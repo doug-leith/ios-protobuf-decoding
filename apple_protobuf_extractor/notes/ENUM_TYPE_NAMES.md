@@ -142,5 +142,4 @@ the scope-qualifying prefix when flattening everything back into one `.proto`. S
   block; `_collect_enums` / `_enums_compatible` (value-keyed de-collision).
 - `proto/models.py` — `ProtoEnum.to_proto`.
 
-See also: `FIELD_TYPE_INFERENCE.md`, `ENUM_NAME_FROM_PREFIX.md`,
-`heuristic_registry.py` (id `enumname-prefix`).
+See also: `FIELD_TYPE_INFERENCE.md`, `ENUM_NAME_FROM_PREFIX.md`.

@@ -76,25 +76,4 @@ This can't surface names the prefix doesn't already produce — it CERTIFIES the
 flags the uncertain ones. Net: turns a convention-decode into a ground-truth match
 where a selector witnesses the type name.
 
-### Suggested validation
-- Census first: across GeoServices / locationd / CoreLocationProtobuf, for every
-  enum where `_enum_name_from_pairs` changes the name (derived != fallback), count
-  how many derived names have a matching `StringAs<derived>:` / `<derived>AsString:`
-  selector in the pool. High match rate ⇒ the confirmation tier is broadly real;
-  the unmatched remainder is the set worth flagging. (Pattern: monkeypatch +
-  `extract_all`, like census_repeated.py / validate_lever.py.)
-- Then, if adding flag/confirm: `validate_ref.py` GEOPDComponent 11/14 +
-  GEOPDPlaceGlobalCommonResult 1/1 must hold; `MACHO_SKIP_GEOSERVICES_BINARY=1
-  ./venv/bin/python3 run_tests.py` stays green. Expect 0 NAME changes (only adds
-  confirmed/flagged metadata), unless you also decide to let a confirming selector
-  OVERRIDE a derived name in edge cases (separate decision).
-
-### Repro scratch (kept in /tmp)
-- `/tmp/inv_enumname.py` — dumps all `*AsString:`/`StringAs*` selectors + sample
-  SCREAMING_SNAKE strings from the GeoServices cache.
-- One-off inline probes used: list a class's enum selectors; grep the string table
-  for a type substring (e.g. `ResultType`).
-
-See also: `FIELD_TYPE_INFERENCE.md`, `heuristic_registry.py` (ids `enumname-prefix`,
-`enumval-overlap`, `qualify-overlap`, `xasstring`), memory `symbols-name-recovery`,
-`venv-capstone`.
+See also: `FIELD_TYPE_INFERENCE.md`.

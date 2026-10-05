@@ -80,8 +80,6 @@ much more rigor. Inferring the package is therefore acceptable.
 
 - `proto/emitter.py` — `package_for_class` (the reconstruction, with the full
   rationale in its docstring) and `_PACKAGE_RECON_NOTE` (the emitted reminder).
-- `heuristic_registry.py` — id `package-prefix`, judged **PRESENTATION** (a naming
-  policy over a correct structure, not a recoverable proto fact).
 
 See also: `ENUM_TYPE_NAMES.md` (the analogous enum-type-name case),
 `FIELD_TYPE_INFERENCE.md`.

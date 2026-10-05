@@ -7,8 +7,8 @@ from a class's ``-[Cls writeTo:]`` serializer body, carved out of the
 It imports only from ``macho.*`` (never from ``proto.extractor``), so it can be
 imported by the extractor with no import cycle.  ``proto.extractor`` re-imports
 ``_extract_writeto_field_numbers`` into its own namespace, so every existing
-caller (``proto.extractor._extract_writeto_field_numbers``, the test imports, and
-``heuristic_registry``) keeps working unchanged.
+caller (``proto.extractor._extract_writeto_field_numbers`` and the test imports)
+keeps working unchanged.
 
 The decoder is the **CFG walk** (``_walk_field_numbers`` + ``writeto_walk`` +
 binding), productionised from the ``wt_reader.py`` prototype: a sound reachability

@@ -72,8 +72,8 @@ def _repeated_element_type(
     # back to "bytes" (the safe fallback).
     #
     # KEEP THIS — it does real work.  Per-path tally of every repeated-message
-    # field across three binaries (dispatch / Strategy-1 rows: census_repeated.py,
-    # 2026-06-08; Strategy-2 row re-measured 2026-06-09):
+    # field across three binaries (dispatch / Strategy-1 rows: 2026-06-08;
+    # Strategy-2 row re-measured 2026-06-09):
     #   path                  GeoServices  locationd  CoreLocationProtobuf
     #   dispatch (by address)      17          23            27   (2026-06-08)
     #   Strategy 1 (metaclass)    503           5            16   (2026-06-08)
@@ -747,7 +747,7 @@ def _resolve_repeated_field_type(
         # and a CLASS NAME (uppercase first char) for Strategy 2 (name-suffix
         # classlist match — an unverified guess).  Capture which one produced this
         # concrete class BEFORE the refinement below so the caller can flag the
-        # field.  (Mirrors the census bucketing in census_repeated.py.)
+        # field.
         via_name_suffix = bool(type_sel) and type_sel[0].isupper()
 
         # Strategy 1/2 found a concrete class.  When the pool has an IMP-confirmed

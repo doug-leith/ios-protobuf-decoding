@@ -424,7 +424,7 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         # split by WHICH non-structural path claimed them.  Both are ERRORS, not
         # footnotes: anchor 1 alone reproduces the full set on every corpus ever
         # measured (391 classes/258 binaries in binary mode, 1642/1 framework in
-        # cache mode — see heuristic_registry.py 'protoclass'), so either set being
+        # cache mode), so either set being
         # non-empty means the structural detector failed and the class's presence in
         # the output rests on a guess.  Computed for real every run rather than
         # assumed empty, so the day it fires the output says so.
@@ -1196,7 +1196,7 @@ def extract_proto_message(
     # Non-structural class detection (see _proto_class_set): the by-name
     # PBCodable-superclass-chain walk did not confirm this class, so its proto-ness
     # rests on a guess. Both flags are emitted as ERRORS. Empty in every real corpus
-    # measured so far — see heuristic_registry.py 'protoclass' — but computed for
+    # measured so far — but computed for
     # real rather than assumed absent.
     #   heuristic: (a) cls IS in cl and neither structural anchor claimed it
     #   (ctx._proto_class_heuristic_only, stamped by the gate's earlier

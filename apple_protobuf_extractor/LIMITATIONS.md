@@ -6,14 +6,12 @@ output where the recovered schema is incomplete or degraded. Where the limitatio
 touches a specific emitted field, the descriptor output carries an inline `// …`
 comment pointing back here, and the relevant source sites carry a `LIMITATIONS.md`
 reference. Items are tagged `to-do #N`: those numbers are identifiers from the project's original
-task list (no longer in this repository), kept so the code comments and the heuristic registry still
+task list (no longer in this repository), kept so the code comments still
 cross-reference the same limitation.
 
-Several limitations are the residual of a `REPLACE` heuristic that survives because
-no principled signal exists for the residual slice; those carry a **Heuristic
-registry** line naming the row(s) in `heuristic_registry.py` (tagged there with the
-matching `[LIM n / to-do #m]`). Limitations (3), (5), (6), (11) have no registry row — they
-are extractor/emitter-level, not heuristic fallbacks. Keep the two files in sync.
+Several limitations are the residual of a heuristic that survives because no principled
+signal exists for the residual slice; those carry a **Heuristic** line naming the fallback.
+Limitations (3), (5), (6), (11) are extractor/emitter-level, not heuristic fallbacks.
 
 The tool's correctness contract is unchanged: it never *silently* emits a wrong
 field — every degraded field below is flagged in the output.
@@ -69,10 +67,10 @@ artifacts are).
 (`_finalize_map_fields`, `_MAP_*_NOTE`); `proto/emitter.py` (`map<>` rendering,
 `_break_map_import_cycles`).
 
-**Heuristic registry.** None of the recovery is heuristic: write-helper types are the
+**Heuristic.** None of the recovery is heuristic: write-helper types are the
 unanimous types of the ivars using them binary-wide, the value class is the proto class
-referenced inside the field's own `readFrom:` handler region. The legacy `bytes` fallback is
-still the `typeref-bytes` row.
+referenced inside the field's own `readFrom:` handler region. The only fallback is the legacy `bytes`
+default type.
 
 ---
 
@@ -131,8 +129,7 @@ repeated field's element resolution returns `element_unresolved`; and
 `_embedded_struct_note` for the singular by-value variant);
 `proto/repeated.py` (`_resolve_repeated_field_type`).
 
-**Heuristic registry.** `typeref-bytes` (the bytes default-type fallback) —
-`heuristic_registry.py`. (Distinct from the *name-suffix* fallback in (7); this one
+**Heuristic.** The `bytes` default-type fallback. (Distinct from the *name-suffix* fallback in (7); this one
 fires when the type cannot be named at all.)
 
 ---
@@ -203,8 +200,7 @@ extractor emits `_FIELD_ZERO_NOTE` for any such field that ends up *estimated*
 (a field whose number is otherwise confirmed needs no flag). Conservative: only
 simple direct-field writes are captured (not nested/submessage writers).
 
-**Heuristic registry.** `ordinal-fieldnum` (the ivar-order estimate the field number
-falls back to) — `heuristic_registry.py`.
+**Heuristic.** The ivar-order estimate the field number falls back to.
 
 ---
 
@@ -314,10 +310,8 @@ Strategy 2); the inline flag `_NAME_SUFFIX_GUESS_NOTE` is defined and attached i
 flag points readers to `FIELD_TYPE_INFERENCE.md` — the dedicated write-up — rather than
 back to this file, unlike limitations (1)/(2)/(4).)
 
-**Heuristic registry.** Four rows, all tagged `[LIM 7 / to-do #45]` —
-`namesuffix-s2` and `s1-selsynth` (`_repeated_element_type` Strategies 2 and 1),
-`resolve-namesuffix` (`_resolve_repeated_type`), and `pool-suffix`
-(`_resolve_repeated_field_type`, base-candidate only — its pool-match + write-helper
+**Heuristic.** Four fallbacks: `_repeated_element_type` Strategies 2 and 1,
+`_resolve_repeated_type`, and `_resolve_repeated_field_type` (base-candidate only — its pool-match + write-helper
 refinements read ground truth and are NOT part of this limitation).
 
 ---

@@ -23,8 +23,7 @@ WHY THEY ARE KEPT.  Neither has ever been the reason a real class was classified
 as proto.  Anchor 1 alone reproduces the full class set on both corpora ever
 measured — 391 classes across 258 standalone binaries in binary mode, and 1642
 classes in the GeoServices cache, including all 5 metadata-sparse subclasses that
-motivated adding the anchors in the first place (see heuristic_registry.py
-'protoclass').  Their measured contribution to date is exactly zero.  They remain
+motivated adding the anchors in the first place.  Their measured contribution to date is exactly zero.  They remain
 here as an investigative safety net for a shape the corpora have not yet shown —
 e.g. a class whose superclass is an EXTERNAL non-root PBCodable subclass, which
 the binary-mode name anchor cannot walk into.
@@ -224,8 +223,7 @@ def check_no_heuristic_detection(
         "  This has never happened on any measured corpus (391 classes/258 binaries, "
         "1642 classes/GeoServices cache) and indicates either a tool bug in the "
         "name-anchor walk or a genuinely new binary shape — investigate before "
-        "trusting ANY output for this image. See proto/protoclass_heuristic.py and "
-        "heuristic_registry.py ('protoclass').")
+        "trusting ANY output for this image. See proto/protoclass_heuristic.py.")
     parts.append(
         f"  To investigate anyway, set {_ALLOW_ENV}=1 to downgrade this to a "
         f"warning; affected messages are then tagged '// ERROR:' inline.")

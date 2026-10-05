@@ -114,7 +114,7 @@ If none of the four tiers fires, the field is emitted as the safe
 
 ## Why Strategy 2 is kept (it does real work)
 
-A census (`census_repeated.py`) tallied every repeated-message field across three
+A census tallied every repeated-message field across three
 binaries by the tier that resolved it (after the compare-chain tier was added
 2026-06-08):
 
@@ -184,5 +184,3 @@ type. A field can carry both comments.
     `ProtoField.type_inference_note` for flagged fields.
 - `proto/models.py` — `ProtoField.type_inference_note`.
 - `proto/emitter.py` — `_emit_field` renders the note as an inline `//` comment.
-- `census_repeated.py` — the per-tier census that justified keeping Strategy 2
-  and removing Pass A / Pass B.

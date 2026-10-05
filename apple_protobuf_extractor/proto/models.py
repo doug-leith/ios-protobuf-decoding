@@ -204,7 +204,7 @@ OPAQUE_PASSTHROUGH_COMMENT = (
 # supposed to be structural: a class is a protobuf message because its ObjC
 # superclass chain reaches PBCodable/PBRequest/PBResponse/PBMessage.  That walk
 # alone reproduces the full class set on every corpus ever measured, in BOTH cache
-# and standalone-binary mode (see heuristic_registry.py 'protoclass').  So if a
+# and standalone-binary mode.  So if a
 # class reaches the output via either non-structural path below, the structural
 # detector has failed on it and this message's very presence in the schema is a
 # guess — the reader must not trust it without checking the binary.
@@ -212,16 +212,14 @@ HEURISTIC_CLASS_DETECTION_COMMENT = (
     "// ERROR: this class was identified as a protobuf message ONLY by the "
     "_is_proto_class heuristic (ivar/method scoring) — its ObjC superclass chain "
     "does NOT reach PBCodable, which should never happen; the class may not be a "
-    "protobuf message at all and must not be trusted "
-    "(see heuristic_registry.py 'protoclass')"
+    "protobuf message at all and must not be trusted"
 )
 
 VA_CLUSTER_CLASS_DETECTION_COMMENT = (
     "// ERROR: this class was identified as a protobuf message ONLY by the "
     "heuristic-seeded VA-cluster closure (shared superclass VAs) — its ObjC "
     "superclass chain does NOT reach PBCodable by name, which should never happen; "
-    "the class may not be a protobuf message at all and must not be trusted "
-    "(see heuristic_registry.py 'protoclass-gate')"
+    "the class may not be a protobuf message at all and must not be trusted"
 )
 
 
@@ -273,8 +271,7 @@ class ProtoMessage:
     # True when this class's PROTO-NESS ITSELF (not any field) rests solely on the
     # per-class _is_proto_class heuristic (ivar/method scoring) — i.e. NEITHER
     # structural anchor in _proto_class_set confirmed it.  Measured empirically to
-    # be extremely rare (0/1642 GeoServices, 0/391 across a 258-binary corpus — see
-    # heuristic_registry.py 'protoclass'); emitted as an ERROR whenever it does
+    # be extremely rare (0/1642 GeoServices, 0/391 across a 258-binary corpus); emitted as an ERROR whenever it does
     # happen, because this message's presence in the output is then a guess rather
     # than a structural fact.
     class_detected_by_heuristic: bool = False
