@@ -9,7 +9,7 @@ The matcher is now native to ios_decoder (ios_decoder.matcher) — no cross-tool
 dependency. These tests SKIP rather than fail when an input is absent:
   * protoc must be installed (to compile the descriptor set),
   * the framework's descriptors must be committed under ios_decoder/protos/,
-  * the live test additionally needs a git-ignored capture.
+  * the live test uses the committed real /fb extracts (fixtures/fb_real/).
 
 What they assert is only the RELIABLE signal — *exclusion*: a table mapping whose
 message the matcher proves impossible for a real body is a regression.  Ranking is
@@ -26,6 +26,7 @@ import pytest
 
 from ios_decoder import fb
 from . import matcher_harness as H
+from ._request_fixtures import load_real
 
 pytestmark = H.requires_harness        # whole module skips if the matcher deps are absent
 
@@ -103,9 +104,9 @@ def test_fb_table_messages_feasible_on_live_bodies(capsys):
     """For every real /fb body in a capture, the message the table maps its
     ?type= channel to must NOT be excluded by the matcher.  Reports rank/confidence
     for inspection (pytest -s); asserts only on exclusion."""
-    bodies = H.capture_bodies("smoot.apple.com/fb")
+    bodies = [(u, b, "request") for u, b in load_real("fb_real")]
     if not bodies:
-        pytest.skip("no git-ignored capture with smoot /fb traffic present")
+        pytest.skip("real /fb extracts absent (run extract_request_samples)")
     checked = 0
     report = []
     for url, body, direction in bodies:

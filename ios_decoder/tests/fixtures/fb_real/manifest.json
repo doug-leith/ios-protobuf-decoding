@@ -1,0 +1,93 @@
+[
+  {
+    "file": "000.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=DuetExpert&v=2",
+    "bytes": 202,
+    "capture": "cookies_default_7dec2025_cont6.mitm",
+    "type": "DuetExpert"
+  },
+  {
+    "file": "001.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=FeedbackV2PB&v=2",
+    "bytes": 182,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "type": "FeedbackV2PB"
+  },
+  {
+    "file": "002.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=FeedbackV2PB&v=2",
+    "bytes": 417,
+    "capture": "mitm_17feb_cont5.mitm",
+    "type": "FeedbackV2PB"
+  },
+  {
+    "file": "003.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=FeedbackV2PB&v=2",
+    "bytes": 964,
+    "capture": "cookies_default_5dec2025_cont6.mitm",
+    "type": "FeedbackV2PB"
+  },
+  {
+    "file": "004.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=FeedbackV2PB&v=2",
+    "bytes": 1115,
+    "capture": "cookies_default_7dec2025_cont6.mitm",
+    "type": "FeedbackV2PB"
+  },
+  {
+    "file": "005.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=FeedbackV2PB&v=2",
+    "bytes": 1129,
+    "capture": "cookies_default_7dec2025_cont6.mitm",
+    "type": "FeedbackV2PB"
+  },
+  {
+    "file": "006.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=FeedbackV2PB&v=2",
+    "bytes": 13248,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "type": "FeedbackV2PB"
+  },
+  {
+    "file": "007.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=ProactiveEventTracker&v=2",
+    "bytes": 146,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "type": "ProactiveEventTracker"
+  },
+  {
+    "file": "008.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=ProactiveEventTracker&v=2",
+    "bytes": 1706,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "type": "ProactiveEventTracker"
+  },
+  {
+    "file": "009.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=ProactiveEventTracker&v=2",
+    "bytes": 8824,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "type": "ProactiveEventTracker"
+  },
+  {
+    "file": "010.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=ProactiveEventTrackerAggregated&v=2",
+    "bytes": 5320,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "type": "ProactiveEventTrackerAggregated"
+  },
+  {
+    "file": "011.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=Usage&v=2",
+    "bytes": 102,
+    "capture": "iphone8_vpn_3june2026.mitm",
+    "type": "Usage"
+  },
+  {
+    "file": "012.bin",
+    "url": "https://fbs.smoot.apple.com/fb?key=cockatoo1790&type=Usage&v=2",
+    "bytes": 113,
+    "capture": "iphone8_vpn_3june2026.mitm",
+    "type": "Usage"
+  }
+]

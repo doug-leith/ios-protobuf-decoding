@@ -4,22 +4,20 @@ This machinery moved into ios_decoder.arpc (it was re-exported from
 mitm_traffic_parser before the decoupling), so ios_decoder owns its coverage now:
 the bvx block framing (bv41/bv4-/bv4$), the inter-block LZ4 preset dictionary,
 the size caps, the error paths, and gzip.  The synthetic tests pin the framing
-deterministically; the live test decompresses REAL ARPC uploads from a git-ignored
-capture when one is present (else skips — no device data is committed).
+deterministically; the live test decompresses REAL ARPC uploads from the committed
+extracts in fixtures/arpc_real/ (regenerate with extract_request_samples.py).
 """
 
 from __future__ import annotations
 
-import glob
 import gzip
 import struct
-from pathlib import Path
 
 import pytest
 
 from ios_decoder import arpc, rawproto
 
-_REPO = Path(__file__).resolve().parents[2]
+from ._request_fixtures import load_real
 
 
 # --- Apple bvx / LZ4 framing -------------------------------------------------
@@ -157,39 +155,18 @@ def test_strip_request_decompresses_lz4_payload():
     assert rawproto.is_valid_protobuf(payload)        # the recovered bytes really are protobuf
 
 
-# --- live: decompress REAL ARPC uploads from a git-ignored capture -----------
+# --- live: decompress REAL ARPC uploads from the committed extracts ----------
 
 def _compressed_arpc_requests():
-    """(url, body) for every LZ4-compressed ARPC request across available captures,
-    or [] if none is present (then the live test skips). No device data is committed."""
-    pytest.importorskip("mitmproxy")
-    from mitmproxy import io as mio
-    caps = (sorted(glob.glob(str(_REPO / "ios_decoder" / "comparison" / "*.mitm")))
-            + sorted(glob.glob(str(_REPO / "iphone8_data" / "captures" / "*.mitm")))
-            + sorted(glob.glob(str(_REPO / "iphone12_data" / "captures" / "*.mitm"))))
-    out = []
-    for cap in caps:
-        try:
-            with open(cap, "rb") as fh:
-                flows = list(mio.FlowReader(fh).stream())
-        except Exception:
-            continue
-        for fl in flows:
-            if getattr(fl, "request", None) is None:
-                continue
-            body = fl.request.content or b""
-            hdr = arpc.parse_request_header(body)
-            if hdr is not None and hdr.compression_algo:
-                out.append((fl.request.pretty_url, body))
-        if out:
-            break          # one capture with compressed ARPC traffic is enough
-    return out
+    """(url, body) for each committed real LZ4-compressed ARPC request (see
+    fixtures/arpc_real/manifest.json), or [] if the extracts are absent."""
+    return load_real("arpc_real")
 
 
 def test_live_compressed_arpc_decompresses_to_protobuf():
     bodies = _compressed_arpc_requests()
     if not bodies:
-        pytest.skip("no git-ignored capture with LZ4-compressed ARPC requests present")
+        pytest.skip("real ARPC extracts absent (run extract_request_samples)")
     pytest.importorskip("lz4.block")
     checked = 0
     for url, body in bodies:

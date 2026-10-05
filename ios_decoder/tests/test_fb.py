@@ -4,13 +4,12 @@ Three layers:
   * unit      — ?type= parsing + dispatch logic, no protoc (StubSchemas);
   * round-trip — build each message via the REAL schema, serialise, decode back
                  (privacy-safe synthetic data; gated on addon_ios schemas present);
-  * live      — decode REAL /fb bodies from a git-ignored capture if one is present,
-                else skip (no device data is committed).
+  * live      — decode REAL /fb bodies from the committed extracts in fixtures/fb_real/
+                (regenerate with extract_request_samples.py).
 """
 
 from __future__ import annotations
 
-import glob
 from pathlib import Path
 
 import pytest
@@ -23,7 +22,8 @@ import shutil
 
 from ios_decoder.paths import DEFAULT_PROTO_DIRS
 
-_REPO = Path(__file__).resolve().parents[2]
+from ._request_fixtures import load_real
+
 # The /fb schemas are UNMODIFIED extractor output committed under ios_decoder/protos.
 _PROTO_DIR = Path(__file__).resolve().parents[1] / "protos"
 
@@ -177,31 +177,12 @@ def test_feedbackv2pb_roundtrip(live_ctx):
     assert "ERROR" not in out
 
 
-# ── live: decode REAL /fb bodies from a git-ignored capture if present ────────
+# ── live: decode REAL /fb bodies from the committed extracts ──────────────────
 
 def _fb_bodies():
-    """(url, body) for every smoot /fb request across available git-ignored captures,
-    or [] if no capture is present (then the live test skips)."""
-    from mitmproxy import io as mio
-    caps = (sorted(glob.glob(str(_REPO / "ios_decoder" / "comparison" / "*.mitm")))
-            + sorted(glob.glob(str(_REPO / "iphone8_data" / "captures" / "*.mitm")))
-            + sorted(glob.glob(str(_REPO / "iphone12_data" / "captures" / "*.mitm"))))
-    out = []
-    for cap in caps:
-        try:
-            with open(cap, "rb") as fh:
-                flows = list(mio.FlowReader(fh).stream())
-        except Exception:
-            continue
-        for fl in flows:
-            if getattr(fl, "request", None) is None:
-                continue
-            u = fl.request.pretty_url
-            if "smoot.apple.com/fb" in u and (fl.request.content or b""):
-                out.append((u, fl.request.content))
-        if out:
-            break          # one capture with /fb traffic is enough for the live check
-    return out
+    """(url, body) for each committed real smoot /fb request (see fixtures/fb_real/manifest.json),
+    or [] if the extracts are absent (then the live test skips)."""
+    return load_real("fb_real")
 
 
 @requires_schemas
@@ -209,7 +190,7 @@ def test_live_fb_bodies_decode(live_ctx):
     ctx, table = live_ctx
     bodies = _fb_bodies()
     if not bodies:
-        pytest.skip("no git-ignored capture with smoot /fb traffic present")
+        pytest.skip("real /fb extracts absent (run extract_request_samples)")
     seen_types = set()
     for url, body in bodies:
         out = decode_request_body(url, body, table, ctx)

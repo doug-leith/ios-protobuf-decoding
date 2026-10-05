@@ -45,10 +45,9 @@ come with mitmproxy, and `dnspython` (DoH). `cbor2` is optional — without it,
 ./venv/bin/python3 -m pytest ios_decoder/tests/      # a few hundred self-contained tests
 ```
 
-Tests are self-contained (they synthesise their own fixtures), and the real tile and Siri
-extracts they also use are committed under `tests/fixtures/`. A few are *live-gated*: the
-tests that scan whole `.mitm` captures (ARPC/LZ4, smoot `/fb`) and the locator tests need
-local data and skip otherwise.
+Tests are self-contained (they synthesise their own fixtures), and the real tile, Siri, ARPC
+and `/fb` extracts they also use are committed under `tests/fixtures/`. Only the locator tests
+are *live-gated*: they need Apple binaries under `iphone8_data/` and skip otherwise.
 
 ## Usage
 

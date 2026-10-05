@@ -1,0 +1,98 @@
+[
+  {
+    "file": "000.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 17778,
+    "capture": "mitm_5mar_cont.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 4
+  },
+  {
+    "file": "001.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 8770,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 3
+  },
+  {
+    "file": "002.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 172,
+    "capture": "iphone8_vpn_3june2026_cont.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "003.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 356,
+    "capture": "cookies_default_5dec2025_cont5.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "004.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 373,
+    "capture": "cookies_default_7dec2025_cont6.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "005.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 380,
+    "capture": "mitm_17feb_cont5.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "006.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 380,
+    "capture": "mitm_17feb_cont5.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "007.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 391,
+    "capture": "cookies_default_7dec2025_cont6.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "008.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 395,
+    "capture": "mitm_24feb_cont2.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 0
+  },
+  {
+    "file": "009.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 502,
+    "capture": "mitm_16march_blockcookies.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 1
+  },
+  {
+    "file": "010.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 594,
+    "capture": "cookies_default_7dec2025_cont6.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 1
+  },
+  {
+    "file": "011.bin",
+    "url": "https://gsp64-ssl.ls.apple.com/hvr/v3/use",
+    "bytes": 3644,
+    "capture": "mitm_16march_blockcookies.mitm",
+    "function_id": 1017,
+    "bv41_blocks": 1
+  }
+]
