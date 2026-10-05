@@ -51,7 +51,7 @@ from proto.models import (
     VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix,
 )
 
-_GENERATOR = "macho_project"
+_GENERATOR = "apple_protobuf_extractor (ios_protobuf_decoding)"
 
 # ── ObjC prefix → proto package ───────────────────────────────────────────────
 
