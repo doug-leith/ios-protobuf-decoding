@@ -16,8 +16,8 @@ from proto.enums import _leading_materialized_bias
 from tests.test_disasm import make_insn
 
 try:
-    import validate_lever as _V
-    _HAVE = _V._load_cache('GeoServices') is not None
+    import live_artifacts as _V
+    _HAVE = _V.load_cache('GeoServices') is not None
 except Exception:
     _HAVE = False
 
@@ -76,8 +76,8 @@ class TestLeadingMaterializedBiasUnit(unittest.TestCase):
 class TestNegAddBiasLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        ctx, st, cl = V._load_cache('GeoServices')
+        import live_artifacts as V
+        ctx, st, cl = V.load_cache('GeoServices')
         cls.enums = {}
         for m in E.extract_all(ctx, st, cl):
             for e in getattr(m, 'enums', []) or []:

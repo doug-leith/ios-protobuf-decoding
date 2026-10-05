@@ -302,8 +302,8 @@ class TestNonStructuralDetectionRendersAsError(unittest.TestCase):
 
 
 try:
-    import validate_lever as _V
-    _HAVE = _V._load_cache("GeoServices") is not None
+    import live_artifacts as _V
+    _HAVE = _V.load_cache("GeoServices") is not None
 except Exception:
     _HAVE = False
 
@@ -312,8 +312,8 @@ except Exception:
 class TestProtoClassSetLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        cls.ctx, cls.st, cls.cl = V._load_cache("GeoServices")
+        import live_artifacts as V
+        cls.ctx, cls.st, cls.cl = V.load_cache("GeoServices")
         cls.msgs = {m.class_name: m for m in E.extract_all(cls.ctx, cls.st, cls.cl)}
 
     def test_recovered_subclasses_emitted_with_inheritance(self):
@@ -343,8 +343,8 @@ class TestProtoClassSetLive(unittest.TestCase):
 
 
 try:
-    import validate_lever as _VL
-    _HAVE_LOCATIOND = _VL._load_locationd() is not None
+    import live_artifacts as _VL
+    _HAVE_LOCATIOND = _VL.load_locationd() is not None
 except Exception:
     _HAVE_LOCATIOND = False
 
@@ -358,8 +358,8 @@ class TestProtoClassSetBinaryNameAnchor(unittest.TestCase):
     parity with cache mode)."""
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        cls.ctx, cls.st, cls.cl = V._load_locationd()
+        import live_artifacts as V
+        cls.ctx, cls.st, cls.cl = V.load_locationd()
 
     def test_resolve_class_name_at_resolves_bind_super_to_pbcodable(self):
         # Every PB subclass shares the same raw bind super value; it must resolve

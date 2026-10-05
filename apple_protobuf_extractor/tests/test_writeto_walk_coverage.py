@@ -29,16 +29,16 @@ import unittest
 from proto.protocore import _is_real_field_ivar
 from proto.protoclass_heuristic import _is_proto_class
 import proto.writeto as W
-import validate_lever as V
+import live_artifacts as V
 
 _GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "golden")
 _UPDATE = os.environ.get("MACHO_UPDATE_GOLDEN") == "1"
 _MAX_SHOWN = 30
 
 _ARTIFACTS = [
-    ("GeoServices", lambda: V._load_cache("GeoServices")),
-    ("locationd", V._load_locationd),
-    ("CoreLocationProtobuf", lambda: V._load_cache("CoreLocationProtobuf")),
+    ("GeoServices", lambda: V.load_cache("GeoServices")),
+    ("locationd", V.load_locationd),
+    ("CoreLocationProtobuf", lambda: V.load_cache("CoreLocationProtobuf")),
 ]
 
 
@@ -132,7 +132,7 @@ class TestAccessorSourcedBinding(unittest.TestCase):
     real 14 — verified via gt_fields message-write helper AND live wire traffic)."""
 
     def test_cpusageenvelope_message_fields(self):
-        loaded = V._load_cache("CoreParsec")
+        loaded = V.load_cache("CoreParsec")
         if loaded is None:
             self.skipTest("CoreParsec cache not available")
         ctx, _st, cl = loaded

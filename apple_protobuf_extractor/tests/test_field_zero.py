@@ -15,8 +15,8 @@ import unittest
 import proto.extractor as E
 
 try:
-    import validate_lever as _V
-    _HAVE = _V._load_cache('NewsTransport') is not None
+    import live_artifacts as _V
+    _HAVE = _V.load_cache('NewsTransport') is not None
 except Exception:
     _HAVE = False
 
@@ -25,8 +25,8 @@ except Exception:
 class TestFieldZeroFlagLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        ctx, st, cl = V._load_cache('NewsTransport')
+        import live_artifacts as V
+        ctx, st, cl = V.load_cache('NewsTransport')
         cls.msgs = {m.class_name: m for m in E.extract_all(ctx, st, cl)}
 
     def _field(self, cn, fn):

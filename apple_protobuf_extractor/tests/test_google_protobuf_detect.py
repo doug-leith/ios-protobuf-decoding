@@ -61,8 +61,8 @@ class TestGoogleProtobufDetectOffline(unittest.TestCase):
 
 
 try:
-    import validate_lever as _VL
-    _HAVE_TD = _VL._load_binary("MACHO_TEST_TRANSPARENCYD", "libexec/transparencyd") is not None
+    import live_artifacts as _VL
+    _HAVE_TD = _VL.load_binary("MACHO_TEST_TRANSPARENCYD", "libexec/transparencyd") is not None
 except Exception:
     _HAVE_TD = False
 
@@ -70,8 +70,8 @@ except Exception:
 @unittest.skipUnless(_HAVE_TD, "transparencyd binary not available")
 class TestGoogleProtobufDetectLive(unittest.TestCase):
     def test_transparencyd_gpb_detected_and_warned(self):
-        import validate_lever as V
-        ctx, st, cl = V._load_binary("MACHO_TEST_TRANSPARENCYD", "libexec/transparencyd")
+        import live_artifacts as V
+        ctx, st, cl = V.load_binary("MACHO_TEST_TRANSPARENCYD", "libexec/transparencyd")
         subs, bases = E.google_protobuf_classes(ctx, cl)
         self.assertGreater(len(subs), 10)
         self.assertTrue(all(b.endswith("GPBMessage") for b in bases), bases)
@@ -82,7 +82,7 @@ class TestGoogleProtobufDetectLive(unittest.TestCase):
 
 
 try:
-    _HAVE_GEO = _VL._load_cache("GeoServices") is not None
+    _HAVE_GEO = _VL.load_cache("GeoServices") is not None
 except Exception:
     _HAVE_GEO = False
 
@@ -90,8 +90,8 @@ except Exception:
 @unittest.skipUnless(_HAVE_GEO, "GeoServices cache not available")
 class TestGoogleProtobufNoFalsePositive(unittest.TestCase):
     def test_pbcodable_framework_has_no_gpb(self):
-        import validate_lever as V
-        ctx, st, cl = V._load_cache("GeoServices")
+        import live_artifacts as V
+        ctx, st, cl = V.load_cache("GeoServices")
         subs, _ = E.google_protobuf_classes(ctx, cl)
         self.assertEqual(subs, [])
 
@@ -235,7 +235,7 @@ class TestForeignProtobufWarnings(unittest.TestCase):
 # emits AWD telemetry protobufs *as well as* its 65 PBCodable messages, and the
 # detector must report that vendored namespace (it is real usage, not a false alarm).
 try:
-    _HAVE_LOCD = _VL._load_locationd() is not None
+    _HAVE_LOCD = _VL.load_locationd() is not None
 except Exception:
     _HAVE_LOCD = False
 
@@ -243,7 +243,7 @@ except Exception:
 @unittest.skipUnless(_HAVE_LOCD, "locationd binary not available")
 class TestForeignProtobufLocationdLive(unittest.TestCase):
     def test_locationd_swift_clean_but_cpp_vendored_reported(self):
-        ctx, st, cl = _VL._load_locationd()
+        ctx, st, cl = _VL.load_locationd()
         msgs, enums, _ = E.swift_protobuf_messages(ctx)
         self.assertEqual((msgs, enums), ([], []))           # no swift-protobuf
         ns = E.cpp_protobuf_namespaces(ctx)

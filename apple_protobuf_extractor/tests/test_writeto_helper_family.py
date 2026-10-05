@@ -275,8 +275,8 @@ def _find_cache():
 
 
 try:
-    import validate_lever as _V
-    _HAVE = _V._load_cache('GeoServices') is not None
+    import live_artifacts as _V
+    _HAVE = _V.load_cache('GeoServices') is not None
 except Exception:
     _HAVE = False
 
@@ -285,8 +285,8 @@ except Exception:
 class TestSintRecoveryLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        cls.ctx, cls.st, cls.cl = V._load_cache('GeoServices')
+        import live_artifacts as V
+        cls.ctx, cls.st, cls.cl = V.load_cache('GeoServices')
         cls.msgs = {m.class_name: m for m in E.extract_all(cls.ctx, cls.st, cls.cl)}
 
     def _field(self, cn, fn):

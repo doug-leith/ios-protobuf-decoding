@@ -695,8 +695,8 @@ class TestLiveCoreParsec(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        loaded = V._load_cache("CoreParsec")
+        import live_artifacts as V
+        loaded = V.load_cache("CoreParsec")
         if loaded is None:
             raise unittest.SkipTest("CoreParsec dyld cache not available")
         ctx, st, cl = loaded

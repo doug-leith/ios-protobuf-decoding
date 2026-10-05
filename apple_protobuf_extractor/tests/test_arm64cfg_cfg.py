@@ -2,7 +2,7 @@
 
 No binary needed — hand-built Insn streams exercise build_blocks / dominators /
 dominates, the engine the readFrom dispatch resolver uses to attribute each element
-`bl` to the field whose handler block DOMINATES it. Mirrors the gt_readfrom.py PoC.
+`bl` to the field whose handler block DOMINATES it.
 """
 import os
 import sys

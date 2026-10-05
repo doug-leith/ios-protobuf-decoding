@@ -11,7 +11,7 @@ import json
 import sys
 
 import proto.extractor as E
-import validate_lever as V
+import live_artifacts as V
 
 
 def _snap_messages(msgs):
@@ -68,9 +68,9 @@ def _snap_messages(msgs):
 def capture(path):
     snap = {}
     for label, loaded in [
-        ("GeoServices", V._load_cache("GeoServices")),
-        ("locationd", V._load_locationd()),
-        ("CoreLocationProtobuf", V._load_cache("CoreLocationProtobuf")),
+        ("GeoServices", V.load_cache("GeoServices")),
+        ("locationd", V.load_locationd()),
+        ("CoreLocationProtobuf", V.load_cache("CoreLocationProtobuf")),
     ]:
         if loaded is None:
             print(f"  {label}: SKIPPED (not found)")

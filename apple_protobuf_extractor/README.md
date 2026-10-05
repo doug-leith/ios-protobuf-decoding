@@ -133,14 +133,34 @@ These artifacts are gitignored (multi-GB).
 ## Tests
 
 ```sh
-# from the repo root — hardcoded module list, not pytest auto-discovery
-./venv/bin/python3 run_tests.py            # full suite (live tests auto-skip if artifacts absent)
-./venv/bin/python3 -m pytest               # if you prefer pytest
+# from the repo root; live tests auto-skip if the artifacts are absent
+./venv/bin/python3 -m pytest
 ```
 
 Live tests load the real cache / binaries and gate on artifact presence (the
 `iphone8_data/` dir, or the `MACHO_*` env overrides above); they skip cleanly when
 the artifacts aren't there.
+
+## Checking the output by hand
+
+Three small tools give an independent check on the extractor. They use raw disassembly, not the
+production decoder, so a bug in one is unlikely to be a bug in the other. They need the Apple artifacts
+(see the repository README) and run from the repo root:
+
+```sh
+# Every field's type against its ivar's Objective-C @encode (the compiler-emitted storage type)
+./venv/bin/python3 apple_protobuf_extractor/gt_types.py CoreLocationProtobuf
+
+# A simple linear-scan oracle: the field numbers and ivars a class's writeTo: writes
+./venv/bin/python3 apple_protobuf_extractor/gt_fields.py CoreLocationProtobuf CLPPressure
+
+# The symbolized disassembly of a class's writeTo: (or readFrom:), 40 instructions, to read by hand
+./venv/bin/python3 apple_protobuf_extractor/gt_dump.py CoreLocationProtobuf CLPPressure 'writeTo:' 40
+```
+
+On `CoreLocationProtobuf`, `gt_types.py` checks 530 fields against their `@encode` and finds no
+contradictions. `gt_fields.py` is deliberately simple and cannot follow jump tables or compare chains;
+where it disagrees with the extractor, `gt_dump.py` shows the assembly to settle which is right.
 
 ## C++ `libprotobuf` extraction
 

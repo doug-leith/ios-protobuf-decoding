@@ -9,7 +9,7 @@ has-disambiguation) tuple is byte-identical to a committed golden snapshot.
 Design notes
 ------------
 * **Live-gated, like the other real-binary tests.** Each artifact test skips when
-  its binary/cache is not present (``validate_lever`` loaders return ``None``) and
+  its binary/cache is not present (``live_artifacts`` loaders return ``None``) and
   when no golden file has been committed yet — so the offline suite stays green.
 * **Reuses ``snapshot_output._snap_messages``** so this test and the manual
   ``snapshot_output.py`` before/after tool can never disagree on what a snapshot
@@ -34,7 +34,7 @@ import os
 import unittest
 
 import proto.extractor as E
-import validate_lever as V
+import live_artifacts as V
 from snapshot_output import _snap_messages
 
 _GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "golden")
@@ -44,9 +44,9 @@ _UPDATE = os.environ.get("MACHO_UPDATE_GOLDEN") == "1"
 # absent.  CoreLocationProtobuf and GeoServices come from the dyld cache in
 # ./dylib/; locationd is a standalone binary in the project root.
 _ARTIFACTS = [
-    ("GeoServices", lambda: V._load_cache("GeoServices")),
-    ("locationd", V._load_locationd),
-    ("CoreLocationProtobuf", lambda: V._load_cache("CoreLocationProtobuf")),
+    ("GeoServices", lambda: V.load_cache("GeoServices")),
+    ("locationd", V.load_locationd),
+    ("CoreLocationProtobuf", lambda: V.load_cache("CoreLocationProtobuf")),
 ]
 
 # Show at most this many differing fields in a failure message (the full set is

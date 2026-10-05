@@ -71,8 +71,7 @@ falls back to the class-qualified, field-derived name (e.g.
 the only — signal available for the type name.
 
 This is a deterministic decode of a real generator convention over ground-truth
-strings, **not** a guess matched against a symbol pool. (See also the registry
-judgment `enumname-prefix` = INTRINSIC.)
+strings, **not** a guess matched against a symbol pool. 
 
 ## 3. How accurate it is
 

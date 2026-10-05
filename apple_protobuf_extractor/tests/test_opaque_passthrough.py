@@ -30,8 +30,8 @@ class TestOpaquePassthroughLive(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
-        loaded = V._load_cache('GeoServices')
+        import live_artifacts as V
+        loaded = V.load_cache('GeoServices')
         if loaded is None:
             cls.ctx = cls.cl = cls.msgs = None
             return

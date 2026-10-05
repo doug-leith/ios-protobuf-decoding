@@ -217,7 +217,7 @@ def _next_imp(imps_sorted, imp):
 # The readFrom resolver attributes each element `bl` to the field whose compare-chain
 # handler block DOMINATES it (exact), vs the address-range approximation. The caller
 # must complete the CFG first (inject_arm_edges with decoded `br` jump-table arms) so
-# blocks reached only via indirect dispatch are reachable. Validated: gt_readfrom.py PoC.
+# blocks reached only via indirect dispatch are reachable.
 
 
 def _succ_addrs(ins, fallthrough, lo, hi):

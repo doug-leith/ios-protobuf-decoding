@@ -19,7 +19,7 @@ packages = ["proto", "macho", "serializers"]
 # Top-level helper modules (CLI + output/validation utilities).  Exposed so they
 # resolve from any cwd — e.g. a tool's lazy `from cli import …` or the test
 # suite — without per-caller sys.path juggling.
-py-modules = ["cli", "version", "snapshot_output", "wt_reader", "validate_lever"]
+py-modules = ["cli", "version", "snapshot_output", "live_artifacts"]
 
 # Code-smell scan tooling.  Not needed to run or test the extractor.
 #   ../venv/bin/pip install -e '.[smells]'
@@ -57,7 +57,7 @@ enable = [
     # Caught the macho/ import cycle that four deferred imports were concealing.
     # Keep enabled so it cannot come back silently.
     "cyclic-import",
-    # Caught a retired PoC (gt_readfrom.py) left byte-identical to the production
+    # Caught a retired proof-of-concept left byte-identical to the production
     # code it was supposed to check independently.  See [tool.pylint.similarities].
     "duplicate-code",
 

@@ -168,9 +168,9 @@ class TestBackingStorePhantomLive(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        import validate_lever as V
+        import live_artifacts as V
         import proto.extractor as E
-        loaded = V._load_cache('GeoServices')
+        loaded = V.load_cache('GeoServices')
         if loaded is None:
             cls.msgs = None
             return

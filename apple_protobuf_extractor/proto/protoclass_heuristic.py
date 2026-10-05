@@ -92,7 +92,7 @@ def _is_proto_class(cls: ObjcClass) -> bool:
 
     RETIRED as a detector — see the module docstring.  Retained as the union floor
     (it never DROPS a hit found structurally) and as the sanity superset, and still
-    used directly by the binary-derived oracles (gt_fields / gt_readfrom) and by
+    used directly by the binary-derived oracle (gt_fields) and by
     tests that build synthetic classes with no superclass chain to walk.
 
     Three detection paths are tried in order:

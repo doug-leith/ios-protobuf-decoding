@@ -54,7 +54,7 @@ bl    #0x18dbdae88          ; [-_unknownFields readUnknownField:type:from:]
 helper `0x18dbdae88` takes `(field#, wiretype, reader)` — the canonical "absorb one unknown
 field" entry point. Nothing types field 100.
 
-## Survey — how common is this shape? (Task 3)
+## Survey — how common is this shape?
 
 Scanned all **1637** GeoServices classes with a `writeTo:`. The "single-ivar load + tail-call
 `writeTo:`" signature matches **78 classes**, and **all 78 load `_unknownFields`
@@ -75,36 +75,20 @@ The 78 are mostly `…Filter` (request-side, e.g. `GEOPDAddressFilter`, `GEOPDBo
 Contrast: the **request** twin `PDReverseGeocodingParameters` has real fields
 (`locations`, `placeTypeLimit`, …). Only the **result** is opaque.
 
-## Recommendation for ios_decoder (Task 4)
+## What the extractor does with it
 
-Neither option as originally framed applies:
+The extractor detects this shape structurally (`_is_opaque_passthrough` in `proto/extractor.py`: a
+single `_unknownFields : PBUnknownFields` ivar, and a leaf `writeTo:` that loads it and tail-calls
+`writeTo:`) and emits `// opaque passthrough — serializes only PBUnknownFields (no typed fields in
+this build)` instead of `// (no fields recovered)`. The two mean opposite things: for a passthrough
+the raw bytes are the complete answer, while a message with no recovered fields because extraction
+was incomplete is a gap. The detector flags exactly the 78 GeoServices classes above; 44 other
+field-less classes keep `(no fields recovered)`; locationd and CoreLocationProtobuf have none.
 
-- **(b) map the wrapper field to an inner message** — *not possible*. There is no inner typed
-  message; the "inner class" is `PBUnknownFields`. Mapping field 100 to some other GEO message
-  by structural guess would violate "leave unprovable mappings to raw-decode rather than
-  guessing" (the wire content is a lone `100: varint`, far too thin to match anything).
-- **(a) emit a delegates-to-`<Inner>` type-alias marker** — *not possible as a type alias*,
-  because `<Inner>` is `PBUnknownFields`. The salvageable kernel of (a) is an **informational
-  opaque-passthrough marker** (see below), not an alias.
-
-**Recommended:**
-
-1. **Keep raw-decoding the sub-message (status quo). It is already correct and complete.**
-   `PDReverseGeocodingResult { 100: 1 … }` is the right output; field 100 is genuinely unknown
-   to the client. This is *not* a decode gap and should stop being counted as one.
-
-2. **(Optional, principled, extractor-side — low blast radius) Distinguish "opaque passthrough"
-   from "extraction-incomplete."** Both currently print `// (no fields recovered)`, but they
-   mean opposite things. A passthrough is structurally detectable with certainty:
-   `instance_size == 0x10`, exactly one ivar `_unknownFields : PBUnknownFields @0x8`, and
-   `writeTo:` is the 4-insn load-`_unknownFields`+tail-call-`writeTo:` stub. For those, emit
-   e.g. `// opaque passthrough — serializes only PBUnknownFields; no typed fields in this build`.
-   This tells humans and ios_decoder that raw bytes are the *complete* answer, not a TODO.
-   (Do **not** implement now — concurrent session may be editing the extractor.)
-
-3. **(Optional, ios_decoder-side) Reclassify the unknown-field note** for these known-opaque
-   message types from "unknown field (gap)" to "expected (opaque container)", so the gap report
-   (`mitm_traffic_parser`/decode notes) stops flagging `reverseGeocodingResult.100` as a miss.
+For the decoder, raw-decoding the sub-message is correct and complete:
+`PDReverseGeocodingResult { 100: 1 … }` is the right output, because field 100 is unmodeled by the
+client. Mapping it to another message would be a structural guess the wire content (a lone
+`100: varint`) cannot support.
 
 ## Uncertainties / flags
 
@@ -114,32 +98,5 @@ Neither option as originally framed applies:
 - Survey detector matched two writeTo shapes (offset-table-indirected "A", direct-immediate
   "B"); all 78 hits were shape "A". A handful of classes whose `writeTo:` is non-trivial but
   still ultimately field-less (e.g. group-encoded) would not match this signature — the 78 is a
-  lower bound on "opaque", but it is the exact set matching the *task's* "load-one-ivar +
+  lower bound on "opaque", but it is the exact set matching the "load-one-ivar +
   tail-call" signature.
-
-## Implementation status — option 2 DONE (2026-06-17)
-
-Extractor-side opaque-passthrough marker implemented (option 2). Option 3
-(ios_decoder unknown-field note reclassification) is a separate session.
-
-- `proto/extractor.py`: `_is_opaque_passthrough(ctx, cls)` (+ `_writeto_self_load_offset`)
-  — purely structural detector (single `_unknownFields:PBUnknownFields` ivar AND a
-  leaf `writeTo:` that loads it and tail-calls `writeTo:`); wired into both
-  `extract_proto_message` returns (the field-less early return is the live path).
-- `proto/models.py` + `proto/emitter.py`: new `ProtoMessage.opaque_passthrough`
-  flag → emits `// opaque passthrough — serializes only PBUnknownFields (no typed
-  fields in this build)` instead of `// (no fields recovered)`.
-- `snapshot_output.py`: records `<opaque_passthrough>` (golden now guards the set).
-- Tests: `tests/test_opaque_passthrough.py` (live) + 2 emitter tests.
-
-**Verification:** flags exactly **78** GeoServices classes (== the survey set),
-incl. GEOPDReverseGeocodingResult; 44 field-less classes correctly KEEP
-`(no fields recovered)`. locationd/CLP: 0 flagged → golden byte-identical. Golden
-diff = **+78 `<opaque_passthrough>` keys, 0 removals, 0 field-tuple changes** →
-wire-neutral. (Gotcha fixed during impl: `disasm(stop_at_ret=True)` does NOT stop
-at an unconditional `b`, so the window must be truncated at the first `b`/`ret`.)
-
-## Repro
-`./venv/bin/python3` probes in `/tmp/probe_revgeo.py`, `/tmp/probe2.py`, `/tmp/survey.py`
-(load GeoServices via `validate_lever._load_cache`-style `DyldCacheReader` + `BinaryContext`,
-then `read_ptr`/`read_s32`/`disasm`).
