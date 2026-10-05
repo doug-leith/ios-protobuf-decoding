@@ -2,11 +2,11 @@
 
 An iPhone sends binary protobuf messages to Apple's servers for location services, maps, Siri, advertising and analytics. Apple publishes no schemas for them. This repository contains:
 
-- **[`apple_protobuf_extractor`](apple_protobuf_extractor/README.md)**, which recovers `.proto` definitions (message and field names, field numbers, types and enums) from Apple's compiled binaries, by statically analysing the Objective-C `PBCodable` classes in a Mach-O file or a dyld shared cache. No Apple headers or `.proto` sources are needed.
+- **[`apple_protobuf_extractor`](apple_protobuf_extractor/README.md)**, which recovers `.proto` definitions (message and field names, field numbers, types and enums) from Apple's compiled binaries, in a Mach-O file or a dyld shared cache. It handles three protobuf runtimes: Apple's Objective-C `PBCodable` classes (by analysing their generated `writeTo:` and `readFrom:` code), Google's C++ `libprotobuf` (an exact decode of the descriptors the binary embeds) and `swift-protobuf` (names and numbers from each message's name map, types from Swift reflection metadata). No Apple headers or `.proto` sources are needed.
 - **[`ios_decoder`](ios_decoder/README.md)**, which decodes captured iOS traffic (mitmproxy `.mitm` files) offline into readable protobuf using those schemas, and also handles Siri, DNS-over-HTTPS, certificates and the map and location tiles.
 - **[119 recovered `.proto` files](#recovered-schemas)** (2,359 messages, 1,047 enums) in `ios_decoder/protos/`, which you can use directly.
 
-The schemas are partly decoded. Names, numbers and types come from the binaries, and some field numbers are estimates (see the [extractor README](apple_protobuf_extractor/README.md#what-it-recovers--and-the-honest-caveats)). What each endpoint is *for* comes from observed traffic, and is described [below](#protobufs-by-endpoint).
+The schemas are partly decoded. Names, numbers and types come from the binaries. The C++ schemas are exact. For `PBCodable` and `swift-protobuf` some numbers or types are estimates, most of them flagged in the output (see the [extractor README](apple_protobuf_extractor/README.md#what-it-recovers--and-the-honest-caveats)). What each endpoint is *for* comes from observed traffic, and is described [below](#protobufs-by-endpoint).
 
 Related repositories:
 
@@ -74,11 +74,26 @@ The [`ios_decoder` README](ios_decoder/README.md) lists all the options. Decrypt
 ./venv/bin/python3 apple_protobuf_extractor/cli.py --list-frameworks --cache iphone8_data/dylib
 ```
 
+The same command extracts all three runtimes. A binary's messages are grouped into `.proto` files whose `// Serializer:` header names the runtime they came from:
+
+```sh
+# Which protobuf runtimes does a binary use, and which messages are in each?
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/libexec/remindd --list-serializers
+
+# swift-protobuf: remindd gives remindd.proto (its own messages) and swiftprotobuf.proto (the Google well-known types it links)
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/libexec/remindd -o ./protos/
+
+# C++ libprotobuf and PBCodable together: locationd gives 65 PBCodable and 334 C++ messages, every field number confirmed
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/locationd -o ./protos/
+```
+
+Google's Objective-C runtime (`GPBMessage`) and `libprotobuf-lite` (which strips its descriptors) are detected and reported, but not decoded.
+
 The dyld cache and binaries are Apple's software and are not in this repository. [Getting the Apple artifacts](#getting-the-apple-artifacts-optional) below shows how to download them.
 
 ## Recovered schemas
 
-`ios_decoder/protos/` holds the extractor's output, one folder per framework. Each file starts with a header naming the tool, the serializer (`Apple PBCodable (ObjC)`) and the source framework. In `geo.proto`, `als.proto` and `clp.proto` the Objective-C class prefix is dropped (`GEOPDPlaceRequest` is `geo.PDPlaceRequest`).
+`ios_decoder/protos/` holds the extractor's output, one folder per framework. Each file starts with a header naming the tool, the serializer (`Apple PBCodable (ObjC)` or `C++ libprotobuf (google::protobuf)`) and the source framework. In `geo.proto`, `als.proto` and `clp.proto` the Objective-C class prefix is dropped (`GEOPDPlaceRequest` is `geo.PDPlaceRequest`).
 
 | Framework | `.proto` files | Messages | What is in it |
 |---|---|---|---|
@@ -88,6 +103,8 @@ The dyld cache and binaries are Apple's software and are not in this repository.
 | `AppPredictionInternal` | 8 | 99 | App-prediction messages (`atx.proto`, used by the `DuetExpert` feedback channel). |
 | `CoreParsec` | 77 | 77 | Feedback and usage messages, for example `_cpusageenvelope.proto` and `_cpclientsession.proto`. |
 | `ProactiveEventTracker` | 2 | 8 | `pet.proto`, used by the `ProactiveEventTracker` feedback channels. |
+
+102 of the files (1,975 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. None of the committed schemas comes from a `swift-protobuf` binary.
 
 ## Protobufs by endpoint
 

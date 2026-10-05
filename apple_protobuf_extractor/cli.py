@@ -82,8 +82,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="apple_protobuf_extractor",
         description=(
-            "Extract proto3 schemas from Apple ObjC proto classes "
-            "in arm64 Mach-O binaries."
+            "Extract proto3 schemas from protobuf classes in arm64 Mach-O "
+            "binaries and dyld caches: Apple PBCodable, C++ libprotobuf and "
+            "swift-protobuf."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,

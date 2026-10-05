@@ -1,12 +1,15 @@
 # apple_protobuf_extractor
 
 Reconstruct protobuf `.proto` schemas from compiled Apple binaries — no headers,
-no `.proto` sources, just the shipped Mach-O. It statically analyses the
-Objective-C `PBCodable` subclasses Apple's protobuf compiler emits: field numbers
-and wire types from each class's `writeTo:` / `readFrom:` ARM64 code, field names
-and base types from the ivar layout, and enum value↔name tables from the
-`xAsString:` methods. Works on a standalone Mach-O file or directly on an image
-inside a dyld shared cache.
+no `.proto` sources, just the shipped Mach-O. It handles three protobuf runtimes.
+For Apple's Objective-C `PBCodable` subclasses it statically analyses the generated
+code: field numbers and wire types from each class's `writeTo:` / `readFrom:` ARM64
+code, field names and base types from the ivar layout, and enum value↔name tables
+from the `xAsString:` methods. For Google's C++ `libprotobuf` it decodes the
+descriptors the binary embeds, which gives exact schemas. For `swift-protobuf` it reads
+field names and numbers from each message's name map and types from Swift reflection
+metadata. Works on a standalone Mach-O file or directly on an image inside a dyld
+shared cache.
 
 ## Install
 
@@ -55,6 +58,12 @@ recreating it, re-run the editable install or `import proto` / `import macho` fa
 
 # Report which protobuf runtimes an image uses (PBCodable / C++ / swift / GPB)
 ./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/locationd --list-serializers
+
+# swift-protobuf: writes remindd.proto and swiftprotobuf.proto (the well-known types it links)
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/libexec/remindd -o ./protos/
+
+# PBCodable and C++ libprotobuf together: locationd gives 65 PBCodable and 334 C++ messages
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/locationd -o ./protos/
 ```
 
 `--cache` accepts either the cache directory or a direct path to the main cache
@@ -75,28 +84,25 @@ the output package name), `--verbose`, `--version`.
   `sfixed*` (distinct wire encodings/helpers) *are* distinguished.
 - **Names are ObjC-derived** (ivar / class names); usually but not always identical
   to the original `.proto`.
-- **Objective-C `PBCodable` protobufs only.** The tool disassembles the generated
-  `writeTo:`/`readFrom:` code of Apple's `PBCodable` subclasses. It does **not**
-  decode protobufs from other libraries — Google's ObjC runtime (`GPBMessage` /
-  `protobuf-objc`), Swift protobuf (`SwiftProtobuf`), or C++ `libprotobuf`
-  (`google::protobuf`) — because those share a descriptor/reflection runtime with no
-  per-class serialization code to analyse. Such messages are simply absent from the
-  output (the framework yields 0 messages), not mis-decoded. When an image *also*
-  carries messages from these runtimes, **the tool prints one consolidated warning**
-  naming each, so they read as recognised-but-skipped:
-    - `GPBMessage`-derived ObjC classes — named (e.g. Apple's **Key Transparency** /
-      `transparencyd`).
-    - Swift `swift-protobuf` types — named, via export-trie protocol-conformance
-      descriptors (e.g. `bookdatastored`'s `PBProperty…` structs).
-    - C++ `google::protobuf` — symbol count + namespace(s), distinguishing top-level
-      `google::protobuf` from vendored static copies such as Apple Wireless
-      Diagnostics' `wireless_diagnostics::google::protobuf`. (locationd, for example,
-      emits its 65 PBCodable messages **and** AWD telemetry via the vendored C++
-      runtime — both reported.) Merely *linking* `libprotobuf.dylib` without
-      referencing it does not trip the detector.
-  Swift/C++ detection reads the binary's symbol table + dyld export trie, so it works
-  on a **standalone Mach-O**; for a cache image, extract the binary to detect these
-  (the cache's shared symbol table isn't addressable per-image).
+- **Three protobuf runtimes are decoded.**
+    - Apple's Objective-C `PBCodable` classes: the tool disassembles the generated
+      `writeTo:` / `readFrom:` code (everything above).
+    - Google's C++ `libprotobuf` (the full runtime): an exact decode of the
+      `FileDescriptorProto` descriptors the binary embeds, with no estimates. See
+      [C++ `libprotobuf` extraction](#c-libprotobuf-extraction).
+    - `swift-protobuf`: names and numbers are read from each message's name map and
+      types from Swift reflection metadata. See [swift-protobuf extraction](#swift-protobuf-extraction).
+- **Two more runtimes are detected but not decoded.** Google's Objective-C runtime
+  (`GPBMessage` / `protobuf-objc`, for example Apple's **Key Transparency** classes in
+  `transparencyd`) and C++ `libprotobuf-lite`, which strips its descriptors so no names
+  or numbers can be recovered. When an image carries messages from either, the tool prints
+  one consolidated warning naming them, and `--list-serializers` lists them.
+  - Detection also tells apart a top-level `google::protobuf` from vendored static copies
+    such as Apple Wireless Diagnostics' `wireless_diagnostics::google::protobuf`. Merely
+    *linking* `libprotobuf.dylib` without referencing it does not trip the detector.
+
+All three decoded runtimes work on a standalone Mach-O and, with `--framework`, on an
+image inside a dyld cache (which uses the cache's `.symbols` file).
 
 `cli.py --help` lists the full set of caveats; see [Limitations](#limitations) for
 the accepted, well-characterised output gaps.
@@ -145,15 +151,45 @@ serialized `FileDescriptorProto` descriptors the generated `.pb.cc` embeds (the
 complete and faithful — message/field/enum names, numbers, types, labels, nesting,
 oneofs — and validated field-for-field against `descriptor_pb2`.
 
+`cli.py --binary` runs it automatically alongside the other runtimes (see [Run](#run)).
+It can also be run on its own:
+
 ```sh
-./venv/bin/python3 apple_protobuf_extractor/cpp_descriptor_extract.py \
-    iphone8_data/libexec/nearbyd -o ./protos_cpp/
+./venv/bin/python3 apple_protobuf_extractor/serializers/cpp_descriptor_extract.py \
+    iphone8_data/locationd -o ./protos_cpp/
 ```
 
 Self-contained (hand-rolled descriptor decoder, no `protobuf` dependency). Only
-works on *full*-runtime binaries; `libprotobuf-lite` strips descriptors — those are
-detected and reported by the foreign-protobuf warning instead. Swift
-(`swift-protobuf`) and Google ObjC (`GPBMessage`) are detected but not yet decoded.
+works on *full*-runtime binaries; `libprotobuf-lite` strips descriptors, so those are
+detected and reported by the foreign-protobuf warning instead.
+
+## swift-protobuf extraction
+
+A `swift-protobuf` message has no single descriptor. Its schema is split across two
+tables in the binary, which the tool joins by field name:
+
+- the `_protobuf_nameMap` that `protoc-gen-swift` emits, which maps each field number
+  to its name; and
+- the Swift reflection metadata (`__swift5_fieldmd`), which gives each stored
+  property's type (`Int32`, `String`, `Array`, `Optional`, `Dictionary`, or another
+  message or enum).
+
+Names and numbers are read literally from the binary, including the several ways
+compilers lower the name map across iOS versions and optimisation levels. Well-known
+types built at runtime (`Google_Protobuf_*`), `oneof` members and copy-on-write
+storage fields are recovered. For example, `remindd` gives its own messages in
+`remindd.proto` and the Google well-known types it links in `swiftprotobuf.proto`:
+
+```sh
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/libexec/remindd -o ./protos/
+```
+
+The accepted gaps ([LIMITATIONS.md](LIMITATIONS.md), section 10): the number of a
+single-field message can be an estimate (flagged `// number estimated`); integer
+subtypes are collapsed to `int32` / `uint32` / `int64` / `uint64` (not flagged, and
+wire-incorrect for a genuine `sint*` or `fixed*` field, though none is known in the
+binaries surveyed); and a container element that does not decode is shown as `bytes`
+with a note.
 
 ## Limitations
 
