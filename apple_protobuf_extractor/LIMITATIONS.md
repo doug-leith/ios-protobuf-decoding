@@ -5,7 +5,9 @@ are documented rather than fixed: each is a small, well-characterised slice of t
 output where the recovered schema is incomplete or degraded. Where the limitation
 touches a specific emitted field, the descriptor output carries an inline `// …`
 comment pointing back here, and the relevant source sites carry a `LIMITATIONS.md`
-reference. The corresponding (deferred) to-do entries are noted per item.
+reference. Items are tagged `to-do #N`: those numbers are identifiers from the project's original
+task list (no longer in this repository), kept so the code comments and the heuristic registry still
+cross-reference the same limitation.
 
 Several limitations are the residual of a `REPLACE` heuristic that survives because
 no principled signal exists for the residual slice; those carry a **Heuristic

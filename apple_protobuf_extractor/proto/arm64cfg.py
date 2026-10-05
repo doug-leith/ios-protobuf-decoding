@@ -1,9 +1,8 @@
 """proto/arm64cfg.py — shared arm64 control-flow / operand-parsing helpers.
 
 Pure, serializer-agnostic primitives lifted out of ``proto/writeto.py`` so both the
-writeTo: field-number walk and the (forthcoming) readFrom: CFG/dominator resolver
-(TODO #42/#43) can share one copy instead of duplicating the parsing/register/extent
-logic.  See ``notes/ARM64CFG_REFACTOR_PLAN.md`` (Tier 1).
+writeTo: field-number walk and the readFrom: CFG/dominator resolver can share one
+copy instead of duplicating the parsing/register/extent logic.
 
 Imports only from ``macho.*`` (keeps the existing ``proto → macho`` direction — no
 import cycle).  These helpers carry NO writeTo: or readFrom: meaning; they operate on

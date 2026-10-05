@@ -24,7 +24,7 @@ no pre-pass (e.g. a direct unit test) returns ``{}`` (no decode, fail-safe).
 HISTORY: a linear forward-scan decoder (``_forward_scan_field_numbers``) and its
 instruction budget (``_WRITETO_MAX_INSNS`` / ``_WRITETO_INSNS_PER_FIELD`` /
 ``_writeto_insn_budget``) ran first, then merged under the walk during the writeTo
-swap (WRITETO_SWAP_PLAN.md / WRITETO_PHASE_B_PLAN.md).  Both the forward scan and
+swap.  Both the forward scan and
 its ``[cap:AFFECTS-OUTPUT]`` budgets were deleted in Phase B8 once the walk owned
 every binding and the per-ivar ``_out_helpers``.  The walk binds nothing for a map
 field written inside an ``enumerateKeysAndObjectsUsingBlock:`` block (the number lives in
@@ -38,8 +38,8 @@ from macho.memory import BinaryContext, Section, _is_in_any_section
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import (disasm, find_adrp_ldr_target, find_adrp_add_target,
                           find_mov_imm, _parse_imm, _norm_reg, _MAX_ADRP_GAP)
-# Tier-1 shared arm64 helpers, lifted to proto/arm64cfg.py
-# (notes/ARM64CFG_REFACTOR_PLAN.md).  Re-imported (hence re-exported) here so
+# Tier-1 shared arm64 helpers, lifted to proto/arm64cfg.py.
+# Re-imported (hence re-exported) here so
 # writeto_walk's own callers and tests/test_writeto_walk_coverage.py
 # (`import proto.writeto as W`) keep working unchanged — a pure code move.
 from proto.arm64cfg import (              # noqa: F401  (re-export)

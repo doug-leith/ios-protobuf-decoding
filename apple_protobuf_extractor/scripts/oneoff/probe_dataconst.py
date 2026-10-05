@@ -8,7 +8,7 @@ list for a chosen proto class, and for every method entry dumps:
   entry_va, raw 12 bytes, field0/1/2 decoded addresses, which section each
   decoded address lands in, and the cstring read at each (via ctx + cache).
 
-This answers the open question from session_summary.md:
+This answers an open question from the cache-native selector investigation:
   For a proto-class method entry, what do field0/field1/field2 decode to, and
   does field1 (typesOffset) resolve to a real pool selector?
 """

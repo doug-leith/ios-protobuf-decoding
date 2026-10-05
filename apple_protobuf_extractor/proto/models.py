@@ -32,7 +32,7 @@ def _enum_prefix(name: str) -> str:
 #: Emitted above an enum whose value-string method overran the disassembler's
 #: instruction budget, so values encoded past the cap could not be recovered.
 #: Unlike a sparse-enum gap (an undefined value), this is a *tool* limit — the
-#: missing values exist in the binary but were not read.  See SCAN_CAP_CONSTANTS_ANALYSIS.md.
+#: missing values exist in the binary but were not read.
 _ENUM_TRUNCATED_COMMENT = (
     "// WARNING: values may be INCOMPLETE — the value-string method exceeded the "
     "disassembly budget; values beyond the cap were not recovered."

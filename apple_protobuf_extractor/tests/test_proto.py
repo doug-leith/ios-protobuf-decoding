@@ -652,8 +652,7 @@ class TestDecodeCmpImm(unittest.TestCase):
 class TestRegisterMaterializedCompare(unittest.TestCase):
     """Sparse-enum values > 4095 are materialized into a register (movz[/movk])
     and compared register-to-register, because they exceed the 12-bit cmp
-    immediate.  These decoders recover such values (see
-    SPARSE_ENUM_REGISTER_COMPARE_FIX.md)."""
+    immediate.  These decoders recover such values."""
 
     @staticmethod
     def _cmp_reg(rn: int, rm: int) -> int:

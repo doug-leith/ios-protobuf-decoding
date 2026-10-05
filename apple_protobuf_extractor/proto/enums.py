@@ -937,7 +937,7 @@ def _extract_jumptable_enum_values(
     # EXTENT (_function_body_extent) so _disasm_truncated fires only on a genuine
     # overrun — killing the 16 false alarms with 0 value change.  Real missing values
     # (if any) are the `seg_incomplete` cases, a decoder problem (closed for the negadd
-    # idiom by #53).  Full sweep + methodology in SCAN_CAP_CONSTANTS_ANALYSIS.md.
+    # idiom by #53).
     _SPARSE_MAX_INSNS = 1000   # cheap probe; all harvestable pairs land well within it
 
     try:

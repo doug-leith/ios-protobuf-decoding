@@ -226,8 +226,8 @@ REGISTRY = [
     ("jt-seg-bias", EN, "_harvest_jumptable_segments", "dense-segment re-base bias: sub #imm12 or materialized mov#-K;add into the compared reg, Idiom A (#53) + Idiom B (#53b); dest-gated, fail-loud on miss", "PRINCIPLED", True),
     # Removed 2026-06-09: xasstring/_extract_enum_for_field, writeto-count/_count_field_write_patterns,
     # writeto-pass2/_find_writeto_imp_by_pattern, readfrom-pattern/_find_readfrom_c_func_by_pattern —
-    # the four no-symbols cold fallbacks deleted when the selector-resolution gate landed (see
-    # HEURISTIC_REGISTRY_RELABELS.md "Open cleanup"; functions no longer exist, 0 calls).
+    # the four no-symbols cold fallbacks deleted when the selector-resolution gate landed (functions
+    # no longer exist, 0 calls).
     # dictrep-reg: relabeled REPLACE -> PRINCIPLED 2026-06-11.  Recovers sparse
     # enum (value,name) pairs from the real `cmp wV,#K` immediates + the cfstring
     # at each branch target; the value-register identity gate is a soundness
@@ -488,7 +488,7 @@ REGISTRY = [
     #     constants reframed to the structural 12-bit cmp ceiling (_SPARSE_MAX_RANGE);
     #     routing is by the scaled-index pointer-load structure, not the count.  Golden
     #     empty-diff.  PRINCIPLED.
-    # All six are now PRINCIPLED (see TODO.md #59).  The xAsString: jump-table
+    # All six are now PRINCIPLED.  The xAsString: jump-table
     # DISASM-BUDGET caps (_SPARSE_MAX_INSNS / _SPARSE_HARD_CAP) are a SEPARATE concern —
     # cap-sparse-insns below.
     ("cap-helper-family", WH, "_classify_write_helper", "[#59 DONE] wire-type decided at the tag-build insn (stop-when-classified); 48 demoted to INPUT-SANITY backstop", "PRINCIPLED", True),

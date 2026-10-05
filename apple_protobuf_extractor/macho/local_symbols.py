@@ -9,8 +9,8 @@ Why this exists
 For cache-native frameworks built with preoptimised "direct selector" method
 lists (e.g. GeoServices), the method-list ``nameOffset`` field is effectively
 stripped: it points at unrelated binary data, so selector names cannot be
-recovered from the method list at all.  See ``session_summary.md`` — of 60,562
-GeoServices methods, every single one resolved to either a null or a wrong
+recovered from the method list at all.  Measured on GeoServices: of 60,562
+methods, every single one resolved to either a null or a wrong
 (false-positive) name via the method list.
 
 The ``.symbols`` file, however, carries the original local symbol table with

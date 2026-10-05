@@ -107,7 +107,7 @@ def _find_field_count(ctx: BinaryContext, func_va: int) -> int:
 
 # Bounded-scan caps.  The sizing rationale (defensive margin over the largest
 # observed real PB reader) is unchanged; what each one's *value* does to the
-# descriptor was audited 2026-06-09 (SCAN_CAP_CONSTANTS_ANALYSIS.md).  Observed
+# descriptor was audited 2026-06-09.  Observed
 # across GeoServices (1309 readers): ReadSpecified ≤ 1223 insns, dispatch `br`
 # ≤ 251 insns from the entry.
 #
