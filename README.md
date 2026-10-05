@@ -23,8 +23,8 @@ for details.
 ./venv/bin/python3 -m pytest
 ```
 
-Without Apple artifacts or captures, a large part of the suite skips by design (about 250
-tests in a clean checkout). The summary says so, and a green run in that state does **not**
+Without Apple artifacts or captures, a large part of the suite skips by design (235 tests in
+a clean checkout: 227 in the extractor suite, 8 in `ios_decoder`). The summary says so, and a green run in that state does **not**
 mean the extractor was exercised against real binaries.
 
 - **Live extractor tests** need the Apple artifacts: a dyld shared cache and the `locationd`
@@ -32,9 +32,13 @@ mean the extractor was exercised against real binaries.
   that holds them. Set `MACHO_REQUIRE_LIVE=1` to make a missing artifact a failure instead of a skip.
   The 8 iOS 27 tests (`test_newer_toolchain_ios27.py`) look for `./ios27_data/dylib/dyld_shared_cache_arm64e`,
   or for the directory named by `MACHO_TEST_IOS27_CACHE`.
-- **Real-capture decoder tests** need fixtures extracted from your own `.mitm` captures with
-  `ios_decoder/tests/extract_tcp_samples.py` and `extract_tile_samples.py`. Those fixtures hold
-  device identifiers and location data, so they are gitignored and never committed.
+- **Real tile and Siri tests** use extracts of real captured traffic that are committed under
+  `ios_decoder/tests/fixtures/` (about 2.6 MB). The author judged them not sensitive. They can be
+  regenerated from your own `.mitm` captures with `ios_decoder/tests/extract_tcp_samples.py` and
+  `extract_tile_samples.py`.
+- **Capture-scanning decoder tests** (ARPC/LZ4 and smoot `/fb`) look through whole `.mitm` files
+  under `ios_decoder/comparison/`, `iphone8_data/captures/` and `iphone12_data/captures/`, and skip
+  when none contain that traffic. The 5 locator tests need Apple binaries under `iphone8_data/`.
 
 ## Provenance
 
@@ -54,6 +58,9 @@ the code reflect that origin:
   machine. Their embedded build paths were replaced in place with a same-length neutral path
   (`/build/./././…/ios_protobuf_decoding`) and nothing else in them was changed. The Swift oracle
   binary was re-signed ad hoc afterwards.
+- `ios_decoder/tests/fixtures/` (real tile and Siri extracts) was added after the initial snapshot,
+  copied from the author's local, gitignored fixture directories; it was not in the original
+  repository's git history.
 - The real latitude/longitude values that a formatter test used were replaced with synthetic numbers
   that exercise the same behaviour.
 

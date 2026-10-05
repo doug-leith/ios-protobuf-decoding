@@ -2,11 +2,3 @@
 .descriptor_cache/
 **/.descriptor_cache/
 __pycache__/
-
-# real TCP flows extracted from .mitm captures (contain device IDs / auth material);
-# regenerate with `python -m ios_decoder.tests.extract_tcp_samples`
-tests/fixtures/siri_real/
-
-# real tile bodies extracted from .mitm captures (crowd-sourced location data);
-# regenerate with `python -m ios_decoder.tests.extract_tile_samples`
-tests/fixtures/tiles_real/

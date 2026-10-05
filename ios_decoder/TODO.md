@@ -84,8 +84,8 @@ cldavl/clsef return `bounds()=None` (near-global rasters, no single box). global
 share one parser, differing only in the CID column label (`render_kwargs={"kind": …}`).
 
 **Real-tile regression tests** (2026-06-15): `extract_tile_samples.py` pulls one real body of
-*every* tile type out of the captures (richest = `mitm_17feb_cont5.mitm`) into git-ignored
-`tests/fixtures/tiles_real/<type>.bin`; each `test_tile_*` has a live test (`saved_tile(name)`,
+*every* tile type out of the captures (richest = `mitm_17feb_cont5.mitm`) into
+`tests/fixtures/tiles_real/<type>.bin` (committed); each `test_tile_*` has a live test (`saved_tile(name)`,
 skips if absent) that decodes the real tile + asserts markers. **All 11 types found and decode
 clean on real data** — this validated the previously synthetic-only ports (hrse/ltecell/clsef/
 global_*) against real Apple tiles. 227 tests, 0 skips (with fixtures present).

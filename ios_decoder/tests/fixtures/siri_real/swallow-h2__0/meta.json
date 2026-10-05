@@ -1,0 +1,69 @@
+{
+  "host": "swallow.apple.com",
+  "port": 443,
+  "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+  "segments": [
+    {
+      "i": 0,
+      "dir": "C",
+      "len": 381
+    },
+    {
+      "i": 1,
+      "dir": "C",
+      "len": 51
+    },
+    {
+      "i": 2,
+      "dir": "S",
+      "len": 55
+    },
+    {
+      "i": 3,
+      "dir": "S",
+      "len": 2570
+    },
+    {
+      "i": 4,
+      "dir": "C",
+      "len": 9
+    },
+    {
+      "i": 5,
+      "dir": "C",
+      "len": 491
+    },
+    {
+      "i": 6,
+      "dir": "S",
+      "len": 459
+    },
+    {
+      "i": 7,
+      "dir": "C",
+      "len": 711
+    },
+    {
+      "i": 8,
+      "dir": "S",
+      "len": 137
+    },
+    {
+      "i": 9,
+      "dir": "C",
+      "len": 47
+    },
+    {
+      "i": 10,
+      "dir": "S",
+      "len": 10
+    },
+    {
+      "i": 11,
+      "dir": "C",
+      "len": 17
+    }
+  ],
+  "client_bytes": 1707,
+  "server_bytes": 3231
+}

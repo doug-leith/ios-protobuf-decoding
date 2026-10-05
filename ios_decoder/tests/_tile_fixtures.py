@@ -1,8 +1,8 @@
 """Helpers for tile-tool tests: synthesize section-framed tiles + pull real ones.
 
 The real-tile helper reads a response body out of a git-ignored capture (the golden
-``comparison/`` subset has one of every tile type), so the live-gated tests run on a dev
-machine with captures present and skip cleanly on a fresh checkout.
+``comparison/`` subset has one of every tile type) when one is present; the committed
+``fixtures/tiles_real/`` extracts cover the same tile types without any capture.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ _REPO = Path(__file__).resolve().parents[2]
 _CAPTURES = [
     _REPO / "ios_decoder" / "comparison" / "subset_large.mitm",
 ]
-# git-ignored real tile bodies extracted by extract_tile_samples (one per type)
+# real tile bodies extracted by extract_tile_samples (one per type; committed)
 _TILES_REAL = Path(__file__).parent / "fixtures" / "tiles_real"
 
 

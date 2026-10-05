@@ -1,0 +1,29 @@
+{
+  "host": "guzzoni.apple.com",
+  "port": 443,
+  "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+  "segments": [
+    {
+      "i": 0,
+      "dir": "C",
+      "len": 417
+    },
+    {
+      "i": 1,
+      "dir": "C",
+      "len": 584
+    },
+    {
+      "i": 2,
+      "dir": "S",
+      "len": 23
+    },
+    {
+      "i": 3,
+      "dir": "S",
+      "len": 662
+    }
+  ],
+  "client_bytes": 1001,
+  "server_bytes": 685
+}

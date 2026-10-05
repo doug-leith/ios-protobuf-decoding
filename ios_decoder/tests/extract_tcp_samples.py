@@ -12,9 +12,9 @@ the decoder can be built and verified against real bytes:
   * ``guzzoni-plain`` — a guzzoni TCP flow with NO ACE magic (edge case);
   * ``non-siri``      — genuine unrelated TCP (the contamination to reject).
 
-The extracted bytes contain real device identifiers / auth material, so the output
-dir is git-ignored (like the .mitm captures themselves).  This script is committed
-and deterministic, so the fixtures can always be regenerated:
+The extracted bytes are real traffic and the output dir is committed (the author judged
+it not sensitive; the .mitm captures themselves stay git-ignored).  This script is
+deterministic, so the fixtures can always be regenerated:
 
     ./venv/bin/python3 -m ios_decoder.tests.extract_tcp_samples
 

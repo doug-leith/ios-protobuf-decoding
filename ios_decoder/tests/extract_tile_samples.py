@@ -3,9 +3,9 @@
 
 The committed tile parsers were largely tested against synthetic data; this pulls a real
 example of every tile type out of the captures so the live regression tests decode *actual*
-Apple tile responses.  The bodies carry crowd-sourced location data, so the output dir is
-git-ignored (like the captures); this script is committed and deterministic, so the fixtures
-can always be regenerated:
+Apple tile responses.  The bodies carry crowd-sourced location data; the output dir is
+committed (the author judged it not sensitive; the captures themselves stay git-ignored).
+This script is deterministic, so the fixtures can always be regenerated:
 
     ./venv/bin/python3 -m ios_decoder.tests.extract_tile_samples
 
@@ -48,7 +48,7 @@ CAPTURES = [
     "iphone12_data/captures/cookies_default_7dec2025_cont6.mitm",
 ]
 
-# Fixtures are git-ignored, so size isn't a real constraint; the cap only avoids an
+# Fixtures are committed, so keep them reasonably small; the cap only avoids an
 # absurdly large body. The global cell tiles are inherently big (global_cdma ≈ 1 MB).
 MAX_BYTES = 2_000_000
 

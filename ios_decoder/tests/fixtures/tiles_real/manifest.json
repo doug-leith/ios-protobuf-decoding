@@ -1,0 +1,109 @@
+[
+  {
+    "name": "wifi",
+    "bytes": 3425,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/1/v1/143/173/1431500_1735500.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++XYZ wifi_tile (1735500,1431500,13)",
+      "+++LATLON_BOUNDBOX wifi_tile (53.150001525878906,53.200001526623964,-6.449999809265137,-6.399999808520079)"
+    ]
+  },
+  {
+    "name": "hrse",
+    "bytes": 1521,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl3.apple.com/2/v1/143/173/1433000_1737000.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX hrse_tile (53.3,53.35000000121072,-6.3,-6.2499999987892805)"
+    ]
+  },
+  {
+    "name": "gsmcell",
+    "bytes": 109113,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/3/v1/142/172/1420000_1720000_0000000001100002.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX gsmcell_tile (52.0,54.0,-8.0,-6.0)"
+    ]
+  },
+  {
+    "name": "cldem",
+    "bytes": 49269,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl3.apple.com/3/v2/142/172/1425000_1729000.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX cldem_tile (52.49833089197463,52.601664225307964,-7.101666971842573,-6.99833363850924)"
+    ]
+  },
+  {
+    "name": "ltecell",
+    "bytes": 119209,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/4/v1/142/172/1420000_1720000_0000000001100005.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX ltecell_tile (52.0,54.0,-8.0,-6.0)"
+    ]
+  },
+  {
+    "name": "global_gsm",
+    "bytes": 551603,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/6/v1/0/0/0000000_0000000.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX global_gsm_tile (-90.0,90.0,-180.0,180.0)"
+    ]
+  },
+  {
+    "name": "global_cdma",
+    "bytes": 1030772,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/7/v1/0/0/0000000_0000000.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX global_cdma_tile (-90.0,90.0,-180.0,180.0)"
+    ]
+  },
+  {
+    "name": "global_lte",
+    "bytes": 717,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/8/v1/0/0/0000000_0000000.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX global_lte_tile (-90.0,90.0,-180.0,180.0)"
+    ]
+  },
+  {
+    "name": "global_5g",
+    "bytes": 56002,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl2.apple.com/11/v1/0/0/0000000_0000000.gz",
+    "decode_ok": true,
+    "markers": [
+      "+++LATLON_BOUNDBOX global_5g_tile (-90.0,90.0,-180.0,180.0)"
+    ]
+  },
+  {
+    "name": "clsef",
+    "bytes": 249567,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl3.apple.com/1/v2/clsef.bin.gz",
+    "decode_ok": true,
+    "markers": []
+  },
+  {
+    "name": "cldavl",
+    "bytes": 12962,
+    "capture": "mitm_traffic_parser/captures/mitm_17feb_cont5.mitm",
+    "url": "https://cl3.apple.com/3/v2/cldavl.avl.gz",
+    "decode_ok": true,
+    "markers": []
+  }
+]

@@ -1,0 +1,617 @@
+[
+  {
+    "name": "guzzoni-ace__0",
+    "host": "guzzoni.apple.com",
+    "port": 443,
+    "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 417
+      },
+      {
+        "i": 1,
+        "dir": "C",
+        "len": 584
+      },
+      {
+        "i": 2,
+        "dir": "S",
+        "len": 23
+      },
+      {
+        "i": 3,
+        "dir": "S",
+        "len": 662
+      }
+    ],
+    "client_bytes": 1001,
+    "server_bytes": 685
+  },
+  {
+    "name": "guzzoni-ace__1",
+    "host": "guzzoni.apple.com",
+    "port": 443,
+    "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 417
+      },
+      {
+        "i": 1,
+        "dir": "S",
+        "len": 19
+      },
+      {
+        "i": 2,
+        "dir": "S",
+        "len": 4
+      },
+      {
+        "i": 3,
+        "dir": "C",
+        "len": 584
+      },
+      {
+        "i": 4,
+        "dir": "S",
+        "len": 660
+      },
+      {
+        "i": 5,
+        "dir": "S",
+        "len": 6
+      }
+    ],
+    "client_bytes": 1001,
+    "server_bytes": 689
+  },
+  {
+    "name": "guzzoni-speech__0",
+    "host": "guzzoni.apple.com",
+    "port": 443,
+    "origin": "mitm_traffic_parser/captures/doug_voice_tcp.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 417
+      },
+      {
+        "i": 1,
+        "dir": "C",
+        "len": 859
+      },
+      {
+        "i": 2,
+        "dir": "S",
+        "len": 23
+      },
+      {
+        "i": 3,
+        "dir": "S",
+        "len": 328
+      },
+      {
+        "i": 4,
+        "dir": "S",
+        "len": 873
+      },
+      {
+        "i": 5,
+        "dir": "C",
+        "len": 16384
+      },
+      {
+        "i": 6,
+        "dir": "C",
+        "len": 17852
+      },
+      {
+        "i": 7,
+        "dir": "S",
+        "len": 157
+      },
+      {
+        "i": 8,
+        "dir": "S",
+        "len": 308
+      },
+      {
+        "i": 9,
+        "dir": "S",
+        "len": 142
+      },
+      {
+        "i": 10,
+        "dir": "S",
+        "len": 878
+      },
+      {
+        "i": 11,
+        "dir": "S",
+        "len": 53
+      },
+      {
+        "i": 12,
+        "dir": "S",
+        "len": 111
+      },
+      {
+        "i": 13,
+        "dir": "C",
+        "len": 9
+      },
+      {
+        "i": 14,
+        "dir": "S",
+        "len": 9
+      },
+      {
+        "i": 15,
+        "dir": "S",
+        "len": 153
+      },
+      {
+        "i": 16,
+        "dir": "S",
+        "len": 165
+      },
+      {
+        "i": 17,
+        "dir": "S",
+        "len": 178
+      },
+      {
+        "i": 18,
+        "dir": "S",
+        "len": 183
+      },
+      {
+        "i": 19,
+        "dir": "S",
+        "len": 197
+      },
+      {
+        "i": 20,
+        "dir": "S",
+        "len": 607
+      },
+      {
+        "i": 21,
+        "dir": "S",
+        "len": 54
+      },
+      {
+        "i": 22,
+        "dir": "C",
+        "len": 1315
+      },
+      {
+        "i": 23,
+        "dir": "C",
+        "len": 122
+      },
+      {
+        "i": 24,
+        "dir": "S",
+        "len": 73
+      },
+      {
+        "i": 25,
+        "dir": "S",
+        "len": 105
+      },
+      {
+        "i": 26,
+        "dir": "S",
+        "len": 2630
+      },
+      {
+        "i": 27,
+        "dir": "S",
+        "len": 208
+      },
+      {
+        "i": 28,
+        "dir": "S",
+        "len": 448
+      },
+      {
+        "i": 29,
+        "dir": "C",
+        "len": 78
+      },
+      {
+        "i": 30,
+        "dir": "C",
+        "len": 142
+      },
+      {
+        "i": 31,
+        "dir": "C",
+        "len": 181
+      },
+      {
+        "i": 32,
+        "dir": "S",
+        "len": 235
+      },
+      {
+        "i": 33,
+        "dir": "C",
+        "len": 894
+      },
+      {
+        "i": 34,
+        "dir": "C",
+        "len": 395
+      },
+      {
+        "i": 35,
+        "dir": "S",
+        "len": 188
+      },
+      {
+        "i": 36,
+        "dir": "S",
+        "len": 82
+      },
+      {
+        "i": 37,
+        "dir": "C",
+        "len": 201
+      },
+      {
+        "i": 38,
+        "dir": "S",
+        "len": 111
+      },
+      {
+        "i": 39,
+        "dir": "S",
+        "len": 79
+      }
+    ],
+    "client_bytes": 38849,
+    "server_bytes": 8578
+  },
+  {
+    "name": "non-siri__0",
+    "host": "31.13.73.53",
+    "port": 443,
+    "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 17
+      },
+      {
+        "i": 1,
+        "dir": "C",
+        "len": 325
+      },
+      {
+        "i": 2,
+        "dir": "S",
+        "len": 122
+      },
+      {
+        "i": 3,
+        "dir": "C",
+        "len": 54
+      },
+      {
+        "i": 4,
+        "dir": "C",
+        "len": 369
+      },
+      {
+        "i": 5,
+        "dir": "C",
+        "len": 32
+      },
+      {
+        "i": 6,
+        "dir": "S",
+        "len": 48
+      },
+      {
+        "i": 7,
+        "dir": "S",
+        "len": 40
+      },
+      {
+        "i": 8,
+        "dir": "S",
+        "len": 37
+      },
+      {
+        "i": 9,
+        "dir": "C",
+        "len": 381
+      },
+      {
+        "i": 10,
+        "dir": "S",
+        "len": 40
+      },
+      {
+        "i": 11,
+        "dir": "S",
+        "len": 39
+      },
+      {
+        "i": 12,
+        "dir": "C",
+        "len": 29
+      },
+      {
+        "i": 13,
+        "dir": "S",
+        "len": 39
+      },
+      {
+        "i": 14,
+        "dir": "C",
+        "len": 29
+      },
+      {
+        "i": 15,
+        "dir": "S",
+        "len": 39
+      },
+      {
+        "i": 16,
+        "dir": "C",
+        "len": 29
+      },
+      {
+        "i": 17,
+        "dir": "S",
+        "len": 55
+      }
+    ],
+    "client_bytes": 1265,
+    "server_bytes": 459
+  },
+  {
+    "name": "non-siri__1",
+    "host": "104.199.65.9",
+    "port": 443,
+    "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 282
+      },
+      {
+        "i": 1,
+        "dir": "S",
+        "len": 521
+      },
+      {
+        "i": 2,
+        "dir": "C",
+        "len": 478
+      },
+      {
+        "i": 3,
+        "dir": "S",
+        "len": 6327
+      },
+      {
+        "i": 4,
+        "dir": "S",
+        "len": 468
+      },
+      {
+        "i": 5,
+        "dir": "C",
+        "len": 27
+      },
+      {
+        "i": 6,
+        "dir": "S",
+        "len": 27
+      },
+      {
+        "i": 7,
+        "dir": "C",
+        "len": 11
+      },
+      {
+        "i": 8,
+        "dir": "S",
+        "len": 11
+      },
+      {
+        "i": 9,
+        "dir": "S",
+        "len": 11
+      },
+      {
+        "i": 10,
+        "dir": "S",
+        "len": 11
+      },
+      {
+        "i": 11,
+        "dir": "S",
+        "len": 11
+      },
+      {
+        "i": 12,
+        "dir": "S",
+        "len": 11
+      },
+      {
+        "i": 13,
+        "dir": "S",
+        "len": 11
+      }
+    ],
+    "client_bytes": 798,
+    "server_bytes": 7409
+  },
+  {
+    "name": "swallow-h2__0",
+    "host": "swallow.apple.com",
+    "port": 443,
+    "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 381
+      },
+      {
+        "i": 1,
+        "dir": "C",
+        "len": 51
+      },
+      {
+        "i": 2,
+        "dir": "S",
+        "len": 55
+      },
+      {
+        "i": 3,
+        "dir": "S",
+        "len": 2570
+      },
+      {
+        "i": 4,
+        "dir": "C",
+        "len": 9
+      },
+      {
+        "i": 5,
+        "dir": "C",
+        "len": 491
+      },
+      {
+        "i": 6,
+        "dir": "S",
+        "len": 459
+      },
+      {
+        "i": 7,
+        "dir": "C",
+        "len": 711
+      },
+      {
+        "i": 8,
+        "dir": "S",
+        "len": 137
+      },
+      {
+        "i": 9,
+        "dir": "C",
+        "len": 47
+      },
+      {
+        "i": 10,
+        "dir": "S",
+        "len": 10
+      },
+      {
+        "i": 11,
+        "dir": "C",
+        "len": 17
+      }
+    ],
+    "client_bytes": 1707,
+    "server_bytes": 3231
+  },
+  {
+    "name": "swallow-h2__1",
+    "host": "swallow.apple.com",
+    "port": 443,
+    "origin": "iphone12_data/cookies_default_7dec2025_cont6.mitm",
+    "segments": [
+      {
+        "i": 0,
+        "dir": "C",
+        "len": 382
+      },
+      {
+        "i": 1,
+        "dir": "C",
+        "len": 51
+      },
+      {
+        "i": 2,
+        "dir": "S",
+        "len": 55
+      },
+      {
+        "i": 3,
+        "dir": "S",
+        "len": 2570
+      },
+      {
+        "i": 4,
+        "dir": "C",
+        "len": 9
+      },
+      {
+        "i": 5,
+        "dir": "C",
+        "len": 61
+      },
+      {
+        "i": 6,
+        "dir": "C",
+        "len": 421
+      },
+      {
+        "i": 7,
+        "dir": "S",
+        "len": 459
+      },
+      {
+        "i": 8,
+        "dir": "C",
+        "len": 566
+      },
+      {
+        "i": 9,
+        "dir": "C",
+        "len": 146
+      },
+      {
+        "i": 10,
+        "dir": "S",
+        "len": 137
+      },
+      {
+        "i": 11,
+        "dir": "C",
+        "len": 38
+      },
+      {
+        "i": 12,
+        "dir": "C",
+        "len": 9
+      },
+      {
+        "i": 13,
+        "dir": "S",
+        "len": 23
+      },
+      {
+        "i": 14,
+        "dir": "C",
+        "len": 17
+      }
+    ],
+    "client_bytes": 1700,
+    "server_bytes": 3244
+  }
+]
