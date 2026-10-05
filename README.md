@@ -1,21 +1,386 @@
-# ios_protobuf_decoding
+# Decoding Apple iOS Binary Protobufs
 
-Two tools for working with the protobuf traffic that iOS devices exchange with Apple:
+An iPhone sends binary protobuf messages to Apple's servers for location services, maps, Siri, advertising and analytics. Apple publishes no schemas for them. This repository contains:
 
-| Package | What it does |
-|---|---|
-| [`apple_protobuf_extractor/`](apple_protobuf_extractor/README.md) | Reconstructs `.proto` schemas from compiled Apple binaries (Objective-C `PBCodable` classes in a Mach-O file or dyld shared cache), with no headers or `.proto` sources. |
-| [`ios_decoder/`](ios_decoder/README.md) | Decodes captured iOS network traffic (mitmproxy `.mitm` files) into readable protobuf, using the schemas the extractor produced (committed under `ios_decoder/protos/`). |
+- **[`apple_protobuf_extractor`](apple_protobuf_extractor/README.md)**, which recovers `.proto` definitions (message and field names, field numbers, types and enums) from Apple's compiled binaries, by statically analysing the Objective-C `PBCodable` classes in a Mach-O file or a dyld shared cache. No Apple headers or `.proto` sources are needed.
+- **[`ios_decoder`](ios_decoder/README.md)**, which decodes captured iOS traffic (mitmproxy `.mitm` files) offline into readable protobuf using those schemas, and also handles Siri, DNS-over-HTTPS, certificates and the map and location tiles.
+- **[119 recovered `.proto` files](#recovered-schemas)** (2,359 messages, 1,047 enums) in `ios_decoder/protos/`, which you can use directly.
 
-## Setup
+The schemas are partly decoded. Names, numbers and types come from the binaries, and some field numbers are estimates (see the [extractor README](apple_protobuf_extractor/README.md#what-it-recovers--and-the-honest-caveats)). What each endpoint is *for* comes from observed traffic, and is described [below](#protobufs-by-endpoint).
+
+Related repositories:
+
+- [android-protobuf-decoding](https://github.com/doug-leith/android-protobuf-decoding) is the Android counterpart, for Google Play Services protobufs.
+- [poor-privacy-practices-of-the-apple-app-store](https://github.com/doug-leith/poor-privacy-practices-of-the-apple-app-store) has the measurement data and software for the Apple App Store study. It includes `addon_ios/ios_decoding_helpers.py`, the live mitmdump addon that `ios_decoder` was rewritten from, and the tweak used to bypass SSL certificate checks when capturing traffic.
+
+## Quick start
+
+Clone this repository and install into a virtual environment (Python 3.12 or later). The [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler must be on your `PATH`, for example `brew install protobuf` on macOS.
 
 ```sh
-python3 -m venv venv                       # Python 3.12+ for the full requirements
-./venv/bin/python3 -m pip install -r requirements.txt
+python3 -m venv venv
+./venv/bin/pip install -r requirements.txt
 ```
 
-`protoc` must also be on `PATH` (for example `brew install protobuf`). See each package's README
-for details.
+To test the installation, decode the example capture:
+
+```sh
+./venv/bin/python3 -m ios_decoder.report examples/example.mitm | diff - examples/example_output.txt
+```
+
+No output from `diff` means the decoded output matches `examples/example_output.txt`. The capture holds three flows: a Wi-Fi location lookup (`gs-loc.apple.com/clls/wloc`) and a sensor-trace upload (`hvr/trc`), both built from the real schemas with made-up values, and one real telemetry upload (`hvr/v3/use`). They are shown [below](#decoded-examples). `examples/make_example_capture.py` rebuilds both files.
+
+## What is in this repository
+
+| Path | Contents |
+|---|---|
+| [`apple_protobuf_extractor/`](apple_protobuf_extractor/README.md) | The schema extractor. |
+| [`ios_decoder/`](ios_decoder/README.md) | The traffic decoder. `endpoints.py` is the table that maps URLs to messages. |
+| `ios_decoder/protos/` | The recovered schemas, one folder per Apple framework. |
+| `examples/` | The example capture, its expected output, and the script that builds them. |
+| `ios_decoder/tests/fixtures/` | Small real extracts of captured traffic, used by the tests. |
+| `apple_protobuf_extractor/tests/` | Tests, with synthetic compiled fixtures and golden outputs. |
+
+## Decoding a capture
+
+Record the phone's traffic with [mitmproxy](https://mitmproxy.org) (`mitmdump -w capture.mitm`), then:
+
+```sh
+# Everything in a capture, decoded flows only
+./venv/bin/python3 -m ios_decoder.report capture.mitm --decoded-only
+
+# Only the traffic from geod, the daemon that makes map and place requests
+./venv/bin/python3 -m ios_decoder.report capture.mitm --user-agent geod --decoded-only
+
+# GeoServices place lookups, first 5, raw bodies in full
+./venv/bin/python3 -m ios_decoder.report capture.mitm --url 'dispatcher\.arpc' --limit 5 --full-bodies
+
+# What domains did the device resolve? (DNS-over-HTTPS)
+./venv/bin/python3 -m ios_decoder.report capture.mitm --url 'dns-query' --decoded-only
+```
+
+The [`ios_decoder` README](ios_decoder/README.md) lists all the options. Decrypting the phone's HTTPS traffic needs the system processes' certificate checks to be bypassed. In our measurements the iPhone 8 was jailbroken with palera1n, a modified SSL Kill Switch tweak bypassed certificate pinning, and `mitmdump` acted as a transparent proxy. The App Store repository above includes an SSL-bypass tweak.
+
+## Extracting schemas from Apple binaries
+
+```sh
+# Extract one framework from the dyld cache  ->  ./protos/*.proto
+./venv/bin/python3 apple_protobuf_extractor/cli.py --framework GeoServices --cache iphone8_data/dylib -o ./protos/
+
+# Extract from a standalone Mach-O binary (no cache needed)
+./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/locationd -o ./protos/
+
+# List every framework embedded in the cache
+./venv/bin/python3 apple_protobuf_extractor/cli.py --list-frameworks --cache iphone8_data/dylib
+```
+
+The dyld cache and binaries are Apple's software and are not in this repository. [Getting the Apple artifacts](#getting-the-apple-artifacts-optional) below shows how to download them.
+
+## Recovered schemas
+
+`ios_decoder/protos/` holds the extractor's output, one folder per framework. Each file starts with a header naming the tool, the serializer (`Apple PBCodable (ObjC)`) and the source framework. In `geo.proto`, `als.proto` and `clp.proto` the Objective-C class prefix is dropped (`GEOPDPlaceRequest` is `geo.PDPlaceRequest`).
+
+| Framework | `.proto` files | Messages | What is in it |
+|---|---|---|---|
+| `GeoServices` | 6 | 1,692 | Maps, places and geocoding, Wi-Fi quality and `geod` telemetry. `geo.proto` holds most of the `GEO*` messages. |
+| `locationd` | 25 | 399 | Wi-Fi and cell location lookup (`als.proto`) and other `locationd` messages. |
+| `CoreLocationProtobuf` | 1 | 84 | Cell and Wi-Fi observation, location, trace and pressure uploads (`clp.proto`). |
+| `AppPredictionInternal` | 8 | 99 | App-prediction messages (`atx.proto`, used by the `DuetExpert` feedback channel). |
+| `CoreParsec` | 77 | 77 | Feedback and usage messages, for example `_cpusageenvelope.proto` and `_cpclientsession.proto`. |
+| `ProactiveEventTracker` | 2 | 8 | `pet.proto`, used by the `ProactiveEventTracker` feedback channels. |
+
+## Protobufs by endpoint
+
+The decoder recognises the endpoints below (the table is `ios_decoder/endpoints.py`). The descriptions are based on traffic from an iPhone 8 running iOS 16.7.11. Server names such as `gsp10-ssl.apple.com` vary, so `*` stands for the number.
+
+<!-- BEGIN endpoint-table (generated by ios_decoder/endpoint_docs.py; do not edit by hand) -->
+
+#### Location lookups and crowdsourced uploads (`locationd`)
+
+`locationd` hosts the phone's location providers. It asks Apple where Wi-Fi access points and cell towers are, and uploads ("harvests") sensor data. The uploads below are ARPC requests with function IDs 100 (`pbcwloc`), 101 (`pds/pd`) and 109 (`hvr/trc`); `psr` is sent with function ID 0.
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `gs-loc.apple.com/clls/wloc` | Wi-Fi and cell location lookup. The handset sends a Wi-Fi MAC address or a cell-tower identity (in one request its own latitude and longitude) and gets back the positions of nearby access points or towers. | request: `als.ALSLocationRequest` (function 1) or `als.ALSNearbyRequest` (function 3)<br>response: `als.ALSLocationResponse` or `als.ALSNearbyResponse` |
+| `gsp*-ssl.apple.com/hcy/pbcwloc` | Cell and Wi-Fi observation upload: cell-tower (MCC, MNC, TAC, cell ID, signal strength) and Wi-Fi (MAC address, channel, signal strength) records, each with the handset location and motion state. | request: `clp.CellWifiCollectionRequest`<br>response: `clp.CellWifiCollectionResponse` |
+| `gsp*-ssl.apple.com/pds/pd` | GPS fix upload: locations with altitude, accuracy, speed, course and motion state, the bundle ID of the app using location, and a trip ID. | request: `clp.LocationCollectionRequest`<br>response: `clp.LocationCollectionResponse` |
+| `gsp*-ssl.apple.com/hvr/trc` | Sensor trace upload: pressure, temperature, locations with GNSS satellite reports, compass attitude, pedometer and motion state, and the app bundle ID. | request: `clp.TraceCollectionRequest`<br>response: `clp.TraceCollectionResponse` |
+| `gsp*-ssl.apple.com/psr` | Barometric pressure upload: a pressure reading and timestamp, with the GPS fix at the time of the reading. | request: `clp.PressureCollectionRequest`<br>response: `clp.PressureCollectionResponse` |
+
+#### Telemetry, experiments and configuration (`geod`)
+
+`geod` is the daemon that makes map and place requests on behalf of the system and apps, and reports usage back to Apple.
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `gsp*-ssl.ls.apple.com/hvr/v3/use` | Telemetry. Batched log records describing each network request `geod` makes and the client that made it, with handset model, OS version, country code, carrier and connectivity type. Daily records carry a session ID. ARPC function 1017, LZ4-compressed. | request: `geo.LogMessageCollectionRequest`<br>response: `geo.LogMessageCollectionResponse` |
+| `gsp*-ssl.apple.com/hvr/v2/rtloc` | Real-time traffic probe sent by `geod`: a sequence of timestamped GPS locations with accuracy and motion type, sent within a minute of the fixes. | request: `geo.LogMessageCollectionRequest`<br>response: `geo.LogMessageCollectionResponse` |
+| `gsp-ssl.ls.apple.com/ab.arpc` | A/B experiments. The handset sends a random GUID, locale, OS version and country code and gets back an experiment bucket ID for the Parsec, Siri, RAP and Maps namespaces. | request: `geo.ABAssignmentRequest`<br>response: `geo.ABAssignmentResponse` |
+
+#### Places and geocoding
+
+Place and address lookups. All use the `PDPlaceRequest` message on different hosts. Requests name the calling client, and some carry a precise location.
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `gsp-ssl.ls.apple.com/dispatcher.arpc` | Reverse geocoding and place data. The request names the calling client (for example the Weather widget); the reply is a street address, bounding polygons and place data. | request: `geo.PDPlaceRequest`<br>response: `geo.PDPlaceResponse` |
+| `gsp*-ssl-revgeo.ls.apple.com/dispatcher.arpc` | Reverse geocoding on behalf of system clients such as CoreRoutine, `analyticsd` and `networkserviceproxy`. Carries GPS coordinates. | request: `geo.PDPlaceRequest`<br>response: `geo.PDPlaceResponse` |
+| `gsp*-ssl-background.ls.apple.com/dispatcher.arpc` | Place lookup on the `-background` dispatcher host; the same `PDPlaceRequest` message. | request: `geo.PDPlaceRequest`<br>response: `geo.PDPlaceResponse` |
+| `gsp*-ssl-locus.ls.apple.com/dispatcher.arpc` | Wi-Fi fingerprint lookup from CoreRoutine: timestamped locations, MAC addresses and signal strengths of nearby access points, and visit entry and exit times. The reply is a status only. | request: `geo.PDPlaceRequest`<br>response: `geo.PDPlaceResponse` |
+| `gsp*-ssl.ls.apple.com/revgeo_pr.arpc` | Reverse geocoding request (`PDPlaceRequest`). | request: `geo.PDPlaceRequest`<br>response: `geo.PDPlaceResponse` |
+| `gsp*-ssl.ls.apple.com/api/v1.0/poi/data` | Point-of-interest lookup (a batched spatial lookup). | request: `geo.SpatialLookupBatchRequest`<br>response: `geo.SpatialLookupBatchResponse` |
+
+#### Wi-Fi quality
+
+Used by the Wi-Fi pre-fetch service (`ThreeBarsXPCService`).
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `gsp*-ssl.ls.apple.com/wifi_request` | Wi-Fi quality lookup: the BSSID of the access point the handset is using, with locale and country code. Sent even when location is off. The reply is a quality status for that BSSID. | request: `geo.WiFiQualityServiceRequest`<br>response: `geo.WiFiQualityServiceResponse` |
+| `gspe*-ssl.ls.apple.com/wifi_request_tile` | Wi-Fi quality tile: per-access-point records with packed BSSID, latitude and longitude, popularity score, authentication type and a public-network flag. | response: `geo.WiFiQualitySearchResultTile` |
+
+#### Map manifests and resources
+
+Downloaded without a location by `geod`.
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `gspe*-ssl.ls.apple.com/geo_manifest/dynamic/config` | The GeoServices manifest: the resources `geod` can fetch (map tiles, fonts, icons, textures) and the endpoint URLs of the other services. | response: `geo.Resources` |
+| `gspe*-ssl.ls.apple.com/config/search-attribution-N` | Search attribution manifest (`SearchAttributionManifest`). | response: `geo.SearchAttributionManifest` |
+| `gspe*-ssl.ls.apple.com/other/publisher_attribution_dot_coms-N.pb` | Publisher attribution manifest (`PublisherAttributionManifest`). | response: `geo.PublisherAttributionManifest` |
+| `gspe*-ssl.ls.apple.com/other/publisher_attribution_manifest_index-N.pb` | Index of the publisher attribution manifests. | response: `geo.PublisherAttributionManifestIndex` |
+| `gspe*-ssl.ls.apple.com/other/regional_vehicle_info-N.pb` | Regional vehicle (EV) information (`LPRWorld`). | response: `geo.LPRWorld` |
+
+#### Feedback, advertising and certificates
+
+Feedback and analytics uploads, advertising SDK traffic and certificate responses.
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `fbs.smoot.apple.com/fb and api.smoot.apple.com/fb` | Feedback and analytics upload. The message depends on the `?type=` channel. | request, by `?type=`: `FeedbackV2PB` → `_cpclientsession._CPClientSession`; `Usage` → `_cpusageenvelope._CPUsageEnvelope`; `ProactiveEventTracker` → `pet.PETUpload`; `ProactiveEventTrackerAggregated` → `pet.PETUpload`; `DuetExpert` → `atx.ATXNotificationsPBLogWrapper` |
+| `xp.apple.com/report/` | XP analytics reports. The body is nested JSON; embedded base64, gzip and protobuf are expanded. | request: nested JSON, with embedded base64, gzip and protobuf expanded |
+| `amp-api*.apps.apple.com/v1/engagement` | App Store engagement traffic: adverts, upsell and subscription offers, and analytics on user behaviour. Nested JSON, expanded the same way as XP. | request and response: nested JSON, with embedded base64, gzip and protobuf expanded |
+| `iadsdk.apple.com/adserver/2.6/optout/optout_optin` | iAd advertising SDK: opt-out / opt-in request. | request and response: 8-byte iAd header, then a protobuf decoded without a schema |
+| `iadsdk.apple.com/adserver/2.6/segment/update` | iAd advertising SDK: segment update. | request and response: 8-byte iAd header, then a protobuf decoded without a schema |
+| `tr.iadsdk.apple.com/adserver/2.6/settings` | iAd advertising SDK: settings. | response: 8-byte iAd header, then a protobuf decoded without a schema |
+| `cf.iadsdk.apple.com/adserver/2.6/config` | iAd advertising SDK: configuration. | response: 8-byte iAd header, then a protobuf decoded without a schema |
+| `humb.apple.com/humbug/baa` | Certificate response. | response: X.509 certificate chain (PEM) |
+| `swallow.apple.com/…GetCertificate` | Certificate response from the Siri `swallow` service. | response: X.509 certificate chain (DER) |
+
+#### Tiles (`locationd` and `geod`)
+
+`locationd` puts the south-west corner of the tile, in degrees, in the URL path (`1433500_1738000` means latitude 53.35, longitude -6.20), so each download tells Apple the area the handset is in. The global tiles name no location. Each is decoded by a tile parser in `ios_decoder/tile_tools`.
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `cl2.apple.com/1/v1/N` | Wi-Fi tile: Wi-Fi MAC addresses and their latitude and longitude. About 5 km across. | response: tile parser `wifi` |
+| `cl2.apple.com/3/v1/N` | GSM cell tile: cell identifiers, locations and coverage footprints for one carrier network (the carrier is encoded in the URL). | response: tile parser `gsmcell` |
+| `cl2.apple.com/4/v1/N` | LTE cell tile: LTE cell identifiers (TAC and global cell ID) and their locations for one carrier network. | response: tile parser `ltecell` |
+| `cl3.apple.com/2/v1/N` | High-resolution signal environment (HRSE) tile: the radio signal environment class at fine resolution over the tile. | response: tile parser `hrse` |
+| `cl3.apple.com/3/v2/N` | Digital elevation model tile: altitudes on a grid across the tile. | response: tile parser `cldem` |
+| `cl2.apple.com/6/v1/N` | Global GSM cell tile: a list of GSM cells (MCC, MNC, cell ID) and their locations. | response: tile parser `global_gsm` |
+| `cl2.apple.com/7/v1/N` | Global CDMA tile: a list of CDMA base station IDs. | response: tile parser `global_cdma` |
+| `cl2.apple.com/8/v1/N` | Global LTE tile: a list of LTE global cell IDs. | response: tile parser `global_lte` |
+| `cl2.apple.com/11/v1/N` | Global 5G tile: a list of 5G NR cell IDs. | response: tile parser `global_5g` |
+| `cl3.apple.com/3/v2/cldavl.avl.gz` | Tile availability index: bitmaps of which geographic tiles have data on the server. | response: tile parser `cldavl` |
+| `cl3.apple.com/1/v2/clsef.bin.gz` | Global coarse signal-environment map: a raster covering the Earth at 0.05 degree resolution. | response: tile parser `clsef` |
+
+<!-- END endpoint-table -->
+
+### How the traffic is framed
+
+Most `geod` and `locationd` requests use Apple's ARPC framing. A request starts with a 2-byte version, then length-prefixed locale, app identifier and OS-version strings (version 2 adds the compression algorithm), a 4-byte function ID and a 4-byte payload length, followed by the protobuf. A response has a version, a response type and a payload length. Compressed payloads use Apple's `bvx` LZ4 framing (`bv41` blocks that share a dictionary, `bv4-` stored blocks and a `bv4$` end marker). The decoder prints the header on the first line of each body, as `apple arpc header: ...`.
+
+### Decoded examples
+
+These come from `examples/example.mitm`. The `wloc` and `hvr/trc` values are made up (the MAC addresses are in the range reserved for documentation, and the coordinates are those of Apple Park). The `hvr/v3/use` body is real.
+
+<!-- BEGIN examples (generated by ios_decoder/endpoint_docs.py; do not edit by hand) -->
+
+#### A Wi-Fi location lookup (`wloc`)
+
+The handset sends one Wi-Fi MAC address; Apple returns the positions of that access point and its neighbours.
+
+```text
+POST https://gs-loc.apple.com/clls/wloc
+Request body (decoded):
+apple arpc header: version=1, locale=en_US, app=com.apple.locationd, osVersion=16.7.11.20H360, requestType=1, length=70
+wirelessAPs {
+  macID: "00:00:5e:00:53:01"
+}
+numberOfSurroundingWifis: 100
+surroundingWifiBands: ALS_LOCATION_REQUEST_SURROUNDING_WIFI_BANDS_K2DOT4_GHZ
+wifiAltitudeScale: ALS_LOCATION_REQUEST_WIFI_ALTITUDE_SCALE_K_WIFI_ALTITUDE_SCALE10TO_THE2
+meta {
+  softwareBuild: "iPhone OS16.7.11/20H360"
+  productId: "iPhone10,1"
+}
+Response body (decoded):
+apple header: version=1, responseType=1, payloadLength=224
+wirelessAPs {
+  macID: "00:00:5e:00:53:01"
+  location {
+    latitude: 3733490000
+    longitude: -12200900000
+    accuracy: 20
+    locationType: 3
+    altitude: 48
+    verticalAccuracy: 1000
+    score: 53
+    reach: 89
+  }
+  channel: 1
+}
+wirelessAPs {
+  macID: "00:00:5e:00:53:02"
+  location {
+    latitude: 3733530000
+    longitude: -12200930000
+    accuracy: 25
+    locationType: 3
+    altitude: 48
+    verticalAccuracy: 1000
+    score: 53
+    reach: 89
+  }
+  channel: 6
+}
+...
+```
+
+#### A sensor-trace upload (`hvr/trc`)
+
+`locationd` uploads GPS fixes and a pressure reading.
+
+```text
+POST https://gsp10-ssl.apple.com/hvr/trc
+Request body (decoded):
+apple arpc header: version=1, locale=en_US, app=com.apple.locationd, osVersion=16.7.11.20H360, requestType=109, length=241
+meta {
+  productId: "D20AP"
+  softwareVersion: "iPhone OS16.7.11/20H360"
+}
+events {
+  type: INDOOR_EVENT_TYPE_LOCATION
+  location {
+    latitude: 37.3349
+    longitude: -122.009
+    horizontalAccuracy: 5
+    altitude: 61.5
+    verticalAccuracy: 4
+    speed: 1.5
+    course: 110
+    timestamp: 802283024
+    provider: 1
+  }
+}
+events {
+  type: INDOOR_EVENT_TYPE_LOCATION
+  location {
+    latitude: 37.335
+    longitude: -122.0091
+    horizontalAccuracy: 5
+    altitude: 61.5
+    verticalAccuracy: 4
+    speed: 1.5
+    course: 110
+    timestamp: 802283025
+    provider: 1
+  }
+}
+...
+```
+
+#### A telemetry upload (`hvr/v3/use`)
+
+`geod` reports a network request it made (here a failed Wi-Fi quality lookup) with the handset model, OS version and a session ID.
+
+```text
+POST https://gsp64-ssl.ls.apple.com/hvr/v3/use
+Request body (decoded):
+apple arpc header: version=2, locale=en-IE_IE, app=com.apple.geod, osVersion=16.7.11.20H360, compressionAlgo=LZ4, requestType=1017, length=323
+logMessages {
+  logMsgEvents {
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_APPLICATION_IDENTIFIER
+      applicationIdentifier {
+        appIdentifier: "com.apple.geod"
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_CAR_PLAY
+      carPlay {
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_DEVICE_SETTINGS
+      deviceSettings {
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_DEVICE_CONNECTION
+      deviceConnection {
+        deviceNetworkConnectivity: DEVICE_NETWORK_CONNECTIVITY_WIFI
+        deviceCountryCode: "IE"
+        deviceCarrierName: "48"
+        cellularDataState: CELLULAR_DATA_STATE_ALLOWED
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_DEVICE_IDENTIFIER
+      deviceIdentifier {
+        deviceOsVersion: "16.7.11.20H360"
+        deviceHwIdentifier: "iPhone10,1"
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_EXPERIMENTS
+      experiments {
+        datasetAbStatus {
+        }
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_MUNIN_RESOURCE_LOG
+      muninResource {
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_USER_SESSION
+      userSession {
+        sessionId: "\010\277\315\231\237\254\301\215\201p\020\370\377\301\333\203\265\374%"
+        relativeTimestamp: 793048500
+        eventTime {
+          timeRoundedToHour: 793047600
+        }
+        ageOfSessionIdInSeconds: 450835
+      }
+    }
+    eventType: LOG_MSG_EVENT_TYPE_NETWORK
+    networkEvent {
+      networkService: LOG_MSG_EVENT_NETWORK_SERVICE_WIFI_QUALITY
+      requestDataSize: 119
+      responseDataSize: 64
+      requestAppIdentifier: "com.apple.wifi.ThreeBarsXPCService"
+      totalTime: 2073
+      httpResponseCode: 200
+      manifestEnv: "prod"
+      tilesetId: 2602162
+      serviceIpAddress: "17.167.200.74:443"
+      requestAppIdMinorVer: "1"
+      samplingRate: 10000
+      taskMetrics {
+      }
+    }
+  }
+  logMessageType: LOG_MESSAGE_TYPE_LONG_SESSION_USAGE
+}
+Response body (decoded):
+apple header: version=1, responseType=1017, payloadLength=0
+(empty payload)
+```
+
+<!-- END examples -->
 
 ## Tests
 
@@ -90,13 +455,16 @@ ipsw dyld info iphone8_data/dylib/dyld_shared_cache_arm64 | grep -E 'OS Version|
 `nptocompaniond`, `DPSubmissionService`) and put them where the tests expect them.
 
 ```sh
-ipsw extract --files --flat --output iphone8_data/extracted \
+ipsw extract --files --output iphone8_data/extracted \
   --pattern '(usr/libexec/(locationd|remindd|transparencyd|nptocompaniond)|GeoServices\.framework/geod|DPSubmissionService\.xpc/DPSubmissionService)$' \
   "$IPSW"
 mkdir -p iphone8_data/libexec
-mv iphone8_data/extracted/{remindd,transparencyd,nptocompaniond} iphone8_data/libexec/
-mv iphone8_data/extracted/{locationd,geod,DPSubmissionService} iphone8_data/
+find iphone8_data/extracted -type f \( -name remindd -o -name transparencyd -o -name nptocompaniond \) -exec mv {} iphone8_data/libexec/ \;
+find iphone8_data/extracted -type f \( -name locationd -o -name geod -o -name DPSubmissionService \) -exec mv {} iphone8_data/ \;
 ```
+
+`ipsw` recreates the firmware's folder layout under `iphone8_data/extracted/`, so the two `find` commands
+do the moving.
 
 **5. Extract the GeoServices image from the cache.** This prints an "experimental" warning; that is expected.
 
@@ -131,20 +499,22 @@ the code reflect that origin:
 - Comments and notes refer to predecessor tools that are not included (`mitm_traffic_parser`,
   `addon_ios`, `find_protobuf_for_url`, `proto_diff`, `macho_disasm`) and to commit hashes from the
   original repository.
-- The generated `.proto` files carry the header `// Generated by macho_project`. That is the
-  original repository's name, kept so the committed outputs stay byte-identical to what the
-  extractor emits.
+- The committed `.proto` files were generated under the original repository's name. Their first line,
+  `// Generated by ...`, was changed to name this repository, and the extractor now emits the new name;
+  nothing else in them was touched.
 - `apple_protobuf_extractor/validate_ref.py` and `scripts/oneoff/validate_protos_dump.py` read a
   hand-decoded reference set (`iphone8_reference_protos/`) that is not part of this repository.
 - The compiled test fixtures under `apple_protobuf_extractor/tests/` were built on the author's
   machine. Their embedded build paths were replaced in place with a same-length neutral path
   (`/build/./././…/ios_protobuf_decoding`) and nothing else in them was changed. The Swift oracle
   binary was re-signed ad hoc afterwards.
-- `ios_decoder/tests/fixtures/` (real tile, Siri, ARPC and `/fb` extracts) was added after the initial snapshot,
-  copied from the author's local, gitignored fixture directories; it was not in the original
-  repository's git history.
+- `ios_decoder/tests/fixtures/` (real tile, Siri, ARPC and `/fb` extracts) was added after the initial snapshot.
+  The tile and Siri extracts were copied from the author's local, gitignored fixture directories, and the
+  ARPC and `/fb` extracts were selected from the captures by `extract_request_samples.py`. None of it was in
+  the original repository's git history.
 - The real latitude/longitude values that a formatter test used were replaced with synthetic numbers
   that exercise the same behaviour.
+- `examples/` was added after the initial snapshot. Its `wloc` and `hvr/trc` flows are synthetic.
 
 ## Licence
 

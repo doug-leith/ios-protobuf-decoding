@@ -234,7 +234,7 @@ def _flow_passes_filters(flow, is_tcp: bool, url_re, ua_prefix: Optional[str],
 def _resolve_proto_dirs(proto_dirs) -> tuple[list, Optional[str]]:
     """Pick the schema-source dirs and a transparency note if none of them exist.
 
-    Named-schema decoding is optional: the .proto files live in the external addon_ios oracle
+    Named-schema decoding is optional: by default the schemas are the committed ios_decoder/protos/
     (or wherever ``--proto-dir`` points).  When no dir is present the decoder still works via
     raw protobuf, but the user should know *why* the output is unnamed — hence the note.
     """
@@ -327,8 +327,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                     help="suppress the +++REQUEST / +++REQHEADERS summary lines")
     ap.add_argument("--proto-dir", action="append", metavar="DIR",
                     help="directory of .proto schema files for named-endpoint decoding "
-                         "(repeatable; default: the addon_ios dir if present). Without any, "
-                         "bodies are decoded as raw protobuf.")
+                         "(repeatable; default: the schemas committed under ios_decoder/protos/). "
+                         "Without any schema dir, bodies are decoded as raw protobuf.")
     args = ap.parse_args(argv)
     body_opts = BodyDisplayOptions(hexdump=args.hex, full=args.full_bodies)
     proto_dirs = [Path(d) for d in args.proto_dir] if args.proto_dir else None

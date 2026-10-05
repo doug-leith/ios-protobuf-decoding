@@ -1,0 +1,226 @@
+
+timestamp 1780000060.0 (2026-05-28 20:27:40+00:00 UTC)
+POST https://gs-loc.apple.com/clls/wloc
+Request body (decoded):
+apple arpc header: version=1, locale=en_US, app=com.apple.locationd, osVersion=16.7.11.20H360, requestType=1, length=70
+wirelessAPs {
+  macID: "00:00:5e:00:53:01"
+}
+numberOfSurroundingWifis: 100
+surroundingWifiBands: ALS_LOCATION_REQUEST_SURROUNDING_WIFI_BANDS_K2DOT4_GHZ
+wifiAltitudeScale: ALS_LOCATION_REQUEST_WIFI_ALTITUDE_SCALE_K_WIFI_ALTITUDE_SCALE10TO_THE2
+meta {
+  softwareBuild: "iPhone OS16.7.11/20H360"
+  productId: "iPhone10,1"
+}
+Response body (decoded):
+apple header: version=1, responseType=1, payloadLength=224
+wirelessAPs {
+  macID: "00:00:5e:00:53:01"
+  location {
+    latitude: 3733490000
+    longitude: -12200900000
+    accuracy: 20
+    locationType: 3
+    altitude: 48
+    verticalAccuracy: 1000
+    score: 53
+    reach: 89
+  }
+  channel: 1
+}
+wirelessAPs {
+  macID: "00:00:5e:00:53:02"
+  location {
+    latitude: 3733530000
+    longitude: -12200930000
+    accuracy: 25
+    locationType: 3
+    altitude: 48
+    verticalAccuracy: 1000
+    score: 53
+    reach: 89
+  }
+  channel: 6
+}
+wirelessAPs {
+  macID: "00:00:5e:00:53:03"
+  location {
+    latitude: 3733570000
+    longitude: -12200960000
+    accuracy: 30
+    locationType: 3
+    altitude: 48
+    verticalAccuracy: 1000
+    score: 53
+    reach: 89
+  }
+  channel: 11
+}
+wirelessAPs {
+  macID: "00:00:5e:00:53:04"
+  location {
+    latitude: 3733610000
+    longitude: -12200990000
+    accuracy: 35
+    locationType: 3
+    altitude: 48
+    verticalAccuracy: 1000
+    score: 53
+    reach: 89
+  }
+  channel: 36
+}
++++REQUEST https://gs-loc.apple.com/clls/wloc 212 1780000060.0
++++REQHEADERS https://gs-loc.apple.com/clls/wloc € User-Agent='locationd/2787.0.5 CFNetwork/1410.1 Darwin/22.6.0' € User-Agent=locationd/2787.0.5 CFNetwork/1410.1 Darwin/22.6.0~Content-Type=application/x-www-form-urlencoded~Accept=*/*~content-length=124~
+
+timestamp 1780000120.0 (2026-05-28 20:28:40+00:00 UTC)
+POST https://gsp10-ssl.apple.com/hvr/trc
+Request body (decoded):
+apple arpc header: version=1, locale=en_US, app=com.apple.locationd, osVersion=16.7.11.20H360, requestType=109, length=241
+meta {
+  productId: "D20AP"
+  softwareVersion: "iPhone OS16.7.11/20H360"
+}
+events {
+  type: INDOOR_EVENT_TYPE_LOCATION
+  location {
+    latitude: 37.3349
+    longitude: -122.009
+    horizontalAccuracy: 5
+    altitude: 61.5
+    verticalAccuracy: 4
+    speed: 1.5
+    course: 110
+    timestamp: 802283024
+    provider: 1
+  }
+}
+events {
+  type: INDOOR_EVENT_TYPE_LOCATION
+  location {
+    latitude: 37.335
+    longitude: -122.0091
+    horizontalAccuracy: 5
+    altitude: 61.5
+    verticalAccuracy: 4
+    speed: 1.5
+    course: 110
+    timestamp: 802283025
+    provider: 1
+  }
+}
+events {
+  type: INDOOR_EVENT_TYPE_LOCATION
+  location {
+    latitude: 37.3351
+    longitude: -122.0092
+    horizontalAccuracy: 5
+    altitude: 61.5
+    verticalAccuracy: 4
+    speed: 1.5
+    course: 110
+    timestamp: 802283026
+    provider: 1
+  }
+}
+events {
+  type: INDOOR_EVENT_TYPE_PRESSURE
+  pressure {
+    timestamp: 802283027
+    pressure: 101.2
+    temperature: 21.5
+  }
+}
+type: TRACE_COLLECTION_REQUEST_TYPE_RANDOM_COLLECTION
+Response body (decoded):
+apple header: version=1, responseType=0, payloadLength=0
+(empty payload)
++++REQUEST https://gsp10-ssl.apple.com/hvr/trc 383 1780000120.0
++++REQHEADERS https://gsp10-ssl.apple.com/hvr/trc € User-Agent='locationd/2787.0.5 CFNetwork/1410.1 Darwin/22.6.0' € User-Agent=locationd/2787.0.5 CFNetwork/1410.1 Darwin/22.6.0~Content-Type=application/x-www-form-urlencoded~Accept=*/*~content-length=295~
+
+timestamp 1780000180.0 (2026-05-28 20:29:40+00:00 UTC)
+POST https://gsp64-ssl.ls.apple.com/hvr/v3/use
+Request body (decoded):
+apple arpc header: version=2, locale=en-IE_IE, app=com.apple.geod, osVersion=16.7.11.20H360, compressionAlgo=LZ4, requestType=1017, length=323
+logMessages {
+  logMsgEvents {
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_APPLICATION_IDENTIFIER
+      applicationIdentifier {
+        appIdentifier: "com.apple.geod"
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_CAR_PLAY
+      carPlay {
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_DEVICE_SETTINGS
+      deviceSettings {
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_DEVICE_CONNECTION
+      deviceConnection {
+        deviceNetworkConnectivity: DEVICE_NETWORK_CONNECTIVITY_WIFI
+        deviceCountryCode: "IE"
+        deviceCarrierName: "48"
+        cellularDataState: CELLULAR_DATA_STATE_ALLOWED
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_DEVICE_IDENTIFIER
+      deviceIdentifier {
+        deviceOsVersion: "16.7.11.20H360"
+        deviceHwIdentifier: "iPhone10,1"
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_EXPERIMENTS
+      experiments {
+        datasetAbStatus {
+        }
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_MUNIN_RESOURCE_LOG
+      muninResource {
+      }
+    }
+    logMsgStates {
+      stateType: LOG_MSG_STATE_TYPE_USER_SESSION
+      userSession {
+        sessionId: "\010\277\315\231\237\254\301\215\201p\020\370\377\301\333\203\265\374%"
+        relativeTimestamp: 793048500
+        eventTime {
+          timeRoundedToHour: 793047600
+        }
+        ageOfSessionIdInSeconds: 450835
+      }
+    }
+    eventType: LOG_MSG_EVENT_TYPE_NETWORK
+    networkEvent {
+      networkService: LOG_MSG_EVENT_NETWORK_SERVICE_WIFI_QUALITY
+      requestDataSize: 119
+      responseDataSize: 64
+      requestAppIdentifier: "com.apple.wifi.ThreeBarsXPCService"
+      totalTime: 2073
+      httpResponseCode: 200
+      manifestEnv: "prod"
+      tilesetId: 2602162
+      serviceIpAddress: "17.167.200.74:443"
+      requestAppIdMinorVer: "1"
+      samplingRate: 10000
+      taskMetrics {
+      }
+    }
+  }
+  logMessageType: LOG_MESSAGE_TYPE_LONG_SESSION_USAGE
+}
+Response body (decoded):
+apple header: version=1, responseType=1017, payloadLength=0
+(empty payload)
++++REQUEST https://gsp64-ssl.ls.apple.com/hvr/v3/use 447 1780000180.0
++++REQHEADERS https://gsp64-ssl.ls.apple.com/hvr/v3/use € User-Agent='geod/1 CFNetwork/1410.1 Darwin/22.6.0' € User-Agent=geod/1 CFNetwork/1410.1 Darwin/22.6.0~Content-Type=application/octet-stream~Accept=*/*~content-length=380~
