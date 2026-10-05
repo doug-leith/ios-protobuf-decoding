@@ -42,13 +42,6 @@ smells = ["pylint>=4.0", "radon>=6.0", "lizard>=1.17", "vulture>=2.10"]
 # `-j 1` is not a preference: the similarities checker (duplicate-code) is only
 # reported single-threaded, and a sandboxed macOS run cannot create the process
 # pool that `-j 0` needs.
-[tool.pylint.main]
-ignore-paths = [
-    # One-off investigation scripts: written to answer one question and kept as
-    # a record of how it was answered, not maintained as library code.
-    "^scripts/oneoff/.*$",
-]
-
 [tool.pylint."messages control"]
 # An ALLOWLIST, not a deny-list: this profile answers "what structural smells
 # does the extractor have", so it names the checks it wants and nothing else.

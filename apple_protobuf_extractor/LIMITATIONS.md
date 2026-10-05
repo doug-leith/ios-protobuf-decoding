@@ -271,7 +271,7 @@ principled, not a guess.
 
 **Source site.** `proto/enums.py` (`_enum_name_from_pairs`, `_qualify_enum_name`); the
 emitter reconciliation `_collect_enums` / `_best_in_compat_group` (`proto/emitter.py`).
-Analysis: `notes/ENUM_NAME_FROM_PREFIX.md`; census `apple_protobuf_extractor/census_enumname.py`.
+Analysis: `notes/ENUM_NAME_FROM_PREFIX.md`.
 
 
 ## 7. A few repeated-element types are inferred from the field *name*  — to-do #45

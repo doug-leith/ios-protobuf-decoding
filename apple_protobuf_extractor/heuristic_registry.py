@@ -316,7 +316,7 @@ REGISTRY = [
     # best-enum -> PRESENTATION: all members of a compat group are WIRE-EQUIVALENT, so
     #   picking the (confirmed, largest) one only affects which definition is shown — no
     #   wire/value/number impact.
-    # enum-split: REPLACE-audit RESOLVED 2026-06-13 (census_enumname.py). _collect_enums
+    # enum-split: REPLACE-audit RESOLVED 2026-06-13. _collect_enums
     #   hosts TWO distinct concerns, recorded as two rows sharing the function's entry count
     #   (the dormant shared=True mechanism, first use):
     #     (1) DETECTION — a split fires ONLY on value-set INCOMPATIBILITY (same enum name,
