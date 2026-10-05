@@ -1,7 +1,7 @@
 """Standalone structural protobuf matcher — score a wire body against a schema set.
 
 Ported into ios_decoder (from the now-retired ``mitm_traffic_parser.match`` /
-``corpus`` / ``wireparse``) so the optional locator→match cross-check has NO cross-tool
+``corpus`` / ``wireparse``) so the optional match cross-check has NO cross-tool
 dependency.  It is built entirely on ios_decoder's own primitives:
 
   * the wire tree comes from :func:`ios_decoder.rawproto.parse_fields` (the

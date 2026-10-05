@@ -1,4 +1,4 @@
-"""Optional fuzzy locator + matcher harness — double-checks the endpoint table.
+"""Optional matcher harness — double-checks the endpoint table.
 
 The production decoder maps a URL to a schema with an explicit, hand-maintained
 table (``ios_decoder.endpoints``).  This harness is an INDEPENDENT cross-check for
@@ -8,11 +8,11 @@ does the matcher think it is?".  It is *test-only* and *optional* — nothing in
 production package imports it, and every entry point degrades to a skip when its
 (heavier) dependencies aren't installed.
 
-The pipeline it reproduces (see notes/LOCATOR_STEP1_FINDINGS.md) has three steps:
+The pipeline it reproduces has three steps:
 
   (i)   LOCATOR — search frameworks/binaries by connection keywords to get a small
         candidate set of images that hold the connection's proto descriptors.
-        *For testing this unreliable step is REPLACED by a manually-named
+        *Here this unreliable step is REPLACED by a manually-named
         framework/binary* (the ``framework`` / ``binary`` argument below).
   (ii)  EXTRACT — run apple_protobuf_extractor over those candidates to get all
         their descriptors.  ``descriptor_dir`` either points at saved extractor

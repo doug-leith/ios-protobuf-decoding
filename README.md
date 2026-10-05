@@ -388,8 +388,8 @@ apple header: version=1, responseType=1017, payloadLength=0
 ./venv/bin/python3 -m pytest
 ```
 
-Without Apple artifacts or captures, a large part of the suite skips by design (232 tests in
-a clean checkout: 227 in the extractor suite, 5 in `ios_decoder`). The summary says so, and a green run in that state does **not**
+Without Apple artifacts or captures, a large part of the suite skips by design (227 tests in
+a clean checkout, all in the extractor suite; `ios_decoder` needs no Apple data). The summary says so, and a green run in that state does **not**
 mean the extractor was exercised against real binaries.
 
 - **Live extractor tests** need the Apple artifacts: a dyld shared cache and the `locationd`
@@ -401,8 +401,6 @@ mean the extractor was exercised against real binaries.
   under `ios_decoder/tests/fixtures/` (about 2.8 MB). The author judged them not sensitive. They can be
   regenerated from your own `.mitm` captures with `extract_tile_samples.py`, `extract_tcp_samples.py`
   and `extract_request_samples.py` (all in `ios_decoder/tests/`); no capture is needed to run the tests.
-- **Locator tests** (5) need `notes/proto_match_groundtruth.json` and a set of daemon binaries
-  under `iphone8_data/`. The ground-truth file is not part of this repository, so these always skip here.
 
 ## Getting the Apple artifacts (optional)
 
@@ -487,7 +485,7 @@ find ios27_data/dylib -mindepth 2 -name 'dyld_shared_cache_arm64e*' -exec mv {} 
 MACHO_REQUIRE_LIVE=1 ./venv/bin/python3 -m pytest
 ```
 
-With everything in place, only the 5 locator tests should still skip. The firmware downloaded in step 2
+With everything in place, nothing should skip (without step 6, the 8 iOS 27 tests skip). The firmware downloaded in step 2
 can be deleted afterwards (`rm -r iphone8_data/ipsw`); the tests do not use it.
 
 ## Provenance

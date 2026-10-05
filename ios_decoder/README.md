@@ -46,8 +46,7 @@ come with mitmproxy, and `dnspython` (DoH). `cbor2` is optional — without it,
 ```
 
 Tests are self-contained (they synthesise their own fixtures), and the real tile, Siri, ARPC
-and `/fb` extracts they also use are committed under `tests/fixtures/`. Only the locator tests
-are *live-gated*: they need Apple binaries under `iphone8_data/` and skip otherwise.
+and `/fb` extracts they also use are committed under `tests/fixtures/`, so the whole suite runs without any Apple data.
 
 ## Usage
 
@@ -201,7 +200,10 @@ dead ends aren't re-explored.
    metadata for endpoint/host strings), then (b) a *structural matcher*
    (now [`matcher.py`](matcher.py), ported from the retired `mitm_traffic_parser.match`)
    would score the body's wire shape (field numbers, wire types, nesting) against each
-   candidate message descriptor and pick the best fit.
+   candidate message descriptor and pick the best fit. (A three-signal locator — daemon
+   `otool -L`, a host/path table and URL-token string search in the binaries — did reach 13/13
+   evaluable producers on a ground-truth set, but it was fragile and needed the daemon binaries,
+   so it has been removed from this repository.)
 
    It failed at **both** stages:
    - The **locator couldn't reliably reduce to a small candidate set.** Simple string/
@@ -238,23 +240,13 @@ harness and tests live in the test tree and never enter the production package:
   retired `mitm_traffic_parser`): excludes messages whose declared wire types
   contradict the body, then ranks the rest by explained-field count.
 - [`tests/matcher_harness.py`](tests/matcher_harness.py) — the reusable harness. It
-  reproduces the locator→extract→match pipeline with step (i) (the unreliable
-  keyword search) replaced by a **manually-named framework**: point it at a framework's
+  reproduces the extract→match pipeline with the framework **named by hand** (the
+  unreliable keyword-search locator is not used): point it at a framework's
   extracted descriptors (the committed `protos/<Framework>/` dirs, or a live
   `extract_descriptors(...)` run against a dyld cache), then `crosscheck(body, dir,
   expected_message)` returns a `MatchVerdict`. Only `protoc` is needed.
 - [`tests/test_matcher_crosscheck.py`](tests/test_matcher_crosscheck.py) — example
   cross-checks of the `/fb` table against real captures.
-- [`tests/locator.py`](tests/locator.py) + [`tests/test_locator_recall.py`](tests/test_locator_recall.py)
-  — the actual step-(i) **locator**, for when you want the *full* automated pipeline
-  rather than a manually-named framework. It fuses three signals — UA→daemon
-  `otool -L`, host/path→framework (the documented manifest-resolver fallback), and
-  URL-token→binary string-search — into a candidate framework set. The recall test
-  evaluates it against `notes/proto_match_groundtruth.json` (does the candidate set
-  contain the true framework?) and currently locates 13/13 evaluable producers while
-  routing the third-party producers to nothing. It needs the libexec daemon binaries +
-  `otool` and skips when they're absent. This is the *fragile* half (the reason
-  approach (2) was abandoned) — kept as a regression gauge, not a production path.
 
 ```sh
 # -s prints the per-body verdict report (matcher winner, rank, confidence)

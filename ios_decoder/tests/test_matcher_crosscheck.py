@@ -2,8 +2,8 @@
 
 These tests double-check that the messages the URL table claims are at least
 *consistent* with the structural matcher run over the framework's extracted
-descriptor set (the locator step (i) replaced by a manually-named framework — see
-ios_decoder/tests/matcher_harness.py and notes/LOCATOR_STEP1_FINDINGS.md).
+descriptor set (the framework is named by hand — see
+ios_decoder/tests/matcher_harness.py).
 
 The matcher is now native to ios_decoder (ios_decoder.matcher) — no cross-tool
 dependency. These tests SKIP rather than fail when an input is absent:

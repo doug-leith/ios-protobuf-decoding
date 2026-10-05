@@ -25,14 +25,14 @@ Detection/labelling only: neither body type has a recoverable PBCodable schema. 
 
 ### Locator TABLE: connection fingerprint → framework/binary with proto descriptor
 Distinct from the URL→message **matcher table** (`endpoints.py`) and from the *fuzzy*
-locator (`tests/locator.py`, the deliberately-fragile string-search half). The idea: a
+locator (the deliberately-fragile string-search half, since removed from this repository). The idea: a
 small, explicit, auditable **locator table** keyed by a connection fingerprint
 (host/path/UA, or a host glob) → the framework/binary that holds the request/response
 proto descriptors. This is the reliable, owner-curated counterpart to the fuzzy locator —
 no string-search guessing. **The table can be constructed directly from the existing
 ground truth** (`notes/proto_match_groundtruth.json` + `notes/host_producer_map.md`): both
 already map producer/host → framework for the full evaluable producer set (13/13 located
-in `tests/test_locator_recall.py`). Use it to (a) drive the locator→extract→match
+by the removed locator test). Use it to (a) drive the locator→extract→match
 cross-check without the fragile step (i), and (b) optionally inform `report` which
 framework's descriptors to load for a given connection. Build it from the GT if it
 doesn't exist yet.
