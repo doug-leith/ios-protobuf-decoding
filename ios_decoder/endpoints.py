@@ -238,13 +238,32 @@ def _build_default_endpoints() -> list[Endpoint]:
 
         # --- ARPC endpoints we strip + raw-decode (no dedicated schema) ---
 
-        # --- iAd advertising SDK (8-byte header + raw protobuf) ---
+        # --- iAd advertising SDK: an 8-byte header + a protobuf from the AdCore framework ---
+        # Each endpoint's request/response pair is the AdCore class of the same name.  Checked
+        # against every captured body: the named message parses it with no unknown fields, and
+        # most of the other AdCore messages do not parse it at all (the very small bodies fit
+        # several, so there the endpoint name decides).  optout_optin, event/analytics and the
+        # config request carry an empty payload in the direction not listed here.
         Endpoint(r"iadsdk\.apple\.com/adserver/2\.6/optout/optout_optin",
-                 iad_rule, iad_rule),
+                 Rule("ad.proto", "ad.ADOptOutRequest", "iad"),
+                 Rule("ad.proto", "ad.ADOptOutResponse", "iad")),
         Endpoint(r"iadsdk\.apple\.com/adserver/2\.6/segment/update",
-                 iad_rule, iad_rule),
-        Endpoint(r"tr\.iadsdk\.apple\.com/adserver/2\.6/settings", None, iad_rule),
-        Endpoint(r"cf\.iadsdk\.apple\.com/adserver/2\.6/config", None, iad_rule),
+                 Rule("ad.proto", "ad.ADSegmentUpdateRequest", "iad"),
+                 Rule("ad.proto", "ad.ADSegmentUpdateResponse", "iad")),
+        Endpoint(r"tr\.iadsdk\.apple\.com/adserver/2\.6/settings",
+                 Rule("ad.proto", "ad.ADClientSettingsRequest", "iad"),
+                 Rule("ad.proto", "ad.ADClientSettingsResponse", "iad")),
+        Endpoint(r"cf\.iadsdk\.apple\.com/adserver/2\.6/config",
+                 Rule("ad.proto", "ad.ADConfigurationRequest", "iad"),
+                 Rule("ad.proto", "ad.ADConfigurationResponse", "iad")),
+        Endpoint(r"iadsdk\.apple\.com/adserver/2\.6/event/analytics",
+                 Rule("ad.proto", "ad.ADLogAnalyticsRequest", "iad"),
+                 Rule("ad.proto", "ad.ADLogAnalyticsResponse", "iad")),
+        Endpoint(r"iadsdk\.apple\.com/adserver/2\.6/privacy/user-transparency",
+                 Rule("ad.proto", "ad.ADUserTransparencyRequest", "iad"),
+                 Rule("ad.proto", "ad.ADUserTransparencyResponse", "iad")),
+        # Any other 2.6 path: strip the header and raw-decode (no schema is known for it).
+        Endpoint(r"iadsdk\.apple\.com/adserver/2\.6/", iad_rule, iad_rule),
 
         # --- parsecd feedback upload: polymorphic by ?type= (per-channel message) ---
         Endpoint(r"(fbs|api)\.smoot\.apple\.com/fb\b",

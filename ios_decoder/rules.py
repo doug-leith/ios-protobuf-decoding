@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-from . import arpc, rawproto
+from . import arpc, iad, rawproto
 from .markers import MarkerSink
 from .protobuf import DecodeError, decode_to_text
 from .schemas import SchemaError, SchemaRegistry
@@ -56,6 +56,7 @@ class Rule:
     decode:
 
       * ``arpc_request`` / ``arpc_response`` — strip the ARPC header (and decompress);
+      * ``iad``                              — strip the 8-byte iAd header;
       * ``plain``                            — body is bare protobuf.
     """
     schema_file: Optional[str] = None
@@ -121,6 +122,8 @@ def _header_and_payload(body: bytes, framing: str) -> tuple[str, bytes]:
     elif framing == "arpc_response":
         hdr, payload, warn = arpc.strip_response(body)
         head = (arpc.format_response_header(hdr) + "\n") if hdr else ""
+    elif framing == "iad":
+        return iad.strip_header(body)
     else:
         return "", body
     if warn:

@@ -3,7 +3,8 @@
 The ``iadsdk.apple.com`` endpoints prefix their protobuf with a fixed 8-byte header that
 has **no magic bytes**, so this framing can't be detected structurally — it is applied by
 endpoint URL only (see endpoints.py), never sniffed onto an arbitrary body (that would be
-a guess).  There is no iAd ``.proto``, so the payload is raw-decoded (fields by number).
+a guess).  The known endpoints decode against the ``AdCore`` schemas (``protos/AdCore/ad.proto``,
+framing ``iad`` in :mod:`ios_decoder.rules`); any other iAd path is raw-decoded (fields by number).
 
 Header (big-endian), confirmed against real optout/segment *and* config/settings traffic:
 
@@ -26,7 +27,7 @@ from typing import Optional
 
 from .protobuf import DecodeError, decode_to_text
 
-__all__ = ["IadHeader", "parse_header", "decode_iad"]
+__all__ = ["IadHeader", "parse_header", "strip_header", "decode_iad"]
 
 _HEADER_LEN = 8
 
@@ -49,27 +50,37 @@ def parse_header(body: bytes) -> Optional[IadHeader]:
                      _HEADER_LEN + length == len(body))
 
 
+def strip_header(body: bytes) -> tuple[str, bytes]:
+    """Split an iAd body into (header text, payload).
+
+    The header text is the ``apple iAd header:`` line plus any ``// WARNING`` line, each ending
+    in a newline, or just a warning when the body is too short to hold a header.  A length
+    mismatch is surfaced, never swallowed.
+    """
+    hdr = parse_header(body)
+    if hdr is None:
+        return (f"// WARNING: body too short ({len(body)} bytes) for an "
+                f"{_HEADER_LEN}-byte iAd header\n"), b""
+    head = f"apple iAd header: extra=0x{hdr.extra.hex()}, length={hdr.payload_length}\n"
+    if not hdr.length_ok:
+        avail = len(body) - hdr.payload_offset
+        head += (f"// WARNING: iAd payload length mismatch: header declares "
+                 f"{hdr.payload_length}, {avail} present after the header\n")
+    return head, body[hdr.payload_offset:hdr.payload_offset + hdr.payload_length]
+
+
 def decode_iad(body: bytes) -> str:
     """Decode an iAd body: strip the 8-byte header and raw-decode the protobuf payload.
 
     Surfaces a short-body warning, a length-mismatch warning, or a payload-decode error —
     none silently.
     """
-    hdr = parse_header(body)
-    if hdr is None:
-        return (f"// WARNING: body too short ({len(body)} bytes) for an "
-                f"{_HEADER_LEN}-byte iAd header")
-    lines = [f"apple iAd header: extra=0x{hdr.extra.hex()}, length={hdr.payload_length}"]
-    payload = body[hdr.payload_offset:hdr.payload_offset + hdr.payload_length]
-    if not hdr.length_ok:
-        avail = len(body) - hdr.payload_offset
-        lines.append(f"// WARNING: iAd payload length mismatch: header declares "
-                     f"{hdr.payload_length}, {avail} present after the header")
+    head, payload = strip_header(body)
+    if parse_header(body) is None:
+        return head.rstrip("\n")
     if not payload:
-        lines.append("(empty payload)")
-        return "\n".join(lines)
+        return head + "(empty payload)"
     try:
-        lines.append(decode_to_text(payload))
+        return head + decode_to_text(payload)
     except DecodeError as e:
-        lines.append(f"// ERROR: iAd payload did not decode as protobuf: {e}")
-    return "\n".join(lines)
+        return head + f"// ERROR: iAd payload did not decode as protobuf: {e}"

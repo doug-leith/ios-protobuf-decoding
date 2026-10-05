@@ -143,7 +143,9 @@ DOCS = [
     Doc("feedback", "fbs.smoot.apple.com/fb and api.smoot.apple.com/fb", r"(fbs|api)\.smoot\.apple\.com/fb\b",
         "Feedback and analytics upload. The message depends on the `?type=` channel."),
     Doc("feedback", "xp.apple.com/report/", r"xp\.apple\.com/report/",
-        "XP analytics reports. The body is nested JSON; embedded base64, gzip and protobuf are expanded.",
+        "XP analytics reports. The body is nested JSON; embedded base64, gzip and protobuf are expanded. "
+        "The `iAdMetadata` field of ad impressions is a protobuf whose schema is not in the iOS cache, so "
+        "it is decoded without one.",
         "request: nested JSON, with embedded base64, gzip and protobuf expanded"),
     Doc("feedback", "amp-api*.apps.apple.com/v1/engagement", r"amp-api[\w-]*\.apps\.apple\.com/v1/engagement",
         "App Store engagement traffic: adverts, upsell and subscription offers, and analytics on user "
@@ -151,20 +153,32 @@ DOCS = [
         "request and response: nested JSON, with embedded base64, gzip and protobuf expanded"),
     Doc("feedback", "iadsdk.apple.com/adserver/2.6/optout/optout_optin",
         r"iadsdk\.apple\.com/adserver/2\.6/optout/optout_optin",
-        "iAd advertising SDK: opt-out / opt-in request.",
-        "request and response: 8-byte iAd header, then a protobuf decoded without a schema"),
+        "iAd opt-out / opt-in: the handset reports its ad-tracking opt-out status with its iAd ID, "
+        "timestamps and time zone."),
     Doc("feedback", "iadsdk.apple.com/adserver/2.6/segment/update",
         r"iadsdk\.apple\.com/adserver/2\.6/segment/update",
-        "iAd advertising SDK: segment update.",
-        "request and response: 8-byte iAd header, then a protobuf decoded without a schema"),
+        "iAd segment update: the handset sends its iAd ID, advertising identifier, OS version and build, "
+        "locale, device modes and account types; the reply gives the intervals before the next update."),
     Doc("feedback", "tr.iadsdk.apple.com/adserver/2.6/settings",
         r"tr\.iadsdk\.apple\.com/adserver/2\.6/settings",
-        "iAd advertising SDK: settings.",
-        "response: 8-byte iAd header, then a protobuf decoded without a schema"),
+        "iAd client settings: the handset sends its iAd ID and current settings; the reply holds the "
+        "search-ads and search-landing-ads settings and an expiration date."),
     Doc("feedback", "cf.iadsdk.apple.com/adserver/2.6/config",
         r"cf\.iadsdk\.apple\.com/adserver/2\.6/config",
-        "iAd advertising SDK: configuration.",
-        "response: 8-byte iAd header, then a protobuf decoded without a schema"),
+        "iAd configuration: the handset sends its current configurations; the reply lists the "
+        "configurations, the proxy URLs and a configuration version."),
+    Doc("feedback", "iadsdk.apple.com/adserver/2.6/event/analytics",
+        r"iadsdk\.apple\.com/adserver/2\.6/event/analytics",
+        "iAd analytics upload: a batch of events (for example an ad-transparency screen appearing) with "
+        "the iAd ID and the app's bundle ID."),
+    Doc("feedback", "iadsdk.apple.com/adserver/2.6/privacy/user-transparency",
+        r"iadsdk\.apple\.com/adserver/2\.6/privacy/user-transparency",
+        "iAd user transparency: the handset sends its locale, iAd ID, store, and whether ad tracking is "
+        "limited and whether it is signed in to iTunes; the reply holds the transparency details."),
+    Doc("feedback", "iadsdk.apple.com/adserver/2.6/… (any other path)",
+        r"iadsdk\.apple\.com/adserver/2\.6/",
+        "Any other iAd SDK 2.6 request. No schema is known for it.",
+        "request and response: 8-byte iAd header, then a protobuf decoded without a schema"),
     Doc("feedback", "humb.apple.com/humbug/baa", r"humb\.apple\.com/humbug/baa",
         "Certificate response.",
         "response: X.509 certificate chain (PEM)"),

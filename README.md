@@ -4,7 +4,7 @@ An iPhone sends binary protobuf messages to Apple's servers for location service
 
 - **[`apple_protobuf_extractor`](apple_protobuf_extractor/README.md)**, which recovers `.proto` definitions (message and field names, field numbers, types and enums) from Apple's compiled binaries, in a Mach-O file or a dyld shared cache. It handles three protobuf runtimes: Apple's Objective-C `PBCodable` classes (by analysing their generated `writeTo:` and `readFrom:` code), Google's C++ `libprotobuf` (an exact decode of the descriptors the binary embeds) and `swift-protobuf` (names and numbers from each message's name map, types from Swift reflection metadata). No Apple headers or `.proto` sources are needed.
 - **[`ios_decoder`](ios_decoder/README.md)**, which decodes captured iOS traffic (mitmproxy `.mitm` files) offline into readable protobuf using those schemas, and also handles Siri, DNS-over-HTTPS, certificates and the map and location tiles.
-- **[119 recovered `.proto` files](#recovered-schemas)** (2,359 messages, 1,047 enums) in `ios_decoder/protos/`, which you can use directly.
+- **[120 recovered `.proto` files](#recovered-schemas)** (2,382 messages, 1,060 enums) in `ios_decoder/protos/`, which you can use directly.
 
 The schemas are partly decoded. Names, numbers and types come from the binaries. The C++ schemas are exact. For `PBCodable` and `swift-protobuf` some numbers or types are estimates, most of them flagged in the output (see the [extractor README](apple_protobuf_extractor/README.md#what-it-recovers--and-the-honest-caveats)). What each endpoint is *for* comes from observed traffic, and is described [below](#protobufs-by-endpoint).
 
@@ -103,8 +103,9 @@ The dyld cache and binaries are Apple's software and are not in this repository.
 | `AppPredictionInternal` | 8 | 99 | App-prediction messages (`atx.proto`, used by the `DuetExpert` feedback channel). |
 | `CoreParsec` | 77 | 77 | Feedback and usage messages, for example `_cpusageenvelope.proto` and `_cpclientsession.proto`. |
 | `ProactiveEventTracker` | 2 | 8 | `pet.proto`, used by the `ProactiveEventTracker` feedback channels. |
+| `AdCore` | 1 | 23 | The iAd advertising SDK: opt-out, segment update, settings, configuration, analytics and user-transparency requests and responses (`ad.proto`). |
 
-102 of the files (1,975 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. 
+103 of the files (1,998 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. 
 
 ## Protobufs by endpoint
 
@@ -175,12 +176,15 @@ Feedback and analytics uploads, advertising SDK traffic and certificate response
 | Endpoint | What it is | Messages |
 |---|---|---|
 | `fbs.smoot.apple.com/fb and api.smoot.apple.com/fb` | Feedback and analytics upload. The message depends on the `?type=` channel. | request, by `?type=`: `FeedbackV2PB` → `_cpclientsession._CPClientSession`; `Usage` → `_cpusageenvelope._CPUsageEnvelope`; `ProactiveEventTracker` → `pet.PETUpload`; `ProactiveEventTrackerAggregated` → `pet.PETUpload`; `DuetExpert` → `atx.ATXNotificationsPBLogWrapper` |
-| `xp.apple.com/report/` | XP analytics reports. The body is nested JSON; embedded base64, gzip and protobuf are expanded. | request: nested JSON, with embedded base64, gzip and protobuf expanded |
+| `xp.apple.com/report/` | XP analytics reports. The body is nested JSON; embedded base64, gzip and protobuf are expanded. The `iAdMetadata` field of ad impressions is a protobuf whose schema is not in the iOS cache, so it is decoded without one. | request: nested JSON, with embedded base64, gzip and protobuf expanded |
 | `amp-api*.apps.apple.com/v1/engagement` | App Store engagement traffic: adverts, upsell and subscription offers, and analytics on user behaviour. Nested JSON, expanded the same way as XP. | request and response: nested JSON, with embedded base64, gzip and protobuf expanded |
-| `iadsdk.apple.com/adserver/2.6/optout/optout_optin` | iAd advertising SDK: opt-out / opt-in request. | request and response: 8-byte iAd header, then a protobuf decoded without a schema |
-| `iadsdk.apple.com/adserver/2.6/segment/update` | iAd advertising SDK: segment update. | request and response: 8-byte iAd header, then a protobuf decoded without a schema |
-| `tr.iadsdk.apple.com/adserver/2.6/settings` | iAd advertising SDK: settings. | response: 8-byte iAd header, then a protobuf decoded without a schema |
-| `cf.iadsdk.apple.com/adserver/2.6/config` | iAd advertising SDK: configuration. | response: 8-byte iAd header, then a protobuf decoded without a schema |
+| `iadsdk.apple.com/adserver/2.6/optout/optout_optin` | iAd opt-out / opt-in: the handset reports its ad-tracking opt-out status with its iAd ID, timestamps and time zone. | request: `ad.ADOptOutRequest`<br>response: `ad.ADOptOutResponse` |
+| `iadsdk.apple.com/adserver/2.6/segment/update` | iAd segment update: the handset sends its iAd ID, advertising identifier, OS version and build, locale, device modes and account types; the reply gives the intervals before the next update. | request: `ad.ADSegmentUpdateRequest`<br>response: `ad.ADSegmentUpdateResponse` |
+| `tr.iadsdk.apple.com/adserver/2.6/settings` | iAd client settings: the handset sends its iAd ID and current settings; the reply holds the search-ads and search-landing-ads settings and an expiration date. | request: `ad.ADClientSettingsRequest`<br>response: `ad.ADClientSettingsResponse` |
+| `cf.iadsdk.apple.com/adserver/2.6/config` | iAd configuration: the handset sends its current configurations; the reply lists the configurations, the proxy URLs and a configuration version. | request: `ad.ADConfigurationRequest`<br>response: `ad.ADConfigurationResponse` |
+| `iadsdk.apple.com/adserver/2.6/event/analytics` | iAd analytics upload: a batch of events (for example an ad-transparency screen appearing) with the iAd ID and the app's bundle ID. | request: `ad.ADLogAnalyticsRequest`<br>response: `ad.ADLogAnalyticsResponse` |
+| `iadsdk.apple.com/adserver/2.6/privacy/user-transparency` | iAd user transparency: the handset sends its locale, iAd ID, store, and whether ad tracking is limited and whether it is signed in to iTunes; the reply holds the transparency details. | request: `ad.ADUserTransparencyRequest`<br>response: `ad.ADUserTransparencyResponse` |
+| `iadsdk.apple.com/adserver/2.6/… (any other path)` | Any other iAd SDK 2.6 request. No schema is known for it. | request and response: 8-byte iAd header, then a protobuf decoded without a schema |
 | `humb.apple.com/humbug/baa` | Certificate response. | response: X.509 certificate chain (PEM) |
 | `swallow.apple.com/…GetCertificate` | Certificate response from the Siri `swallow` service. | response: X.509 certificate chain (DER) |
 
