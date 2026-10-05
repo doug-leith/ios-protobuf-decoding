@@ -26,8 +26,21 @@ from . import locator as L
 _REPO = Path(__file__).resolve().parents[2]
 _GT = _REPO / "notes" / "proto_match_groundtruth.json"
 
-requires_artifacts = pytest.mark.skipif(
-    L.artifacts_reason() is not None, reason=L.artifacts_reason() or "")
+def _skip_reason():
+    """Why the artifact-gated tests can't run here, or None.  Beyond the binaries dir + otool
+    (L.artifacts_reason), they need the ground-truth file and the daemons they exercise."""
+    reason = L.artifacts_reason()
+    if reason:
+        return reason
+    if not _GT.exists():
+        return f"ground truth not available ({_GT.relative_to(_REPO)} is not in this repository)"
+    missing = [d for d in ("geod", "locationd") if L.daemon_binary(d) is None]
+    if missing:
+        return "daemon binaries not found in the binaries dir: " + ", ".join(missing)
+    return None
+
+
+requires_artifacts = pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")
 
 # Canonical (host, path) per evaluable GT producer — the connection the locator sees.
 # Hosts/paths are the documented endpoints (notes/host_producer_map.md, GT entries).
