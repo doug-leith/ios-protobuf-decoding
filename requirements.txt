@@ -1,0 +1,38 @@
+# Python dependencies for the apple_protobuf_extractor protobuf-schema extractor and
+# the ios_decoder offline traffic decoder.
+#
+#   python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
+#
+# Non-pip system dependency: `protoc` (Protocol Buffers compiler) must be on PATH
+# — used for `protoc --decode_raw` cross-checks and as a one-time .proto ->
+# descriptor compiler.
+#
+# Python: a full `pip install -r requirements.txt` needs **3.12+** — not because of
+# our code (the extractor + decoder use only PEP 604/585 and install+test clean on
+# 3.10; apple-protobuf-extractor declares requires-python>=3.10), but because
+# **mitmproxy 12.x requires Python >=3.12** (11.0.2 is the last to support 3.10/3.11).
+# For 3.10/3.11, pin `mitmproxy<12` (11.x) or drop it — mitmproxy is only needed to
+# READ .mitm captures, not to decode bodies.
+#
+# Pins below are MINIMUM floors (>=). They allow newer releases — cap a major
+# (e.g. `<13`) if an upstream breaking change ever bites.
+
+# --- runtime ---
+capstone>=5.0.9        # arm64 disassembly for the Mach-O / dyld-cache extractor
+mitmproxy>=12.2.3      # read .mitm captures (FlowReader); also pulls in cryptography + hpack/h2
+lz4>=4.4.5             # ios_decoder.arpc: Apple bvx/LZ4 payload decompression
+protobuf>=7.35.1       # schema decoding via google.protobuf (protoc = compile-only)
+dnspython>=2.8.0       # ios_decoder: DNS-over-HTTPS (application/dns-message) decoding
+# cbor2 is an OPTIONAL ios_decoder dependency (application/cbor bodies); absent -> graceful note
+
+# --- the extractor package (editable) ---
+# Exposes proto/ macho/ (under apple_protobuf_extractor/) as top-level imports.
+# setuptools+wheel are its build backend; must precede the editable install.
+setuptools
+wheel
+-e ./apple_protobuf_extractor
+
+# --- development / test ---
+pytest>=9.0.3
+pytest-cov>=7.1.0
+coverage>=7.14.1

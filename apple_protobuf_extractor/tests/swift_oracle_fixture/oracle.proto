@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+message Ora_Single7 {
+  string only = 7;
+}
+
+message Ora_Single1 {
+  string only = 1;
+}
+
+message Ora_Multi {
+  int32 a = 1;
+  string b = 2;
+  bool c = 3;
+  int64 big = 5;
+  bytes raw = 9;
+}
+
+message Ora_WithKinds {
+  repeated int32 nums = 1;
+  Ora_Single1 child = 2;
+  map<string, int32> lut = 3;
+  sint32 zig = 4;
+  fixed32 fx = 5;
+}

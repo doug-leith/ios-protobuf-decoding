@@ -1,0 +1,5486 @@
+{
+"CLPAccessoryMeta.make": [
+"string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPAccessoryMeta.model": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPAccessoryMeta.version": [
+"string",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.<enum:AltimeterCollectionRequestCollectionType>": [
+[
+[
+1,
+"ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_COLLECTION_HVAC"
+],
+[
+2,
+"ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_COLLECTION_BIAS_ESTIMATION"
+],
+[
+3,
+"ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_COLLECTION_SENSOR_CHARACTERIZATION"
+]
+],
+true,
+false
+],
+"CLPAltimeterCollectionRequest.collectionType": [
+"AltimeterCollectionRequestCollectionType",
+"ENUM:AltimeterCollectionRequestCollectionType",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.context": [
+"CLPContext",
+"CLPContext",
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.location": [
+"CLPLocation",
+"CLPLocation",
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.locations": [
+"CLPLocation",
+"CLPLocation",
+9,
+"repeated",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.pressures": [
+"CLPIndoorPressure",
+"CLPIndoorPressure",
+7,
+"repeated",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.startTimestamp": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.stopTimestamp": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPAltimeterCollectionRequest.wifiScans": [
+"CLPIndoorWifiScan",
+"CLPIndoorWifiScan",
+8,
+"repeated",
+true,
+false,
+false
+],
+"CLPAppCollectionRequest.appLocations": [
+"CLPAppLocation",
+"CLPAppLocation",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPAppCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPAppCollectionRequest.signature": [
+"bytes",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPAppCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPAppCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.age": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.appBundleId": [
+"string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.appState": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.location": [
+"CLPLocation",
+"CLPLocation",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.loiType": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.routineMode": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPAppLocation.serverHash": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPBaroCalibrationIndication.<enum:BaroCalibrationIndicationMapMatchRoadType>": [
+[
+[
+0,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_UNKNOWN"
+],
+[
+1,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_MOTORWAY"
+],
+[
+2,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_MULTI_CARRIAGE_WAY_NOT_MOTORWAY"
+],
+[
+3,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PAR_OF_SINGLE_CARRIAGE_WAY_DEFAULT"
+],
+[
+4,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_ROUNDABOUT"
+],
+[
+5,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_AN_ETA_PARKING_PLACE"
+],
+[
+6,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_AN_ETA_PARKING_GARAGE_BUILDING"
+],
+[
+7,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_ETA_UNSTRUCTURED_TRAFFIC_SQUARE"
+],
+[
+8,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_SLIP_ROAD"
+],
+[
+9,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_SERVICE_ROAD"
+],
+[
+10,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_ENTRACE_EXIT_TO_FORM_CAR_PARK"
+],
+[
+11,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_PEDESTRIAN_ZONE"
+],
+[
+12,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_PART_OF_WALK_WAY"
+],
+[
+13,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_SPECIAL_TRAFFIC_FIGURES"
+],
+[
+14,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_FOW_ETA_GALLERY"
+],
+[
+15,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_FOW_STAIRS"
+],
+[
+16,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_ROAD_FOR_AUTHORITIES"
+],
+[
+17,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_FOW_CONNECTOR"
+],
+[
+18,
+"BARO_CALIBRATION_INDICATION_MAP_MATCH_ROAD_TYPE_FOW_CUL_DE_SAC"
+]
+],
+true,
+false
+],
+"CLPBaroCalibrationIndication.isCalibratedBarometricAlt": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPBaroCalibrationIndication.isMapMatched": [
+"bool",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPBaroCalibrationIndication.isOutdoorContext": [
+"bool",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPBaroCalibrationIndication.mapMatchRoadType": [
+"BaroCalibrationIndicationMapMatchRoadType",
+"ENUM:BaroCalibrationIndicationMapMatchRoadType",
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPBaroCalibrationIndication.outdoorConfidence": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPBundleId.fullName": [
+"string",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPBundleId.shortKey": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPBundleId.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.<enum:CalibratedPressureCollectionRequestReliability>": [
+[
+[
+0,
+"CALIBRATED_PRESSURE_COLLECTION_REQUEST_RELIABILITY_PROTOBUF_DEFAULT"
+],
+[
+1,
+"CALIBRATED_PRESSURE_COLLECTION_REQUEST_RELIABILITY_RELIABLITY_LOW"
+],
+[
+2,
+"CALIBRATED_PRESSURE_COLLECTION_REQUEST_RELIABILITY_RELIABLITY_MEDIUM"
+],
+[
+3,
+"CALIBRATED_PRESSURE_COLLECTION_REQUEST_RELIABILITY_HIGH"
+]
+],
+true,
+false
+],
+"CLPCalibratedPressureCollectionRequest.activity": [
+"CLPMotionActivity",
+"CLPMotionActivity",
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.altitudeHAEM": [
+"float",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.altitudeHAEUncM": [
+"float",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.calibratedPressurePa": [
+"float",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.calibratedPressureUncPa": [
+"float",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.calibration": [
+"CLPBaroCalibrationIndication",
+"CLPBaroCalibrationIndication",
+18,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.devicePressurePa": [
+"float",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.devicePressureUncPa": [
+"float",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.horizontalUncM": [
+"float",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.latitudeDeg": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.longitudeDeg": [
+"double",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.quantizedDistChangeSinceLastCalibrationM": [
+"int32",
+null,
+19,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.quantizedTimeChangeSinceLastCalibrationS": [
+"int32",
+null,
+20,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.referenceAltM": [
+"float",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.referenceAltUncM": [
+"float",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.reliability": [
+"CalibratedPressureCollectionRequestReliability",
+"ENUM:CalibratedPressureCollectionRequestReliability",
+17,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.speedMps": [
+"float",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.speedUncMps": [
+"float",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.timeSinceLastSignificantLocationVisitExitS": [
+"double",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPCalibratedPressureCollectionRequest.timestampOfCalibrationS": [
+"double",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellNeighbor.channel": [
+"sint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellNeighbor.ecn0": [
+"sint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellNeighbor.pilotPhase": [
+"sint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellNeighbor.pnoffset": [
+"sint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellNeighbor.rscp": [
+"sint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.appBundleId": [
+"string",
+null,
+18,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.bandclass": [
+"int32",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.bsLatitude": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.bsLongitude": [
+"double",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.bsid": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.celltype": [
+"int32",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.channel": [
+"int32",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.dayLightSavings": [
+"int32",
+null,
+22,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.derivedMccs": [
+"int32",
+null,
+23,
+"repeated",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.ecn0": [
+"sint32",
+null,
+25,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.isLimitedService": [
+"bool",
+null,
+32,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.location": [
+"CLPLocation",
+"CLPLocation",
+17,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.ltmOffset": [
+"int32",
+null,
+21,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.mcc": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.mnc": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.neighborGroup": [
+"CLPCellNeighborsGroup",
+"CLPCellNeighborsGroup",
+31,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.neighbors": [
+"CLPCdmaCellNeighbor",
+"CLPCdmaCellNeighbor",
+30,
+"repeated",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.nid": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.operatorName": [
+"string",
+null,
+20,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.pnoffset": [
+"int32",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.rat": [
+"int32",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.rscp": [
+"sint32",
+null,
+26,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.sectorLatitude": [
+"double",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.sectorLongitude": [
+"double",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.sectorid": [
+"string",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.serverHash": [
+"int32",
+null,
+19,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.serviceProviderName": [
+"string",
+null,
+33,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.sid": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPCdmaCellTowerLocation.zoneid": [
+"int32",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPCellNeighbor.ecn0": [
+"sint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPCellNeighbor.psc": [
+"sint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCellNeighbor.rscp": [
+"sint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPCellNeighbor.rssi": [
+"sint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPCellNeighbor.uarfcn": [
+"sint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCellNeighborsGroup.cdmaNeighbors": [
+"CLPCdmaCellNeighbor",
+"CLPCdmaCellNeighbor",
+3,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellNeighborsGroup.gsmNeighbors": [
+"CLPCellNeighbor",
+"CLPCellNeighbor",
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellNeighborsGroup.lteNeighbors": [
+"CLPLteCellNeighbor",
+"CLPLteCellNeighbor",
+4,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellNeighborsGroup.nrNeighbors": [
+"CLPNRCellNeighbor",
+"CLPNRCellNeighbor",
+5,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellNeighborsGroup.scdmaNeighbors": [
+"CLPCellNeighbor",
+"CLPCellNeighbor",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellOutOfServiceInfo.hasWifiFallback": [
+"bool",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPCellOutOfServiceInfo.location": [
+"CLPLocation",
+"CLPLocation",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCellOutOfServiceInfo.serviceProviderName": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCellOutOfServiceInfo.uniqueCount": [
+"bool",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.appBundleId": [
+"string",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.arfcn": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.ci": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.ecn0": [
+"sint32",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.isLimitedService": [
+"bool",
+null,
+22,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.lac": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.location": [
+"CLPLocation",
+"CLPLocation",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.mcc": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.mnc": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.neighborGroup": [
+"CLPCellNeighborsGroup",
+"CLPCellNeighborsGroup",
+21,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.neighbors": [
+"CLPCellNeighbor",
+"CLPCellNeighbor",
+20,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.operatorName": [
+"string",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.psc": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.rat": [
+"int32",
+null,
+17,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.rscp": [
+"sint32",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.rssi": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.serverHash": [
+"int32",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.serviceProviderName": [
+"string",
+null,
+23,
+"optional",
+true,
+false,
+false
+],
+"CLPCellTowerLocation.transmit": [
+"int32",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.cdmaCellTowerLocations": [
+"CLPCdmaCellTowerLocation",
+"CLPCdmaCellTowerLocation",
+4,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.cellOutOfServiceInfos": [
+"CLPCellOutOfServiceInfo",
+"CLPCellOutOfServiceInfo",
+7,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.cellTowerLocations": [
+"CLPCellTowerLocation",
+"CLPCellTowerLocation",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.lteCellTowerLocations": [
+"CLPLteCellTowerLocation",
+"CLPLteCellTowerLocation",
+5,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.nrCellTowerLocations": [
+"CLPNRCellTowerLocation",
+"CLPNRCellTowerLocation",
+8,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.scdmaCellTowerLocations": [
+"CLPSCdmaCellTowerLocation",
+"CLPSCdmaCellTowerLocation",
+6,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionRequest.wifiAPLocations": [
+"CLPWifiAPLocation",
+"CLPWifiAPLocation",
+3,
+"repeated",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPCellWifiCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPContext.bundleCategory": [
+"string",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPContext.isDriving": [
+"bool",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPContext.type": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPContext.workoutType": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMAttitude.<enum:IndoorCMAttitudeMagneticCalibration>": [
+[
+[
+0,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_UNKNOWN"
+],
+[
+1,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_UNRELIABLE"
+],
+[
+2,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_2_D_WEAK"
+],
+[
+3,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_2_D_STRONG"
+],
+[
+4,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_3_D_WEAK"
+],
+[
+5,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_3_D"
+],
+[
+6,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_3_D_STRONG"
+],
+[
+7,
+"INDOOR_CM_ATTITUDE_MAGNETIC_CALIBRATION_MAX"
+]
+],
+true,
+false
+],
+"CLPIndoorCMAttitude.magneticAccuracy": [
+"float",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMAttitude.magneticCalibration": [
+"IndoorCMAttitudeMagneticCalibration",
+"ENUM:IndoorCMAttitudeMagneticCalibration",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMAttitude.quaternion": [
+"CLPQuaternion",
+"CLPQuaternion",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMAttitude.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.activeTime": [
+"float",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.distance": [
+"float",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.firstStepTime": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.floorsAscended": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.floorsDescended": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.numberOfSteps": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCMPedometer.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.bundleIds": [
+"CLPBundleId",
+"CLPBundleId",
+8,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.indoorCMAttitudes": [
+"CLPIndoorCMAttitude",
+"CLPIndoorCMAttitude",
+4,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.indoorCMPedometers": [
+"CLPIndoorCMPedometer",
+"CLPIndoorCMPedometer",
+5,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.indoorLocations": [
+"CLPLocation",
+"CLPLocation",
+3,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.indoorMotionActivitys": [
+"CLPIndoorMotionActivity",
+"CLPIndoorMotionActivity",
+6,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.indoorPressures": [
+"CLPIndoorPressure",
+"CLPIndoorPressure",
+7,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.indoorWifis": [
+"CLPIndoorWifiScan",
+"CLPIndoorWifiScan",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPIndoorCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.<enum:IndoorEventType>": [
+[
+[
+1,
+"INDOOR_EVENT_TYPE_CM_ATTITUDE"
+],
+[
+2,
+"INDOOR_EVENT_TYPE_CM_PEDOMETER"
+],
+[
+3,
+"INDOOR_EVENT_TYPE_LOCATION"
+],
+[
+4,
+"INDOOR_EVENT_TYPE_MOTION_ACTIVITY"
+],
+[
+5,
+"INDOOR_EVENT_TYPE_PRESSURE"
+],
+[
+6,
+"INDOOR_EVENT_TYPE_WIFI_SCAN"
+],
+[
+7,
+"INDOOR_EVENT_TYPE_BUNDLE_ID"
+],
+[
+8,
+"INDOOR_EVENT_TYPE_VIO_ESTIMATION"
+],
+[
+9,
+"INDOOR_EVENT_TYPE_VL_LOCALIZATION_RESULT"
+],
+[
+10,
+"INDOOR_EVENT_TYPE_WORKOUT_UPDATE_MOTION_ACTIVITY"
+]
+],
+true,
+false
+],
+"CLPIndoorEvent.bundleId": [
+"CLPBundleId",
+"CLPBundleId",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.cmAttitude": [
+"CLPIndoorCMAttitude",
+"CLPIndoorCMAttitude",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.cmPedometer": [
+"CLPIndoorCMPedometer",
+"CLPIndoorCMPedometer",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.location": [
+"CLPLocation",
+"CLPLocation",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.motionActivity": [
+"CLPIndoorMotionActivity",
+"CLPIndoorMotionActivity",
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.pressure": [
+"CLPIndoorPressure",
+"CLPIndoorPressure",
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.type": [
+"IndoorEventType",
+"ENUM:IndoorEventType",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.vioEstimation": [
+"CLPLOGENTRYVISIONVIOEstimation",
+"CLPLOGENTRYVISIONVIOEstimation",
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.vlLocalizationResult": [
+"CLPLOGENTRYVISIONVLLocalizationResult",
+"CLPLOGENTRYVISIONVLLocalizationResult",
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.wifiScan": [
+"CLPIndoorWifiScan",
+"CLPIndoorWifiScan",
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorEvent.workoutUpdateMotionActivity": [
+"CLPWorkoutUpdateMotionActivity",
+"CLPWorkoutUpdateMotionActivity",
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorMotionActivity.motionActivity": [
+"CLPMotionActivity",
+"CLPMotionActivity",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorMotionActivity.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorPressure.pressure": [
+"float",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorPressure.temperature": [
+"float",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorPressure.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.age": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.bundleId": [
+"string",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.channel": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.hidden": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.mac": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.rssi": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPIndoorWifiScan.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereCollectionRequest.ionoDatas": [
+"CLPIonosphereData",
+"CLPIonosphereData",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPIonosphereCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.applicableTimeSec": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.d2vtecDphi2": [
+"double",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.d2vtecDtheta2": [
+"double",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.d2vtecDthetaphi": [
+"double",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.dvtecDphi": [
+"double",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.dvtecDtheta": [
+"double",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.estimatorAgeSec": [
+"double",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.geodeticAltitudeM": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.hmaxKm": [
+"double",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.latitudeDeg": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.longitudeDeg": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.pd2vtecDphi2D2vtecDphi2": [
+"double",
+null,
+19,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.pd2vtecDtheta2D2vtecDtheta2": [
+"double",
+null,
+17,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.pd2vtecDthetadphiD2vtecDthetadphi": [
+"double",
+null,
+18,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.pdvtecDphiDvtecDphi": [
+"double",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.pdvtecDthetaDvtecDtheta": [
+"double",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.phmaxHmaxKm2": [
+"double",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.pvtec0Vtec0": [
+"double",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPIonosphereData.vtec0": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONCGSize.height": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONCGSize.width": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.<enum:LOGENTRYVISIONLSLHeadingGlobalReferenceFrame>": [
+[
+[
+0,
+"LOGENTRYVISIONLSL_HEADING_GLOBAL_REFERENCE_FRAME_LSL_GLOBAL_REFERENCE_FRAME_UNKNOWN"
+],
+[
+1,
+"LOGENTRYVISIONLSL_HEADING_GLOBAL_REFERENCE_FRAME_LSL_GLOBAL_REFERENCE_FRAME_NWU"
+],
+[
+2,
+"LOGENTRYVISIONLSL_HEADING_GLOBAL_REFERENCE_FRAME_LSL_GLOBAL_REFERENCE_FRAME_ENU"
+],
+[
+3,
+"LOGENTRYVISIONLSL_HEADING_GLOBAL_REFERENCE_FRAME_LSL_GLOBAL_REFERENCE_FRAME_ECEF"
+]
+],
+true,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.confidence": [
+"double",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.globalReferenceFrame": [
+"LOGENTRYVISIONLSLHeadingGlobalReferenceFrame",
+"ENUM:LOGENTRYVISIONLSLHeadingGlobalReferenceFrame",
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.location": [
+"CLPLOGENTRYVISIONLSLLocation",
+"CLPLOGENTRYVISIONLSLLocation",
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.rotationFromGlobalToCameraFrame": [
+"CLPLOGENTRYVISIONSimdDoubleMxN",
+"CLPLOGENTRYVISIONSimdDoubleMxN",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.rotationFromGlobalToDeviceFrame": [
+"CLPLOGENTRYVISIONSimdDoubleMxN",
+"CLPLOGENTRYVISIONSimdDoubleMxN",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.rotationalAccuracyInRadians": [
+"CLPLOGENTRYVISIONSimdDoubleM",
+"CLPLOGENTRYVISIONSimdDoubleM",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.supplemantaryInfo": [
+"CLPLOGENTRYVISIONLSLHeadingSupplInfo",
+"CLPLOGENTRYVISIONLSLHeadingSupplInfo",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeading.timestamp": [
+"CLPLOGENTRYVISIONTimeStamp",
+"CLPLOGENTRYVISIONTimeStamp",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeadingEstimation.<enum:LOGENTRYVISIONLSLHeadingEstimationStatus>": [
+[
+[
+0,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_SUCCESS"
+],
+[
+1,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_MAP_DOWNLOAD_TIMEOUT"
+],
+[
+2,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_MAP_DOWNLOAD_GEO_SERVICES_FAIL"
+],
+[
+3,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_MAP_DOWNLOAD_UNSUPPORTED_PLATFORM"
+],
+[
+4,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_MAP_OFFLINE_UNABLE_TO_READ"
+],
+[
+5,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_NO_ROADS_FOUND"
+],
+[
+6,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_NOT_ENOUGH_FEATURES"
+],
+[
+7,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_MATCH_FAILURE"
+],
+[
+8,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_LSL_STATUS_UNKNOWN"
+]
+],
+true,
+false
+],
+"CLPLOGENTRYVISIONLSLHeadingEstimation.<enum:LOGENTRYVISIONLSLHeadingEstimationStatusDEPRECATED>": [
+[
+[
+0,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_DEPRECATED_LSL_STATUS_UNKNOWN_DEPRECATED"
+],
+[
+1,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_DEPRECATED_LSL_STATUS_SUCCESS_DEPRECATED"
+],
+[
+2,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_DEPRECATED_LSL_STATUS_MAP_DOWNLOAD_ERROR_DEPRECATED"
+],
+[
+3,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_DEPRECATED_LSL_STATUS_MAP_EMPTY_DEPRECATED"
+],
+[
+4,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_DEPRECATED_LSL_STATUS_NOT_ENOUGH_FEATURES_DEPRECATED"
+],
+[
+5,
+"LOGENTRYVISIONLSL_HEADING_ESTIMATION_STATUS_DEPRECATED_LSL_STATUS_MATCH_FAILURE_DEPRECATED"
+]
+],
+true,
+false
+],
+"CLPLOGENTRYVISIONLSLHeadingEstimation.headings": [
+"CLPLOGENTRYVISIONLSLHeading",
+"CLPLOGENTRYVISIONLSLHeading",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeadingEstimation.status": [
+"LOGENTRYVISIONLSLHeadingEstimationStatus",
+"ENUM:LOGENTRYVISIONLSLHeadingEstimationStatus",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeadingEstimation.statusDEPRECATED": [
+"LOGENTRYVISIONLSLHeadingEstimationStatusDEPRECATED",
+"ENUM:LOGENTRYVISIONLSLHeadingEstimationStatusDEPRECATED",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLHeadingSupplInfo.roadSegment": [
+"CLPLOGENTRYVISIONLSLMapRoadSegment",
+"CLPLOGENTRYVISIONLSLMapRoadSegment",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLLocation.altitude": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLLocation.coordinate": [
+"CLPLOGENTRYVISIONLSLLocationCoordinate",
+"CLPLOGENTRYVISIONLSLLocationCoordinate",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLLocation.timestamp": [
+"CLPLOGENTRYVISIONTimeStamp",
+"CLPLOGENTRYVISIONTimeStamp",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLLocationCoordinate.latitude": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLLocationCoordinate.longitude": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLMapRoadSegment.polylines": [
+"CLPLOGENTRYVISIONLSLLocationCoordinate",
+"CLPLOGENTRYVISIONLSLLocationCoordinate",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONLSLMapRoadSegment.roadId": [
+"uint64",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONSimdDoubleM.values": [
+"double",
+null,
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONSimdDoubleMxN.columns": [
+"CLPLOGENTRYVISIONSimdDoubleM",
+"CLPLOGENTRYVISIONSimdDoubleM",
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONSimdFloatM.values": [
+"float",
+null,
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONSimdFloatMxN.columns": [
+"CLPLOGENTRYVISIONSimdFloatM",
+"CLPLOGENTRYVISIONSimdFloatM",
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONTimeStamp.cfAbsoluteTimeS": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONTimeStamp.machAbsoluteTimeS": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONTimeStamp.machContinuousTimeS": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.<enum:LOGENTRYVISIONVIOEstimationTrackingState>": [
+[
+[
+0,
+"LOGENTRYVISIONVIO_ESTIMATION_TRACKING_STATE_VIO_TRACKING_STATE_UNKNOWN"
+],
+[
+1,
+"LOGENTRYVISIONVIO_ESTIMATION_TRACKING_STATE_VIO_TRACKING_STATE_NOMINAL"
+],
+[
+2,
+"LOGENTRYVISIONVIO_ESTIMATION_TRACKING_STATE_VIO_TRACKING_STATE_UNACCEPTABLE"
+],
+[
+3,
+"LOGENTRYVISIONVIO_ESTIMATION_TRACKING_STATE_VIO_TRACKING_STATE_UNACCEPTABLE_DUE_TO_FAST_MOTION"
+],
+[
+4,
+"LOGENTRYVISIONVIO_ESTIMATION_TRACKING_STATE_VIO_TRACKING_STATE_UNACCEPTABLE_DUE_TO_LOW_SCENE_TEXTURE"
+],
+[
+5,
+"LOGENTRYVISIONVIO_ESTIMATION_TRACKING_STATE_VIO_TRACKING_STATE_UNACCEPTABLE_DUE_TO_LOW_LIGHT"
+]
+],
+true,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.cameraImageResolution": [
+"CLPLOGENTRYVISIONCGSize",
+"CLPLOGENTRYVISIONCGSize",
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.cameraIntrinsics": [
+"CLPLOGENTRYVISIONSimdFloatMxN",
+"CLPLOGENTRYVISIONSimdFloatMxN",
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.cameraPose": [
+"CLPLOGENTRYVISIONSimdFloatMxN",
+"CLPLOGENTRYVISIONSimdFloatMxN",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.inertialCovariance": [
+"bytes",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.inertialCovarianceInfo": [
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo",
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo",
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.inertialState": [
+"bytes",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.inertialStateInfo": [
+"CLPLOGENTRYVISIONVIOInertialStateInfo",
+"CLPLOGENTRYVISIONVIOInertialStateInfo",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.originTimestamp": [
+"CLPLOGENTRYVISIONTimeStamp",
+"CLPLOGENTRYVISIONTimeStamp",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.timestamp": [
+"CLPLOGENTRYVISIONTimeStamp",
+"CLPLOGENTRYVISIONTimeStamp",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOEstimation.trackingState": [
+"LOGENTRYVISIONVIOEstimationTrackingState",
+"ENUM:LOGENTRYVISIONVIOEstimationTrackingState",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.accelBiasCovOffset": [
+"uint32",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.accelBiasDof": [
+"uint32",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.covarianceSize": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.covarianceSizeInBytes": [
+"uint64",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.gyroBiasCovOffset": [
+"uint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.gyroBiasDof": [
+"uint32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.orientationCovOffset": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.orientationDof": [
+"uint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.positionCovOffset": [
+"uint32",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.positionDof": [
+"uint32",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.velocityCovOffset": [
+"uint32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialCovarianceInfo.velocityDof": [
+"uint32",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.accelBiasLength": [
+"uint32",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.accelBiasOffset": [
+"uint32",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.gyroBiasLength": [
+"uint32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.gyroBiasOffset": [
+"uint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.orientationLength": [
+"uint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.orientationOffset": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.positionLength": [
+"uint32",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.positionOffset": [
+"uint32",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.stateLength": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.stateLengthInBytes": [
+"uint64",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.velocityLength": [
+"uint32",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVIOInertialStateInfo.velocityOffset": [
+"uint32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationDebugInfo.maps488Details": [
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details",
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.descriptorDimension": [
+"uint64",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.inlierIndices": [
+"int32",
+null,
+4,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.numFrames": [
+"uint64",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.numInliers": [
+"uint64",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.numSlamTracks": [
+"uint64",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameCalibrationMatrices": [
+"float",
+null,
+16,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameDistortions": [
+"float",
+null,
+17,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameVioPoses": [
+"float",
+null,
+15,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameVioStatusCodes": [
+"int32",
+null,
+14,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.points2ds": [
+"float",
+null,
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.points3ds": [
+"double",
+null,
+3,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.resultPoseRotations": [
+"double",
+null,
+18,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.resultPoseTranslations": [
+"double",
+null,
+19,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamOrigins": [
+"double",
+null,
+5,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackDescriptors": [
+"bytes",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackImageIndices": [
+"int32",
+null,
+12,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackObservations": [
+"int32",
+null,
+10,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTracks": [
+"float",
+null,
+7,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTracks2ds": [
+"float",
+null,
+11,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationResult.confidence": [
+"float",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationResult.covariance": [
+"CLPLOGENTRYVISIONVLMatrixfMxN",
+"CLPLOGENTRYVISIONVLMatrixfMxN",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationResult.debugInfo": [
+"CLPLOGENTRYVISIONVLLocalizationDebugInfo",
+"CLPLOGENTRYVISIONVLLocalizationDebugInfo",
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationResult.location": [
+"CLPLOGENTRYVISIONVLLocation",
+"CLPLOGENTRYVISIONVLLocation",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationResult.timestamp": [
+"CLPLOGENTRYVISIONTimeStamp",
+"CLPLOGENTRYVISIONTimeStamp",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocalizationResult.transform": [
+"CLPLOGENTRYVISIONSimdDoubleMxN",
+"CLPLOGENTRYVISIONSimdDoubleMxN",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocation.coordinate": [
+"CLPLOGENTRYVISIONSimdDoubleM",
+"CLPLOGENTRYVISIONSimdDoubleM",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLLocation.horizontalAccuracy": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLMatrixfMxN.rows": [
+"CLPLOGENTRYVISIONVLVectorfM",
+"CLPLOGENTRYVISIONVLVectorfM",
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLOGENTRYVISIONVLVectorfM.values": [
+"float",
+null,
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLocation.<enum:LocationModeIndicator>": [
+[
+[
+0,
+"LOCATION_MODE_INDICATOR_NOT_RECOGNIZED"
+],
+[
+1,
+"LOCATION_MODE_INDICATOR_NOT_SPECIFIED"
+],
+[
+2,
+"LOCATION_MODE_INDICATOR_AUTONOMOUS"
+],
+[
+3,
+"LOCATION_MODE_INDICATOR_DIFFERENTIAL"
+],
+[
+4,
+"LOCATION_MODE_INDICATOR_ESTIMATED"
+]
+],
+true,
+false
+],
+"CLPLocation.altitude": [
+"float",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.appBundleIdIndices": [
+"string",
+null,
+15,
+"repeated",
+true,
+false,
+false
+],
+"CLPLocation.baroCalibrationIndication": [
+"CLPBaroCalibrationIndication",
+"CLPBaroCalibrationIndication",
+30,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.context": [
+"int32",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.course": [
+"float",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.courseAccuracy": [
+"float",
+null,
+21,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.dominantMotionActivity": [
+"CLPMotionActivity",
+"CLPMotionActivity",
+20,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.floor": [
+"int32",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.horizontalAccuracy": [
+"float",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.horzUncSemiMaj": [
+"float",
+null,
+24,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.horzUncSemiMajAz": [
+"float",
+null,
+26,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.horzUncSemiMin": [
+"float",
+null,
+25,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.isFromLocationController": [
+"bool",
+null,
+28,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.latitude": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.longitude": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.modeIndicator": [
+"LocationModeIndicator",
+"ENUM:LocationModeIndicator",
+23,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.motionActivity": [
+"CLPMotionActivity",
+"CLPMotionActivity",
+19,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.motionActivityConfidence": [
+"int32",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.motionActivityType": [
+"int32",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.motionVehicleConnected": [
+"bool",
+null,
+17,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.motionVehicleConnectedStateChanged": [
+"bool",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.pipelineDiagnosticReport": [
+"CLPPipelineDiagnosticReport",
+"CLPPipelineDiagnosticReport",
+29,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.provider": [
+"int32",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.rawMotionActivity": [
+"CLPMotionActivity",
+"CLPMotionActivity",
+18,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.satReport": [
+"CLPSatelliteReport",
+"CLPSatelliteReport",
+27,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.speed": [
+"float",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.speedAccuracy": [
+"float",
+null,
+22,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.timestamp": [
+"double",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLocation.verticalAccuracy": [
+"float",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.accessoryLocations": [
+"CLPLocation",
+"CLPLocation",
+10,
+"repeated",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.accessoryMeta": [
+"CLPAccessoryMeta",
+"CLPAccessoryMeta",
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.appBundleId": [
+"string",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.appBundleIds": [
+"string",
+null,
+8,
+"repeated",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.locations": [
+"CLPLocation",
+"CLPLocation",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.mcc": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.mnc": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.pipelineMetadata": [
+"CLPLocationProcessingPipelineMetadata",
+"CLPLocationProcessingPipelineMetadata",
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.rat": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionRequest.tripId": [
+"string",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationConsumptionScoreInfo.clientKey": [
+"string",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationConsumptionScoreInfo.score": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationConsumptionScoreInfo.startTime": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationConsumptionScoreInfo.stopTime": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLocationConsumptionScoreInfoRequest.locationConsumptionScoreInfos": [
+"CLPLocationConsumptionScoreInfo",
+"CLPLocationConsumptionScoreInfo",
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPLocationProcessingPipelineMetadata.privacySanitization": [
+"CLPPrivacySanitization",
+"CLPPrivacySanitization",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.bandwidth": [
+"uint32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.ecn0": [
+"sint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.maxThroughput": [
+"uint32",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.neighborType": [
+"uint32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.pid": [
+"sint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.rscp": [
+"sint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.rssi": [
+"sint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellNeighbor.uarfcn": [
+"sint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.appBundleId": [
+"string",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.bandInfo": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.bandwidth": [
+"int32",
+null,
+22,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.cellLatitude": [
+"double",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.cellLongitude": [
+"double",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.ci": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.csgId": [
+"uint32",
+null,
+32,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.csgIndication": [
+"uint32",
+null,
+31,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.deploymentType": [
+"uint32",
+null,
+25,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.downlinkBandwidth": [
+"uint32",
+null,
+26,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.ecn0": [
+"sint32",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.isLimitedService": [
+"bool",
+null,
+23,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.isStalled": [
+"bool",
+null,
+27,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.latency": [
+"uint32",
+null,
+28,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.location": [
+"CLPLocation",
+"CLPLocation",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.maxThroughput": [
+"uint32",
+null,
+30,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.mcc": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.mnc": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.neighborGroup": [
+"CLPCellNeighborsGroup",
+"CLPCellNeighborsGroup",
+21,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.neighbors": [
+"CLPLteCellNeighbor",
+"CLPLteCellNeighbor",
+20,
+"repeated",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.operatorName": [
+"string",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.pid": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.pmax": [
+"uint32",
+null,
+29,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.rscp": [
+"sint32",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.rssi": [
+"sint32",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.serverHash": [
+"int32",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.serviceProviderName": [
+"string",
+null,
+24,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.tac": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.timingAdvance": [
+"int32",
+null,
+33,
+"optional",
+true,
+false,
+false
+],
+"CLPLteCellTowerLocation.uarfcn": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPMeta.probeId": [
+"string",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPMeta.productId": [
+"string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPMeta.softwareVersion": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPMeta.submissionId": [
+"int64",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPMotionActivity.<enum:MotionActivityConfidence>": [
+[
+[
+0,
+"MOTION_ACTIVITY_CONFIDENCE_LOW"
+],
+[
+1,
+"MOTION_ACTIVITY_CONFIDENCE_MEDIUM"
+],
+[
+2,
+"MOTION_ACTIVITY_CONFIDENCE_HIGH"
+]
+],
+true,
+false
+],
+"CLPMotionActivity.<enum:MotionActivityType>": [
+[
+[
+0,
+"MOTION_ACTIVITY_TYPE_UNKNOWN"
+],
+[
+1,
+"MOTION_ACTIVITY_TYPE_FROZEN"
+],
+[
+2,
+"MOTION_ACTIVITY_TYPE_STATIC"
+],
+[
+3,
+"MOTION_ACTIVITY_TYPE_MOVING"
+],
+[
+4,
+"MOTION_ACTIVITY_TYPE_WALKING"
+],
+[
+5,
+"MOTION_ACTIVITY_TYPE_DRIVING"
+],
+[
+6,
+"MOTION_ACTIVITY_TYPE_CYCLING"
+],
+[
+7,
+"MOTION_ACTIVITY_TYPE_SEMI_STATIONARY"
+],
+[
+8,
+"MOTION_ACTIVITY_TYPE_RUNNING"
+],
+[
+9,
+"MOTION_ACTIVITY_TYPE_MOVING_COARSE"
+],
+[
+10,
+"MOTION_ACTIVITY_TYPE_IN_VEHICLE_FROZEN"
+],
+[
+11,
+"MOTION_ACTIVITY_TYPE_IN_VEHICLE_STATIC"
+],
+[
+41,
+"MOTION_ACTIVITY_TYPE_WALKING_SLOW"
+],
+[
+52,
+"MOTION_ACTIVITY_TYPE_VEHICULAR_IN_HAND"
+],
+[
+56,
+"MOTION_ACTIVITY_TYPE_DRIVING_OTHER"
+],
+[
+61,
+"MOTION_ACTIVITY_TYPE_MACHINE_WORKOUT"
+],
+[
+62,
+"MOTION_ACTIVITY_TYPE_WORKOUT"
+],
+[
+100,
+"MOTION_ACTIVITY_TYPE_CYCLING_LEG"
+],
+[
+2010,
+"MOTION_ACTIVITY_TYPE_STATIONARY_CYCLING"
+],
+[
+2020,
+"MOTION_ACTIVITY_TYPE_CALISTHENICS"
+],
+[
+2048,
+"MOTION_ACTIVITY_TYPE_ELLIPTICAL"
+],
+[
+2061,
+"MOTION_ACTIVITY_TYPE_CROSS_TRAINING"
+],
+[
+2065,
+"MOTION_ACTIVITY_TYPE_STAIR_CLIMBING"
+],
+[
+2071,
+"MOTION_ACTIVITY_TYPE_ROWING"
+],
+[
+2150,
+"MOTION_ACTIVITY_TYPE_YOGA"
+],
+[
+3015,
+"MOTION_ACTIVITY_TYPE_DANCING"
+],
+[
+11805,
+"MOTION_ACTIVITY_TYPE_PUSHING_WHEELCHAIR"
+],
+[
+12150,
+"MOTION_ACTIVITY_TYPE_INDOOR_RUNNING"
+],
+[
+17150,
+"MOTION_ACTIVITY_TYPE_INDOOR_WALKING"
+],
+[
+18240,
+"MOTION_ACTIVITY_TYPE_SWIMMING"
+],
+[
+19150,
+"MOTION_ACTIVITY_TYPE_DOWNHILL_SKIING"
+],
+[
+90603,
+"MOTION_ACTIVITY_TYPE_OUTDOOR_WHEELCHAIR"
+]
+],
+false,
+false
+],
+"CLPMotionActivity.confidence": [
+"MotionActivityConfidence",
+"ENUM:MotionActivityConfidence",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPMotionActivity.type": [
+"MotionActivityType",
+"ENUM:MotionActivityType",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.bandwidth": [
+"uint32",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.bwpSupport": [
+"uint32",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.ecn0": [
+"sint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.maxThroughput": [
+"uint32",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.neighborType": [
+"uint32",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.nrarfcn": [
+"sint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.pid": [
+"sint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.rscp": [
+"sint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.rssi": [
+"sint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.saOrNsaNeighbor": [
+"uint32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellNeighbor.scs": [
+"uint32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.appBundleId": [
+"string",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.bandInfo": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.bandwidth": [
+"int32",
+null,
+22,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.bwpSupport": [
+"uint32",
+null,
+32,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.cellLatitude": [
+"double",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.cellLongitude": [
+"double",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.ci": [
+"int64",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.downlinkBandwidth": [
+"uint32",
+null,
+27,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.ecn0": [
+"sint32",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.gscn": [
+"uint32",
+null,
+26,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.isLimitedService": [
+"bool",
+null,
+23,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.isStalled": [
+"bool",
+null,
+28,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.latency": [
+"uint32",
+null,
+29,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.location": [
+"CLPLocation",
+"CLPLocation",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.maxThroughput": [
+"uint32",
+null,
+31,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.mcc": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.mnc": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.neighborGroup": [
+"CLPCellNeighborsGroup",
+"CLPCellNeighborsGroup",
+21,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.neighbors": [
+"CLPNRCellNeighbor",
+"CLPNRCellNeighbor",
+20,
+"repeated",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.nrarfcn": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.operatorName": [
+"string",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.pid": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.pmax": [
+"uint32",
+null,
+30,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.rscp": [
+"sint32",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.rssi": [
+"sint32",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.scs": [
+"uint32",
+null,
+25,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.serverHash": [
+"int32",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.serviceProviderName": [
+"string",
+null,
+24,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.tac": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPNRCellTowerLocation.timingAdvance": [
+"int32",
+null,
+33,
+"optional",
+true,
+false,
+false
+],
+"CLPPassCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPassCollectionRequest.passLocations": [
+"CLPPassLocation",
+"CLPPassLocation",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPPassCollectionRequest.signature": [
+"bytes",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPassCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPassCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPassLocation.age": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPPassLocation.associatedStoreIds": [
+"string",
+null,
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPPassLocation.location": [
+"CLPLocation",
+"CLPLocation",
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPPassLocation.passSource": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPassLocation.passTypeId": [
+"string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPassLocation.serverHash": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.<enum:PipelineDiagnosticReportPfYieldStatusBeforeCalculatePose>": [
+[
+[
+0,
+"PIPELINE_DIAGNOSTIC_REPORT_PF_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_UNKNOWN"
+],
+[
+1,
+"PIPELINE_DIAGNOSTIC_REPORT_PF_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_OK"
+],
+[
+2,
+"PIPELINE_DIAGNOSTIC_REPORT_PF_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_LOW"
+],
+[
+3,
+"PIPELINE_DIAGNOSTIC_REPORT_PF_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_OFFMAP"
+],
+[
+4,
+"PIPELINE_DIAGNOSTIC_REPORT_PF_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_NONE"
+]
+],
+true,
+false
+],
+"CLPPipelineDiagnosticReport.<enum:PipelineDiagnosticReportYieldStatusBeforeCalculatePose>": [
+[
+[
+0,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_UNKNOWN"
+],
+[
+1,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_OK"
+],
+[
+2,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_LOW"
+],
+[
+3,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_OFFMAP"
+],
+[
+4,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_STATUS_BEFORE_CALCULATE_POSE_YIELD_STATUS_NONE"
+]
+],
+true,
+false
+],
+"CLPPipelineDiagnosticReport.<enum:PipelineDiagnosticReportYieldType>": [
+[
+[
+0,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_TYPE_YIELD_TYPE_UNKNOWN"
+],
+[
+1,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_TYPE_YIELD_TYPE_PRIMARY"
+],
+[
+2,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_TYPE_YIELD_TYPE_AUXILARY"
+],
+[
+3,
+"PIPELINE_DIAGNOSTIC_REPORT_YIELD_TYPE_YIELD_TYPE_DEAD_RECKONING"
+]
+],
+true,
+false
+],
+"CLPPipelineDiagnosticReport.pfYieldStatusBeforeCalculatePose": [
+"PipelineDiagnosticReportPfYieldStatusBeforeCalculatePose",
+"ENUM:PipelineDiagnosticReportPfYieldStatusBeforeCalculatePose",
+13,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbCoarseIndoorSaysIndoor": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbGpsSaysIndoor": [
+"double",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbInjectionGainRetryLimitOk": [
+"double",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbInjectionOccupancyRetryLimitOk": [
+"double",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbInlierEstimate": [
+"double",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbLocalizerIoWrapperSaysWifiOk": [
+"double",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbOnFloorEstimates": [
+"double",
+null,
+8,
+"repeated",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbOnFloorsEstimate": [
+"double",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbParticleFilterSaysYield": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbPipelinedSaysYield": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.prbWifiSaysIndoor": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.yieldStatusBeforeCalculatePose": [
+"PipelineDiagnosticReportYieldStatusBeforeCalculatePose",
+"ENUM:PipelineDiagnosticReportYieldStatusBeforeCalculatePose",
+14,
+"optional",
+true,
+false,
+false
+],
+"CLPPipelineDiagnosticReport.yieldType": [
+"PipelineDiagnosticReportYieldType",
+"ENUM:PipelineDiagnosticReportYieldType",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiCollectionRequest.harvests": [
+"CLPPoiHarvest",
+"CLPPoiHarvest",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPPoiCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiHarvest.accessPoints": [
+"CLPPoiWifiAccessPoint",
+"CLPPoiWifiAccessPoint",
+3,
+"repeated",
+true,
+false,
+false
+],
+"CLPPoiHarvest.locations": [
+"CLPLocation",
+"CLPLocation",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPPoiHarvest.triggerEvent": [
+"CLPPoiTriggerEvent",
+"CLPPoiTriggerEvent",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiTriggerEvent.<enum:PoiTriggerEventTriggerType>": [
+[
+[
+0,
+"POI_TRIGGER_EVENT_TRIGGER_TYPE_UNKNOWN"
+],
+[
+1,
+"POI_TRIGGER_EVENT_TRIGGER_TYPE_PASSBOOK"
+],
+[
+2,
+"POI_TRIGGER_EVENT_TRIGGER_TYPE_VISIT"
+],
+[
+3,
+"POI_TRIGGER_EVENT_TRIGGER_TYPE_VISIT_SETTLED"
+],
+[
+4,
+"POI_TRIGGER_EVENT_TRIGGER_TYPE_REVIEW"
+]
+],
+true,
+false
+],
+"CLPPoiTriggerEvent.muid": [
+"uint64",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiTriggerEvent.providerIdentifier": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiTriggerEvent.triggerSubType": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiTriggerEvent.triggerTimestamp": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiTriggerEvent.triggerType": [
+"PoiTriggerEventTriggerType",
+"ENUM:PoiTriggerEventTriggerType",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiWifiAccessPoint.age": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiWifiAccessPoint.channel": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiWifiAccessPoint.mac": [
+"string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiWifiAccessPoint.rssi": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPoiWifiAccessPoint.scanTimestamp": [
+"double",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPPressure.std": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPressure.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPressure.value": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPressureCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPressureCollectionRequest.pressure": [
+"CLPPressure",
+"CLPPressure",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPressureCollectionRequest.pressureLocation": [
+"CLPLocation",
+"CLPLocation",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPPressureCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPPressureCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPrivacySanitization.<enum:PrivacySanitizationTripSegmentType>": [
+[
+[
+0,
+"PRIVACY_SANITIZATION_TRIP_SEGMENT_TYPE_UNKNOWN"
+],
+[
+1,
+"PRIVACY_SANITIZATION_TRIP_SEGMENT_TYPE_ORIGIN"
+],
+[
+2,
+"PRIVACY_SANITIZATION_TRIP_SEGMENT_TYPE_MAIN_SPLIT"
+],
+[
+3,
+"PRIVACY_SANITIZATION_TRIP_SEGMENT_TYPE_MAIN_UN_SPLIT"
+]
+],
+true,
+false
+],
+"CLPPrivacySanitization.tripSegmentType": [
+"PrivacySanitizationTripSegmentType",
+"ENUM:PrivacySanitizationTripSegmentType",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPPrivacySanitization.version": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPQuaternion.w": [
+"float",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPQuaternion.x": [
+"float",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPQuaternion.y": [
+"float",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPQuaternion.z": [
+"float",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPRTVisit.entryTime": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPRTVisit.exitTime": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.appBundleId": [
+"string",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.arfcn": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.ci": [
+"int32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.ecn0": [
+"sint32",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.isLimitedService": [
+"bool",
+null,
+22,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.lac": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.location": [
+"CLPLocation",
+"CLPLocation",
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.mcc": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.mnc": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.neighborGroup": [
+"CLPCellNeighborsGroup",
+"CLPCellNeighborsGroup",
+21,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.neighbors": [
+"CLPCellNeighbor",
+"CLPCellNeighbor",
+20,
+"repeated",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.operatorName": [
+"string",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.psc": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.rat": [
+"int32",
+null,
+17,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.rscp": [
+"sint32",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.rssi": [
+"int32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.serverHash": [
+"int32",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.serviceProviderName": [
+"string",
+null,
+23,
+"optional",
+true,
+false,
+false
+],
+"CLPSCdmaCellTowerLocation.transmit": [
+"int32",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"CLPSatelliteInfo.azimuths": [
+"int32",
+null,
+3,
+"repeated",
+true,
+false,
+false
+],
+"CLPSatelliteInfo.cnos": [
+"int32",
+null,
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPSatelliteInfo.elevations": [
+"int32",
+null,
+4,
+"repeated",
+true,
+false,
+false
+],
+"CLPSatelliteInfo.isUsedInFixes": [
+"bool",
+null,
+5,
+"repeated",
+true,
+false,
+false
+],
+"CLPSatelliteInfo.satIds": [
+"int32",
+null,
+1,
+"repeated",
+true,
+false,
+false
+],
+"CLPSatelliteReport.galileo": [
+"CLPSatelliteInfo",
+"CLPSatelliteInfo",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPSatelliteReport.glonass": [
+"CLPSatelliteInfo",
+"CLPSatelliteInfo",
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPSatelliteReport.gps": [
+"CLPSatelliteInfo",
+"CLPSatelliteInfo",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPSatelliteReport.qzss": [
+"CLPSatelliteInfo",
+"CLPSatelliteInfo",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPTraceCollectionRequest.<enum:TraceCollectionRequestType>": [
+[
+[
+1,
+"TRACE_COLLECTION_REQUEST_TYPE_RANDOM_COLLECTION"
+],
+[
+2,
+"TRACE_COLLECTION_REQUEST_TYPE_SCORED_COLLECTION"
+],
+[
+3,
+"TRACE_COLLECTION_REQUEST_TYPE_VISION_COLLECTION"
+]
+],
+true,
+false
+],
+"CLPTraceCollectionRequest.events": [
+"CLPIndoorEvent",
+"CLPIndoorEvent",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPTraceCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPTraceCollectionRequest.type": [
+"TraceCollectionRequestType",
+"ENUM:TraceCollectionRequestType",
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPTraceCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPTraceCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.<enum:WifiAPLocationScanType>": [
+[
+[
+0,
+"WIFI_AP_LOCATION_SCAN_TYPE_INVALID"
+],
+[
+1,
+"WIFI_AP_LOCATION_SCAN_TYPE_TWO_GHZ_SET1"
+],
+[
+2,
+"WIFI_AP_LOCATION_SCAN_TYPE_TWO_GHZ_SET2"
+],
+[
+3,
+"WIFI_AP_LOCATION_SCAN_TYPE_FIVE_GHZ_SET1"
+],
+[
+4,
+"WIFI_AP_LOCATION_SCAN_TYPE_FIVE_GHZ_SET2"
+],
+[
+5,
+"WIFI_AP_LOCATION_SCAN_TYPE_FIVE_GHZ_SET3"
+],
+[
+6,
+"WIFI_AP_LOCATION_SCAN_TYPE_CACHED"
+],
+[
+7,
+"WIFI_AP_LOCATION_SCAN_TYPE_CHANNEL"
+],
+[
+8,
+"WIFI_AP_LOCATION_SCAN_TYPE_FAST"
+],
+[
+9,
+"WIFI_AP_LOCATION_SCAN_TYPE_STAGE1"
+],
+[
+10,
+"WIFI_AP_LOCATION_SCAN_TYPE_STAGE2"
+],
+[
+11,
+"WIFI_AP_LOCATION_SCAN_TYPE_NORMAL"
+],
+[
+12,
+"WIFI_AP_LOCATION_SCAN_TYPE_CUSTOM_SCAN"
+],
+[
+13,
+"WIFI_AP_LOCATION_SCAN_TYPE_FIVE_GHZ_STAGE1"
+],
+[
+14,
+"WIFI_AP_LOCATION_SCAN_TYPE_MAX"
+]
+],
+true,
+false
+],
+"CLPWifiAPLocation.appBundleId": [
+"string",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.channel": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.hidden": [
+"int32",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.location": [
+"CLPLocation",
+"CLPLocation",
+4,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.mac": [
+"string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.rssi": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.scanTimestamp": [
+"double",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.scanType": [
+"WifiAPLocationScanType",
+"ENUM:WifiAPLocationScanType",
+9,
+"optional",
+true,
+false,
+false
+],
+"CLPWifiAPLocation.serverHash": [
+"int32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"CLPWorkoutUpdateMotionActivity.activityType": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"CLPWorkoutUpdateMotionActivity.startTime": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPWorkoutUpdateMotionActivity.timestamp": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPWtwCollectionRequest.meta": [
+"CLPMeta",
+"CLPMeta",
+1,
+"optional",
+true,
+false,
+false
+],
+"CLPWtwCollectionRequest.wtwLocations": [
+"CLPWifiAPLocation",
+"CLPWifiAPLocation",
+2,
+"repeated",
+true,
+false,
+false
+],
+"CLPWtwCollectionResponse.msg": [
+"string",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"CLPWtwCollectionResponse.success": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+]
+}

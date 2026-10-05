@@ -1,0 +1,158 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apple-protobuf-extractor"
+version = "0.1.0"
+description = "Extract protobuf .proto descriptors from Apple Mach-O / dyld-cache binaries"
+requires-python = ">=3.10"   # only PEP 604/585 features used; no 3.11+ syntax.
+dependencies = ["capstone>=5.0"]
+
+# Flat layout: the importable packages live directly under apple_protobuf_extractor/ and
+# are intentionally exposed as TOP-LEVEL names (`import proto`, `import macho`) so
+# existing consumers across the repo (this tool's own code, ios_decoder and the
+# test suite) keep importing them unchanged. `pip install -e .` adds
+# apple_protobuf_extractor/ to sys.path for the repo venv.
+[tool.setuptools]
+packages = ["proto", "macho", "serializers"]
+# Top-level helper modules (CLI + output/validation utilities).  Exposed so they
+# resolve from any cwd — e.g. a tool's lazy `from cli import …` or the test
+# suite — without per-caller sys.path juggling.
+py-modules = ["cli", "version", "snapshot_output", "wt_reader", "validate_lever"]
+
+# Code-smell scan tooling.  Not needed to run or test the extractor.
+#   ../venv/bin/pip install -e '.[smells]'
+[project.optional-dependencies]
+smells = ["pylint>=4.0", "radon>=6.0", "lizard>=1.17", "vulture>=2.10"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# pylint — structural code-smell scan
+# ══════════════════════════════════════════════════════════════════════════════
+# Run:  ../venv/bin/pylint . --score=n -j 1
+#
+# Scope: this config deliberately keeps ONLY the checks that correspond to a
+# named structural smell, and turns off house style.  Unconfigured, pylint emits
+# ~1070 messages here of which ~800 are this project's own deliberate idioms —
+# which buries the ~270 that mean something.  Every disable below is a judgement
+# about THIS codebase, with the reason, so the list can be re-argued rather than
+# inherited.
+#
+# `-j 1` is not a preference: the similarities checker (duplicate-code) is only
+# reported single-threaded, and a sandboxed macOS run cannot create the process
+# pool that `-j 0` needs.
+[tool.pylint.main]
+ignore-paths = [
+    # One-off investigation scripts: written to answer one question and kept as
+    # a record of how it was answered, not maintained as library code.
+    "^scripts/oneoff/.*$",
+]
+
+[tool.pylint."messages control"]
+# An ALLOWLIST, not a deny-list: this profile answers "what structural smells
+# does the extractor have", so it names the checks it wants and nothing else.
+# Stated this way it stays stable when pylint adds checks, and each entry can be
+# argued on its own rather than inherited.
+#
+# This is deliberately NOT a general lint profile.  For error checking, run the
+# default checker set instead (see the note at the bottom of this file) --
+# `disable = ["all"]` here would otherwise silence the E-class checks too.
+disable = ["all"]
+enable = [
+    # ── Coupling / architecture ──────────────────────────────────────────────
+    # Caught the macho/ import cycle that four deferred imports were concealing.
+    # Keep enabled so it cannot come back silently.
+    "cyclic-import",
+    # Caught a retired PoC (gt_readfrom.py) left byte-identical to the production
+    # code it was supposed to check independently.  See [tool.pylint.similarities].
+    "duplicate-code",
+
+    # ── Size / shape, where the count is not intrinsic to the problem ────────
+    "too-many-lines",
+    "too-many-instance-attributes",
+    "too-many-public-methods",
+    "too-many-ancestors",
+    "attribute-defined-outside-init",
+
+    # ── Resource handling ────────────────────────────────────────────────────
+    "consider-using-with",
+]
+#
+# Checks deliberately NOT enabled, with the reason:
+#
+#   too-many-locals / -branches / -statements / -return-statements /
+#   -nested-blocks
+#       The ARM64 decoders are branch-per-instruction-idiom: the local count is
+#       the number of registers tracked, and the branch count is the number of
+#       compiler idioms recognised.  Splitting them relocates branches without
+#       removing any, and separates the binary-format reasoning in the docstrings
+#       from the code implementing it.  A deliberate non-goal, not debt.
+#
+#   too-many-arguments / -positional-arguments
+#       Several long signatures exist precisely to define a record shape in ONE
+#       place (proto/writeto.py `_make_write`), so the check penalises the
+#       anti-duplication measure.  Reviewed by hand instead; `lizard --csv`
+#       reports parameter counts if you want the list.
+#
+#   too-few-public-methods
+#       Fires on the ObjC/Mach-O record dataclasses (ObjcMethod, ObjcIvar,
+#       Section), where holding fields and nothing else is the entire job.
+#
+#   import-outside-toplevel
+#       Deferred imports are load-bearing here: optional deps (capstone) and one
+#       remaining layering exception (macho/memory.py -> cache_classlist).  The
+#       four that existed only to hide an import cycle are gone; `cyclic-import`
+#       above is what guards against their return.
+#
+#   invalid-name, line-too-long, multiple-statements, superfluous-parens,
+#   consider-using-f-string, use-dict-literal, multiple-imports,
+#   wrong-import-order / -position, ungrouped-imports
+#       House style.  Names follow the ObjC/Mach-O ABI; long lines are almost
+#       all struct-layout comments; `if x: return None` guard clauses are used
+#       throughout on purpose.
+#
+#   use-implicit-booleaness-not-comparison(-to-zero)
+#       Explicit `== 0` is intentional in the decoders: it distinguishes a read
+#       that returned zero from one that returned None, which `if not x`
+#       silently conflates.
+#
+#   missing-*-docstring
+#       The codebase documents at module and function level but not on every
+#       small helper or test.  Re-enable if that changes.
+
+[tool.pylint.similarities]
+# 8 lines rather than the default 4: at 4 the checker matches shared import
+# blocks and `self.assertEqual` runs in tests, which are not clones worth
+# reporting.  Docstrings/comments are excluded so a shared ABI explanation
+# above two different decoders is not counted as duplicated code.
+min-similarity-lines = 8
+ignore-comments = true
+ignore-docstrings = true
+ignore-imports = true
+ignore-signatures = true
+
+[tool.pylint.design]
+# Thresholds left at pylint defaults where the check is enabled, so counts stay
+# comparable with other projects rather than being tuned until they pass.
+max-module-lines = 1200   # default 1000; proto/enums.py and the larger test
+                          # modules sit just above it with no natural split
+#
+# Reading the output: a unittest TestCase with 25 test methods trips
+# too-many-public-methods, and a 1000-line test module trips too-many-lines, in
+# both cases by construction rather than as a defect.  The production subset is
+# the part to act on; `grep -v tests/` is usually the right first filter.
+
+
+# ── Running the OTHER profile: general error checking ─────────────────────────
+# The config above is the smell scan.  To error-check instead, override the
+# message control on the command line so the default checker set applies:
+#
+#   ../venv/bin/pylint . --score=n -j 1 --enable=all --disable=  \
+#       --disable=invalid-name,line-too-long,missing-module-docstring
+#
+# Two things to know before reading those results:
+#   * Run it from ../venv, which has capstone / pytest / google.protobuf.  From
+#     any other interpreter you get ~8 spurious `import-error`s for those.
+#   * The test suite deliberately exercises private helpers, so `protected-access`
+#     (~300) and `redefined-outer-name` (pytest fixtures) are expected there.

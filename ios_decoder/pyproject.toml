@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ios-decoder"
+version = "1.0.0"   # keep in step with ios_decoder.__version__
+description = "Decode captured iOS (Apple GeoServices / locationd / Siri / …) network traffic into readable protobuf/text — no protoc at decode time."
+readme = "README.md"
+requires-python = ">=3.10"   # uses PEP 604 `X | None` unions and PEP 585 builtin generics
+
+# Runtime dependencies:
+#   * protobuf  — the named-schema registry (ios_decoder.schemas) loads compiled
+#     FileDescriptorSets through google.protobuf at decode time (import-time hard dep).
+#   * lz4       — Apple bvx/LZ4 payload decompression (ARPC GeoServices uploads).
+#     Imported lazily when a body is actually compressed, but declared here so a
+#     fresh install can decode real captures out of the box.
+dependencies = [
+    "protobuf",
+    "lz4",
+]
+
+# ios_decoder is self-contained: the ARPC framing + Apple bvx/LZ4 + gzip
+# decompression (ios_decoder.arpc) and the schema-free protobuf sniff
+# (ios_decoder.rawproto.is_valid_protobuf) are vendored, so there is no
+# cross-tool import dependency on the sibling mitm_traffic_parser package.
+
+[project.optional-dependencies]
+# Reading .mitm capture files (ios_decoder.report) needs mitmproxy's flow reader.
+# It is imported lazily, so the library decodes raw bodies without it; this extra
+# pulls it in for the `ios-decoder-report` CLI.
+captures = ["mitmproxy"]
+# X.509 certificate / OCSP decoding (ios_decoder.certs) — optional; without it the
+# cert decoders return a clear "not installed" note instead of crashing.
+certs = ["cryptography"]
+# DNS-over-HTTPS decoding (ios_decoder.doh) — optional; without it DoH bodies return
+# a clear "not installed" note instead of crashing.
+doh = ["dnspython"]
+# Everything, for a full-feature install.
+all = ["mitmproxy", "cryptography", "dnspython"]
+
+[project.scripts]
+# Decode a .mitm capture to a readable per-flow report.
+ios-decoder-report = "ios_decoder.report:main"
+
+# Flat layout: the source modules live directly in this directory (which IS the
+# ``ios_decoder`` package), alongside this pyproject.  Map the package names to
+# their source dirs so setuptools finds the modules and the bundled .proto schemas.
+[tool.setuptools]
+packages = ["ios_decoder", "ios_decoder.tile_tools", "ios_decoder.tests"]
+
+[tool.setuptools.package-dir]
+"ios_decoder" = "."
+"ios_decoder.tile_tools" = "tile_tools"
+"ios_decoder.tests" = "tests"
+
+[tool.setuptools.package-data]
+# The committed, unmodified extractor output (one subdir per framework) is real
+# runtime data: ios_decoder.paths resolves schemas relative to the installed
+# package, so the .proto files must ship inside the wheel.
+"ios_decoder" = ["protos/*/*.proto"]
+# Test fixtures (Siri/tile sample bodies) so the suite is runnable post-install.
+"ios_decoder.tests" = ["fixtures/**/*"]
