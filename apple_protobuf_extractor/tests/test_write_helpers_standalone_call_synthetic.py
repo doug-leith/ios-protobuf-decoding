@@ -14,7 +14,7 @@ which fixture.
 extract_proto_message is also a public, documented standalone entry point
 (single-class extraction — see its own docstring and proto/write_helpers.py's
 _ensure_writeto_indegree docstring: "a standalone caller ... without
-extract_all"), used elsewhere in this repo (e.g. validate_ref). Reusing an
+extract_all"), used by standalone callers. Reusing an
 EXISTING fixture binary and calling extract_proto_message directly on a
 FRESH BinaryContext (built the same way _extract() does, just skipping
 extract_all) exercises this path with real, already-verified ground truth —

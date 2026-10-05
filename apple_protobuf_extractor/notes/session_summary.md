@@ -96,7 +96,7 @@
 > MapsResultType 6/6, GEOComponentType 89/89, ComponentStatus 9/9, CacheControlType 3/3 — only enum
 > *names* differ by convention). All binary-CONFIRMED reference fields match. Tool **beats** the reference
 > in many places (recovers real classes where the ref used `GEOPDGlobalResult_Unknown` placeholders / `*Value`
-> guesses the ref's own comments confirm). Harness kept at `validate_ref.py`.
+> guesses the ref's own comments confirm). The comparison harness (`validate_ref.py`) has since been removed from this repository.
 
 > ## ★★★ METACLASS TYPE-METHOD GRAFTING DONE & VERIFIED (2026-06-08 cont.) — 1016 tests pass
 >

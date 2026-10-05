@@ -7,12 +7,10 @@ memory notes reference the project numbers (#42 readFrom resolver, #45 name-suff
 retirement, #57 enum type-name reconstruction) — those are preserved.
 
 **Campaign goal:** replace heuristics with principled, portable signals; verify every
-change (golden empty-diff or accepted-diff + full suite + `validate_ref` + Hopper
+change (golden empty-diff or accepted-diff + full suite + Hopper
 ground truth) before landing; surface uncertainty to the user rather than guess.
 
-Standard gate for any change: `./venv/bin/python3 run_tests.py` (full suite),
-`./venv/bin/python3 apple_protobuf_extractor/validate_ref.py` (GEOPDComponent 11/14,
-GEOPDPlaceGlobalCommonResult 1/1), and the golden snapshots in
+Standard gate for any change: `./venv/bin/python3 -m pytest` (full suite) and the golden snapshots in
 `apple_protobuf_extractor/tests/golden/` (`MACHO_UPDATE_GOLDEN=1` to accept an intentional
 diff — review the git diff first).
 

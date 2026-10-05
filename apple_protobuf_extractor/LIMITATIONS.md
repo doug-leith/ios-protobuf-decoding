@@ -149,8 +149,8 @@ have no matching ivar) — that is the planned CFG/dominator `readFrom` resolver
 (to-do #42), not part of this accepted-limitation set.
 
 **Known affected fields (GeoServices).** 1 field:
-`GEOPDReverseGeocodingResult.placeContextMetadata #1` (the lone `TOOL MISSING` in
-`validate_ref.py`).
+`GEOPDReverseGeocodingResult.placeContextMetadata #1` (found by comparing against a hand-decoded
+reference for `GEOPDPlaceResponse`, which is not part of this repository).
 
 **Note on flagging.** Unlike (1) and (2), this limitation **cannot** be flagged in
 the descriptor output — the field is absent, so there is nothing to attach a comment

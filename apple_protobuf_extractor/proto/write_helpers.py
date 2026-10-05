@@ -69,7 +69,7 @@ def _identify_string_write_helpers(
     binary-local classlist).
     """
     # The writeTo decoder (CFG walk) needs the binary-wide indegree pre-pass on
-    # ctx; ensure it exists so a standalone caller (e.g. validate_ref builds this
+    # ctx; ensure it exists so a standalone caller (one that builds this
     # set before extract_all has run) gets real helpers instead of an empty set.
     _ensure_writeto_indegree(ctx, cl)
 

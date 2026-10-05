@@ -11,7 +11,6 @@ APIs they call evolve.
 
 | Script | Investigation it supported |
 |---|---|
-| `validate_protos_dump.py` / `validate_protos_classify.py` / `validate_protos_candidates.py` / `validate_protos_geo1_regression.py` | One-shot tool-vs-reference `.proto` comparison pipeline (glued together by a hardcoded `/tmp/valcmp.json` scratch file). The maintained reference validator is `../../validate_ref.py`. |
 | `probe_fieldlabel_60.py` | swift COW `_storage` / oneof field-label probe (#60). |
 | `probe_methlist.py` | ObjC method-list layout probe. |
 | `probe_dataconst.py` | `__DATA_CONST` cfstring/pointer-section probe. |
@@ -32,6 +31,6 @@ PYTHONPATH=. ../venv/bin/python3 scripts/oneoff/<script>.py
 ```
 
 The maintained oracles/tooling stay at the package top level: `gt_*.py`,
-`validate_ref.py`, `validate_lever.py`, `snapshot_output.py`,
+`validate_lever.py`, `snapshot_output.py`,
 `heuristic_freq.py`, `heuristic_registry.py`, `census_repeated.py`,
 `artifacts.py`.

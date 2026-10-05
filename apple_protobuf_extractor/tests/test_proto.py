@@ -996,7 +996,7 @@ class TestDisasmAdrpAdd(unittest.TestCase):
 # exist on-device. Every assertion this class made about GeoServices' actual
 # extracted content (message/field counts, specific classes and field
 # numbers, no internal ivars, .proto rendering) is still exercised via the
-# cache-native path by test_golden_output.py and validate_ref.py, so no
+# cache-native path by test_golden_output.py, so no
 # coverage was lost. See artifacts.py:geoservices_path() for the full caveat.
 
 
