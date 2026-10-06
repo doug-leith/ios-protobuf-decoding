@@ -1004,12 +1004,12 @@ false,
 false
 ],
 "GEOAPSessionData.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOARElementDetails.<enum:ArElement>": [
@@ -1355,13 +1355,40 @@ true,
 false,
 false
 ],
-"GEOActiveResourceFilters.filters": [
-"bytes",
+"GEOActiveResourceFilter.lastTimestamp": [
+"double",
 null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOActiveResourceFilter.scale": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOActiveResourceFilter.scenario": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOActiveResourceFilters.filters": [
+"GEOActiveResourceFilter",
+"GEOActiveResourceFilter",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOActiveTileGroup.<enum:ResourceFilterScale>": [
@@ -1638,12 +1665,12 @@ false,
 false
 ],
 "GEOActiveTileGroup.hybridUnavailableRegions": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 56,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOActiveTileGroup.iconChecksums": [
@@ -2489,12 +2516,12 @@ false,
 false
 ],
 "GEOActiveTileSet.availableTiles": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 8,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOActiveTileSet.baseURL": [
@@ -7569,12 +7596,12 @@ false,
 false
 ],
 "GEOAttribution.regions": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 8,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOAttribution.resources": [
@@ -9193,12 +9220,12 @@ false,
 false
 ],
 "GEOCarInfo.screenResolution": [
-"bytes",
-null,
+"GEOScreenResolution",
+"GEOScreenResolution",
 4,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOCategory.alias": [
@@ -11852,6 +11879,24 @@ true,
 false,
 false
 ],
+"GEOCoarseLocationLatLng.lat": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOCoarseLocationLatLng.lng": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
 "GEOCoarseLocationMetadata.<enum:CoarseLocationType>": [
 [
 [
@@ -11879,6 +11924,24 @@ true,
 false,
 false
 ],
+"GEOCoarseLocationPoint.lat": [
+"sint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOCoarseLocationPoint.lng": [
+"sint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
 "GEOCoarseLocationPolygon.holes": [
 "GEOCoarseLocationRing",
 "GEOCoarseLocationRing",
@@ -11898,12 +11961,12 @@ false,
 false
 ],
 "GEOCoarseLocationRing.points": [
-"bytes",
-null,
+"GEOCoarseLocationPoint",
+"GEOCoarseLocationPoint",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCoarseLocationTerritoryInfo.<enum:CoarseLocationTerritoryInfoRepresentativePointQuality>": [
@@ -12074,12 +12137,12 @@ false,
 false
 ],
 "GEOCoarseLocationTerritoryInfo.representativePoint": [
-"bytes",
-null,
+"GEOCoarseLocationLatLng",
+"GEOCoarseLocationLatLng",
 7,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOCoarseLocationTerritoryInfo.representativePointQuality": [
@@ -12577,12 +12640,12 @@ false,
 false
 ],
 "GEOCompanionCyclingStep.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 9,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCompanionCyclingStep.junctionType": [
@@ -12972,12 +13035,12 @@ false,
 false
 ],
 "GEOCompanionDriveStep.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 9,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCompanionDriveStep.junctionType": [
@@ -13317,12 +13380,12 @@ false,
 false
 ],
 "GEOCompanionFerryStep.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 9,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCompanionFerryStep.junctionType": [
@@ -13660,12 +13723,12 @@ true,
 false
 ],
 "GEOCompanionGenericStep.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 9,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCompanionGenericStep.junctionType": [
@@ -15064,12 +15127,12 @@ false,
 false
 ],
 "GEOCompanionWalkStep.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 9,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCompanionWalkStep.junctionType": [
@@ -15453,13 +15516,58 @@ true,
 false,
 false
 ],
-"GEOCoverageExtent.coverageExceptions": [
-"bytes",
+"GEOCoverageException.maxX": [
+"uint32",
 null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOCoverageException.maxY": [
+"uint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"GEOCoverageException.minX": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOCoverageException.minY": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOCoverageException.zoom": [
+"uint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"GEOCoverageExtent.coverageExceptions": [
+"GEOCoverageException",
+"GEOCoverageException",
 6,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCoverageExtent.maxX": [
@@ -16602,12 +16710,12 @@ false,
 false
 ],
 "GEODeviceSyncData.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEODirectionsCollectionRequest.requestElements": [
@@ -16719,12 +16827,12 @@ false,
 false
 ],
 "GEODirectionsFeedbackLogMessage.navigationAudioFeedback": [
-"bytes",
-null,
+"GEONavigationAudioFeedback",
+"GEONavigationAudioFeedback",
 4,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEODirectionsRequest.<enum:DirectionsRequestOriginalRoutePurpose>": [
@@ -17055,12 +17163,12 @@ false,
 false
 ],
 "GEODirectionsRequest.sessionID": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 19,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEODirectionsRequest.sessionRelativeTimestamp": [
@@ -17537,12 +17645,12 @@ false,
 false
 ],
 "GEODirectionsResponse.problemDetails": [
-"bytes",
-null,
+"GEOProblemDetail",
+"GEOProblemDetail",
 11,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEODirectionsResponse.routeDeviatesFromOriginal": [
@@ -17645,12 +17753,12 @@ false,
 false
 ],
 "GEODirectionsResponse.timepointUsed": [
-"bytes",
-null,
+"GEOTimepoint",
+"GEOTimepoint",
 958,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEODirectionsResponse.trafficCameras": [
@@ -18029,6 +18137,33 @@ true,
 false,
 false
 ],
+"GEOECEFCoordinate.x": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOECEFCoordinate.y": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOECEFCoordinate.z": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
 "GEOETARequest.<enum:ETARequestTransportType>": [
 [
 [
@@ -18325,12 +18460,12 @@ false,
 false
 ],
 "GEOETARequest.sessionID": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 8,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOETARequest.sessionRelativeTimestamp": [
@@ -18352,12 +18487,12 @@ false,
 false
 ],
 "GEOETARequest.timepoint": [
-"bytes",
-null,
+"GEOTimepoint",
+"GEOTimepoint",
 2,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOETARequest.trafficApiResponses": [
@@ -18520,12 +18655,12 @@ false,
 false
 ],
 "GEOETAResponse.problemDetails": [
-"bytes",
-null,
+"GEOProblemDetail",
+"GEOProblemDetail",
 4,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOETAResponse.status": [
@@ -19431,12 +19566,12 @@ false,
 false
 ],
 "GEOETATrafficUpdateRequest.sessionID": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 8,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOETATrafficUpdateRequest.sessionRelativeTimestamp": [
@@ -19617,12 +19752,12 @@ false,
 false
 ],
 "GEOETATrafficUpdateResponse.problemDetails": [
-"bytes",
-null,
+"GEOProblemDetail",
+"GEOProblemDetail",
 10,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOETATrafficUpdateResponse.responseId": [
@@ -20499,13 +20634,40 @@ true,
 false,
 false
 ],
-"GEOFlyoverRegionVersions.regions": [
-"bytes",
+"GEOFlyoverRegion.field3": [
+"uint32",
 null,
+3,
+"optional",
+true,
+true,
+false
+],
+"GEOFlyoverRegion.region": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOFlyoverRegion.version": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOFlyoverRegionVersions.regions": [
+"GEOFlyoverRegion",
+"GEOFlyoverRegion",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOFormatArgument.<enum:FormatArgumentFormat>": [
@@ -21098,6 +21260,33 @@ false
 "GenericSubstitutesWaypointCategory",
 "ENUM:GenericSubstitutesWaypointCategory",
 2,
+"optional",
+true,
+false,
+false
+],
+"GEOGenericTile.resourceIndex": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOGenericTile.textureIndex": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOGenericTile.tileType": [
+"int32",
+null,
+1,
 "optional",
 true,
 false,
@@ -21696,6 +21885,33 @@ true,
 false,
 false
 ],
+"GEOHighlight.length": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOHighlight.lineNumber": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOHighlight.startIndex": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
 "GEOHours.days": [
 "int32",
 null,
@@ -22105,6 +22321,33 @@ true,
 false,
 false
 ],
+"GEOJunctionElement.angle": [
+"sint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOJunctionElement.type": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOJunctionElement.usage": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
 "GEOJunctionInfo.<enum:JunctionInfoDrivingSide>": [
 [
 [
@@ -22393,12 +22636,12 @@ false,
 false
 ],
 "GEOJunctionInfo.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOJunctionInfo.junctionType": [
@@ -24623,21 +24866,21 @@ false,
 false
 ],
 "GEOLocationShiftRequest.pixel": [
-"bytes",
-null,
+"GEOPixelPoint",
+"GEOPixelPoint",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLocationShiftResponse.shiftedPixel": [
-"bytes",
-null,
+"GEOPixelPoint",
+"GEOPixelPoint",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMessage.<enum:LogMessageType>": [
@@ -26215,21 +26458,21 @@ false,
 false
 ],
 "GEOLogMsgEventDirections.navSessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 6,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgEventDirections.navigationAudioFeedback": [
-"bytes",
-null,
+"GEONavigationAudioFeedback",
+"GEONavigationAudioFeedback",
 4,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgEventDirections.originalEta": [
@@ -41847,12 +42090,12 @@ false,
 false
 ],
 "GEOLogMsgEventVLFUsage.initialPositionContextClassification": [
-"bytes",
-null,
+"GEOVLFPositionContextClassification",
+"GEOVLFPositionContextClassification",
 7,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgEventVLFUsage.initializationFailureDetails": [
@@ -73246,12 +73489,12 @@ false,
 false
 ],
 "GEOLogMsgStateUser.preSyncSessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 8,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgStateUser.syncFirstTimestamp": [
@@ -73300,12 +73543,12 @@ false,
 false
 ],
 "GEOLogMsgStateUserSession.initialDeviceSessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 10,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgStateUserSession.lastIcloudSyncDate": [
@@ -73318,12 +73561,12 @@ false,
 false
 ],
 "GEOLogMsgStateUserSession.navSessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 4,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgStateUserSession.navSessionRelativeTimestamp": [
@@ -73336,12 +73579,12 @@ false,
 false
 ],
 "GEOLogMsgStateUserSession.preSyncSessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 9,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOLogMsgStateUserSession.relativeTimestamp": [
@@ -73372,12 +73615,12 @@ false,
 false
 ],
 "GEOLogMsgStateUserSession.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOManeuverData.<enum:ManeuverDataManeuverType>": [
@@ -74708,12 +74951,12 @@ false,
 false
 ],
 "GEOMapQuery.sessionID": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 15,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOMapQuery.tilesizeX": [
@@ -76068,12 +76311,12 @@ false,
 false
 ],
 "GEOMapServiceTraits.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOMapServiceTraits.sessionRelativeTimestamp": [
@@ -77638,6 +77881,168 @@ true,
 false,
 false
 ],
+"GEONavigationAudioFeedback.bTHFPAvailableAtEndOfNav": [
+"bool",
+null,
+15,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.bTHFPRoutesAvailable": [
+"bool",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.currentRouteHFPEnabledAtEndOfNav": [
+"bool",
+null,
+17,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.currentRouteTypeAtEndOfNav": [
+"int32",
+null,
+16,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.everManuallyChangedRoute": [
+"bool",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.everManuallyEnabledHFPRoute": [
+"bool",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.everViewedAudioSheet": [
+"bool",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.everViewedAudioSheetBTAny": [
+"bool",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.everViewedAudioSheetBTHFP": [
+"bool",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.manuallyChangedRouteCount": [
+"uint32",
+null,
+12,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.manuallyDisabledHFPCount": [
+"uint32",
+null,
+14,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.manuallyEnabledHFPCount": [
+"uint32",
+null,
+13,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.pauseSpokenAudioEnabled": [
+"bool",
+null,
+18,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.spokenPromptsCount": [
+"uint32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.viewedAudioSheet": [
+"bool",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.viewedAudioSheetBTAny": [
+"bool",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.viewedAudioSheetBTHFP": [
+"bool",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"GEONavigationAudioFeedback.wirelessRoutesAvailable": [
+"bool",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
 "GEONavigationGuidanceState.<enum:NavigationGuidanceStateGuidanceLevel>": [
 [
 [
@@ -79142,12 +79547,12 @@ false,
 false
 ],
 "GEOPBTransitLine.operatingHours": [
-"bytes",
-null,
+"GEOPBTransitTimeRange",
+"GEOPBTransitTimeRange",
 26,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPBTransitLine.placeDisplayStyle": [
@@ -79744,6 +80149,24 @@ false
 "string",
 null,
 5,
+"optional",
+true,
+false,
+false
+],
+"GEOPBTransitTimeRange.duration": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOPBTransitTimeRange.startTime": [
+"uint32",
+null,
+1,
 "optional",
 true,
 false,
@@ -81052,12 +81475,12 @@ false,
 false
 ],
 "GEOPDAnalyticMetadata.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 8,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPDAnnotatedItemList.<enum:AnnotatedItemStyle>": [
@@ -81111,12 +81534,12 @@ false,
 false
 ],
 "GEOPDAnnotatedItemListFilter.photoSizeFilters": [
-"bytes",
-null,
+"GEOPDPhotoSizeFilterValue",
+"GEOPDPhotoSizeFilterValue",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDAppClipParams.appAdamId": [
@@ -84837,6 +85260,105 @@ true,
 false,
 false
 ],
+"GEOPDCameraPathFrame.easeIn": [
+"float",
+null,
+9,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.easeOut": [
+"float",
+null,
+10,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.fieldOfView": [
+"float",
+null,
+11,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.height": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.latitude": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.longitude": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.roll": [
+"double",
+null,
+7,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.rotation": [
+"double",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.secondsToNextFrame": [
+"double",
+null,
+8,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.tilt": [
+"double",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
+"GEOPDCameraPathFrame.zoom": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
 "GEOPDCandidateFilterReason.<enum:CandidateFilterReasonType>": [
 [
 [
@@ -85027,12 +85549,12 @@ false,
 false
 ],
 "GEOPDCaptionedPhotoFilter.photoSizeFilters": [
-"bytes",
-null,
+"GEOPDPhotoSizeFilterValue",
+"GEOPDPhotoSizeFilterValue",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDCaptionedPhotoFilter.vendorId": [
@@ -85117,12 +85639,12 @@ false,
 false
 ],
 "GEOPDCategorizedPhotosFilter.photoSizeFilters": [
-"bytes",
-null,
+"GEOPDPhotoSizeFilterValue",
+"GEOPDPhotoSizeFilterValue",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDCategorizedPhotosFilter.startIndex": [
@@ -89684,12 +90206,12 @@ false,
 false
 ],
 "GEOPDDateTimeRange.timeRanges": [
-"bytes",
-null,
+"GEOPDLocalTimeRange",
+"GEOPDLocalTimeRange",
 3,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDDeparture.<enum:PDDepartureRealTimeStatusInfo>": [
@@ -89850,12 +90372,12 @@ false,
 false
 ],
 "GEOPDDeparturePredicate.timeRange": [
-"bytes",
-null,
+"GEOPDTimeRange",
+"GEOPDTimeRange",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPDDepartureSequence.artwork": [
@@ -92280,21 +92802,21 @@ false,
 false
 ],
 "GEOPDFlyover.cameraPaths": [
-"bytes",
-null,
+"GEOPDCameraPathFrame",
+"GEOPDCameraPathFrame",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDFlyover.labelFrames": [
-"bytes",
-null,
+"GEOPDLabelFrame",
+"GEOPDLabelFrame",
 3,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDFlyover.labels": [
@@ -93289,12 +93811,12 @@ false,
 false
 ],
 "GEOPDHours.timeRanges": [
-"bytes",
-null,
+"GEOPDLocalTimeRange",
+"GEOPDLocalTimeRange",
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDHoursFilter.<opaque_passthrough>": true,
@@ -93611,6 +94133,33 @@ true,
 false,
 false
 ],
+"GEOPDLabelFrame.endFraction": [
+"float",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOPDLabelFrame.labelIndex": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOPDLabelFrame.startFraction": [
+"float",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
 "GEOPDLabelGeometry.hasSelectionPolygon": [
 "bool",
 null,
@@ -93869,6 +94418,42 @@ false,
 false
 ],
 "GEOPDLinkedServiceFilter.<opaque_passthrough>": true,
+"GEOPDLitePlaceResult.litePlaceResult": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOPDLitePlaceResult.muid": [
+"uint64",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOPDLocalTimeRange.from": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOPDLocalTimeRange.to": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
 "GEOPDLocalizedAddress.address": [
 "GEOAddress",
 "GEOAddress",
@@ -96424,12 +97009,12 @@ false,
 false
 ],
 "GEOPDPhotoFilter.photoSizeFilters": [
-"bytes",
-null,
+"GEOPDPhotoSizeFilterValue",
+"GEOPDPhotoSizeFilterValue",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDPhotoPosition.build": [
@@ -96535,6 +97120,24 @@ false
 "GEOPDOrientedTilePosition",
 "GEOPDOrientedTilePosition",
 10,
+"optional",
+true,
+false,
+false
+],
+"GEOPDPhotoSizeFilterValue.height": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOPDPhotoSizeFilterValue.width": [
+"uint32",
+null,
+1,
 "optional",
 true,
 false,
@@ -100696,12 +101299,12 @@ false,
 false
 ],
 "GEOPDPopularNearbyResult.litePlaceResults": [
-"bytes",
-null,
+"GEOPDLitePlaceResult",
+"GEOPDLitePlaceResult",
 3,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDPopularNearbyResult.sectionHeader": [
@@ -103312,12 +103915,12 @@ false,
 false
 ],
 "GEOPDReviewFilter.photoSizeFilters": [
-"bytes",
-null,
+"GEOPDPhotoSizeFilterValue",
+"GEOPDPhotoSizeFilterValue",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDReviewFilter.suppressSyntheticReviews": [
@@ -110839,12 +111442,12 @@ false,
 false
 ],
 "GEOPDSpatialEventLookupParameters.timeRange": [
-"bytes",
-null,
+"GEOPDTimeRange",
+"GEOPDTimeRange",
 5,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPDSpatialEventLookupResponse.<enum:SpatialEventLookupCategory>": [
@@ -111894,6 +112497,24 @@ true,
 true,
 false
 ],
+"GEOPDTimeRange.duration": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOPDTimeRange.startTime": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
 "GEOPDTip.snippets": [
 "string",
 null,
@@ -111931,12 +112552,12 @@ false,
 false
 ],
 "GEOPDTipFilter.photoSizeFilters": [
-"bytes",
-null,
+"GEOPDPhotoSizeFilterValue",
+"GEOPDPhotoSizeFilterValue",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDTipUser.image": [
@@ -112367,12 +112988,12 @@ false,
 false
 ],
 "GEOPDTransitSchedule.operatingHoursRange": [
-"bytes",
-null,
+"GEOPDTimeRange",
+"GEOPDTimeRange",
 4,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPDTransitSchedule.ttlSeconds": [
@@ -112430,12 +113051,12 @@ false,
 false
 ],
 "GEOPDTransitScheduleFilter.operatingHoursRange": [
-"bytes",
-null,
+"GEOPDTimeRange",
+"GEOPDTimeRange",
 7,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPDTransitScheduleGroup.<enum:PDTransitScheduleGroupType>": [
@@ -112621,12 +113242,12 @@ false,
 false
 ],
 "GEOPDTransitTripStopTimeFilter.operatingHoursRange": [
-"bytes",
-null,
+"GEOPDTimeRange",
+"GEOPDTimeRange",
 3,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPDTransitVehiclePositionParameters.tripIds": [
@@ -113932,6 +114553,33 @@ true,
 false,
 false
 ],
+"GEOPixelPoint.x": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOPixelPoint.y": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOPixelPoint.z": [
+"int32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
 "GEOPlace.<enum:PlaceAddressGeocodeAccuracy>": [
 [
 [
@@ -115077,12 +115725,12 @@ false,
 false
 ],
 "GEOPlaceSearchFeedbackRequest.sessionGUID": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 2,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPlaceSearchFeedbackRequest.timestamp": [
@@ -116093,12 +116741,12 @@ false,
 false
 ],
 "GEOPlaceSearchRequest.sessionGUID": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 12,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOPlaceSearchRequest.structuredSearch": [
@@ -116704,6 +117352,24 @@ false,
 false
 ],
 "GEOProactiveWidgetItem.timeSinceStart": [
+"int32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOProblemDetail.problemType": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOProblemDetail.waypointIndex": [
 "int32",
 null,
 2,
@@ -127422,12 +128088,12 @@ false,
 false
 ],
 "GEORPProblemContext.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 1,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEORPProblemContext.tileStateLog": [
@@ -131146,6 +131812,33 @@ true,
 false,
 false
 ],
+"GEORPVisibleTileKey.x": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEORPVisibleTileKey.y": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEORPVisibleTileKey.z": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
 "GEORPVisibleTileSet.<enum:RPVisibleTileSetStyle>": [
 [
 [
@@ -131551,12 +132244,12 @@ false,
 false
 ],
 "GEORPVisibleTileSet.tileKeys": [
-"bytes",
-null,
+"GEORPVisibleTileKey",
+"GEORPVisibleTileKey",
 3,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEORPWatchAuxiliaryControl.hardwareIdentifier": [
@@ -131972,12 +132665,12 @@ false,
 false
 ],
 "GEORegionalResource.tileRanges": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 29,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEORegionalResource.x": [
@@ -132002,6 +132695,33 @@ false
 "uint32",
 null,
 3,
+"optional",
+true,
+false,
+false
+],
+"GEORegionalResourceIndex.attributionIndex": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEORegionalResourceIndex.iconIndex": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEORegionalResourceIndex.regionalResourceIndex": [
+"uint32",
+null,
+1,
 "optional",
 true,
 false,
@@ -132035,21 +132755,21 @@ false,
 false
 ],
 "GEORegionalResourceRegion.tileRanges": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEORegionalResourceSet.regions": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEORegionalResourceSet.resources": [
@@ -132330,12 +133050,12 @@ false,
 false
 ],
 "GEOResource.regions": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 4,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOResource.resourceType": [
@@ -135225,12 +135945,12 @@ false,
 false
 ],
 "GEORouteAttributes.timepoint": [
-"bytes",
-null,
+"GEOTimepoint",
+"GEOTimepoint",
 11,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEORouteAttributes.trafficType": [
@@ -136228,6 +136948,24 @@ true,
 false,
 false
 ],
+"GEOScreenResolution.height": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOScreenResolution.width": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
 "GEOSearchAttribution.attributionURLs": [
 "string",
 null,
@@ -136591,6 +137329,24 @@ false
 ],
 "GEOServicesState.bogusFieldForTestingPurposes": [
 "string",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOSessionID.high": [
+"uint64",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOSessionID.low": [
+"uint64",
 null,
 1,
 "optional",
@@ -138694,12 +139450,12 @@ false,
 false
 ],
 "GEOStep.junctionElements": [
-"bytes",
-null,
+"GEOJunctionElement",
+"GEOJunctionElement",
 11,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOStep.junctionType": [
@@ -140042,12 +140798,12 @@ false,
 false
 ],
 "GEOSuggestionEntry.textHighlights": [
-"bytes",
-null,
+"GEOHighlight",
+"GEOHighlight",
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOSuggestionEntryList.<enum:AutocompleteSectionContentType>": [
@@ -143841,12 +144597,12 @@ false,
 false
 ],
 "GEOTileGroup.hybridUnavailableRegions": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 11,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTileGroup.iconIndexs": [
@@ -143877,12 +144633,12 @@ false,
 false
 ],
 "GEOTileGroup.regionalResourceIndexs": [
-"bytes",
-null,
+"GEORegionalResourceIndex",
+"GEORegionalResourceIndex",
 7,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTileGroup.resourceIndexs": [
@@ -143913,12 +144669,12 @@ false,
 false
 ],
 "GEOTileGroup.tileSets": [
-"bytes",
-null,
+"GEOVersionedTileSet",
+"GEOVersionedTileSet",
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTileGroup.xmlIndexs": [
@@ -144978,6 +145734,60 @@ true,
 false,
 false
 ],
+"GEOTileSetRegion.maxX": [
+"uint32",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOTileSetRegion.maxY": [
+"uint32",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"GEOTileSetRegion.maxZ": [
+"uint32",
+null,
+6,
+"optional",
+true,
+false,
+false
+],
+"GEOTileSetRegion.minX": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOTileSetRegion.minY": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOTileSetRegion.minZ": [
+"uint32",
+null,
+5,
+"optional",
+true,
+false,
+false
+],
 "GEOTileSetUsage.<enum:TileSetUsageStyle>": [
 [
 [
@@ -145383,21 +146193,21 @@ false,
 false
 ],
 "GEOTileSetVersion.availableTiles": [
-"bytes",
-null,
+"GEOTileSetRegion",
+"GEOTileSetRegion",
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTileSetVersion.genericTiles": [
-"bytes",
-null,
+"GEOGenericTile",
+"GEOGenericTile",
 4,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTileSetVersion.identifier": [
@@ -145494,6 +146304,33 @@ false
 "double",
 null,
 1,
+"optional",
+true,
+false,
+false
+],
+"GEOTimepoint.currentUserTime": [
+"double",
+null,
+4,
+"optional",
+true,
+false,
+false
+],
+"GEOTimepoint.time": [
+"double",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOTimepoint.type": [
+"int32",
+null,
+2,
 "optional",
 true,
 false,
@@ -147709,12 +148546,12 @@ false,
 false
 ],
 "GEOTransitRouteUpdateRequest.sessionId": [
-"bytes",
-null,
+"GEOSessionID",
+"GEOSessionID",
 10,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOTransitRouteUpdateRequest.sessionRelativeTimestamp": [
@@ -147814,12 +148651,12 @@ false,
 false
 ],
 "GEOTransitRouteUpdateResponse.timepointUsed": [
-"bytes",
-null,
+"GEOTimepoint",
+"GEOTimepoint",
 5,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOTransitRouteUpdateResponse.transitDataVersion": [
@@ -150526,12 +151363,12 @@ false,
 false
 ],
 "GEOVLFLocalizationDetails.positionContextClassification": [
-"bytes",
-null,
+"GEOVLFPositionContextClassification",
+"GEOVLFPositionContextClassification",
 10,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOVLFLocalizationDetails.relativeTimestampMs": [
@@ -150606,12 +151443,12 @@ false,
 false
 ],
 "GEOVLFLocalizationResults.positionContextClassification": [
-"bytes",
-null,
+"GEOVLFPositionContextClassification",
+"GEOVLFPositionContextClassification",
 4,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOVLFLocalizationResults.vlfCorrection": [
@@ -150655,12 +151492,12 @@ true,
 false
 ],
 "GEOVLFLocation.ecefLocation": [
-"bytes",
-null,
+"GEOECEFCoordinate",
+"GEOECEFCoordinate",
 2,
 "optional",
 true,
-true,
+false,
 false
 ],
 "GEOVLFLocation.heading": [
@@ -150739,6 +151576,33 @@ false
 "float",
 null,
 3,
+"optional",
+true,
+false,
+false
+],
+"GEOVLFPositionContextClassification.indoorProbability": [
+"double",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOVLFPositionContextClassification.outdoorProbability": [
+"double",
+null,
+3,
+"optional",
+true,
+false,
+false
+],
+"GEOVLFPositionContextClassification.type": [
+"int32",
+null,
+1,
 "optional",
 true,
 false,
@@ -151131,6 +151995,24 @@ false
 "GEOServiceVersion",
 1,
 "repeated",
+true,
+false,
+false
+],
+"GEOVersionedTileSet.identifier": [
+"uint32",
+null,
+2,
+"optional",
+true,
+false,
+false
+],
+"GEOVersionedTileSet.tileSetIndex": [
+"uint32",
+null,
+1,
+"optional",
 true,
 false,
 false
@@ -154111,12 +154993,12 @@ false,
 false
 ],
 "GEOWiFiQualityHours.timeRanges": [
-"bytes",
-null,
+"GEOWiFiQualityTimeRange",
+"GEOWiFiQualityTimeRange",
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOWiFiQualityIndex.<enum:WiFiQualityIndexType>": [
@@ -154457,6 +155339,24 @@ false
 "WiFiQualityServiceResponseStatusCode",
 "ENUM:WiFiQualityServiceResponseStatusCode",
 1,
+"optional",
+true,
+false,
+false
+],
+"GEOWiFiQualityTimeRange.from": [
+"uint32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEOWiFiQualityTimeRange.to": [
+"uint32",
+null,
+2,
 "optional",
 true,
 false,

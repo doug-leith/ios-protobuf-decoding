@@ -4,7 +4,7 @@ An iPhone sends binary protobuf messages to Apple's servers for location service
 
 - **[`apple_protobuf_extractor`](apple_protobuf_extractor/README.md)**, which recovers `.proto` definitions (message and field names, field numbers, types and enums) from Apple's compiled binaries, in a Mach-O file or a dyld shared cache. It handles three protobuf runtimes: Apple's Objective-C `PBCodable` classes (by analysing their generated `writeTo:` and `readFrom:` code), Google's C++ `libprotobuf` (an exact decode of the descriptors the binary embeds) and `swift-protobuf` (names and numbers from each message's name map, types from Swift reflection metadata). No Apple headers or `.proto` sources are needed.
 - **[`ios_decoder`](ios_decoder/README.md)**, which decodes captured iOS traffic (mitmproxy `.mitm` files) offline into readable protobuf using those schemas, and also handles Siri, DNS-over-HTTPS, certificates and the map and location tiles.
-- **[120 recovered `.proto` files](#recovered-schemas)** (2,382 messages, 1,060 enums) in `ios_decoder/protos/`, which you can use directly.
+- **[120 recovered `.proto` files](#recovered-schemas)** (2,410 messages, 1,060 enums) in `ios_decoder/protos/`, which you can use directly.
 
 The schemas are partly decoded. Names, numbers and types come from the binaries. The C++ schemas are exact. For `PBCodable` and `swift-protobuf` some numbers or types are estimates, most of them flagged in the output (see the [extractor README](apple_protobuf_extractor/README.md#what-it-recovers--and-the-honest-caveats)). What each endpoint is *for* comes from observed traffic, and is described [below](#protobufs-by-endpoint).
 
@@ -97,7 +97,7 @@ The dyld cache and binaries are Apple's software and are not in this repository.
 
 | Framework | `.proto` files | Messages | What is in it |
 |---|---|---|---|
-| `GeoServices` | 6 | 1,692 | Maps, places and geocoding, Wi-Fi quality and `geod` telemetry. `geo.proto` holds most of the `GEO*` messages. |
+| `GeoServices` | 6 | 1,720 | Maps, places and geocoding, Wi-Fi quality and `geod` telemetry. `geo.proto` holds most of the `GEO*` messages. |
 | `locationd` | 25 | 399 | Wi-Fi and cell location lookup (`als.proto`) and other `locationd` messages. |
 | `CoreLocationProtobuf` | 1 | 84 | Cell and Wi-Fi observation, location, trace and pressure uploads (`clp.proto`). |
 | `AppPredictionInternal` | 8 | 99 | App-prediction messages (`atx.proto`, used by the `DuetExpert` feedback channel). |
@@ -105,7 +105,7 @@ The dyld cache and binaries are Apple's software and are not in this repository.
 | `ProactiveEventTracker` | 2 | 8 | `pet.proto`, used by the `ProactiveEventTracker` feedback channels. |
 | `AdCore` | 1 | 23 | The iAd advertising SDK: opt-out, segment update, settings, configuration, analytics and user-transparency requests and responses (`ad.proto`). |
 
-103 of the files (1,998 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. 
+103 of the files (2,026 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. 
 
 ## Protobufs by endpoint
 
@@ -369,7 +369,10 @@ logMessages {
     logMsgStates {
       stateType: LOG_MSG_STATE_TYPE_USER_SESSION
       userSession {
-        sessionId: "\010\277\315\231\237\254\301\215\201p\020\370\377\301\333\203\265\374%"
+        sessionId {
+          low: 8071072902065579711
+          high: 21376328107327480
+        }
         relativeTimestamp: 793048500
         eventTime {
           timeRoundedToHour: 793047600

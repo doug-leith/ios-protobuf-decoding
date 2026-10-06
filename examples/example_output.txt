@@ -192,7 +192,10 @@ logMessages {
     logMsgStates {
       stateType: LOG_MSG_STATE_TYPE_USER_SESSION
       userSession {
-        sessionId: "\010\277\315\231\237\254\301\215\201p\020\370\377\301\333\203\265\374%"
+        sessionId {
+          low: 8071072902065579711
+          high: 21376328107327480
+        }
         relativeTimestamp: 793048500
         eventTime {
           timeRoundedToHour: 793047600

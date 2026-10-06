@@ -273,7 +273,7 @@ EXAMPLES = [
      "`locationd` uploads GPS fixes and a pressure reading.", 35),
     ("hvr/v3/use", "A telemetry upload (`hvr/v3/use`)",
      "`geod` reports a network request it made (here a failed Wi-Fi quality lookup) with the handset "
-     "model, OS version and a session ID.", 82),
+     "model, OS version and a session ID.", 85),
 ]
 
 

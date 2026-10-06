@@ -10,11 +10,13 @@ in fixture.m, not derived from any tool output.
 
 Covers proto/writeto.py's _forward_self_load_off, previously ZERO synthetic
 coverage (confirmed by a corpus trace before writing this fixture: see
-fixture.m's header). The element type degrades to `bytes` (an inline
-C-array-of-structs field, not an NSMutableArray one -- protocore.py's
-packed-list-shape detector only names scalar element types); that
-degradation is a separate, already-accepted limitation and not what this
-fixture is checking.
+fixture.m's header). The element is an inline C struct, not an NSMutableArray
+one. Until 2026-10-06 its type degraded to `bytes`; proto/structfields.py
+(to-do #37) now recovers it as a message from the struct's @encode and its
+serialiser in writeTo: -- number 1 and int32 match the hand-authored `int32 a
+= 1` above. The member NAME `a` is not recoverable here (the @encode names no
+members and the fixture has no _dictionaryRepresentation:), so it is emitted
+as the flagged placeholder `field1`.
 
 Differential-verified this fixture actually depends on the function under
 test, not just incidentally passes: monkeypatching _forward_self_load_off
@@ -27,8 +29,14 @@ describes. With it enabled, `items` binds correctly to field 1, confirmed.
 EXPECTED = {
     "TestForwardContainer": {
         "fields": [
-            {"name": "items", "number": 1, "type_name": "bytes",
+            {"name": "items", "number": 1, "type_name": "TestForwardElem",
              "label": "repeated", "number_confirmed": True},
+        ],
+    },
+    "TestForwardElem": {
+        "fields": [
+            {"name": "field1", "number": 1, "type_name": "int32",
+             "label": "optional", "number_confirmed": True},
         ],
     },
 }

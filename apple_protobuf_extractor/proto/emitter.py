@@ -480,6 +480,8 @@ class ProtoFile:
             out.append("  " + HEURISTIC_CLASS_DETECTION_COMMENT)
         if msg.class_detected_by_va_cluster:
             out.append("  " + VA_CLUSTER_CLASS_DETECTION_COMMENT)
+        if msg.inline_struct:
+            out.append(f"  // {msg.inline_struct}")
         if msg.inherits_from:
             out.append(f"  // inherits all fields from {msg.inherits_from} "
                        "(ObjC subclass — parent fields not repeated here)")

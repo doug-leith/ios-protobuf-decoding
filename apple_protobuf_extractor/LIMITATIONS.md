@@ -80,63 +80,68 @@ default type.
 
 ---
 
-## 2. Repeated-message elements with an unresolved element type emit as `repeated bytes`  — to-do #37
+## 2. Sub-messages with no ObjC class: inline C structs (recovered) and unnamed repeated elements (residual)  — to-do #37 (inline structs DONE 2026-10-06)
 
-**Symptom.** A `repeated <Message>` field whose element type can't be bound emits
-as `repeated bytes`, flagged inline:
+**What is recovered.** Apple's compiler stores an all-scalar sub-message as a plain C struct
+rather than an ObjC object: a *singular* one by value (`@encode` `{GEOPDTimeRange=…}`), a
+*repeated* one as an array of them (`^{GEOWiFiQualityTimeRange=II{?=b1b1}}` plus the `_xCount` /
+`_xSpace` ivars). `proto/structfields.py` now emits each as a real message, with confirmed
+numbers and no comment, from three sources that are all in the binary:
 
-```proto
-repeated bytes region = 8;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
-```
+- the struct's **name and member layout** — the ivar `@encode`;
+- each member's **field number and wire type** — the struct's C serialiser (`has-bit test ;
+  load [struct+offset] ; write(field#)` per member), whether it is a called function or inlined
+  between the begin/end marks of the owner's `writeTo:` (the has-bit tests of an inlined struct
+  put some members out of line, past the loop's back-edge, so the body is walked as a CFG
+  region, with a symbolic base-register tracker that follows the ivar-offset variable);
+- each member's **name** — the `@encode` where it names members (`"_duration"I`), otherwise the
+  `CFString` keys of the struct's dictionary representation (a called function, or inlined into
+  the owner's `_dictionaryRepresentation:`).
 
-**Why.** The element type is recovered from the `readFrom:`/`writeTo:` dispatch.
-Two cases leave it unresolved:
+A struct is accepted only if the writer's member offsets and load widths equal the `@encode`
+layout exactly (every member written once, none at an unknown offset), and every owner of one
+struct tag agrees on numbers, names and wire families; otherwise it keeps the flagged `bytes`
+fallback below. One message is emitted per struct *tag* (`GEOWiFiQualityTimeRange` →
+`WiFiQualityTimeRange`) and carries an `// inline C struct '<tag>' …` comment. On the iPhone 8
+GeoServices image this retypes 78 fields (41 arrays, 37 by value) and adds 28 messages.
 
-- **Inline-C struct-writers (the largest known cluster, ~17 fields).** The element
-  is serialized by an inline C function (e.g. `_GEOTileSetRegionWriteTo`, bracketed
-  by the length-delimited helpers `0x18dbdab88`/`0x18dbdab94`) rather than a
-  PBCodable `writeTo:`, so there is no element *class* to name. Mostly the
-  `GEOTileSetRegion` family (`GEOTileGroup` #11, `GEOResource` #4,
-  `GEOAttribution` #8, `GEOTileSetVersion` #2, …) plus a few fixed structs
-  (`UInt128`/`SessionID`/`ScreenResolution`). Hopper-confirmed example:
-  `GEOAttribution.region #8` = `repeated GEOTileSetRegion`. Also
-  `GEOPDDepartureSequence.operatingHours #3` = `repeated GEOPDTimeRange`.
-- **Metadata-sparse element classes.** The element class has no ObjC methods to
-  read, so the dispatch has no body to resolve against (this slice is intrinsic —
-  the binary genuinely doesn't name the element at the field site).
+**Residual (still emitted as flagged `bytes`).**
 
-The field number and the `repeated` label are correct; only the element *type* is
-degraded to `bytes`. The inline `// …` note fires for the whole unresolved-element
-class (a superset of the inline-C subset above); it is not isolated to the C-struct
-cases. (The `repeated` label on the inline-C-struct `^{Struct=…}` fields is derived
-from the ivar's pointer-to-struct storage shape.)
-
-**Singular by-value embedded structs (the same `bytes` catch-all).** A *singular*
-field whose ivar is a by-value C struct (`@encode {Name=…}`, e.g.
-`{GEOSessionID="_high"Q"_low"Q}`, `{GEOTimepoint=…}`, `{GEOPDTimeRange=…}`,
-`{GEOECEFCoordinate=…}`) is a length-delimited submessage on the wire, but the tool
-does not model the struct's layout, so it reaches the same `("bytes", None)`
-catch-all in `_type_from_enc` and emits as a *singular* `bytes`. Flagged inline:
+- **`NSMutableArray` elements of an unnamed class** (20 GeoServices fields, e.g. the
+  `GEOPDSearchKey…PairList.pairs` family, `GEOPDTileList.tiles`). The ivar is an object array and
+  the element class has no ObjC methods to read, so the dispatch has no body to resolve against
+  (INTRINSIC — the binary does not name the element at the field site):
 
 ```proto
-optional bytes sessionId = 1;  // embedded fixed-struct 'GEOSessionID' emitted as bytes; element type/layout not modelled — see LIMITATIONS.md (2)
+repeated bytes pairs = 1;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
 ```
 
-~37 GeoServices fields (sessionId / timepoint / timeRange / operatingHoursRange /
-ecefLocation / representativePoint / screenResolution / …); 0 in locationd /
-CoreLocationProtobuf. A genuine `NSData` field (`@encode @"NSData"`) is a real
-`bytes` and is deliberately NOT flagged.
+  The field number and the `repeated` label are correct; only the element *type* is degraded.
+  A genuine `NSData` field (`@encode @"NSData"`) is a real `bytes` and is deliberately NOT flagged.
+- **Structs that are not a flat struct of scalars** (a nested struct member, a pointer or object
+  member, a bare bitfield) are not modelled and keep `bytes`. None occurs in a serialised
+  GeoServices field today (the polyline-range and `GeoCodecs*` structs are not wire messages).
 
-**Workaround for consumers.** The element is a length-delimited submessage; identify
-its type by hand from the `writeTo:`/`readFrom:` of the owning class.
+**Naming and typing caveats (all cosmetic or sign-only; numbers and wire forms are exact).**
 
-**Source sites.** `proto/extractor.py` (`_ELEMENT_UNRESOLVED_NOTE`, set where a
-repeated field's element resolution returns `element_unresolved`; and
-`_embedded_struct_note` for the singular by-value variant);
-`proto/repeated.py` (`_resolve_repeated_field_type`).
+- The message name is the C struct tag with the class prefix stripped; Apple's own `.proto`
+  name for these inline messages is not recorded in the binary.
+- A member whose dictionary key is chosen at run time (`isJSON ? @"startTime" : @"start_time"`)
+  gets the camelCase spelling; a member no source names (one in `GEOFlyoverRegion`, whose key is
+  spilled to the stack before use) is emitted `field<N>` with an inline note.
+- `int32` vs `uint32` (and 64-bit) is not recoverable from the `@encode` + helper any more than
+  for ordinary fields (see the README caveat); sint/fixed forms are recovered from the write
+  helper as usual. An enum-typed member (`GEOTimepoint.type`) is emitted as its integer.
 
-**Heuristic.** The `bytes` default-type fallback. (Distinct from the *name-suffix* fallback in (7); this one
-fires when the type cannot be named at all.)
+**Source sites.** `proto/structfields.py` (recovery); `proto/extractor.py` (`record_struct_site`
+in the field loop, `finalize_struct_fields` at the end of `extract_all`;
+`_ELEMENT_UNRESOLVED_NOTE` for the residual); `proto/models.py` (`ProtoMessage.inline_struct`);
+`proto/emitter.py` (the provenance comment).
+
+**Heuristic.** The recovery itself is principled. Its only judgement calls are two cosmetic
+naming choices (the camelCase key spelling and the `field<N>` placeholder above); the residual
+is the `bytes` default-type fallback. (Distinct from the *name-suffix* fallback in (7); this
+one fires when the type cannot be named at all.)
 
 ---
 

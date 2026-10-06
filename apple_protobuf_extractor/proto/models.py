@@ -279,6 +279,9 @@ class ProtoMessage:
     # _proto_class_set's heuristic-seeded VA-cluster closure (anchor 2) and the
     # by-name superclass-chain walk (anchor 1) never confirmed it.  Also an ERROR.
     class_detected_by_va_cluster: bool = False
+    # Set (to a one-line provenance comment) when this message is an INLINE C STRUCT with no
+    # ObjC class behind it (proto.structfields): ``class_name`` is then the C struct tag.
+    inline_struct: Optional[str] = None
 
     def __repr__(self) -> str:
         return f"ProtoMessage({self.name!r}, {len(self.fields)} fields, {len(self.enums)} enums)"

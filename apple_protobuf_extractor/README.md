@@ -223,8 +223,9 @@ A few small, well-characterised slices of the output are **accepted limitations*
 (not bugs — the degraded fields are flagged inline in the `.proto`, except where
 there's no field to flag): a `map<>` field whose entry writer isn't found (or whose key/value
 type isn't proven) falls back to `bytes` / `repeated bytes` — map fields that are
-serialized by `writeTo:` are otherwise recovered as `map<K, V>`; repeated messages with an
-unresolved element type emit as `repeated bytes`; ivar-less *delegated* fields are
+serialized by `writeTo:` are otherwise recovered as `map<K, V>`; repeated messages whose
+element class cannot be named (an array of an unnamed class) emit as `repeated bytes`
+(sub-messages stored as inline C structs are recovered as messages); ivar-less *delegated* fields are
 omitted; a wire number of 0 (Apple's illegal-in-proto 0-based numbering) gets a
 flagged, non-wire-accurate estimate; and proto-to-proto subclasses omit inherited
 parent fields (noted with `// inherits all fields from …`). See

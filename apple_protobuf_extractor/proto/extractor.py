@@ -87,6 +87,7 @@ from proto.repeated  import (
     _resolve_repeated_via_dispatch, _resolve_repeated_via_dispatch_ivars,
     _resolve_repeated_field_type, _build_meta_type_pool,
 )
+from proto.structfields import finalize_struct_fields, record_struct_site
 from proto.mapfields import (
     MAP_OBJC_CLASSES, MAP_IVAR_ENCS, MapEntryWriter, MapTypes, find_map_writers,
     record_helper_votes, resolve_map_types,
@@ -715,6 +716,9 @@ class _FieldNumberResult:
     # {ivar_name: MapEntryWriter} for NSDictionary ivars whose map-entry writer was
     # recovered (#41); their numbers are already merged into ``confirmed_numbers``.
     map_writers: Dict[str, MapEntryWriter] = field(default_factory=dict)
+    # {ivar_name: raw writeTo: walk write event} — the begin-mark of an inline C-struct
+    # sub-message is bound here (proto.structfields, #37).
+    walk_writes: Dict[str, dict] = field(default_factory=dict)
 
 
 def _confirm_field_numbers(
@@ -786,6 +790,7 @@ def _confirm_field_numbers(
         string_helper     = string_helper,
         wrote_zero_fields = wt_zero,
         map_writers       = map_writers,
+        walk_writes       = wt_writes,
     )
 
 
@@ -1260,6 +1265,7 @@ def extract_proto_message(
     _string_helper    = _fnr.string_helper
     _wrote_zero       = _fnr.wrote_zero_fields
     _map_writers      = _fnr.map_writers
+    _walk_writes      = _fnr.walk_writes
 
     # One vote per field for "which wire kind does this write helper encode" — the
     # binary-wide table :func:`_finalize_map_fields` reads to type map keys/values.
@@ -1410,6 +1416,14 @@ def extract_proto_message(
         # the degradation is visible (see LIMITATIONS.md (2)).
         if not _type_note:
             _type_note = _embedded_struct_note(ivar, type_name, type_class)
+
+        # Inline C-struct sub-message (by value or an array of them): remember the
+        # begin-mark the walk bound to it, so :func:`finalize_struct_fields` can read the
+        # struct's serialiser once the whole image is extracted (#37).  Fields it cannot
+        # resolve keep the flagged `bytes` fallback set above.
+        if type_name == "bytes":
+            record_struct_site(ctx, cls.name, pname, ivar.name, ivar.offset, ivar.type_enc,
+                               _walk_writes.get(ivar.name))
 
         fields.append(ProtoField(
             name=pname,
@@ -1610,7 +1624,8 @@ def extract_all(
                         "_dictrep_truncated_classes", "_proto_class_names_cache",
                         "_proto_inherits", "_proto_class_heuristic_only",
                         "_proto_class_cluster_only", "_helper_votes",
-                        "_helper_canon", "_map_writers"):
+                        "_helper_canon", "_map_writers", "_struct_sites",
+                        "_dictrep_names"):
         try:
             setattr(ctx, _cache_attr, None)
         except Exception:
@@ -1704,6 +1719,10 @@ def extract_all(
 
     # Map<> fields (#41): type them now that the binary-wide write-helper table is complete.
     _finalize_map_fields(ctx, cl, messages, readfrom_core_index)
+
+    # Inline C-struct sub-messages (#37): synthesise a message per struct tag and retype the
+    # owner fields whose struct serialiser was decoded.
+    finalize_struct_fields(ctx, cl, messages, prefixes)
 
     messages.sort(key=lambda m: m.class_name)
     return messages
