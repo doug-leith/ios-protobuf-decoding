@@ -1954,3 +1954,81 @@ class TestDetectSubcacheStride(unittest.TestCase):
         from macho.dyld_cache import _detect_subcache_stride, _SUBCACHE_STRIDE_V1
         raw = b'\x00' * 24   # shorter than the v2 probe offset (24)
         self.assertEqual(_detect_subcache_stride(raw), _SUBCACHE_STRIDE_V1)
+
+
+class TestSlideInfoVersionGate(unittest.TestCase):
+    """decode_ptr reads the runtime offset of an arm64e DATA pointer as the low 34 bits
+    for slide-info v5 caches (iOS 26+/macOS 26+, > 4 GB, ``dyld_cache_slide_pointer5``)
+    and as the low 32 bits otherwise (v3 keeps PAC diversity in bits 32-47).  A cache
+    whose data lies past ``cache_base + 4 GB`` was silently mis-decoded (the 32-bit
+    result lands on a *different mapped* address): MessageProtection/TrustedPeers on
+    iOS 27 lost every ObjC class."""
+
+    BASE   = 0x180000000
+    OFFSET = 0x14e7735c0            # 33 bits: past the 4 GB mark
+
+    def _reader(self, tmp, *, slide_version, legacy=False, with_target=True):
+        data = bytearray(_pack_cache(self.BASE, b'\x00' * 0x1000, magic=_MAGIC_ARM64E))
+        slide_off = 0x500
+        struct.pack_into('<I', data, slide_off, slide_version)
+        if legacy:
+            # old header: mappingOffset below the mappingWithSlide fields
+            struct.pack_into('<I', data, _HDR_MAPPING_OFF, 0x100)
+            struct.pack_into('<Q', data, 0x100, self.BASE)
+            struct.pack_into('<Q', data, 0x108, 0x1000)
+            struct.pack_into('<Q', data, 0x110, 0x1000)
+            struct.pack_into('<Q', data, 0x28, slide_off)       # slideInfoOffsetUnused
+        else:
+            struct.pack_into('<II', data, 0x138, 0x300, 1)      # mappingWithSlide off/cnt
+            struct.pack_into('<QQQQQ', data, 0x300, self.BASE, 0x1000, 0x1000, slide_off, 0x20)
+        path = tmp.write('cache', bytes(data))
+        rd = DyldCacheReader(path)
+        if with_target:
+            # a mapping at base+OFFSET (past 4 GB) and one at base+(OFFSET & 0xFFFFFFFF)
+            for off in (self.OFFSET, self.OFFSET & 0xFFFFFFFF):
+                rd._mappings.append(type(rd._mappings[0])(self.BASE + off - 0x1000, 0x2000, path, 0x1000))
+            rd._mappings.sort(key=lambda m: m.vmaddr)
+            rd._vmaddr_keys = [m.vmaddr for m in rd._mappings]
+        return rd
+
+    def _raw(self):
+        return (1 << 52) | self.OFFSET          # next=1 (v5 plain rebase), low 34 bits = offset
+
+    def test_v5_slide_version_detected(self):
+        with _TmpDir() as tmp:
+            rd = self._reader(tmp, slide_version=5)
+            self.assertEqual(rd._slide_versions, {5})
+            self.assertEqual(rd._runtime_offset_mask, (1 << 34) - 1)
+            rd.close()
+
+    def test_v5_pointer_past_4gb_decodes_to_the_real_target(self):
+        with _TmpDir() as tmp:
+            rd = self._reader(tmp, slide_version=5)
+            self.assertEqual(rd.decode_ptr(self._raw()), self.BASE + self.OFFSET)
+            rd.close()
+
+    def test_v3_pointer_keeps_the_32_bit_mask(self):
+        # v3 auth pointer: offset in bits 0-31, PAC diversity in bits 32-47.  The same bits
+        # that v5 treats as offset must NOT be taken as offset here.
+        with _TmpDir() as tmp:
+            rd = self._reader(tmp, slide_version=3)
+            self.assertEqual(rd._slide_versions, {3})
+            self.assertEqual(rd._runtime_offset_mask, 0xFFFFFFFF)
+            self.assertEqual(rd.decode_ptr(self._raw()),
+                             self.BASE + (self.OFFSET & 0xFFFFFFFF))
+            rd.close()
+
+    def test_legacy_header_slide_info_is_read(self):
+        with _TmpDir() as tmp:
+            rd = self._reader(tmp, slide_version=2, legacy=True, with_target=False)
+            self.assertEqual(rd._slide_versions, {2})
+            self.assertEqual(rd._runtime_offset_mask, 0xFFFFFFFF)
+            rd.close()
+
+    def test_cache_without_slide_info_keeps_the_32_bit_mask(self):
+        with _TmpDir() as tmp:
+            path = tmp.write('cache', _pack_cache(self.BASE, b'\x00' * 0x1000))
+            rd = DyldCacheReader(path)
+            self.assertEqual(rd._slide_versions, set())
+            self.assertEqual(rd._runtime_offset_mask, 0xFFFFFFFF)
+            rd.close()

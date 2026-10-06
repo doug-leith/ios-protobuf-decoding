@@ -343,5 +343,64 @@ class TestIos27Live(unittest.TestCase):
         self.assertEqual(t.type_class, "ENUM:ComponentType")      # iOS 16's name, 89 values
 
 
+@unittest.skipUnless(_ios27_cache_dir(), "iOS 27 cache not present")
+class TestIos27ImagesBeyond4GB(unittest.TestCase):
+    """Images whose data lies past cache_base + 4 GB (slide-info v5, 34-bit runtime offset).
+
+    The 32-bit mask in ``decode_ptr`` mapped every pointer of such an image to a different
+    *mapped* address, so MessageProtection (NGMPB) and TrustedPeers (TPPB) yielded no ObjC
+    classes at all.  Expected schemas = the iPhone 8 ones (plus newer fields)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        from macho.strings import build_string_table
+        from macho.classlist import build_class_list
+        import proto.extractor as E
+
+        cls.reader = DyldCacheReader(os.path.join(_ios27_cache_dir(), "dyld_shared_cache_arm64e"))
+
+        def run(fw):
+            mv = cls.reader.find_image_header(fw)
+            ctx = BinaryContext.from_cache(cls.reader, mv)
+            st = build_string_table(ctx)
+            cl = build_class_list(ctx, st)
+            return mv, {m.class_name: m for m in E.extract_all(ctx, st, cl)}
+        cls.mp_va, cls.mp = run("MessageProtection")
+        cls.tp_va, cls.tp = run("TrustedPeers")
+
+    @staticmethod
+    def _nums(msg):
+        return {f.name: f.number for f in msg.fields}
+
+    def test_the_images_under_test_are_beyond_the_4gb_mark(self):
+        lim = self.reader.cache_base + (1 << 32)
+        for va in (self.mp_va, self.tp_va):
+            start, _ = self.reader.image_sections(va)["__DATA_CONST/__objc_classlist"]
+            self.assertGreaterEqual(start, lim)
+        self.assertEqual(self.reader._runtime_offset_mask, (1 << 34) - 1)
+
+    def test_message_protection_ngmpb_classes_are_recovered(self):
+        self.assertEqual(
+            sorted(n for n in self.mp if n.startswith("NGMPB")),
+            ["NGMPBDevicePreKey", "NGMPBFullDeviceIdentity", "NGMPBInnerMessage", "NGMPBLegacyKey",
+             "NGMPBOuterMessage", "NGMPBP256Key", "NGMPBPublicDeviceIdentity", "NGMPBPublicDevicePrekey"])
+
+    def test_ngmpb_numbers_match_the_iphone8_schema(self):
+        inner = self._nums(self.mp["NGMPBInnerMessage"])
+        self.assertEqual(inner, {"message": 1, "counter": 2, "ktGossipData": 3, "debugInfo": 99})
+        outer = self._nums(self.mp["NGMPBOuterMessage"])
+        for name, num in {"encryptedPayload": 1, "ephemeralPubKey": 2, "signature": 3, "keyValidator": 99}.items():
+            self.assertEqual(outer[name], num)
+        self.assertTrue(all(f.number_confirmed for m in self.mp.values()
+                            if m.class_name.startswith("NGMPB") for f in m.fields))
+
+    def test_trusted_peers_tppb_classes_are_recovered(self):
+        tppb = [n for n in self.tp if n.startswith("TPPB")]
+        self.assertEqual(len(tppb), 29)
+        self.assertEqual(self._nums(self.tp["TPPBVoucher"]), {"reason": 1, "beneficiary": 2, "sponsor": 3})
+
+
 if __name__ == "__main__":
     unittest.main()

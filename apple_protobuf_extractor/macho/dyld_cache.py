@@ -102,6 +102,11 @@ def _is_framework_principal(path: str, name: str) -> bool:
 _HDR_MAGIC          = 0x00   # char[16]
 _HDR_MAPPING_OFF    = 0x10   # u32  – file offset of mapping array
 _HDR_MAPPING_CNT    = 0x14   # u32  – number of mapping entries
+_HDR_SLIDE_OFF_LEGACY  = 0x28   # u64  – slideInfoOffsetUnused: file offset of the single
+                                #        legacy slide-info block (headers without a
+                                #        mappingWithSlide array)
+_HDR_MAPPING_SLIDE_OFF = 0x138  # u32  – file offset of the dyld_cache_mapping_and_slide_info array
+_HDR_MAPPING_SLIDE_CNT = 0x13c  # u32  – number of entries in that array
 _HDR_SUBCACHE_OFF   = 0x188  # u32  – file offset of sub-cache entry array
 _HDR_SUBCACHE_CNT   = 0x18c  # u32  – number of sub-cache entries
 _HDR_OBJC_OPTS_OFF  = 0x1d0  # u64  – vmaddr offset (from the cache base) of the
@@ -113,6 +118,20 @@ _HDR_OBJC_OPTS_SIZE = 0x1d8  # u64  – size of that header; 0 or "too small" me
 # ── Struct sizes ─────────────────────────────────────────────────────────────
 
 _MAPPING_STRIDE     = 32     # sizeof(dyld_cache_mapping_info)
+_MAPPING_SLIDE_STRIDE = 56   # sizeof(dyld_cache_mapping_and_slide_info):
+                              #   address, size, fileOffset, slideInfoFileOffset,
+                              #   slideInfoFileSize (u64 each), flags u64, maxProt u32, initProt u32
+_MAPPING_SLIDE_INFO_OFF = 24  # offset of slideInfoFileOffset within that entry
+
+# Slide-info version 5 (dyld_cache_slide_pointer5, iOS 26+ / macOS 26+ arm64e caches)
+# encodes every DATA pointer as runtimeOffset:34 | high8:8 | … | next:11 | auth:1.
+# The offset from the cache base is the LOW 34 BITS in both the plain and the
+# authenticated form, and these caches exceed 4 GB, so a 32-bit mask truncates
+# every target past cache_base + 4 GB.  Older arm64e slide versions (v3) keep a
+# 32-bit offset and put the PAC diversity in bits 32-47, so they must stay at 32.
+_SLIDE_VERSION_5        = 5
+_SLIDE5_OFFSET_MASK     = (1 << 34) - 1
+_DEFAULT_OFFSET_MASK    = 0xFFFFFFFF
 
 # Sub-cache entry stride is detected at runtime (_detect_subcache_stride),
 # not hardcoded.  Two known layouts exist:
@@ -322,6 +341,9 @@ class DyldCacheReader:
         self._mapping_offset_value, self._objc_opts_offset, self._objc_opts_size = (
             self._load_objc_opts_meta(main_hdr)
         )
+        # Slide-info versions seen across every cache file; decides how wide the
+        # runtime-offset field of a DATA pointer is (see decode_ptr).
+        self._slide_versions: Set[int] = set()
         self._load_mappings(main_hdr, main_path)
         self._load_subcaches(main_hdr, main_path)
         self._mappings.sort(key=lambda m: m.vmaddr)
@@ -417,6 +439,54 @@ class DyldCacheReader:
             vmaddr, size, file_off = struct.unpack_from('<QQQ', raw, off)
             if size > 0:
                 self._mappings.append(_Mapping(vmaddr, size, path, file_off))
+
+        self._load_slide_versions(hdr, path)
+
+    def _load_slide_versions(self, hdr: bytes, path: str) -> None:
+        """Record the slide-info version of every slid mapping in this file.
+
+        Headers new enough to carry a ``mappingWithSlide`` array (the array sits
+        at/after 0x138, so ``mappingOffset`` is at least 0x140) list one
+        ``dyld_cache_mapping_and_slide_info`` per mapping; older headers have a
+        single legacy slide-info block at ``slideInfoOffsetUnused``.  Every slide
+        info starts with a ``u32 version``.
+        """
+        if len(hdr) < _HDR_MAPPING_SLIDE_CNT + 4:
+            return
+        map_off = struct.unpack_from('<I', hdr, _HDR_MAPPING_OFF)[0]
+        offsets: List[int] = []
+        if map_off >= _HDR_MAPPING_SLIDE_CNT + 4:
+            ms_off = struct.unpack_from('<I', hdr, _HDR_MAPPING_SLIDE_OFF)[0]
+            ms_cnt = struct.unpack_from('<I', hdr, _HDR_MAPPING_SLIDE_CNT)[0]
+            if ms_off and 0 < ms_cnt <= _MAX_MAPPINGS:
+                fh = self._fh(path)
+                fh.seek(ms_off)
+                raw = fh.read(ms_cnt * _MAPPING_SLIDE_STRIDE)
+                for i in range(ms_cnt):
+                    base = i * _MAPPING_SLIDE_STRIDE + _MAPPING_SLIDE_INFO_OFF
+                    if base + 16 > len(raw):
+                        break
+                    slide_off, slide_size = struct.unpack_from('<QQ', raw, base)
+                    if slide_off and slide_size:
+                        offsets.append(slide_off)
+        else:
+            legacy = struct.unpack_from('<Q', hdr, _HDR_SLIDE_OFF_LEGACY)[0]
+            if legacy:
+                offsets.append(legacy)
+
+        fh = self._fh(path)
+        for slide_off in offsets:
+            fh.seek(slide_off)
+            ver = fh.read(4)
+            if len(ver) == 4:
+                self._slide_versions.add(struct.unpack('<I', ver)[0])
+
+    @property
+    def _runtime_offset_mask(self) -> int:
+        """Bit mask extracting the cache-base-relative target from a DATA pointer."""
+        if _SLIDE_VERSION_5 in self._slide_versions:
+            return _SLIDE5_OFFSET_MASK
+        return _DEFAULT_OFFSET_MASK
 
     def _load_subcaches(self, main_hdr: bytes, main_path: str) -> None:
         """Parse the sub-cache entry array and load each sub-cache's mappings.
@@ -1055,7 +1125,9 @@ class DyldCacheReader:
         1. **Direct vmaddr** — the raw value itself is already mapped (common
            for pointer values that happen to carry no metadata bits).
         2. **Low-36-bit truncation** — the plain-arm64-cache encoding.
-        3. **Low-32-bit offset from cache_base** — the arm64e encoding.
+        3. **Low-32-bit offset from cache_base** — the arm64e encoding; widened to
+           the low 34 bits for slide-info v5 caches (iOS 26+/macOS 26+), which
+           exceed 4 GB (see ``_SLIDE5_OFFSET_MASK``).
 
         Returns ``0`` if no strategy resolves to a mapped address (this also
         covers bind entries, which are not pointers into this cache at all).
@@ -1068,9 +1140,9 @@ class DyldCacheReader:
             low36 = raw & 0xFFFFFFFFF
             if low36 and self.has_vmaddr(low36):
                 return low36
-        target32 = raw & 0xFFFFFFFF
-        if target32:
-            candidate = self.cache_base + target32
+        target_off = raw & self._runtime_offset_mask
+        if target_off:
+            candidate = self.cache_base + target_off
             if self.has_vmaddr(candidate):
                 return candidate
         return 0
