@@ -160,13 +160,17 @@ def _demangle_one(s, i, words):
     substitutions against (and extending) *words*.  Returns (text, next_i) or
     (None, i) if undecodable.  Handles both the plain ``<len><chars>`` form and
     the leading-'0' word-substitution form where a letter back-references a
-    previously seen word (uppercase = last substitution in the run)."""
+    previously seen word (uppercase = last substitution in the run).  A word-
+    substituted identifier may be closed by an explicit ``0`` (``06ClientF0`` =
+    ``ClientMetadata``: literal ``Client`` + last-subst ``F``, then the
+    terminator) -- mirrors the Swift demangler's ``if (nextIf('0')) break``."""
     n = len(s)
     has_subst = False
+    subst_ident = False
     if s[i] == "0":
         if i + 1 < n and s[i + 1] == "0":
             return None, i                 # '00' = punycode — unsupported, bail
-        has_subst = True
+        has_subst = subst_ident = True
         i += 1
     out = []
     while True:
@@ -184,6 +188,9 @@ def _demangle_one(s, i, words):
                 out.append(words[idx])
                 if not has_subst:
                     break
+        if subst_ident and i < n and s[i] == "0":
+            i += 1                         # '0' terminates a word-substituted identifier
+            break
         j = i
         while j < n and s[j].isdigit():
             j += 1

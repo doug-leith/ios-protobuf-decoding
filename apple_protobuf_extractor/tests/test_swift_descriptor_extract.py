@@ -100,6 +100,20 @@ class TestMangledNameParse(unittest.TestCase):
         self.assertEqual(S._split_idents("6oracle9Ora_Multi"), ["oracle", "Ora_Multi"])
         self.assertEqual(S._split_idents("1M5OuterV5Inner"), ["M", "Outer", "Inner"])
 
+    def test_word_substituted_identifier_with_zero_terminator(self):
+        # `06ClientF0` = literal 'Client' + last-subst 'F' ('Metadata') closed by
+        # an explicit '0'.  The terminator must not truncate the nested name: it
+        # used to resolve to the PARENT's key (EscrowInformation.Metadata), so the
+        # nested type silently collided with, and was lost behind, its parent.
+        child = ("_$s18TrustedPeersHelper17EscrowInformationV8MetadataV06ClientF0V"
+                 "17_protobuf_nameMap21InternalSwiftProtobuf05_NameJ0VvgZ")
+        parent = ("_$s18TrustedPeersHelper17EscrowInformationV8MetadataV"
+                  "17_protobuf_nameMap21InternalSwiftProtobuf05_NameI0VvgZ")
+        self.assertEqual(S._type_from_namemap_symbol(child),
+                         ("TrustedPeersHelper", "EscrowInformation.Metadata.ClientMetadata"))
+        self.assertEqual(S._type_from_namemap_symbol(parent),
+                         ("TrustedPeersHelper", "EscrowInformation.Metadata"))
+
     def test_word_substituted_wkt_name(self):
         # SwiftProtobuf's bundled well-known types mangle with word
         # substitution (B = 'Protobuf' from 'SwiftProtobuf'); the full name must
@@ -366,6 +380,89 @@ class TestNameMapBuilderValidation(unittest.TestCase):
             S.disasm = orig
 
 
+class TestSharedOnceInitTargets(unittest.TestCase):
+    """Shape D getter gate (:func:`_shared_once_init_targets`).  The once-token and
+    storage slot are in ``__DATA`` and often beyond ``adr`` reach, so the compiler
+    emits them as ``adrp``+``add``; that must still count as the minimal
+    straight-line dispatch (iOS 16 TrustedPeersHelper: 72 messages read as empty
+    until it did)."""
+
+    def test_adr_only_form(self):
+        insns = [_FI("adr", "x0, #0x100"), _FI("adr", "x1, #0x200"),
+                 _FI("adr", "x2, #0x300"), _FI("nop"), _FI("b", "#0x400")]
+        self.assertEqual(S._shared_once_init_targets(insns), [0x100, 0x200, 0x300])
+
+    def test_adrp_add_token_and_slot_with_adr_builder(self):
+        # the verbatim TrustedPeersHelper EstablishRequest getter
+        insns = [_FI("adrp", "x0, #0x1001e7000"), _FI("add", "x0, x0, #0x5d8"),
+                 _FI("adrp", "x1, #0x1001f3000"), _FI("add", "x1, x1, #0xcd8"),
+                 _FI("adr", "x2, #0x100071e9c"), _FI("nop"),
+                 _FI("b", "#0x100087efc")]
+        got = S._shared_once_init_targets(insns)
+        self.assertIn(0x100071E9C, got)               # the builder
+        self.assertIn(0x1001E7000 + 0x5D8, got)       # token (data; caller filters)
+        self.assertIn(0x1001F3000 + 0xCD8, got)       # storage slot (data)
+
+    def test_builder_materialised_by_adrp_add(self):
+        insns = [_FI("adr", "x0, #0x100"), _FI("adr", "x1, #0x200"),
+                 _FI("adrp", "x2, #0x7000"), _FI("add", "x2, x2, #0x1c"),
+                 _FI("b", "#0x400")]
+        self.assertIn(0x701C, S._shared_once_init_targets(insns))
+
+    def test_add_without_adrp_page_is_ignored(self):
+        insns = [_FI("add", "x0, x0, #0x10"), _FI("adr", "x2, #0x300"),
+                 _FI("b", "#0x400")]
+        self.assertEqual(S._shared_once_init_targets(insns), [0x300])
+
+    def test_inline_fast_path_getter_still_rejected(self):
+        # #74 regression guard: a once-init getter with its own cmn/b.ne fast path
+        # is the runtime-_NameMap shape, not shape D -- even though it contains
+        # adrp/add/adr and ends in a tail call.
+        insns = [_FI("adrp", "x8, #0x1001f3000"), _FI("ldr", "x8, [x8, #0x60]"),
+                 _FI("cmn", "x8, #1"), _FI("b.ne", "#0x500"),
+                 _FI("adr", "x1, #0x300"), _FI("b", "#0x400")]
+        self.assertEqual(S._shared_once_init_targets(insns), [])
+
+    def test_no_tail_branch_rejected(self):
+        self.assertEqual(S._shared_once_init_targets(
+            [_FI("adr", "x0, #0x100"), _FI("nop")]), [])
+
+
+class _TextCtx:
+    """Just enough ctx for ``_in_executable_text``: one __TEXT,__text section."""
+    class _Sec:
+        vmaddr, vmsize = 0x1000, 0x1000
+
+    def has_section(self, seg, name):
+        return (seg, name) == ("__TEXT", "__text")
+
+    def section(self, seg, name):
+        return self._Sec()
+
+
+class TestClosureArgTargets(unittest.TestCase):
+    """``_closure_arg_targets``: the once-init closure is ``adr`` when near and
+    ``adrp``+``add`` when far (device / cache images -- SeymourCore, SiriOntology,
+    NewsPersonalization: ~300 messages read as empty before)."""
+    def test_adr_closure(self):
+        insns = [_FI("adr", "x1, #0x1200")]
+        self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [0x1200])
+
+    def test_adrp_add_closure_in_text(self):
+        insns = [_FI("adrp", "x1, #0x1000"), _FI("add", "x1, x1, #0xcf8")]
+        self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [0x1CF8])
+
+    def test_data_token_not_taken_as_closure(self):
+        # the swift_once token (x0) and a once-storage address outside __text
+        insns = [_FI("adrp", "x0, #0x9000"), _FI("add", "x0, x0, #0"),
+                 _FI("adrp", "x1, #0x9000"), _FI("add", "x1, x1, #0x40")]
+        self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [])
+
+    def test_other_destination_register_ignored(self):
+        insns = [_FI("adrp", "x2, #0x1000"), _FI("add", "x2, x2, #0x10")]
+        self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [])
+
+
 class TestFatSlice(unittest.TestCase):
     def _fat(self, slices):
         # slices: list of (cputype, cpusubtype, payload)
@@ -440,6 +537,25 @@ def _remindd_path():
     if p:
         return p if os.path.isfile(p) else None
     return _data_path("libexec", "remindd")
+
+
+def _trustedpeershelper_path():
+    """iOS 16.7.11 TrustedPeersHelper.xpc (Cuttlefish/Octagon keychain-trust
+    swift-protobuf messages) from the extracted phone disk image, which sits
+    beside the repo rather than under ``iphone8_data``.  ``MACHO_TEST_TRUSTEDPEERSHELPER``
+    overrides."""
+    p = os.environ.get("MACHO_TEST_TRUSTEDPEERSHELPER", "").strip()
+    if p:
+        return p if os.path.isfile(p) else None
+    try:
+        import artifacts
+        cand = os.path.join(
+            os.path.dirname(artifacts.REPO_ROOT), "phone_disk_image", "System",
+            "Library", "Frameworks", "Security.framework", "XPCServices",
+            "TrustedPeersHelper.xpc", "TrustedPeersHelper")
+        return cand if os.path.isfile(cand) else None
+    except Exception:
+        return None
 
 
 def _swift_oracle_path():
@@ -590,12 +706,179 @@ class TestLiveDPSubmission(unittest.TestCase):
                           {(1, "baa_signed_donation_envelope")})
 
 
+@unittest.skipUnless(_trustedpeershelper_path(), "TrustedPeersHelper binary not available")
+class TestLiveTrustedPeersHelper(unittest.TestCase):
+    """iOS 16.7.11 TrustedPeersHelper.xpc -- Cuttlefish/Octagon (``InternalSwiftProtobuf``
+    fork).  Shape D with ``adrp``+``add``-materialised once-token/storage and
+    unoptimised builders (name via ``adrp``+``add``, entry address computed from the
+    value-witness stride).  Before the gate fix every message here came back empty.
+
+    Field NUMBERS are cross-checked loosely against the published hand-written
+    Cuttlefish descriptor (rustpush ``cloudkit.proto``, a different version, so
+    equality is expected only where the messages did not change) and strictly
+    against the independent ``traverse`` visit numbers (must be a subset)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.ctx = _load_ctx(_trustedpeershelper_path())
+        cls.msgs = {m.name: m for m in S.swift_messages(cls.ctx)}
+
+    def test_establish_request(self):
+        self.assertEqual(_fieldset(self.msgs["EstablishRequest"]),
+                         {(1, "peer"), (2, "bottle"), (3, "view_keys"), (4, "tlk_shares")})
+
+    def test_fetch_changes_request(self):
+        self.assertEqual(_fieldset(self.msgs["FetchChangesRequest"]), {(1, "change_token")})
+
+    def test_update_trust_request_matches_published_cuttlefish(self):
+        # rustpush cloudkit.proto CuttlefishUpdateTrustRequest: restorePoint=1,
+        # peerId=2, stableInfo=3, dynamicInfo=4, tlkshares=5, viewKeys=6.
+        got = {f.number: f.name for f in self.msgs["UpdateTrustRequest"].fields}
+        self.assertEqual(sorted(got), [1, 2, 3, 4, 5, 6])
+        self.assertEqual(got[2], "peer_id")
+        self.assertEqual(got[5], "tlk_shares")
+
+    def test_nested_word_substituted_type_not_lost(self):
+        # EscrowInformation.Metadata.ClientMetadata's symbol uses `06ClientF0`; it
+        # must be its own message, distinct from (not merged into) its parent.
+        self.assertIn("EscrowInformation.Metadata.ClientMetadata", self.msgs)
+        parent = _fieldset(self.msgs["EscrowInformation.Metadata"])
+        child = _fieldset(self.msgs["EscrowInformation.Metadata.ClientMetadata"])
+        self.assertEqual(len(parent), 8)
+        self.assertGreaterEqual(len(child), 12)
+        self.assertIn((7, "device_mid"), child)
+
+    def test_genuinely_empty_messages_stay_empty(self):
+        for name in ("ReportHealthResponse", "PushHealthInquiryRequest",
+                     "ValidatePeersRequest", "GetSupportAppInfoRequest"):
+            self.assertEqual(self.msgs[name].fields, [], name)
+
+    def test_most_messages_recovered(self):
+        # 64/73 have fields; the other 9 are empty request/response stubs.
+        with_fields = sum(1 for m in self.msgs.values() if m.fields)
+        self.assertGreaterEqual(with_fields, 60)
+
+    def test_traverse_numbers_never_contradict_namemap(self):
+        syms = S.symbol_addrs(self.ctx)
+        traversers = {}
+        for name, va in syms.items():
+            if "V8traverse" in name and name.endswith("F"):
+                p = S._type_from_namemap_symbol_like(name, "V8traverse")
+                if p:
+                    traversers.setdefault(p, va)
+        checked = 0
+        for m in self.msgs.values():
+            va = traversers.get((m.module, m.name))
+            if va is None or not m.fields:
+                continue
+            seen = set(S._traverse_field_numbers(self.ctx, va))
+            self.assertLessEqual(seen, {f.number for f in m.fields}, m.name)
+            checked += bool(seen)
+        self.assertGreater(checked, 20)      # the cross-check actually ran
+
+
+def _seymourcore_path():
+    try:
+        import artifacts
+        p = os.path.join(artifacts.data_dir(), "iphone8_data", "dylib", "System", "Library",
+                         "PrivateFrameworks", "SeymourCore.framework", "SeymourCore")
+        return p if os.path.isfile(p) else None
+    except Exception:
+        return None
+
+
+@unittest.skipUnless(_seymourcore_path(), "SeymourCore image not available")
+class TestLiveSeymourCoreClosureViaAdrpAdd(unittest.TestCase):
+    """Device-form once-init getter (``cmn; b.ne``) whose swift_once closure is
+    loaded by ``adrp``+``add`` (too far for ``adr``): previously 200 of 229
+    messages in this image came back empty."""
+    @classmethod
+    def setUpClass(cls):
+        cls.msgs = _msgs_by_name(_seymourcore_path())
+
+    def test_two_field_message(self):
+        self.assertEqual(
+            _fieldset(self.msgs["CatalogEditorialCollectionDetailAnnotationProtobuf"]),
+            {(1, "editorialCollection"), (2, "tileDescriptors")})
+
+    def test_most_messages_recovered(self):
+        with_fields = sum(1 for m in self.msgs.values() if m.fields)
+        self.assertGreaterEqual(with_fields, 200)
+
+
+def _ios27_cache_file():
+    try:
+        import artifacts
+        p = os.path.join(artifacts.REPO_ROOT, "ios27_data", "dylib", "dyld_shared_cache_arm64e")
+        return p if os.path.isfile(p + ".symbols") else None
+    except Exception:
+        return None
+
+
+@unittest.skipUnless(_ios27_cache_file(), "iOS 27 cache (+ .symbols) not available")
+class TestLiveIos27PackedBytecode(unittest.TestCase):
+    """iOS 27 ``_NameMap(bytecode:)`` (shape E), cache-native.  Before it, every
+    message in these images came back empty."""
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        cls.reader = DyldCacheReader(_ios27_cache_file())
+        cls.msgs = {}
+        for fw in ("CipherML", "WorkoutKit"):
+            ctx = BinaryContext.from_cache(cls.reader, cls.reader.resolve_image(fw))
+            cls.msgs[fw] = {m.name: m for m in S.swift_messages(ctx)}
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            cls.reader.close()
+        except Exception:
+            pass
+
+    def test_sequential_numbers(self):
+        m = self.msgs["CipherML"]["AspireApiEvaluationKeyMetadata"]
+        self.assertEqual(_fieldset(m), {(1, "timestamp"), (2, "identifier")})
+        self.assertEqual(m.shape, "bytecode")
+
+    def test_delta_encoded_numbers(self):
+        m = self.msgs["WorkoutKit"]["Apple_Workout_WorkoutPlan"]
+        nums = {f.name: f.number for f in m.fields}
+        self.assertEqual(nums["id"], 9)
+        self.assertEqual(nums["route"], 100)
+        self.assertEqual(nums["majorVersion"], 1000)
+        self.assertEqual(nums["privateVersion"], 1002)
+
+    def test_inline_getter_form(self):
+        # reached via `bl _NameMap.init(bytecode:)` inside the getter, no tail call
+        m = self.msgs["WorkoutKit"]["Apple_Workout_WorkoutConfiguration"]
+        self.assertTrue(m.fields)
+        self.assertEqual(m.shape, "bytecode")
+
+    def test_bytecode_names_match_reflection_names(self):
+        # independent source: __swift5_fieldmd.  (Reflection renames a proto field
+        # `has_x` to `hasXp`, so compare only names reflection did not rename.)
+        from serializers import swift_type_recovery as TR
+        from macho.memory import BinaryContext
+        ctx = BinaryContext.from_cache(self.reader, self.reader.resolve_image("CipherML"))
+        by_type, _ = TR._collect_field_types(ctx)
+        checked = 0
+        for name, m in self.msgs["CipherML"].items():
+            fm = {k.replace("_", "").lower() for k, t in by_type.get(name, {}).items()
+                  if not t.startswith("OneOf_")}      # oneof wrapper property, not a field
+            got = {f.name.replace("_", "").lower() for f in m.fields}
+            if m.shape == "bytecode" and fm and not any(n.startswith("has") for n in got):
+                self.assertEqual(got, fm, name)
+                checked += 1
+        self.assertGreater(checked, 30)
+
+
 class TestLiveDecoderCrossCheck(unittest.TestCase):
     """Layer-regression guard: across every available swift-protobuf binary, the
     field numbers ``decodeMessage`` switches on must NEVER include a number the
     nameMap lacks (independent codegen path).  Zero contradictions tool-wide."""
     def _binaries(self):
-        for p in (_remindd_path(), _data_path(*_NPTO)):
+        for p in (_remindd_path(), _data_path(*_NPTO), _trustedpeershelper_path(),
+                  _seymourcore_path()):
             if p:
                 yield p
 

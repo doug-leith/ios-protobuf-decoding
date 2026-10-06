@@ -34,6 +34,14 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   hop, concatenating the stub's setup with the template's body since the
   template starts with empty register state on its own).
 
+* **E — packed bytecode** (newer swift-protobuf / iOS 27 InternalSwiftProtobuf):
+  ``_NameMap(bytecode: "<literal>")`` -- the whole (number, name) table is one
+  NUL-delimited string literal, reached from a getter of the form ``adrp/add
+  x1,<slot>; adrp/add x2,<literal>; mov w3,#<len>; b <template>``.  Decoded by
+  :mod:`serializers.swift_namemap_bytecode` (structure-validated: header, opcodes,
+  terminators and full consumption, else it declines).  Single-field messages use
+  a bare-name literal (no header) and stay with shape B.
+
 TYPES are intentionally NOT recovered here: swift-protobuf encodes them via
 generic ``Visitor``/``Decoder`` witness-table calls (``blraa`` / local thunks),
 so there is no named ``visit*Field`` symbol to read the wire type from.  Output
@@ -58,6 +66,8 @@ from typing import Dict, List, Optional, Tuple
 from macho.memory import BinaryContext
 from macho.disasm import disasm
 from serializers.swift_type_recovery import demangle_idents
+from serializers.swift_namemap_bytecode import (
+    bytecode_literal_from_getter, decode_namemap_bytecode)
 
 # Max proto field number (29-bit) and a sane name-length ceiling — used to
 # validate candidate (number, name, len) triples when scanning static blobs.
@@ -508,23 +518,45 @@ def _shared_once_init_targets(insns) -> List[int]:
     function (the others are a once-token and the type's ``_NameMap``
     storage slot).
 
-    Only matches the MINIMAL dispatch shape: nothing but ``adr``/``nop``
-    before the tail ``b``.  A once-init getter with its own inline fast/cold
-    path (:func:`_runtime_namemap_fields`'s shape) reaches a conditional
-    branch (``cmn``/``b.ne`` etc.) first and is rejected here -- without this
-    gate, an `adr` sitting anywhere later in that LONGER function (its cold
-    path, e.g.) would be wrongly treated as a shape-D builder reference (#74
-    regression: remindd's UnmigrateRequest, a genuinely-empty once-init
-    message, picked up its sibling `Option` enum's builder this way)."""
+    Only matches the MINIMAL dispatch shape: nothing but straight-line
+    address materialisation (``adr``, or ``adrp``+``add`` page+offset) and
+    ``nop`` before the tail ``b``.  A once-init getter with its own inline
+    fast/cold path (:func:`_runtime_namemap_fields`'s shape) reaches a
+    conditional branch (``cmn``/``b.ne`` etc.) first and is rejected here --
+    without this gate, an `adr` sitting anywhere later in that LONGER function
+    (its cold path, e.g.) would be wrongly treated as a shape-D builder
+    reference (#74 regression: remindd's UnmigrateRequest, a genuinely-empty
+    once-init message, picked up its sibling `Option` enum's builder this way).
+
+    The once-token and storage slot live in ``__DATA`` and are routinely out
+    of ``adr`` reach (+-1 MB), so the compiler materialises them with
+    ``adrp``+``add``; only the builder -- a nearby function -- is a plain
+    ``adr``.  A getter such as ``adrp x0; add x0; adrp x1; add x1; adr x2;
+    nop; b`` (iOS 16 TrustedPeersHelper) is therefore the same minimal shape.
+    The ``adrp``+``add`` results are returned too (a far-away builder is
+    materialised the same way); callers filter to code addresses with
+    :func:`_in_executable_text`, which drops the data token/slot."""
     out: List[int] = []
+    page: Dict[str, int] = {}
     for ins in insns:
-        if ins.mnemonic == "adr":
+        m = ins.mnemonic
+        if m == "adr":
             t = _adr_target(ins)
             if t is not None:
                 out.append(t)
-        elif ins.mnemonic == "b":
+        elif m == "adrp":
+            p = _adr_target(ins)
+            if p is not None:
+                page[ins.op_str.split(",", 1)[0].strip()] = p
+        elif m == "add":
+            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
+            if mm and mm.group(2) in page:
+                off = _imm("#" + mm.group(3))
+                if off is not None:
+                    out.append(page[mm.group(2)] + off)
+        elif m == "b":
             return out
-        elif ins.mnemonic != "nop":
+        elif m != "nop":
             return []   # any other control flow -> not the minimal dispatch shape
     return []
 
@@ -577,6 +609,38 @@ def _disasm_hit_cap(body, cap: int) -> bool:
     return bool(body) and len(body) >= cap and body[-1].mnemonic not in _RET_MNEMONICS
 
 
+_CLOSURE_ARG_REGS = ("x1", "x9", "x16")
+
+
+def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
+    """Code addresses an init/once closure is passed in (``x1``/``x9``/``x16``):
+    ``adr xN,<closure>`` when it is within +-1 MB, else ``adrp xN,#page; add
+    xN,xN,#off`` (device / cache form, where the closure sits far from the
+    getter).  ``adrp``+``add`` results are kept only when they land in this
+    image's executable text, so a once-token or storage slot in ``__DATA``
+    (also materialised that way, usually in ``x0``/``x1``) is never mistaken
+    for a builder."""
+    out: List[int] = []
+    page: Dict[str, int] = {}
+    for ins in insns:
+        reg = ins.op_str.split(",", 1)[0].strip()
+        if ins.mnemonic == "adr" and reg in _CLOSURE_ARG_REGS:
+            t = _adr_target(ins)
+            if t is not None:
+                out.append(t)
+        elif ins.mnemonic == "adrp":
+            p = _adr_target(ins)
+            if p is not None:
+                page[reg] = p
+        elif ins.mnemonic == "add" and reg in _CLOSURE_ARG_REGS:
+            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
+            if mm and mm.group(2) in page:
+                off = _imm("#" + mm.group(3))
+                if off is not None and _in_executable_text(ctx, page[mm.group(2)] + off):
+                    out.append(page[mm.group(2)] + off)
+    return out
+
+
 def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField]:
     """The once-initialised ``_NameMap`` lowering: the getter fast-path loads a
     cached ``_NameMap`` from ``__bss`` and a ``cmn x?,#1; b.ne <builder>`` guards
@@ -600,10 +664,7 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField
             t = _imm(ins.op_str)
             if t is not None:
                 targets.append(t)
-        elif ins.mnemonic == "adr" and ins.op_str.split(",", 1)[0].strip() in ("x1", "x9", "x16"):
-            t = _adr_target(ins)
-            if t is not None:
-                targets.append(t)
+    targets += _closure_arg_targets(ctx, getter_insns)
     best: List[SwiftField] = []
     best_truncated = False
     for t in targets:
@@ -615,20 +676,16 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField
         trunc = _disasm_hit_cap(body, 400)
         if not got:
             # the builder is often reached one hop on, via `adr x1,<closure>`.
-            for ins in body:
-                if ins.mnemonic == "adr" and ins.op_str.split(",", 1)[0].strip() in ("x1", "x9", "x16"):
-                    ct = _adr_target(ins)
-                    if ct is None:
-                        continue
-                    try:
-                        inner = disasm(ctx, ct, max_insns=400, stop_at_ret=True)
-                    except Exception:
-                        got = []
-                        continue
-                    got = _walk_namemap_builder(ctx, inner)
-                    trunc = _disasm_hit_cap(inner, 400)
-                    if got:
-                        break
+            for ct in _closure_arg_targets(ctx, body):
+                try:
+                    inner = disasm(ctx, ct, max_insns=400, stop_at_ret=True)
+                except Exception:
+                    got = []
+                    continue
+                got = _walk_namemap_builder(ctx, inner)
+                trunc = _disasm_hit_cap(inner, 400)
+                if got:
+                    break
         if len(got) > len(best):
             best = got
             best_truncated = trunc
@@ -852,6 +909,16 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
             best_shared = got
     if best_shared and _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va):
         return best_shared, "shared-once"
+
+    # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the
+    # getter hands a string literal + length to a shared template.  Placed after
+    # D (whose targets are code addresses; the literal is data, so the two never
+    # collide) and before the shape-B fallback, which would read at most one field.
+    lit = bytecode_literal_from_getter(ctx, insns)
+    if lit is not None:
+        decoded = decode_namemap_bytecode(lit)
+        if decoded:
+            return [SwiftField(n, nm) for n, nm in decoded], "bytecode"
 
     # A — inline, reached via an `adr x16,<closure>` (device getter → swift_once).
     for ins in insns:

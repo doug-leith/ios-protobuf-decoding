@@ -195,7 +195,10 @@ tables in the binary, which the tool joins by field name:
   message or enum).
 
 Names and numbers are read literally from the binary, including the several ways
-compilers lower the name map across iOS versions and optimisation levels. Well-known
+compilers lower the name map across iOS versions and optimisation levels: a table built
+inline or by a shared builder function, a static array, and, on the newest toolchain
+(iOS 27), a single packed bytecode string literal that is decoded directly
+(`serializers/swift_namemap_bytecode.py`). Well-known
 types built at runtime (`Google_Protobuf_*`), `oneof` members and copy-on-write
 storage fields are recovered. For example, `remindd` gives its own messages in
 `remindd.proto` and the Google well-known types it links in `swiftprotobuf.proto`:
@@ -209,7 +212,10 @@ single-field message can be an estimate (flagged `// number estimated`); integer
 subtypes are collapsed to `int32` / `uint32` / `int64` / `uint64` (not flagged, and
 wire-incorrect for a genuine `sint*` or `fixed*` field, though none is known in the
 binaries surveyed); and a container element that does not decode is shown as `bytes`
-with a note.
+with a note. Two further gaps apply to the swift output: enum types are not extracted
+(a field of enum type is named but the enum's cases are not recovered), and references
+to nested or cross-module types are written by their short name, so a swift-derived
+`.proto` may not compile under `protoc` without edits.
 
 ## Limitations
 

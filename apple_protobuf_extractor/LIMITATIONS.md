@@ -420,11 +420,29 @@ key/value doesn't decode, the field shows a `bytes` filler with an inline
 A genuine `[Data]`/`repeated bytes` is not flagged. The `map<>` value is still commonly
 a filler (see (1)).
 
+**(d) Enums are not extracted, and some type references do not resolve.** Only
+`struct` message name maps are read; the name map of a swift enum (case name ↔ raw
+value) is skipped, so a field of enum type is emitted by name with no `enum` definition.
+Such enum name maps, if read, would need care: the zero-valued case is stored as
+`str xzr`, so a reader that keeps only non-zero immediates shifts every raw value by
+one. Nested types are referenced by short name (`ClientMetadata`) although they are
+emitted flattened (`EscrowInformation_Metadata_ClientMetadata`), and types from another
+module (`Ckcode_*`) or the well-known types (`Google_Protobuf_Timestamp`) are not
+defined in the file. The names, numbers and field types are still correct, but a file
+that uses any of these fails under `protoc` as written (remindd, DPSubmissionService
+and TrustedPeersHelper do; a file whose messages reference only top-level types, such
+as nptocompaniond's, compiles). The `Unresolved type refs` count in the summary does
+not cover these.
+
+**(e) Messages with no fields.** A genuinely empty message and a message whose name map
+could not be read are both written as `// (no fields recovered)`.
+
 **Unrecovered types.** A fully-unrecovered type is emitted as `bytes` with the inline
 `// swift-protobuf: type not recovered` note rather than a guess.
 
 **Source sites.** `swift_type_recovery.py` (`_SWIFT_SCALAR`/`_DIRECT`,
-`decode_mangled`); `swift_descriptor_extract.py` (`_single_field_tail_call`,
+`decode_mangled`); `swift_namemap_bytecode.py` (the iOS 27 packed name map);
+`swift_descriptor_extract.py` (`_single_field_tail_call`,
 `_attach_field_types`); `proto/foreign.py` (`_swift_field`). The integer-subtype
 limit is documented in the module docstring.
 
