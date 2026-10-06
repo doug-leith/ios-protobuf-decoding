@@ -16,11 +16,10 @@
 #    protoc-gen-swift emits `_NameMap(bytecode: "...")` — a compact varint/
 #    string bytecode program — instead of the classic
 #    `_NameMap = [1: .same(proto: "x"), ...]` array/dictionary literal.
-#    serializers/swift_descriptor_extract.py's `_extract_namemap` does not
-#    yet decode the bytecode form (a well-specified but separate format —
-#    see swift-protobuf's Sources/SwiftProtobuf/{NameMap,BytecodeReader}.swift
-#    if someone wants to add support later); pinning to a pre-bytecode
-#    release keeps the oracle on the lowering the tool already handles. This
+#    The extractor decodes both (serializers/swift_namemap_bytecode.py handles
+#    the bytecode form; its ground truth is tests/swift_enum_oracle_fixture,
+#    built with 1.33.3).  This oracle stays pinned to a pre-bytecode release so
+#    that the CLASSIC lowering keeps a ground-truth test of its own. This
 #    is a `protoc-gen-swift` (codegen) version constraint, independent of
 #    which SwiftProtobuf runtime version the binary links — both are pinned
 #    to 1.30.0 here for simplicity.
