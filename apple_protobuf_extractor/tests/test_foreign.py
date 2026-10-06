@@ -432,6 +432,54 @@ class TestSwiftTypeResolution(unittest.TestCase):
         self.assertEqual(f.type_name, "Pkg_Inner")
 
 
+class TestSwiftEnumEmission(unittest.TestCase):
+    def _enum(self, name, *cases):
+        return SW.SwiftMessage(module="M", name=name, is_enum=True,
+                               fields=[SW.SwiftField(n, c) for n, c in cases])
+
+    def test_aliases_become_a_comment_not_a_duplicate_number(self):
+        e = F._swift_enum(self._enum("E", (0, "A"), (1, "B"), (1, "B2"), (2, "C")))
+        self.assertEqual([(v.name, v.number) for v in e.values], [("A", 0), ("B", 1), ("C", 2)])
+        self.assertIn("B2", e.values[1].comment)
+
+    def test_negative_and_zero_values_kept(self):
+        e = F._swift_enum(self._enum("E", (-5, "N"), (0, "Z")))
+        self.assertEqual([v.number for v in e.values], [-5, 0])
+
+    def test_case_and_underscore_collision_is_renamed(self):
+        # protoc: "Enum name CAPTION2 has the same name as CAPTION_2 if you ignore case ..."
+        e = F._swift_enum(self._enum("Style", (0, "CAPTION_2"), (1, "CAPTION2"), (2, "BODY")))
+        names = [v.name for v in e.values]
+        self.assertEqual(names[0], "CAPTION_2")
+        self.assertNotEqual(names[1], "CAPTION2")
+        self.assertIn("renamed from CAPTION2", e.values[1].comment)
+        self.assertEqual(names[2], "BODY")
+
+    def test_value_names_are_unique_across_enums_of_a_package(self):
+        taken = {"M", "E1", "E2"}
+        e1 = F._swift_enum(self._enum("E1", (0, "CAPTION"), (1, "CAPTION2")), taken)
+        e2 = F._swift_enum(self._enum("E2", (0, "CAPTION"), (1, "BODY")), taken)
+        names = [v.name for v in e1.values + e2.values]
+        self.assertEqual(len(names), len(set(names)))                  # package-unique
+        self.assertEqual(e1.values[0].name, "CAPTION")
+        self.assertEqual(e2.values[0].name, "CAPTION_2")
+        self.assertIn("unique within its package", e2.values[0].comment)
+
+    def test_package_rename_cannot_recreate_the_case_collision(self):
+        # the emitter's own rename of a duplicate CAPTION to CAPTION_2 collided with a
+        # real CAPTION2 in the SAME enum (SnippetKit NamedFont)
+        taken = {"M", "E", "Other"}
+        F._swift_enum(self._enum("Other", (0, "CAPTION")), taken)
+        e = F._swift_enum(self._enum("E", (0, "CAPTION"), (1, "CAPTION2")), taken)
+        norm = [v.name.replace("_", "").lower() for v in e.values]
+        self.assertEqual(len(norm), len(set(norm)))
+
+    def test_prefix_is_ignored_when_comparing(self):
+        e = F._swift_enum(self._enum("Kind", (0, "KIND_FOO_BAR"), (1, "KIND_FOOBAR")))
+        self.assertNotEqual(e.values[0].name, e.values[1].name)
+        self.assertIn("renamed", e.values[1].comment)
+
+
 class TestEmitterMixedSerializer(unittest.TestCase):
     def test_mixed_file_tags_each_message(self):
         pb = ProtoMessage(name="PBThing", class_name="PBThing",

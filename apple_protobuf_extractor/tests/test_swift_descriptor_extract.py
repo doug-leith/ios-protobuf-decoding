@@ -762,7 +762,7 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
         # output defines (flat name), else the field must have degraded to bytes/int32.
         from proto import foreign as F
         out = F.swift_messages(self.ctx)
-        defined = {m.name for m in out}
+        defined = {m.name for m in out} | {e.name for m in out for e in m.enums}
         for m in out:
             for f in m.fields:
                 t = f.type_name
@@ -775,7 +775,9 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
         by = {m.name: {f.name: f for f in m.fields} for m in out}
         self.assertEqual(by["EscrowInformation_Metadata"]["client_metadata"].type_name,
                          "EscrowInformation_Metadata_ClientMetadata")
-        self.assertEqual(by["EscrowInformation"]["record_status"].type_name, "int32")
+        # an enum whose cases were recovered is defined in the output and referenced by name
+        self.assertEqual(by["EscrowInformation"]["record_status"].type_name, "RecordStatus")
+        self.assertIn("RecordStatus", {e.name for m in out for e in m.enums})
         self.assertEqual(by["EscrowInformation_Metadata"]["secure_backup_timestamp"].type_name,
                          "bytes")
 
@@ -892,6 +894,182 @@ class TestLiveIos27PackedBytecode(unittest.TestCase):
                 self.assertEqual(got, fm, name)
                 checked += 1
         self.assertGreater(checked, 30)
+
+
+def _enum_oracle(name):
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "swift_enum_oracle_fixture", name)
+    return p if os.path.isfile(p) else None
+
+
+# Ground truth: tests/swift_enum_oracle_fixture/enum_oracle.proto (compiled by a real
+# protoc + protoc-gen-swift + Swift compiler).
+_ORACLE_ENUMS = {
+    "Eo_Top": {(-5, "T_NEG"), (0, "T_ZERO"), (1, "T_ONE"), (100000, "T_BIG")},
+    "Eo_NonZero": {(1, "NZ_FIRST"), (7, "NZ_SEVEN")},
+    "Eo_Single": {(4, "SINGLE_ONLY")},
+    "Eo_Holder.Inner": {(0, "I_A"), (3, "I_B")},
+}
+_ORACLE_ALIASED = {(0, "AL_X"), (1, "AL_Y"), (1, "AL_Y2"), (2, "AL_Z")}
+
+
+class _EnumOracleBase:
+    BINARY = None
+    SHAPE = None
+    ALIASED = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ctx = _load_ctx(_enum_oracle(cls.BINARY))
+        cls.enums = {e.name: e for e in S.swift_enums(cls.ctx) if e.module == "eo"}
+        cls.msgs = {m.name: m for m in S.swift_messages(cls.ctx) if m.module == "eo"}
+
+    def test_enum_cases_match_the_proto_exactly(self):
+        for name, want in _ORACLE_ENUMS.items():
+            self.assertEqual(_fieldset(self.enums[name]), want, name)
+            self.assertTrue(self.enums[name].is_enum)
+
+    def test_zero_negative_large_and_non_zero_first_values(self):
+        top = {f.name: f.number for f in self.enums["Eo_Top"].fields}
+        self.assertEqual((top["T_ZERO"], top["T_NEG"], top["T_BIG"]), (0, -5, 100000))
+        self.assertEqual(min(f.number for f in self.enums["Eo_NonZero"].fields), 1)
+
+    def test_aliased_enum_is_exact_or_empty_never_wrong(self):
+        self.assertEqual(_fieldset(self.enums["Eo_Aliased"]), self.ALIASED)
+
+    def test_messages_still_exact(self):
+        self.assertEqual(_fieldset(self.msgs["Eo_Multi"]),
+                         {(1, "a"), (2, "b"), (3, "c"), (10, "n10"), (11, "t"), (100, "big")})
+        self.assertEqual(_fieldset(self.msgs["Eo_Holder"]),
+                         {(1, "top"), (2, "inner"), (3, "nz"), (4, "al"), (5, "single"), (6, "plain")})
+        self.assertEqual({m.shape for m in self.msgs.values()}, {self.SHAPE})
+
+    def test_enums_are_not_returned_as_messages(self):
+        self.assertFalse(set(self.enums) & set(self.msgs))
+
+    def test_emitted_proto_defines_and_references_the_enums(self):
+        from proto import foreign as F
+        out = {m.name: m for m in F.swift_messages(self.ctx) if m.package == "eo"}
+        holder = {f.name: f for f in out["Eo_Holder"].fields}
+        self.assertEqual(holder["top"].type_name, "Eo_Top")
+        self.assertEqual(holder["inner"].type_name, "Eo_Holder_Inner")   # nested enum
+        self.assertEqual(out["Eo_Multi"].fields[4].type_name, "Eo_Top")
+        names = {e.name: e for m in out.values() for e in m.enums}
+        self.assertIn("Eo_Holder_Inner", {e.name for e in out["Eo_Holder"].enums})  # on its owner
+        top = {v.name: v.number for v in names["Eo_Top"].values}
+        self.assertEqual(top, {"T_NEG": -5, "T_ZERO": 0, "T_ONE": 1, "T_BIG": 100000})
+
+
+@unittest.skipUnless(_enum_oracle("eo_bytecode"), "enum oracle (bytecode) not available")
+class TestEnumOracleBytecode(_EnumOracleBase, unittest.TestCase):
+    """swift-protobuf 1.33.3: the packed `_NameMap(bytecode:)` form (iOS 27)."""
+    BINARY, SHAPE, ALIASED = "eo_bytecode", "bytecode", _ORACLE_ALIASED
+
+    def test_alias_names_share_the_primary_value_in_the_emitted_enum(self):
+        from proto import foreign as F
+        out = [m for m in F.swift_messages(self.ctx) if m.package == "eo"]
+        al = {e.name: e for m in out for e in m.enums}["Eo_Aliased"]
+        self.assertEqual({v.name: v.number for v in al.values}, {"AL_X": 0, "AL_Y": 1, "AL_Z": 2})
+        self.assertIn("AL_Y2", [v.comment for v in al.values if v.name == "AL_Y"][0])
+
+
+@unittest.skipUnless(_enum_oracle("eo_classic"), "enum oracle (classic) not available")
+class TestEnumOracleClassic(_EnumOracleBase, unittest.TestCase):
+    """swift-protobuf 1.30.0: classic dictionary-literal name map (static array).  The
+    aliased enum is built at runtime in this lowering and is reported EMPTY (a known
+    gap), not wrongly -- an earlier open-ended blob scan returned a neighbouring type's
+    case for it."""
+    BINARY, SHAPE, ALIASED = "eo_classic", "static", set()
+
+    def test_aliased_enum_falls_back_to_int32_in_the_emitted_proto(self):
+        from proto import foreign as F
+        out = {m.name: m for m in F.swift_messages(self.ctx) if m.package == "eo"}
+        al = {f.name: f for f in out["Eo_Holder"].fields}["al"]
+        self.assertEqual(al.type_name, "int32")
+        self.assertIn("cases not recovered", al.type_inference_note)
+
+
+@unittest.skipUnless(_trustedpeershelper_path(), "TrustedPeersHelper binary not available")
+class TestLiveTrustedPeersHelperEnums(unittest.TestCase):
+    """The same enums used to read shifted by one (the zero case is stored from the
+    zero register) and, via a tail-call getter walked 'until ret', as the NEXT
+    enum's cases."""
+    @classmethod
+    def setUpClass(cls):
+        cls.enums = {e.name: e for e in S.swift_enums(_load_ctx(_trustedpeershelper_path()))}
+
+    def test_values_start_at_zero_and_are_contiguous(self):
+        self.assertEqual(len(self.enums), 7)
+        for name, e in self.enums.items():
+            self.assertEqual([f.number for f in e.fields], list(range(len(e.fields))), name)
+
+    def test_cases_belong_to_their_own_enum(self):
+        # the cases carry their type's name as a prefix
+        for name, prefix in (("ResetReason", "RESET_REASON_"), ("RepairAction", "REPAIR_ACTION_"),
+                             ("ViewKeyClass", "VIEW_KEY_CLASS_"), ("SOSViability", "SOS_"),
+                             ("RecordStatus", "RECORD_STATUS_"), ("FilteringRequest", "FILTERING_REQUEST_"),
+                             ("SupportAppDeviceStatus", "SUPPORT_APP_DEVICE_STATUS_")):
+            self.assertTrue(all(f.name.startswith(prefix) for f in self.enums[name].fields), name)
+
+    def test_reset_reason_exact(self):
+        self.assertEqual(
+            [(f.number, f.name) for f in self.enums["ResetReason"].fields],
+            [(0, "RESET_REASON_UNKNOWN"), (1, "RESET_REASON_USER_INITIATED_RESET"),
+             (2, "RESET_REASON_HEALTH_CHECK"),
+             (3, "RESET_REASON_NO_BOTTLE_DURING_ESCROW_RECOVERY"),
+             (4, "RESET_REASON_LEGACY_JOIN_CIRCLE"), (5, "RESET_REASON_RECOVERY_KEY"),
+             (6, "RESET_REASON_TEST_GENERATED"), (7, "RESET_REASON_SUPPORT_APP_INITIATED_RESET")])
+
+
+class TestEnumCasePlausibility(unittest.TestCase):
+    def _f(self, *pairs):
+        return [S.SwiftField(n, nm) for n, nm in pairs]
+
+    def test_sorted_distinct_identifiers_pass(self):
+        self.assertTrue(S._enum_cases_plausible(self._f((-5, "A_B"), (0, "A_C"), (1, "A_D"))))
+
+    def test_alias_shares_a_value(self):
+        self.assertTrue(S._enum_cases_plausible(self._f((0, "X"), (1, "Y"), (1, "Y2"), (2, "Z"))))
+
+    def test_scrambled_pairing_is_rejected(self):
+        # remindd Google_Protobuf_Field.Kind as the loose pairing used to return it
+        self.assertFalse(S._enum_cases_plausible(
+            self._f((8, "TYPE_BOOL"), (0, "TYPE_UNKNOWN"), (0, "TYPE_STRING"))))
+
+    def test_duplicate_or_non_identifier_names_rejected(self):
+        self.assertFalse(S._enum_cases_plausible(self._f((0, "A"), (1, "A"))))
+        self.assertFalse(S._enum_cases_plausible(self._f((0, "A B"))))
+        self.assertFalse(S._enum_cases_plausible([]))
+
+
+class TestDispatchStub(unittest.TestCase):
+    def test_tail_call_stub(self):
+        self.assertTrue(S._is_dispatch_stub(
+            [_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #8"), _FI("adr", "x2, #0x40"),
+             _FI("nop"), _FI("b", "#0x100")]))
+        self.assertTrue(S._is_dispatch_stub(
+            [_FI("adrp", "x1, #0x1000"), _FI("add", "x1, x1, #8"), _FI("mov", "w3, #24"),
+             _FI("b", "#0x100")]))
+
+    def test_real_function_is_not_a_stub(self):
+        self.assertFalse(S._is_dispatch_stub(
+            [_FI("pacibsp"), _FI("stp", "x29, x30, [sp, #-0x10]!"), _FI("bl", "#0x100")]))
+        self.assertFalse(S._is_dispatch_stub([_FI("adrp", "x0, #0x1000"), _FI("ldr", "x8, [x0]"),
+                                              _FI("cmn", "x8, #1"), _FI("b.ne", "#0x40")]))
+
+    def test_branch_to_next_instruction_is_a_fallthrough_not_a_tail_call(self):
+        # CreateML getters: `adrp; add; b <next>` then the closure body follows
+        class _I(_FI):
+            def __init__(self, m, o, addr):
+                super().__init__(m, o)
+                self.addr = addr
+        insns = [_I("adrp", "x1, #0x1000", 0x100), _I("add", "x1, x1, #8", 0x104),
+                 _I("b", "#0x10c", 0x108), _I("stp", "x22, x21, [sp, #-0x30]!", 0x10c)]
+        self.assertFalse(S._is_dispatch_stub(insns))
+        insns[2] = _I("b", "#0x900", 0x108)            # a real tail call elsewhere
+        self.assertTrue(S._is_dispatch_stub(insns))
+
+    def test_no_branch_is_not_a_stub(self):
+        self.assertFalse(S._is_dispatch_stub([_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #8")]))
 
 
 class TestLiveDecoderCrossCheck(unittest.TestCase):

@@ -425,12 +425,20 @@ key/value doesn't decode, the field shows a `bytes` filler with an inline
 A genuine `[Data]`/`repeated bytes` is not flagged. The `map<>` value is still commonly
 a filler (see (1)).
 
-**(d) Enums are not extracted.** Only `struct` message name maps are read; the name
-map of a swift enum (case name ↔ raw value) is skipped. A field of one of the image's
-own enum types is therefore emitted as `int32` (the varint wire type) with the note
-`swift-protobuf enum X: cases not recovered`, and no `enum` definition is written.
-Reading those name maps needs care: the zero-valued case is stored as `str xzr`, so a
-reader that keeps only non-zero immediates shifts every raw value by one.
+**(d) Enums.** Enum name maps (case value ↔ case name) are read by the same shapes as
+messages, and each enum is written as a proto `enum` that its fields reference. Values
+may be 0, negative or large. Two cases sharing a value (an alias) are written as one
+value with the alias in a comment, because the flat emitter has no `allow_alias`; names
+that `protoc` would reject (equal ignoring case and underscores, or reused by another
+enum of the package) are renamed with a comment. No `decodeMessage` exists to
+cross-check an enum, so a table is accepted only if it is sorted by value with distinct
+identifier names, which is how protoc-gen-swift writes it. Known gaps:
+
+- an enum that fails that check, or whose name map is built at runtime (an enum with
+  aliases, in the classic lowering), is reported with no cases, and its fields fall back
+  to `int32` with a note, never to wrong cases (about 3% of the enums in the images
+  surveyed);
+- the packed iOS 27 lowering handles aliases, the classic one does not.
 
 Type references are otherwise resolved so that the output compiles under `protoc`:
 a nested type is referenced by its qualified, flattened name

@@ -229,6 +229,18 @@ def _split_idents(head: str) -> List[str]:
     return demangle_idents(head)
 
 
+def _parse_namemap_symbol(sym: str) -> Optional[Tuple[str, str, bool]]:
+    """``…_protobuf_nameMap`` symbol -> ``(module, type_name, is_enum)``, or None.
+    ``V`` before the marker is a struct (message), ``O`` an enum."""
+    m = re.search(r"_\$[sS](.*?)([VO])" + _NAMEMAP_MARKER, sym)
+    if not m:
+        return None
+    idents = _split_idents(m.group(1))
+    if len(idents) < 2:
+        return None
+    return idents[0], ".".join(idents[1:]), m.group(2) == "O"
+
+
 def _type_from_namemap_symbol(sym: str) -> Optional[Tuple[str, str]]:
     """``…_protobuf_nameMap`` symbol → ``(module, type_name)`` (type may be
     dotted for nested types), or None."""
@@ -292,13 +304,63 @@ def _adrp_add_targets(insns) -> List[int]:
 
 # ── shape C: static-object blob ───────────────────────────────────────────────
 
-def _parse_static_blob(ctx: BinaryContext, blob_va: int) -> Optional[List[SwiftField]]:
+def _parse_enum_blob(ctx: BinaryContext, buf: bytes, count: int) -> Optional[List[SwiftField]]:
+    """Strict reader for a static ``Array<(Int, _NameDescription)>`` of enum cases.
+
+    Elements start right after the 0x20-byte header, each ``(value: Int, name ptr,
+    name len, …)`` with a fixed (version-specific) stride.  Unlike the message scan
+    this does NOT hunt through neighbouring memory: the first case must sit at +0x20,
+    the stride is read off the first two cases, and all ``count`` cases must parse
+    -- otherwise None.  (Scanning loosely read an unrelated alias-name array, then
+    the next type's cases, as this type's.)"""
+    def entry(off: int):
+        if off + 24 > len(buf):
+            return None
+        num = struct.unpack_from("<q", buf, off)[0]
+        nptr = struct.unpack_from("<Q", buf, off + 8)[0]
+        ln = struct.unpack_from("<Q", buf, off + 16)[0]
+        if not (-(1 << 31) <= num < (1 << 31)) or not 1 <= ln <= _MAX_NAME_LEN:
+            return None
+        nm = _cstr(ctx, nptr)
+        if not nm or ln != len(nm) or not _IDENT_RE.match(nm):
+            return None
+        return num, nm
+
+    first = entry(0x20)
+    if first is None:
+        return None
+    out = [SwiftField(*first)]
+    if count > 1:
+        stride = next((st for st in range(0x18, 0x80, 8) if entry(0x20 + st) is not None), None)
+        if stride is None:
+            return None
+        for i in range(1, count):
+            e = entry(0x20 + i * stride)
+            if e is None:
+                return None
+            out.append(SwiftField(*e))
+    if len({(f.number, f.name) for f in out}) != len(out):
+        return None
+    return out
+
+
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def _parse_static_blob(ctx: BinaryContext, blob_va: int,
+                       enum: bool = False) -> Optional[List[SwiftField]]:
     """Parse a static ``Array<(Int, _NameDescription)>`` storage blob.
 
     Header is 0x20 bytes (metadata, refcount, count, capacity); the element
     stride depends on ``_NameDescription``'s size (version-specific), so we
     SCAN 8-byte slots for valid ``(number, name-ptr, len)`` triples rather than
-    assume the stride."""
+    assume the stride.
+
+    *enum*: the entries are enum cases, whose value may be 0 or negative (a signed
+    Int in the slot) and may repeat (aliases); a message field number is >= 1 and
+    unique.  Enum names must also look like identifiers, and the scan is bounded by
+    the header's entry count -- without that bound a blob whose values the field-number
+    filter rejects keeps scanning into the NEXT type's data and returns its cases."""
     try:
         count = struct.unpack_from("<Q", ctx.read_bytes(blob_va, 0x20), 0x10)[0]
     except Exception:
@@ -315,28 +377,59 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int) -> Optional[List[SwiftF
             continue
     if not buf:
         return None
+    if enum:
+        return _parse_enum_blob(ctx, buf, count)
     out: List[SwiftField] = []
     seen = set()
-    off = 0x10
+    # Real elements start right after the 0x20-byte header.  Message blobs have always
+    # been scanned from 0x10 (harmless: nothing there parses as a triple), but for
+    # enums the header's `capacity` word at 0x18 can pair with the first slots of an
+    # unrelated static array -- e.g. the one-element alias-name array of an enum with
+    # aliases looked like case ``(2, "AL_Y2")``.
+    off = 0x20 if enum else 0x10
     while off + 24 <= len(buf) and len(out) < count:
-        num = struct.unpack_from("<Q", buf, off)[0]
-        if not (1 <= num <= _MAX_FIELD_NUMBER):
+        if enum:
+            num = struct.unpack_from("<q", buf, off)[0]
+            valid = -(1 << 31) <= num < (1 << 31)
+        else:
+            num = struct.unpack_from("<Q", buf, off)[0]
+            valid = 1 <= num <= _MAX_FIELD_NUMBER
+        if not valid:
             off += 8
             continue
         nptr = struct.unpack_from("<Q", buf, off + 8)[0]
         ln = struct.unpack_from("<Q", buf, off + 16)[0]
         if 1 <= ln <= _MAX_NAME_LEN:
             nm = _cstr(ctx, nptr)
-            if nm and ln == len(nm) and num not in seen:
-                seen.add(num)
+            key = (num, nm) if enum else num
+            if (nm and ln == len(nm) and key not in seen
+                    and (not enum or _IDENT_RE.match(nm))):
+                seen.add(key)
                 out.append(SwiftField(num, nm))
+                off += 16          # skip the matched (name ptr, len) slots
         off += 8
     return out or None
 
 
 # ── shapes A/B: inline closure / single-field tail-call ───────────────────────
 
-def _walk_inline_closure(ctx: BinaryContext, insns) -> List[SwiftField]:
+_MOVK_RE = re.compile(r"(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+),\s*lsl\s*#(\d+)")
+
+
+def _movk(reg_imm: Dict[str, int], op_str: str) -> None:
+    """``movk wN,#imm,lsl #sh`` -- insert 16 bits into an already-known immediate
+    (a value that does not fit one ``mov``, e.g. an enum value of 100000)."""
+    m = _MOVK_RE.match(op_str.strip())
+    if not m:
+        return
+    reg = m.group(1).replace("x", "w")
+    if reg not in reg_imm:
+        return
+    sh = int(m.group(3))
+    reg_imm[reg] = (reg_imm[reg] & ~(0xFFFF << sh)) | ((int(m.group(2), 0) & 0xFFFF) << sh)
+
+
+def _walk_inline_closure(ctx: BinaryContext, insns, enum: bool = False) -> List[SwiftField]:
     """Shape A: each entry is ``mov w,#<num>; str x,[base]`` (number stored at
     the entry's slot-0) plus ``<name-load>; mov w,#<len>; stp x,x,[entry]``
     (name pointer + length).  The length-check pins names to real entries.
@@ -360,6 +453,8 @@ def _walk_inline_closure(ctx: BinaryContext, insns) -> List[SwiftField]:
                     dst = parts[0].strip().replace("x", "w")
                     reg_imm[dst] = v
                     adrp_page.pop(dst.replace("w", "x"), None)
+        elif m == "movk":
+            _movk(reg_imm, o)
         elif m == "adrp":
             reg = o.split(",", 1)[0].strip()
             page = _adr_target(ins)
@@ -381,7 +476,10 @@ def _walk_inline_closure(ctx: BinaryContext, insns) -> List[SwiftField]:
         elif m == "str":
             mm = re.match(r"(\w+),\s*\[(\w+)\]$", o)
             if mm:
-                cur_num = reg_imm.get(mm.group(1).replace("x", "w"))
+                if enum and mm.group(1) in ("xzr", "wzr"):
+                    cur_num = 0           # enum value 0 is stored from the zero register
+                else:
+                    cur_num = reg_imm.get(mm.group(1).replace("x", "w"))
         elif m == "stp":
             mm = re.match(r"(\w+),\s*(\w+),\s*\[(\w+)", o)
             if mm:
@@ -392,7 +490,7 @@ def _walk_inline_closure(ctx: BinaryContext, insns) -> List[SwiftField]:
     return entries
 
 
-def _walk_namemap_builder(ctx: BinaryContext, insns) -> List[SwiftField]:
+def _walk_namemap_builder(ctx: BinaryContext, insns, enum: bool = False) -> List[SwiftField]:
     """Runtime-built ``_NameMap``: read the ``(fieldNumber, name)`` table the cold
     builder writes into its freshly-allocated buffer.  swift-protobuf emits the
     entries in (at least) three store shapes, all of which carry the number and the
@@ -411,7 +509,12 @@ def _walk_namemap_builder(ctx: BinaryContext, insns) -> List[SwiftField]:
     equals its name length (e.g. ``Field.name`` = #4, ``len('name')`` = 4) would be
     misclassified otherwise.  A/B entries pair directly; C's separate number stores
     are zipped with its name stores in program order (which the compiler emits
-    consistently per field)."""
+    consistently per field).
+
+    *enum*: the entries are enum cases.  A case value may be 0 (stored from the zero
+    register, ``str xzr,[…]``), negative or repeated (an alias), so the field-number
+    range filter and the unique-number dedupe do not apply; both are unsafe to relax
+    for messages, where a zero store is unrelated bookkeeping."""
     reg_imm: Dict[str, int] = {}
     reg_str: Dict[str, Optional[str]] = {}
     adrp_page: Dict[str, int] = {}
@@ -427,13 +530,21 @@ def _walk_namemap_builder(ctx: BinaryContext, insns) -> List[SwiftField]:
         adrp_page.pop(rx, None)
 
     def _bind(num, nm) -> None:
-        if nm and num is not None and 1 <= num <= _MAX_FIELD_NUMBER and num not in seen:
-            seen.add(num)
+        if not nm or num is None:
+            return
+        if enum:
+            ok, key = -(1 << 31) <= num < (1 << 31), (num, nm)
+        else:
+            ok, key = 1 <= num <= _MAX_FIELD_NUMBER, num
+        if ok and key not in seen:
+            seen.add(key)
             paired.append(SwiftField(num, nm))
 
     for ins in insns:
         m, o = ins.mnemonic, ins.op_str
-        if m in ("mov", "movz"):
+        if m == "movk":
+            _movk(reg_imm, o)
+        elif m in ("mov", "movz"):
             parts = o.split(",")
             if len(parts) == 2:
                 dst_raw, src_raw = parts[0].strip(), parts[1].strip()
@@ -486,14 +597,18 @@ def _walk_namemap_builder(ctx: BinaryContext, insns) -> List[SwiftField]:
                 elif a_str or b_str:                  # name with no imm partner
                     loose_names.append(a_str or b_str)
         elif m == "str":
-            mm = re.match(r"(\w+),\s*\[", o)
+            mm = re.match(r"(\w+),\s*\[(\w+)", o)
+            if mm and enum and mm.group(2) == "sp":
+                continue                              # enum: a stack spill, not a table entry
             if mm:
                 r = mm.group(1)
                 s = reg_str.get(r.replace("w", "x"))
                 v = reg_imm.get(r.replace("x", "w"))
-                if s is not None:                     # B/C: lone name pointer
+                if enum and r in ("xzr", "wzr"):
+                    loose_nums.append(0)              # enum value 0 (zero register)
+                elif s is not None:                   # B/C: lone name pointer
                     loose_names.append(s)
-                elif v is not None and 1 <= v <= _MAX_FIELD_NUMBER:
+                elif v is not None and (enum or 1 <= v <= _MAX_FIELD_NUMBER):
                     loose_nums.append(v)              # B/C: standalone number
     for num, nm in zip(loose_nums, loose_names):      # pair C/B leftovers by order
         _bind(num, nm)
@@ -561,7 +676,8 @@ def _shared_once_init_targets(insns) -> List[int]:
     return []
 
 
-def _walk_namemap_builder_hop(ctx: BinaryContext, va: int) -> List[SwiftField]:
+def _walk_namemap_builder_hop(ctx: BinaryContext, va: int,
+                              enum: bool = False) -> List[SwiftField]:
     """Read one builder's (number, name) table, following ONE extra tail-call
     hop when the builder is itself just an arg-setup stub (``adr x1,<storage>;
     adr x2,<name>; mov w3,<len>; b <template>``) for a second, arity-specific
@@ -577,7 +693,7 @@ def _walk_namemap_builder_hop(ctx: BinaryContext, va: int) -> List[SwiftField]:
         body = disasm(ctx, va, max_insns=600, stop_at_ret=True)
     except Exception:
         return []
-    got = _walk_namemap_builder(ctx, body)
+    got = _walk_namemap_builder(ctx, body, enum)
     if got:
         return got
     setup: List = []
@@ -590,7 +706,7 @@ def _walk_namemap_builder_hop(ctx: BinaryContext, va: int) -> List[SwiftField]:
                 inner = disasm(ctx, t, max_insns=600, stop_at_ret=True)
             except Exception:
                 return []
-            return _walk_namemap_builder(ctx, setup + inner)
+            return _walk_namemap_builder(ctx, setup + inner, enum)
         setup.append(ins)
         if len(setup) > 12:
             return []
@@ -641,7 +757,8 @@ def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
     return out
 
 
-def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField]:
+def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
+                            enum: bool = False) -> List[SwiftField]:
     """The once-initialised ``_NameMap`` lowering: the getter fast-path loads a
     cached ``_NameMap`` from ``__bss`` and a ``cmn x?,#1; b.ne <builder>`` guards
     a cold builder that constructs it once.  Follow the cold path to the builder
@@ -672,7 +789,7 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField
             body = disasm(ctx, t, max_insns=400, stop_at_ret=True)
         except Exception:
             continue
-        got = _walk_namemap_builder(ctx, body)
+        got = _walk_namemap_builder(ctx, body, enum)
         trunc = _disasm_hit_cap(body, 400)
         if not got:
             # the builder is often reached one hop on, via `adr x1,<closure>`.
@@ -682,7 +799,7 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField
                 except Exception:
                     got = []
                     continue
-                got = _walk_namemap_builder(ctx, inner)
+                got = _walk_namemap_builder(ctx, inner, enum)
                 trunc = _disasm_hit_cap(inner, 400)
                 if got:
                     break
@@ -701,7 +818,8 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns) -> List[SwiftField
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
                                decode_va: Optional[int],
-                               traverse_va: Optional[int]) -> bool:
+                               traverse_va: Optional[int],
+                               enum: bool = False) -> bool:
     """Guard the runtime-namemap reading against fabrication.
 
     The cold-builder entry is a ``stp <smallInt>, <namePtr>, [base,#slot]`` pair
@@ -716,6 +834,11 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
         wrong thing; and
       * not EVERY entry has ``number == len(name)`` — the signature of the
         ``(length, ptr)`` packed form."""
+    if enum:
+        # no decodeMessage / traverse for an enum; the (length, ptr) packed-form
+        # confusion is a message-field-number artefact.  Case names must all look
+        # like identifiers, and at least one entry must exist.
+        return bool(got) and all(_IDENT_RE.match(f.name) for f in got)
     recovered = {f.number for f in got}
     oracle: set = set()
     if decode_va is not None:
@@ -853,10 +976,66 @@ def _single_field_tail_call(ctx: BinaryContext, insns, decode_va: Optional[int],
 
 # ── per-type extraction ───────────────────────────────────────────────────────
 
+_STUB_OK = frozenset({"adr", "adrp", "add", "mov", "movz", "movk", "nop", "paciza", "pacia"})
+
+
+def _is_dispatch_stub(insns, max_len: int = 16) -> bool:
+    """True when the function is just straight-line address/constant setup ending in
+    a tail-call ``b`` (``adrp/add …; mov w3,#len; b <shared template>``).
+
+    Such a getter contains no table of its own: the (number, name) data is in the
+    function it passes (shape D), in a literal it passes (shape E) or in a static
+    blob (shape C).  The inline shapes (A, runtime) walk a function 'until ret', and
+    a stub has no ``ret`` -- so they would run on into the NEXT function in memory and
+    read its table as this type's.  Callers skip those shapes for a stub."""
+    for i, ins in enumerate(insns[:max_len]):
+        if ins.mnemonic == "b":
+            # `b <next instruction>` is a fall-through the linker left behind, not a
+            # tail call: the code that follows is this function's own body.
+            addr, tgt = getattr(ins, "addr", None), _imm(ins.op_str)
+            if addr is not None and tgt == addr + 4:
+                continue
+            return i > 0
+        if ins.mnemonic not in _STUB_OK:
+            return False
+    return False
+
+
+def _enum_cases_plausible(got: List[SwiftField]) -> bool:
+    """Self-consistency of a recovered enum case table.
+
+    protoc-gen-swift writes an enum's name map sorted by case value (aliases share a
+    value), with distinct identifier names.  The loose pairing of separate number /
+    name stores can scramble a large table, and an enum has no ``decodeMessage`` to
+    cross-check against -- so a table that violates the invariant is rejected rather
+    than emitted with wrong values."""
+    nums = [f.number for f in got]
+    names = [f.name for f in got]
+    return (bool(got) and nums == sorted(nums) and len(set(names)) == len(names)
+            and all(_IDENT_RE.match(n) for n in names))
+
+
 def _extract_namemap(ctx: BinaryContext, init_va: int,
                      decode_va: Optional[int],
-                     traverse_va: Optional[int] = None) -> Tuple[List[SwiftField], str]:
-    """Recover one type's (number, name) entries, auto-detecting the lowering."""
+                     traverse_va: Optional[int] = None,
+                     enum: bool = False) -> Tuple[List[SwiftField], str]:
+    """See :func:`_extract_namemap_raw`; for an enum the result must also pass
+    :func:`_enum_cases_plausible`."""
+    got, shape = _extract_namemap_raw(ctx, init_va, decode_va, traverse_va, enum)
+    if enum and got and not _enum_cases_plausible(got):
+        return [], "none"
+    return got, shape
+
+
+def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
+                     decode_va: Optional[int],
+                     traverse_va: Optional[int] = None,
+                     enum: bool = False) -> Tuple[List[SwiftField], str]:
+    """Recover one type's (number, name) entries, auto-detecting the lowering.
+
+    *enum*: the type is a swift ``enum`` (case value <-> case name) rather than a
+    message.  The same lowerings are used, but values may be 0 / negative / repeated
+    and there is no ``decodeMessage`` to cross-check or single-field default."""
     try:
         insns = disasm(ctx, init_va, max_insns=64, stop_at_ret=False)
     except Exception:
@@ -865,7 +1044,7 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
     # C — static object: try each adrp+add target as a static _NameMap blob.
     best: Optional[List[SwiftField]] = None
     for blob in _adrp_add_targets(insns):
-        got = _parse_static_blob(ctx, blob)
+        got = _parse_static_blob(ctx, blob, enum)
         if got and (best is None or len(got) > len(best)):
             best = got
     if best:
@@ -877,20 +1056,23 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
     # terminator (the function's own `ret`); the insn cap is only a runaway
     # guard.  (A next-symbol extent bound was tried and rejected: the `.symbols`
     # nlist carries mid-function local symbols, so it truncates real fields.)
-    try:
-        full = disasm(ctx, init_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
-    except Exception:
-        full = insns
-    got = _walk_inline_closure(ctx, full)
-    if got:
-        return got, "inline"
+    stub = _is_dispatch_stub(insns)
+    if not stub:
+        try:
+            full = disasm(ctx, init_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
+        except Exception:
+            full = insns
+        got = _walk_inline_closure(ctx, full, enum)
+        if got:
+            return got, "inline"
 
     # Runtime-built _NameMap (once-init `cmn x?,#1; b.ne <builder>`): follow the
     # cold builder closure and read its literal (number, name) table.  Placed
     # before the shape-B fallback, which would under-read such a message to its
     # first field only (e.g. remindd Credential 5 -> 1).  #72.
-    got = _runtime_namemap_fields(ctx, insns)
-    if len(got) > 1 and _namemap_builder_validated(ctx, got, decode_va, traverse_va):
+    got = [] if stub else _runtime_namemap_fields(ctx, insns, enum)
+    if len(got) > (0 if enum else 1) and _namemap_builder_validated(
+            ctx, got, decode_va, traverse_va, enum):
         return got, "runtime-namemap"
 
     # D — shared once-init template (`adr x0,<token>; adr x1,<storage>;
@@ -904,19 +1086,19 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
     for t in _shared_once_init_targets(insns):
         if t == init_va or not _in_executable_text(ctx, t):
             continue
-        got = _walk_namemap_builder_hop(ctx, t)
+        got = _walk_namemap_builder_hop(ctx, t, enum)
         if len(got) > len(best_shared):
             best_shared = got
-    if best_shared and _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va):
+    if best_shared and _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum):
         return best_shared, "shared-once"
 
     # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the
     # getter hands a string literal + length to a shared template.  Placed after
     # D (whose targets are code addresses; the literal is data, so the two never
     # collide) and before the shape-B fallback, which would read at most one field.
-    lit = bytecode_literal_from_getter(ctx, insns)
+    lit = bytecode_literal_from_getter(ctx, insns, enum=enum)
     if lit is not None:
-        decoded = decode_namemap_bytecode(lit)
+        decoded = decode_namemap_bytecode(lit, enum=enum)
         if decoded:
             return [SwiftField(n, nm) for n, nm in decoded], "bytecode"
 
@@ -926,11 +1108,13 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
             t = _adr_target(ins)
             if t is not None and t != init_va and abs(t - init_va) < 0x8000:
                 try:
-                    got = _walk_inline_closure(ctx, disasm(ctx, t, max_insns=600, stop_at_ret=True))
+                    got = _walk_inline_closure(ctx, disasm(ctx, t, max_insns=600, stop_at_ret=True), enum)
                 except Exception:
                     got = []
                 if got:
                     return got, "inline-closure"
+                if enum:
+                    continue
                 # B — single-field tail-call inside the followed closure.
                 try:
                     cl = disasm(ctx, t, max_insns=40, stop_at_ret=False)
@@ -940,7 +1124,10 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
                 if got:
                     return got, "single"
 
-    # B — single-field tail-call directly in this function.
+    # B — single-field tail-call directly in this function.  Not for an enum: its
+    # single-field number comes from a message's decodeMessage, which an enum lacks.
+    if enum:
+        return [], "none"
     got = _single_field_tail_call(ctx, insns, decode_va, traverse_va)
     if got:
         return got, "single"
@@ -950,12 +1137,26 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
 # ── top-level ─────────────────────────────────────────────────────────────────
 
 def swift_messages(ctx: BinaryContext) -> List[SwiftMessage]:
-    """Recover every swift-protobuf message/enum's field names + numbers.
+    """Recover every swift-protobuf MESSAGE's field names + numbers (and, from
+    reflection metadata, types).
 
-    Returns one :class:`SwiftMessage` per type with a recovered nameMap, sorted
-    by qualified name.  Works both from a standalone binary (LC_SYMTAB / export
-    trie) and cache-native (the ``.symbols`` sub-cache); empty only when no
-    symbol source resolves the per-type nameMap symbols."""
+    Returns one :class:`SwiftMessage` per struct type with a recovered nameMap,
+    sorted by qualified name.  Works both from a standalone binary (LC_SYMTAB /
+    export trie) and cache-native (the ``.symbols`` sub-cache); empty only when no
+    symbol source resolves the per-type nameMap symbols.  Enums are separate:
+    :func:`swift_enums`."""
+    return _recover_types(ctx, want_enum=False)
+
+
+def swift_enums(ctx: BinaryContext) -> List[SwiftMessage]:
+    """Recover every swift-protobuf ENUM's cases (``fields`` = (value, name), value
+    may be 0, negative, or shared by an alias) with ``is_enum=True``.  Same symbol
+    sources and lowerings as :func:`swift_messages`; the enum's case-value table is
+    its ``_protobuf_nameMap``."""
+    return _recover_types(ctx, want_enum=True)
+
+
+def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
     syms = symbol_addrs(ctx)
     if not syms:
         return []
@@ -965,16 +1166,18 @@ def swift_messages(ctx: BinaryContext) -> List[SwiftMessage]:
     inits: Dict[Tuple[str, str], Tuple[int, str]] = {}
     decoders: Dict[Tuple[str, str], int] = {}
     traversers: Dict[Tuple[str, str], int] = {}
-    enum_types = set()
     for name, va in syms.items():
         if _NAMEMAP_MARKER in name:
-            parsed = _type_from_namemap_symbol(name)
-            if not parsed:
+            p = _parse_namemap_symbol(name)
+            if not p or p[2] != want_enum:
                 continue
+            parsed = (p[0], p[1])
             if name.endswith("_WZ"):
                 inits[parsed] = (va, "WZ")
             elif name.endswith("vgZ") and parsed not in inits:
                 inits[parsed] = (va, "vgZ")
+        elif want_enum:
+            continue
         elif "13decodeMessage" in name and name.endswith("F"):
             parsed = _type_from_namemap_symbol_like(name, "V13decodeMessage")
             if parsed:
@@ -987,11 +1190,12 @@ def swift_messages(ctx: BinaryContext) -> List[SwiftMessage]:
     out: List[SwiftMessage] = []
     for (module, tname), (va, _kind) in inits.items():
         fields, shape = _extract_namemap(ctx, va, decoders.get((module, tname)),
-                                         traversers.get((module, tname)))
-        msg = SwiftMessage(module=module, name=tname, fields=fields,
-                           is_enum=(module, tname) in enum_types, shape=shape)
-        out.append(msg)
-    _attach_field_types(ctx, out)
+                                         traversers.get((module, tname)),
+                                         enum=want_enum)
+        out.append(SwiftMessage(module=module, name=tname, fields=fields,
+                                is_enum=want_enum, shape=shape))
+    if not want_enum:
+        _attach_field_types(ctx, out)
     out.sort(key=lambda m: m.qualified)
     return out
 

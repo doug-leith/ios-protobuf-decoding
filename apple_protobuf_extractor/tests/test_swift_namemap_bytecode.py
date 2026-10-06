@@ -126,5 +126,38 @@ class TestLiteralFromGetter(unittest.TestCase):
         self.assertIsNone(B.bytecode_literal_from_getter(_Ctx(b"", 0), insns))
 
 
+class TestEnumBytecode(unittest.TestCase):
+    """Real enum literals from tests/swift_enum_oracle_fixture/eo_bytecode (protoc-gen-swift
+    1.33.3).  Integers are signed 32-bit; an enum's first value 0 / a negative value
+    needs an explicit delta; an alias list is a count then that many names."""
+    TOP = b"\x00\x02{\x7f\x7f\x7f\x7f\x03T_NEG\x00\x02\x05T_ZERO\x00\x01T_ONE\x00\x02_Z\x18T_BIG\x00"
+    ALIASED = b"\x00\x02\x00AL_X\x00\tAL_Y\x00\x01AL_Y2\x00\x01AL_Z\x00"
+    INNER = b"\x00\x02\x00I_A\x00\x02\x03I_B\x00"
+
+    def test_negative_zero_and_large_values(self):
+        self.assertEqual(B.decode_namemap_bytecode(self.TOP, enum=True),
+                         [(-5, "T_NEG"), (0, "T_ZERO"), (1, "T_ONE"), (100000, "T_BIG")])
+
+    def test_alias_entries_share_the_primary_number(self):
+        self.assertEqual(B.decode_namemap_bytecode(self.ALIASED, enum=True),
+                         [(0, "AL_X"), (1, "AL_Y"), (1, "AL_Y2"), (2, "AL_Z")])
+
+    def test_zero_first_value(self):
+        self.assertEqual(B.decode_namemap_bytecode(self.INNER, enum=True), [(0, "I_A"), (3, "I_B")])
+
+    def test_message_mode_rejects_zero_and_negative_numbers(self):
+        # a field number is >= 1: the same bytes are not a valid MESSAGE name map
+        self.assertIsNone(B.decode_namemap_bytecode(self.INNER))
+        self.assertIsNone(B.decode_namemap_bytecode(self.TOP))
+
+    def test_inline_locator_honours_enum_flag(self):
+        data = b"\x00" * 0x40 + self.INNER
+        ctx = _Ctx(data, 0x1000)
+        insns = [_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #0x40"), _FI("mov", "x8, sp"),
+                 _FI("mov", "w1, #%d" % len(self.INNER)), _FI("mov", "w2, #2"), _FI("bl", "#0x3000")]
+        self.assertIsNone(B.bytecode_literal_from_getter(ctx, insns))
+        self.assertEqual(B.bytecode_literal_from_getter(ctx, insns, enum=True), self.INNER)
+
+
 if __name__ == "__main__":
     unittest.main()

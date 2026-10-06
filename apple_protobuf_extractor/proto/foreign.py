@@ -255,12 +255,17 @@ class _SwiftTypes:
 
     * a type from another module / the well-known types (not defined in this image's
       own nameMaps) -> ``bytes`` (length-delimited, like any message), annotated;
-    * one of this image's own swift enums -> ``int32`` (varint), annotated -- the enum
-      cases are not recovered (LIMITATIONS 10d).
+    * one of this image's own swift enums -> the enum, when its cases were recovered
+      (it is then defined in the output); otherwise ``int32`` (varint), annotated.
     """
 
-    def __init__(self, messages, enum_names):
+    def __init__(self, messages, enum_names, enum_defs=()):
         self.known = {(m.module, m.name) for m in messages}
+        # enums whose cases were recovered (and so are defined in the output)
+        self.defined_enums = {(e.module, e.name) for e in enum_defs}
+        self.enum_mods: Dict[str, List[str]] = {}
+        for e in enum_defs:
+            self.enum_mods.setdefault(e.name, []).append(e.module)
         self.pkg = {m.module: (_sanitize_pkg(m.module) if m.module else "swift_protobuf")
                     for m in messages}
         self.mods_by_name: Dict[str, List[str]] = {}
@@ -268,12 +273,19 @@ class _SwiftTypes:
             self.mods_by_name.setdefault(m.name, []).append(m.module)
         self.enums = set(enum_names)
 
+    @staticmethod
+    def pkg_of(module: str) -> str:
+        return _sanitize_pkg(module) if module else "swift_protobuf"
+
     def resolve(self, t: str, module: str):
         """-> (type_name, ref_package|None, unresolved_name|None, note|None)."""
         if t in _PROTO_SCALARS:
             return t, None, None, None
-        if (module, t) in self.known:
+        if (module, t) in self.known or (module, t) in self.defined_enums:
             return _flat(t), None, None, None
+        emods = self.enum_mods.get(t, [])
+        if len(emods) == 1:                        # a recovered enum of another module
+            return _flat(t), self.pkg_of(emods[0]), None, None
         mods = self.mods_by_name.get(t, [])
         if len(mods) == 1:                         # another module of this image
             return _flat(t), self.pkg[mods[0]], None, None
@@ -297,15 +309,102 @@ def swift_messages(ctx) -> List[ProtoMessage]:
     except Exception as exc:
         log.debug("swift enum scan failed: %s", exc)
         enums = set()
-    types = _SwiftTypes(sw, enums)
+    try:
+        enum_defs = [e for e in _swift.swift_enums(ctx) if e.fields]
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        log.debug("swift enum recovery failed: %s", exc)
+        enum_defs = []
+    types = _SwiftTypes(sw, enums, enum_defs)
     out: List[ProtoMessage] = []
+    by_key: Dict[tuple, ProtoMessage] = {}
     for m in sw:
         pkg = _sanitize_pkg(m.module) if m.module else "swift_protobuf"
         fields = [_swift_field(f, m.module, types) for f in m.fields]
-        out.append(ProtoMessage(name=_flat(m.name), class_name=_flat(m.name),
-                                package=pkg, serializer=SWIFT_SERIALIZER,
-                                fields=fields))
+        pm = ProtoMessage(name=_flat(m.name), class_name=_flat(m.name),
+                          package=pkg, serializer=SWIFT_SERIALIZER, fields=fields)
+        out.append(pm)
+        by_key[(m.module, m.name)] = pm
+    _attach_swift_enums(enum_defs, out, by_key)
     return out
+
+
+def _swift_enum(e, taken: Optional[set] = None) -> ProtoEnum:
+    """A recovered swift enum as a ProtoEnum.  Two cases may share a value (an alias);
+    the flat proto emitter has no ``allow_alias``, so the first name is the value and
+    the rest are listed in its comment -- names never appear on the wire.
+
+    Value names must also be valid proto3 in the PACKAGE: they share a scope with the
+    package's message and enum type names and with the values of every other enum
+    (``taken``, updated in place), and within one enum protoc rejects two names that
+    are equal ignoring case and underscores once the enum-name prefix is dropped
+    (``CAPTION2`` / ``CAPTION_2``).  Swift name maps carry such names verbatim, so the
+    later one is renamed here -- both rules at once, because the emitter's own
+    package-scope rename checks only exact equality and can create the second kind."""
+    values: List[ProtoEnumValue] = []
+    by_num: Dict[int, ProtoEnumValue] = {}
+    for f in e.fields:
+        v = by_num.get(f.number)
+        if v is None:
+            v = ProtoEnumValue(name=f.name, number=f.number)
+            by_num[f.number] = v
+            values.append(v)
+        else:
+            v.comment = (f"{v.comment}, {f.name}" if v.comment
+                         else f"alias of this value, not emitted: {f.name}")
+    taken = taken if taken is not None else set()
+    prefix = _flat(e.name).replace("_", "").lower()
+
+    def norm(n: str) -> str:
+        k = n.replace("_", "").lower()
+        return k[len(prefix):] if k.startswith(prefix) and len(k) > len(prefix) else k
+
+    keys: Dict[str, str] = {}
+    for v in values:
+        orig, why = v.name, None
+        if v.name in taken:
+            why = "an enum value name is unique within its package"
+        elif norm(v.name) in keys:
+            why = (f"protoc rejects value names equal ignoring case and underscores "
+                   f"({keys[norm(v.name)]})")
+        if why:
+            n = 2
+            while True:
+                cand = f"{orig}_{n}"
+                if cand not in taken and norm(cand) not in keys:
+                    break
+                n += 1
+            v.name = cand
+            note = f"renamed from {orig}: {why}"
+            v.comment = f"{v.comment}; {note}" if v.comment else note
+        taken.add(v.name)
+        keys[norm(v.name)] = v.name
+    return ProtoEnum(name=_flat(e.name), values=values, values_confirmed=True)
+
+
+def _attach_swift_enums(enums, messages: List[ProtoMessage], by_key: Dict[tuple, ProtoMessage]) -> None:
+    """The flat emitter collects enums only from ``msg.enums``: carry a nested enum on
+    its OWNER message and a top-level one on the first message of its module (same
+    output file as the fields that reference it)."""
+    carrier: Dict[str, ProtoMessage] = {}
+    taken: Dict[str, set] = {}               # per package: names sharing the value scope
+    for m in messages:
+        carrier.setdefault(m.package, m)
+        taken.setdefault(m.package, set()).add(m.name)
+    for e in enums:
+        taken.setdefault(_sanitize_pkg(e.module) if e.module else "swift_protobuf", set()).add(_flat(e.name))
+    for e in enums:
+        pkg = _sanitize_pkg(e.module) if e.module else "swift_protobuf"
+        owner = None
+        if "." in e.name:
+            owner = by_key.get((e.module, e.name.rsplit(".", 1)[0]))
+        owner = owner or carrier.get(pkg)
+        if owner is None:
+            log.warning("swift enum %s.%s has no message in its module to carry it; omitted",
+                        e.module, e.name)
+            continue
+        owner.enums = list(owner.enums) + [_swift_enum(e, taken[pkg])]
 
 
 def _swift_field(f, module: str = "", types: Optional["_SwiftTypes"] = None) -> ProtoField:

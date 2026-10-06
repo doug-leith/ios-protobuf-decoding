@@ -212,8 +212,8 @@ single-field message can be an estimate (flagged `// number estimated`); integer
 subtypes are collapsed to `int32` / `uint32` / `int64` / `uint64` (not flagged, and
 wire-incorrect for a genuine `sint*` or `fixed*` field, though none is known in the
 binaries surveyed); and a container element that does not decode is shown as `bytes`
-with a note. Enum types are not extracted: a field of enum type is emitted as `int32` with a note, and the enum's cases
-are not recovered. Types defined outside the image (another module, the well-known
+with a note. Enums are extracted and referenced by name (an enum whose cases cannot be
+recovered falls back to `int32` with a note). Types defined outside the image (another module, the well-known
 types) are emitted as `bytes` with an `unresolved:` note, so the output compiles under
 `protoc`.
 

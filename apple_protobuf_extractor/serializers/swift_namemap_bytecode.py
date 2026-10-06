@@ -22,12 +22,16 @@ dictionary literal, so the (number, name) table is a plain byte string in
     op 4 standardDelta  "                                 number = prev + <delta>
     op 5/6 uniqueNext/Delta   proto name, then JSON name (two NUL-terminated strings)
     op 7/8 groupNext/Delta    group type name
-    op 9/10 aliasNext/Delta   primary name + alias names
+    op 9/10 aliasNext/Delta   enum value: primary name, then <count> and that many alias
+                              names (all share the primary's number)
     op 11 reservedName        reserved name (no field)
     op 12 reservedNumbers     reserved range (no field)
 
 Integers (deltas, reserved numbers) use the 6-bit/0x40-continuation form of
-:func:`_varint`.
+:func:`_varint` and are SIGNED 32-bit (two's complement): an enum with a negative or
+zero first value is encoded with an explicit delta (``T_NEG = -5`` is
+``02 {\x7f\x7f\x7f\x7f\x03`` = -5).  Field numbers are >= 1; enum values may be any
+int32.
 
 Only the structure the extractor needs is returned: ``(number, proto_name)``.
 
@@ -71,6 +75,12 @@ def _varint(buf: bytes, i: int) -> Tuple[int, int]:
         shift += 6
 
 
+def _int32(v: int) -> int:
+    """Reinterpret an unsigned 32-bit group-assembled value as signed."""
+    v &= 0xFFFFFFFF
+    return v - (1 << 32) if v & 0x80000000 else v
+
+
 def _cstr(buf: bytes, i: int) -> Tuple[str, int]:
     end = buf.find(b"\x00", i)
     if end < 0:
@@ -78,13 +88,15 @@ def _cstr(buf: bytes, i: int) -> Tuple[str, int]:
     return buf[i:end].decode("utf-8", "replace"), end + 1
 
 
-def decode_namemap_bytecode(raw: bytes) -> Optional[List[Tuple[int, str]]]:
+def decode_namemap_bytecode(raw: bytes, enum: bool = False) -> Optional[List[Tuple[int, str]]]:
     """Decode a ``_NameMap`` bytecode literal to ``[(number, proto_name), …]``.
 
     Returns ``None`` when *raw* is not a well-formed bytecode (so a caller can
     fall through to another shape instead of fabricating fields).  Reserved
-    names/ranges are skipped.  Enum alias lists are consumed (primary name is
-    returned)."""
+    names/ranges are skipped.  An enum alias list yields the primary entry and then
+    one entry per alias with the SAME number, in source order.  *enum* admits any
+    int32 value (zero and negative included); otherwise numbers must be valid
+    field numbers (>= 1)."""
     if not raw or raw[0] != 0:
         return None
     out: List[Tuple[int, str]] = []
@@ -102,22 +114,28 @@ def decode_namemap_bytecode(raw: bytes) -> Optional[List[Tuple[int, str]]]:
                 continue
             if not _SAME_NEXT <= op <= _ALIAS_DELTA:
                 return None
-            if op % 2 == 0:                     # *Delta form: explicit delta first
+            if op % 2 == 0:                     # *Delta form: explicit (signed) delta first
                 delta, i = _varint(raw, i)
-                num = prev + delta
+                num = prev + _int32(delta)
             else:
                 num = prev + 1
             name, i = _cstr(raw, i)
+            names = [name]
             if op in (_UNIQUE_NEXT, _UNIQUE_DELTA):
                 _, i = _cstr(raw, i)            # JSON name
             elif op in (_ALIAS_NEXT, _ALIAS_DELTA):
-                while i < len(raw) and raw[i] != 0:   # alias names, list ends at an empty string
-                    _, i = _cstr(raw, i)
-                i += 1
-            if not 1 <= num <= _MAX_FIELD_NUMBER or not name:
+                count, i = _varint(raw, i)
+                if count > 64:
+                    return None
+                for _ in range(count):
+                    alias, i = _cstr(raw, i)
+                    names.append(alias)
+            lo = -(1 << 31) if enum else 1
+            hi = (1 << 31) - 1 if enum else _MAX_FIELD_NUMBER
+            if not lo <= num <= hi or not all(names):
                 return None
             prev = num
-            out.append((num, name))
+            out.extend((num, nm) for nm in names)
     except ValueError:
         return None
     return out
@@ -127,7 +145,7 @@ _MAX_LITERAL_LEN = 4096
 _RET = ("ret", "retab", "retaa")
 
 
-def bytecode_literal_from_getter(ctx, insns) -> Optional[bytes]:
+def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[bytes]:
     """Locate the bytecode string literal passed to ``_NameMap.init(bytecode:)``
     from a getter's leading instructions.  Two lowerings:
 
@@ -182,7 +200,7 @@ def bytecode_literal_from_getter(ctx, insns) -> Optional[bytes]:
         elif m in ("bl", "blr"):                     # inline form
             if "x0" in addr and imm.get("w1") and imm.get("w2") == 2:
                 lit = _read(ctx, addr["x0"], imm["w1"])
-                if lit is not None and decode_namemap_bytecode(lit):
+                if lit is not None and decode_namemap_bytecode(lit, enum=enum):
                     return lit
             for r in range(0, 18):                   # caller-saved regs are dead after a call
                 addr.pop("x%d" % r, None)

@@ -1,0 +1,48 @@
+syntax = "proto2";
+package eo;
+
+enum Top {
+  T_ZERO = 0;
+  T_ONE = 1;
+  T_NEG = -5;
+  T_BIG = 100000;
+}
+
+enum NonZero {
+  NZ_FIRST = 1;
+  NZ_SEVEN = 7;
+}
+
+enum Aliased {
+  option allow_alias = true;
+  AL_X = 0;
+  AL_Y = 1;
+  AL_Y2 = 1;
+  AL_Z = 2;
+}
+
+enum Single {
+  SINGLE_ONLY = 4;
+}
+
+message Holder {
+  enum Inner {
+    I_A = 0;
+    I_B = 3;
+  }
+  optional Top top = 1;
+  optional Inner inner = 2;
+  repeated NonZero nz = 3;
+  optional Aliased al = 4;
+  optional Single single = 5;
+  optional string plain = 6;
+}
+
+message Multi {
+  optional int32 a = 1;
+  optional string b = 2;
+  optional bool c = 3;
+  optional int32 n10 = 10;
+  optional Top t = 11;
+  optional int64 big = 100;
+}
