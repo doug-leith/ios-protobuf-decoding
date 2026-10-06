@@ -264,7 +264,7 @@ def _resolve_symbolic(ctx, va):
     ptr_site = va + 1 + off
     if ctrl == 1:
         # Direct: the relptr points straight at the local type context descriptor.
-        name = _local_desc_name(ctx, ptr_site)
+        name = _local_type_ref(ctx, ptr_site)
         return _SWIFT_SCALAR.get(name, name) if name else None
     # Indirect: ptr_site is a GOT slot holding a chained-fixup pointer to the
     # descriptor — a REBASE to a local type, or a BIND to an external one.
@@ -275,11 +275,11 @@ def _resolve_symbolic(ctx, va):
     # local rebase: try the decoded pointer, then a manual low-32 + image_base.
     name = None
     try:
-        name = _local_desc_name(ctx, ctx.read_ptr(ptr_site))
+        name = _local_type_ref(ctx, ctx.read_ptr(ptr_site))
     except Exception:
         pass
     if not name:
-        name = _local_desc_name(ctx, ctx.image_base + (raw & 0xFFFFFFFF))
+        name = _local_type_ref(ctx, ctx.image_base + (raw & 0xFFFFFFFF))
     if name:
         return _SWIFT_SCALAR.get(name, name)
     # external bind: demangle the import symbol name.
@@ -287,6 +287,42 @@ def _resolve_symbolic(ctx, va):
         return _type_from_bind(ctx.import_name_for_bind(raw))
     except Exception:
         return None
+
+
+def _local_type_ref(ctx, desc):
+    """Reference name for a LOCAL type descriptor: its QUALIFIED name
+    (``Outer.Inner``) so a nested type resolves to exactly the descriptor the field
+    points at -- the short name alone is ambiguous (several messages nest a
+    ``Details`` / ``Error``) and cannot be linked to the emitted flattened name.
+    Top-level types are unchanged.  None if *desc* is not a plausible descriptor."""
+    short = _local_desc_name(ctx, desc)
+    if not short:
+        return None
+    return _qualified_name(ctx, desc) or short
+
+
+def local_enum_names(ctx):
+    """Qualified names of the image's own Swift ``enum`` types (excluding the
+    ``OneOf_*`` oneof wrappers, which are not proto enums).  A message field whose
+    type is one of these is a proto enum field (varint on the wire)."""
+    out = set()
+    try:
+        sec = ctx.section("__TEXT", "__swift5_types")
+    except Exception:
+        return out
+    for i in range(sec.vmsize // 4):
+        try:
+            desc = _relptr(ctx, sec.vmaddr + i * 4)
+            if not desc or _desc_kind(ctx, desc) != _ENUM_KIND:
+                continue
+            name = _desc_name(ctx, desc)
+            if name and not name.startswith(_ONEOF_PREFIX):
+                q = _qualified_name(ctx, desc)
+                if q:
+                    out.add(q)
+        except Exception:
+            continue
+    return out
 
 
 def _local_desc_name(ctx, desc):

@@ -135,9 +135,9 @@ class TestLiveDeviceTypes(unittest.TestCase):
 
     def test_nested_and_oneof_message(self):
         smr = self.t["StartMigrationRequest"]
-        self.assertEqual(smr["credential"], "Credential")     # nested message
-        self.assertEqual(smr["source"], "OneOf_Source")       # oneof
-        self.assertEqual(self.t["MigrateRequest"]["user"], "User")
+        self.assertEqual(smr["credential"], "StartMigrationRequest.Credential")     # nested message (qualified)
+        self.assertEqual(smr["source"], "StartMigrationRequest.OneOf_Source")       # oneof wrapper (qualified)
+        self.assertEqual(self.t["MigrateRequest"]["user"], "MigrateRequest.User")   # nested, qualified
 
     def test_repeated_message_and_full_wkt_name(self):
         # Google_Protobuf_Field.options is `repeated Google_Protobuf_Option` — a

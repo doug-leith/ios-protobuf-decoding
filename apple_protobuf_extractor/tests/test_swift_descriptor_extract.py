@@ -757,6 +757,28 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
         with_fields = sum(1 for m in self.msgs.values() if m.fields)
         self.assertGreaterEqual(with_fields, 60)
 
+    def test_every_field_type_is_defined_or_degraded(self):
+        # what protoc checks: each non-scalar field type must name a message the
+        # output defines (flat name), else the field must have degraded to bytes/int32.
+        from proto import foreign as F
+        out = F.swift_messages(self.ctx)
+        defined = {m.name for m in out}
+        for m in out:
+            for f in m.fields:
+                t = f.type_name
+                if t.startswith("map<"):
+                    t = t[4:-1].partition(", ")[2]
+                if t in F._PROTO_SCALARS:
+                    continue
+                self.assertIn(t, defined, f"{m.name}.{f.name}: {t}")
+        # the references that used to be undefined
+        by = {m.name: {f.name: f for f in m.fields} for m in out}
+        self.assertEqual(by["EscrowInformation_Metadata"]["client_metadata"].type_name,
+                         "EscrowInformation_Metadata_ClientMetadata")
+        self.assertEqual(by["EscrowInformation"]["record_status"].type_name, "int32")
+        self.assertEqual(by["EscrowInformation_Metadata"]["secure_backup_timestamp"].type_name,
+                         "bytes")
+
     def test_traverse_numbers_never_contradict_namemap(self):
         syms = S.symbol_addrs(self.ctx)
         traversers = {}
@@ -864,7 +886,7 @@ class TestLiveIos27PackedBytecode(unittest.TestCase):
         checked = 0
         for name, m in self.msgs["CipherML"].items():
             fm = {k.replace("_", "").lower() for k, t in by_type.get(name, {}).items()
-                  if not t.startswith("OneOf_")}      # oneof wrapper property, not a field
+                  if not t.split(".")[-1].startswith("OneOf_")}      # oneof wrapper property, not a field
             got = {f.name.replace("_", "").lower() for f in m.fields}
             if m.shape == "bytecode" and fm and not any(n.startswith("has") for n in got):
                 self.assertEqual(got, fm, name)

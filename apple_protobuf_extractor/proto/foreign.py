@@ -238,38 +238,114 @@ def cpp_messages_from_ctx(ctx) -> List[ProtoMessage]:
 
 # ── swift-protobuf ────────────────────────────────────────────────────────────
 
+_PROTO_SCALARS = frozenset({
+    "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
+    "sfixed32", "sfixed64", "bool", "string", "bytes", "float", "double"})
+
+
+class _SwiftTypes:
+    """Resolves swift-protobuf field type names (as recovered from reflection
+    metadata) to something the emitted ``.proto`` can reference.
+
+    swift reflection gives the QUALIFIED name of a local type (``Outer.Inner``),
+    which is exactly the key the nested message was emitted under (flattened to
+    ``Outer_Inner``), so a nested reference resolves to the right message even when
+    several messages nest a ``Details``.  What cannot be referenced is degraded to a
+    type that still parses and keeps the wire format:
+
+    * a type from another module / the well-known types (not defined in this image's
+      own nameMaps) -> ``bytes`` (length-delimited, like any message), annotated;
+    * one of this image's own swift enums -> ``int32`` (varint), annotated -- the enum
+      cases are not recovered (LIMITATIONS 10d).
+    """
+
+    def __init__(self, messages, enum_names):
+        self.known = {(m.module, m.name) for m in messages}
+        self.pkg = {m.module: (_sanitize_pkg(m.module) if m.module else "swift_protobuf")
+                    for m in messages}
+        self.mods_by_name: Dict[str, List[str]] = {}
+        for m in messages:
+            self.mods_by_name.setdefault(m.name, []).append(m.module)
+        self.enums = set(enum_names)
+
+    def resolve(self, t: str, module: str):
+        """-> (type_name, ref_package|None, unresolved_name|None, note|None)."""
+        if t in _PROTO_SCALARS:
+            return t, None, None, None
+        if (module, t) in self.known:
+            return _flat(t), None, None, None
+        mods = self.mods_by_name.get(t, [])
+        if len(mods) == 1:                         # another module of this image
+            return _flat(t), self.pkg[mods[0]], None, None
+        if t in self.enums:
+            return ("int32", None, None,
+                    f"swift-protobuf enum {t}: cases not recovered (shown as int32)")
+        return ("bytes", None, t,
+                f"swift-protobuf: {t} is defined outside this image's name maps "
+                "(shown as bytes; wire-correct only for a message)")
+
+
 def swift_messages(ctx) -> List[ProtoMessage]:
-    """Every swift-protobuf message in *ctx* (names + numbers; types unrecovered)."""
+    """Every swift-protobuf message in *ctx* (names, numbers and, where reflection
+    metadata allows, types)."""
+    sw = _swift.swift_messages(ctx)
+    try:
+        from serializers.swift_type_recovery import local_enum_names
+        enums = local_enum_names(ctx)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        log.debug("swift enum scan failed: %s", exc)
+        enums = set()
+    types = _SwiftTypes(sw, enums)
     out: List[ProtoMessage] = []
-    for m in _swift.swift_messages(ctx):
+    for m in sw:
         pkg = _sanitize_pkg(m.module) if m.module else "swift_protobuf"
-        fields = [_swift_field(f) for f in m.fields]
+        fields = [_swift_field(f, m.module, types) for f in m.fields]
         out.append(ProtoMessage(name=_flat(m.name), class_name=_flat(m.name),
                                 package=pkg, serializer=SWIFT_SERIALIZER,
                                 fields=fields))
     return out
 
 
-def _swift_field(f) -> ProtoField:
+def _swift_field(f, module: str = "", types: Optional["_SwiftTypes"] = None) -> ProtoField:
     """Map a recovered swift field (name+number, optional proto_type) to a
     ProtoField.  ``proto_type`` like 'repeated int32' / 'map<string, int32>' /
-    'Foo' is split into (label, type); absent types fall back to ``bytes``."""
+    'Foo' is split into (label, type); absent types fall back to ``bytes``.  With
+    *types* given, message / enum references are resolved against the image's own
+    messages (see :class:`_SwiftTypes`); without it names are only flattened."""
     label, type_name, note = FieldLabel.OPTIONAL, "bytes", None
+    ref_pkg = unresolved = None
     t = f.proto_type
+
+    def one(name: str):
+        if types is None:
+            return _flat(name), None, None, None
+        return types.resolve(name, module)
+
     if not t:
         note = "swift-protobuf: type not recovered"
     elif t.startswith("repeated "):
-        label, type_name = FieldLabel.REPEATED, _flat(t[len("repeated "):])
+        label = FieldLabel.REPEATED
+        type_name, ref_pkg, unresolved, note = one(t[len("repeated "):])
     elif t.startswith("map<"):
-        type_name = t                       # emitted verbatim (map<k, v>)
+        k, _, v = t[4:-1].partition(", ")
+        vt, _vp, unresolved, note = one(v) if v else ("bytes", None, None, None)
+        type_name = f"map<{k}, {vt}>"      # emitted verbatim; cross-package map values
+        # degrade to bytes above, so no package qualifier is ever needed here
+        if _vp is not None:
+            type_name, unresolved, note = f"map<{k}, bytes>", v, (
+                f"swift-protobuf: map value {v} is in another module (shown as bytes)")
     else:
-        type_name = _flat(t)
+        type_name, ref_pkg, unresolved, note = one(t)
     # a recovered container whose element/value is a guess filler is flagged (#67)
     note = note or getattr(f, "type_note", None)
     return ProtoField(name=f.name, number=f.number, type_name=type_name,
                       label=label,
                       number_confirmed=getattr(f, "number_confirmed", True),
-                      type_inference_note=note)
+                      type_inference_note=note,
+                      ref_package=ref_pkg,
+                      unresolved_type_class=unresolved)
 
 
 # ── orchestration ─────────────────────────────────────────────────────────────

@@ -212,10 +212,10 @@ single-field message can be an estimate (flagged `// number estimated`); integer
 subtypes are collapsed to `int32` / `uint32` / `int64` / `uint64` (not flagged, and
 wire-incorrect for a genuine `sint*` or `fixed*` field, though none is known in the
 binaries surveyed); and a container element that does not decode is shown as `bytes`
-with a note. Two further gaps apply to the swift output: enum types are not extracted
-(a field of enum type is named but the enum's cases are not recovered), and references
-to nested or cross-module types are written by their short name, so a swift-derived
-`.proto` may not compile under `protoc` without edits.
+with a note. Enum types are not extracted: a field of enum type is emitted as `int32` with a note, and the enum's cases
+are not recovered. Types defined outside the image (another module, the well-known
+types) are emitted as `bytes` with an `unresolved:` note, so the output compiles under
+`protoc`.
 
 ## Limitations
 

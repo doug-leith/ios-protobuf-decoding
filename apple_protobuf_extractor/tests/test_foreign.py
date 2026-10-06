@@ -374,6 +374,64 @@ class TestSwiftAdapter(unittest.TestCase):
         self.assertEqual(f_msg.label, FieldLabel.OPTIONAL)
 
 
+class TestSwiftTypeResolution(unittest.TestCase):
+    """Swift field types must resolve to something the emitted .proto can
+    reference (the output used to fail under protoc: nested types by short name,
+    other-module / well-known types and enums undefined)."""
+    def _types(self):
+        msgs = [SW.SwiftMessage(module="M", name="Outer"),
+                SW.SwiftMessage(module="M", name="Outer.Inner"),
+                SW.SwiftMessage(module="M", name="Other.Inner"),
+                SW.SwiftMessage(module="Lib", name="Shared")]
+        return F._SwiftTypes(msgs, {"Mode", "Outer.Kind"})
+
+    def _field(self, t):
+        return F._swift_field(SW.SwiftField(1, "f", proto_type=t), "M", self._types())
+
+    def test_nested_reference_uses_the_qualified_flat_name(self):
+        # two messages nest an `Inner`; the qualified ref picks the right one
+        self.assertEqual(self._field("Outer.Inner").type_name, "Outer_Inner")
+        self.assertEqual(self._field("Other.Inner").type_name, "Other_Inner")
+
+    def test_repeated_message_reference(self):
+        f = self._field("repeated Outer.Inner")
+        self.assertEqual((f.label, f.type_name), (FieldLabel.REPEATED, "Outer_Inner"))
+
+    def test_other_module_message_in_same_image_gets_package(self):
+        f = self._field("Shared")
+        self.assertEqual((f.type_name, f.ref_package), ("Shared", F._sanitize_pkg("Lib")))
+
+    def test_external_type_degrades_to_bytes_and_is_flagged(self):
+        f = self._field("Ckcode_RecordTransport")
+        self.assertEqual(f.type_name, "bytes")
+        self.assertEqual(f.unresolved_type_class, "Ckcode_RecordTransport")
+        self.assertIn("outside this image", f.type_inference_note)
+
+    def test_local_enum_is_int32_with_note(self):
+        f = self._field("Mode")
+        self.assertEqual(f.type_name, "int32")
+        self.assertIsNone(f.unresolved_type_class)
+        self.assertIn("enum Mode", f.type_inference_note)
+        self.assertEqual(self._field("Outer.Kind").type_name, "int32")
+
+    def test_scalars_untouched(self):
+        for t in ("int32", "string", "bytes", "bool", "double"):
+            f = self._field(t)
+            self.assertEqual((f.type_name, f.type_inference_note), (t, None))
+
+    def test_map_value_resolved_or_degraded(self):
+        self.assertEqual(self._field("map<string, Outer.Inner>").type_name,
+                         "map<string, Outer_Inner>")
+        self.assertEqual(self._field("map<string, Gone>").type_name, "map<string, bytes>")
+        self.assertEqual(self._field("map<string, Mode>").type_name, "map<string, int32>")
+        # a value in another module cannot be package-qualified inside map<>
+        self.assertEqual(self._field("map<string, Shared>").type_name, "map<string, bytes>")
+
+    def test_unqualified_call_keeps_old_flatten_only_behaviour(self):
+        f = F._swift_field(SW.SwiftField(2, "child", proto_type="Pkg.Inner"))
+        self.assertEqual(f.type_name, "Pkg_Inner")
+
+
 class TestEmitterMixedSerializer(unittest.TestCase):
     def test_mixed_file_tags_each_message(self):
         pb = ProtoMessage(name="PBThing", class_name="PBThing",

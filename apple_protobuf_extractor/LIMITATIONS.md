@@ -420,19 +420,19 @@ key/value doesn't decode, the field shows a `bytes` filler with an inline
 A genuine `[Data]`/`repeated bytes` is not flagged. The `map<>` value is still commonly
 a filler (see (1)).
 
-**(d) Enums are not extracted, and some type references do not resolve.** Only
-`struct` message name maps are read; the name map of a swift enum (case name ↔ raw
-value) is skipped, so a field of enum type is emitted by name with no `enum` definition.
-Such enum name maps, if read, would need care: the zero-valued case is stored as
-`str xzr`, so a reader that keeps only non-zero immediates shifts every raw value by
-one. Nested types are referenced by short name (`ClientMetadata`) although they are
-emitted flattened (`EscrowInformation_Metadata_ClientMetadata`), and types from another
-module (`Ckcode_*`) or the well-known types (`Google_Protobuf_Timestamp`) are not
-defined in the file. The names, numbers and field types are still correct, but a file
-that uses any of these fails under `protoc` as written (remindd, DPSubmissionService
-and TrustedPeersHelper do; a file whose messages reference only top-level types, such
-as nptocompaniond's, compiles). The `Unresolved type refs` count in the summary does
-not cover these.
+**(d) Enums are not extracted.** Only `struct` message name maps are read; the name
+map of a swift enum (case name ↔ raw value) is skipped. A field of one of the image's
+own enum types is therefore emitted as `int32` (the varint wire type) with the note
+`swift-protobuf enum X: cases not recovered`, and no `enum` definition is written.
+Reading those name maps needs care: the zero-valued case is stored as `str xzr`, so a
+reader that keeps only non-zero immediates shifts every raw value by one.
+
+Type references are otherwise resolved so that the output compiles under `protoc`:
+a nested type is referenced by its qualified, flattened name
+(`EscrowInformation_Metadata_ClientMetadata`); a type that is defined outside the
+image's own name maps (another module such as `Ckcode_*`, or the well-known types
+`Google_Protobuf_*`) is emitted as `bytes` with an `unresolved:` note. That is
+wire-correct for a message but not for an enum from another module.
 
 **(e) Messages with no fields.** A genuinely empty message and a message whose name map
 could not be read are both written as `// (no fields recovered)`.

@@ -220,7 +220,7 @@ class TestRuntimeNameMap(unittest.TestCase):
         smr = {f.name: f.proto_type
                for f in self.msgs["StartMigrationRequest"].fields}
         self.assertEqual(smr["archivePath"], "string")
-        self.assertEqual(smr["credential"], "Credential")   # nested message member
+        self.assertEqual(smr["credential"], "StartMigrationRequest.Credential")   # nested message member (qualified)
 
     def test_repeated_label_preserved_when_elem_unrecovered(self):
         # #69: a repeated field whose element type doesn't resolve keeps the
