@@ -628,6 +628,13 @@ def _in_executable_text(ctx: BinaryContext, va: int) -> bool:
     return sec.vmaddr <= va < sec.vmaddr + sec.vmsize
 
 
+# Straight-line setup that may sit between the address loads and the tail ``b`` of a shape-D
+# getter.  ``paciza``/``pacia`` + ``mov x2,x16`` appear on arm64e (iOS 27), where the builder's
+# function pointer is signed before being passed (``adrp/add x16,<builder>; paciza x16;
+# mov x2,x16``); none of them transfers control.
+_DISPATCH_SETUP_OK = frozenset({"nop", "mov", "movz", "paciza", "pacia"})
+
+
 def _shared_once_init_targets(insns) -> List[int]:
     """Shape D: a short ``adr`` x2/x3 + unconditional-branch dispatch into a
     lazy-once-init TEMPLATE shared across many unrelated types (device /
@@ -675,7 +682,7 @@ def _shared_once_init_targets(insns) -> List[int]:
                     out.append(page[mm.group(2)] + off)
         elif m == "b":
             return out
-        elif m != "nop":
+        elif m not in _DISPATCH_SETUP_OK:
             return []   # any other control flow -> not the minimal dispatch shape
     return []
 
@@ -1144,10 +1151,24 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         if not got and not enum:
             got = _single_entry_stub(ctx, t)
             stub = bool(got)
+        packed = False
+        if not got:
+            # iOS 27: the builder is a stub passing the packed bytecode literal (x2) and its
+            # length (w3) to the shared template (shape E's data, one hop deeper)
+            try:
+                lit = bytecode_literal_from_getter(
+                    ctx, disasm(ctx, t, max_insns=16, stop_at_ret=False), enum=enum)
+            except Exception:
+                lit = None
+            dec = decode_namemap_bytecode(lit, enum=enum) if lit else None
+            if dec:
+                got = [SwiftField(n, nm) for n, nm in dec]
+                packed = True
         if len(got) > len(best_shared):
             best_shared = got
-            shared_shape = "single-stub" if stub else "shared-once"
-    if best_shared and _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum):
+            shared_shape = ("bytecode" if packed else "single-stub" if stub else "shared-once")
+    if best_shared and (shared_shape == "bytecode"
+                        or _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum)):
         return best_shared, shared_shape
 
     # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the

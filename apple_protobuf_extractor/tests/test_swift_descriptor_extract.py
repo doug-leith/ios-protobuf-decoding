@@ -463,6 +463,69 @@ class TestClosureArgTargets(unittest.TestCase):
         self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [])
 
 
+class TestSharedOnceInitTargetsArm64e(unittest.TestCase):
+    """arm64e (iOS 27): the builder pointer is signed before being passed --
+    ``adrp/add x16,<builder>; paciza x16; mov x2,x16; b <template>``."""
+    def _getter(self):
+        return [_FI("adrp", "x0, #0x100345000"), _FI("add", "x0, x0, #0x560"),
+                _FI("adrp", "x1, #0x10035f000"), _FI("add", "x1, x1, #0x7f8"),
+                _FI("adrp", "x16, #0x1000f4000"), _FI("add", "x16, x16, #0x390"),
+                _FI("paciza", "x16"), _FI("mov", "x2, x16"), _FI("b", "#0x10011a25c")]
+
+    def test_signed_builder_pointer_is_returned(self):
+        self.assertIn(0x1000F4390, S._shared_once_init_targets(self._getter()))
+
+    def test_still_rejects_conditional_control_flow(self):
+        g = self._getter()
+        g.insert(6, _FI("cmn", "x8, #1"))
+        g.insert(7, _FI("b.ne", "#0x500"))
+        self.assertEqual(S._shared_once_init_targets(g), [])
+
+    def test_is_a_dispatch_stub(self):
+        self.assertTrue(S._is_dispatch_stub(self._getter()))
+
+
+def _ios27_tph_path():
+    try:
+        import artifacts
+        p = os.path.join(artifacts.REPO_ROOT, "ios27_data", "ipsw_extract", "24A446__iPhone17,3", "System",
+                         "Library", "Frameworks", "Security.framework", "XPCServices",
+                         "TrustedPeersHelper.xpc", "TrustedPeersHelper")
+        return p if os.path.isfile(p) else None
+    except Exception:
+        return None
+
+
+@unittest.skipUnless(_ios27_tph_path(), "iOS 27.0.1 TrustedPeersHelper (ipsw extract) not available")
+class TestLiveIos27TrustedPeersHelper(unittest.TestCase):
+    """iOS 27.0.1 (arm64e) service: the getter is the signed-pointer shared-once form and the
+    builder is a stub that passes a packed-bytecode literal, so every message was empty
+    before.  iOS 16.7.11's service has no `metrics` field; this one does."""
+    @classmethod
+    def setUpClass(cls):
+        ctx = _load_ctx(_ios27_tph_path())
+        cls.msgs = {m.name: m for m in S.swift_messages(ctx)}
+        cls.enums = {e.name: e for e in S.swift_enums(ctx)}
+
+    def test_everything_is_read_or_proven_empty(self):
+        self.assertEqual(len(self.msgs), 76)
+        self.assertEqual(sum(1 for m in self.msgs.values() if m.fields), 73)
+        self.assertTrue(all(m.fieldless for m in self.msgs.values() if not m.fields))
+        self.assertEqual(len(self.enums), 12)
+        self.assertTrue(all(e.fields for e in self.enums.values()))
+        self.assertEqual({m.shape for m in self.msgs.values() if m.fields}, {"bytecode"})
+
+    def test_metrics_field_exists_in_ios27(self):
+        self.assertEqual(_fieldset(self.msgs["FetchViableBottlesRequest"]),
+                         {(1, "filter_request"), (2, "metrics"), (3, "accountInfo")})
+        self.assertEqual(_fieldset(self.msgs["Metrics"]), {(1, "flow_id"), (2, "device_session_id")})
+
+    def test_join_with_voucher_fields_6_to_8(self):
+        got = _fieldset(self.msgs["JoinWithVoucherRequest"])
+        self.assertTrue({(6, "trusted_devices_version"), (7, "metrics"), (8, "accountInfo")} <= got)
+        self.assertEqual({n for n, _ in got}, set(range(1, 9)))
+
+
 class TestFatSlice(unittest.TestCase):
     def _fat(self, slices):
         # slices: list of (cputype, cpusubtype, payload)
