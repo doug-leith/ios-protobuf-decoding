@@ -38,6 +38,12 @@ GeoServices maps (the five above plus two `GEOActiveTileGroup` string→string m
 iOS 27 ones are typed with the same shapes and numbers. Those runs are not golden-guarded (only the iPhone 8
 artifacts are).
 
+The iOS 27 and macOS 27 caches are larger than 4 GB and use slide-info version 5, where a data pointer's target is the
+low 34 bits (an offset from the cache base). The cache reader reads the slide-info version of each cache file and
+uses 34 bits for version 5 (32 bits for older caches). Before this, every image whose data lies past `cache_base + 4 GB`
+(about a third of the images, e.g. `MessageProtection` and `TrustedPeers`) returned a wrong ObjC class list with no error,
+so a result of "no classes" on a version-5 cache from an older Extractor is not evidence that the classes are absent.
+
 **Residual cases (each flagged inline, never silently wrong):**
 
 * **No map-entry writer in `writeTo:`** — the field stays `bytes // number estimated;

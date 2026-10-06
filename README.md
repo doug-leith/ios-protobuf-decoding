@@ -416,7 +416,7 @@ mean the extractor was exercised against real binaries.
 - **Live extractor tests** need the Apple artifacts: a dyld shared cache and the `locationd`
   binary. Put them in `./iphone8_data/`, or point `MACHO_DATA_DIR` at a directory
   that holds them. Set `MACHO_REQUIRE_LIVE=1` to make a missing artifact a failure instead of a skip.
-  The 8 iOS 27 tests (`test_newer_toolchain_ios27.py`) look for `./ios27_data/dylib/dyld_shared_cache_arm64e`,
+  The 12 iOS 27 tests (`test_newer_toolchain_ios27.py`) look for `./ios27_data/dylib/dyld_shared_cache_arm64e`,
   or for the directory named by `MACHO_TEST_IOS27_CACHE`.
 - **Real tile, Siri, ARPC and `/fb` tests** use extracts of real captured traffic that are committed
   under `ios_decoder/tests/fixtures/` (about 2.8 MB). They can be
@@ -491,7 +491,7 @@ do the moving.
 ipsw dyld extract iphone8_data/dylib/dyld_shared_cache_arm64 GeoServices --output iphone8_data
 ```
 
-**6. iOS 27 cache (optional; about 12 GB).** Only the 8 tests in `test_newer_toolchain_ios27.py`
+**6. iOS 27 cache (optional; about 12 GB).** Only the 12 tests in `test_newer_toolchain_ios27.py`
 use it. This extracts just the cache from Apple's server, without keeping the whole firmware.
 
 ```sh
@@ -506,7 +506,7 @@ find ios27_data/dylib -mindepth 2 -name 'dyld_shared_cache_arm64e*' -exec mv {} 
 MACHO_REQUIRE_LIVE=1 ./venv/bin/python3 -m pytest
 ```
 
-With everything in place, nothing should skip (without step 6, the 8 iOS 27 tests skip). The firmware downloaded in step 2
+With everything in place, nothing should skip (without step 6, the 12 iOS 27 tests skip). The firmware downloaded in step 2
 can be deleted afterwards (`rm -r iphone8_data/ipsw`); the tests do not use it.
 
 ## Provenance
