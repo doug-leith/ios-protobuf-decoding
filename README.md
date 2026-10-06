@@ -87,7 +87,7 @@ The same command extracts all three runtimes. A binary's messages are grouped in
 ./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/locationd -o ./protos/
 ```
 
-Google's Objective-C runtime (`GPBMessage`) and `libprotobuf-lite` (which strips its descriptors) are detected and reported, but not decoded.
+Google's Objective-C runtime (`GPBMessage`), `libprotobuf-lite` (which strips its descriptors) and the C `protobuf-c` runtime are detected and reported, but not decoded.
 
 The dyld cache and binaries are Apple's software and are not in this repository. [Getting the Apple artifacts](#getting-the-apple-artifacts-optional) below shows how to download them.
 

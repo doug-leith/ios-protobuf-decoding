@@ -11,7 +11,7 @@ cross-reference the same limitation.
 
 Several limitations are the residual of a heuristic that survives because no principled
 signal exists for the residual slice; those carry a **Heuristic** line naming the fallback.
-Limitations (3), (5), (6), (11) are extractor/emitter-level, not heuristic fallbacks.
+Limitations (3), (5), (6), (11), (12) are extractor/emitter-level, not heuristic fallbacks.
 
 The tool's correctness contract is unchanged: it never *silently* emits a wrong
 field — every degraded field below is flagged in the output.
@@ -540,3 +540,49 @@ not use it (it uses the tight extent `_core_insns`); the other users do.
 `macho/memory.py` (chained-fixup decoders). Ground-truth fixtures:
 `tests/synthetic_fixtures/f27_compare_tree_engine_no_guard`, `f25_newer_dispatch_engine`,
 `f26_arm64e_fixups`.
+
+---
+
+## 12. protobuf-c (the C runtime) messages are detected but not decoded  — to-do (deferred)
+
+**Symptom.** An image that embeds protobuf-c schema tables is reported by
+`--list-serializers` as `protobuf-c (C runtime) … [DETECTED — not decodable by this
+tool]`, listing each message descriptor's package-qualified name (`chunkserver.ChunkInfo`)
+with a note giving the message / enum descriptor counts and the number of
+`_protobuf_c_*` runtime symbols. It is also named in the single consolidated foreign-protobuf
+warning. No `.proto` schema is emitted; the field names, numbers, types and enum values
+are not read.
+
+**Why.** protobuf-c schemas are static `ProtobufCMessageDescriptor` /
+`ProtobufCEnumDescriptor` structs, so detection and naming are cheap and exact: each
+begins with a 32-bit magic (`0x28aaeef9` / `0x114315af`) and holds the type name at +8.
+Decoding the fields means walking 72-byte `ProtobufCFieldDescriptor` records (name, id,
+label, type, default, and a descriptor pointer for message / enum types), which is
+tractable (a short script reads them for MMCS) — but no image in either cache outside Apple's MMCS, TouchML and BiomeStreams uses the runtime, so
+it was not built. **Accepted as a deferred limitation.**
+
+**Detection.** The data segments are scanned for 8-byte-aligned magic words through the
+`BinaryContext` memory API (`serializers/protobufc_detect.py`), so it works the same on a
+standalone binary and a cache image. `__TEXT`, `__LINKEDIT` and `__PAGEZERO` are skipped;
+every other segment is read, including `__AUTH_CONST` — on arm64e a message descriptor
+holds a signed `message_init` pointer, so iOS 27's message descriptors are there while its
+enum descriptors (no function pointer) stay in `__DATA_CONST`. A hit counts only if its
+name pointer resolves to a dotted identifier and its entry count is sane; the count of
+hits that fail this is kept in `ProtobufCDescriptors.rejected` and was 0 on every image
+scanned. `_protobuf_c_*` symbols (binary mode: symbol table / export trie; cache-native:
+the `.symbols` sub-cache) are reported as corroboration and are the only signal for an
+image that carries the runtime but no descriptors; they are absent from stripped images
+such as TouchML.
+
+**Known affected.** iPhone 8 (iOS 16.7.11) cache, 2705 images: `MMCS` (48 messages,
+1 enum) and `TouchML` (10 messages, 1 enum); 2 images. iOS 27 cache, 4695 images: `MMCS`
+(52 / 1), `TouchML` (10 / 1) and `BiomeStreams` (232 / 57); 3 images. Binary mode over the
+extracted iPhone 8 files (`libexec/`, the daemon binaries and `dylib/System`, 2607 binaries) gives the
+same two frameworks and nothing else. No other image — GeoServices, locationd, CloudKit and the C++ /
+swift-protobuf images included — produced a hit or a rejected magic word.
+
+**Source sites.** `serializers/protobufc_detect.py` (`find_protobufc_descriptors`,
+`protobufc_symbols`); `proto/extractor.py` (`protobufc_descriptors`,
+`_warn_if_foreign_protobuf`); `proto/foreign.py` (`summarize_serializers`, the
+`PROTOBUFC_SERIALIZER` detect-only summary); `cli.py` (`--list-serializers`).
+Tests: `tests/test_protobufc_detect.py`.

@@ -92,11 +92,14 @@ the output package name), `--verbose`, `--version`.
       [C++ `libprotobuf` extraction](#c-libprotobuf-extraction).
     - `swift-protobuf`: names and numbers are read from each message's name map and
       types from Swift reflection metadata. See [swift-protobuf extraction](#swift-protobuf-extraction).
-- **Two more runtimes are detected but not decoded.** Google's Objective-C runtime
+- **Three more runtimes are detected but not decoded.** Google's Objective-C runtime
   (`GPBMessage` / `protobuf-objc`, for example Apple's **Key Transparency** classes in
-  `transparencyd`) and C++ `libprotobuf-lite`, which strips its descriptors so no names
-  or numbers can be recovered. When an image carries messages from either, the tool prints
-  one consolidated warning naming them, and `--list-serializers` lists them.
+  `transparencyd`), C++ `libprotobuf-lite`, which strips its descriptors so no names
+  or numbers can be recovered, and the C `protobuf-c` runtime (Apple's `MMCS`), whose
+  message and enum descriptors are counted and named but whose fields are not read
+  ([LIMITATIONS.md](LIMITATIONS.md) item 12). When an image carries messages from any of
+  them, the tool prints one consolidated warning naming them, and `--list-serializers`
+  lists them.
   - Detection also tells apart a top-level `google::protobuf` from vendored static copies
     such as Apple Wireless Diagnostics' `wireless_diagnostics::google::protobuf`. Merely
     *linking* `libprotobuf.dylib` without referencing it does not trip the detector.

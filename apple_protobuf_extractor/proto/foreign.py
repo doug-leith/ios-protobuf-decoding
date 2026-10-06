@@ -39,6 +39,7 @@ log = logging.getLogger(__name__)
 CPP_SERIALIZER = "C++ libprotobuf (google::protobuf)"
 CPP_LITE_SERIALIZER = "C++ libprotobuf-lite (google::protobuf)"
 SWIFT_SERIALIZER = "swift-protobuf"
+PROTOBUFC_SERIALIZER = "protobuf-c (C runtime)"
 
 
 def _sanitize_pkg(name: str) -> str:
@@ -473,10 +474,12 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
     * PBCodable — the PBCodable subclass set (``_proto_class_set``);
     * C++ libprotobuf — message names from the embedded FileDescriptorProtos;
     * swift-protobuf — conformance-descriptor type names;
-    * GPBMessage — the GPB subclass set (detected, not decodable).
+    * GPBMessage — the GPB subclass set (detected, not decodable);
+    * protobuf-c — descriptor-magic scan of the data sections (detected, not decodable).
     """
     from proto.extractor import (_proto_class_set, google_protobuf_classes,
-                                 swift_protobuf_messages, cpp_protobuf_namespaces)
+                                 swift_protobuf_messages, cpp_protobuf_namespaces,
+                                 protobufc_descriptors)
     out: List[SerializerSummary] = []
 
     pb = sorted(_proto_class_set(ctx, cl))
@@ -553,6 +556,22 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
         # Detect-only — accepted limitation, see LIMITATIONS.md (8), #64.
         out.append(SerializerSummary("Google protobuf-objc (GPBMessage)",
                                      False, sorted(gpb_subs)))
+
+    try:
+        pbc = protobufc_descriptors(ctx)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        log.debug("protobuf-c detection failed: %s", exc)
+        pbc = None
+    if pbc:
+        # Detect-only — accepted limitation, see LIMITATIONS.md (12).  Names are the
+        # descriptors' own (package-qualified) names; field layouts are not decoded.
+        note = ("%d message + %d enum descriptor(s), %d _protobuf_c_* runtime symbol(s); "
+                "field layouts (ProtobufCFieldDescriptor) are not decoded"
+                % (len(pbc.messages), len(pbc.enums), len(pbc.symbols)))
+        out.append(SerializerSummary(PROTOBUFC_SERIALIZER, False,
+                                     pbc.messages, note=note))
     return out
 
 

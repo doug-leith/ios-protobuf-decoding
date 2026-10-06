@@ -188,7 +188,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--list-serializers",
         action="store_true",
         help="Print the protobuf serializers present (PBCodable, C++ libprotobuf, "
-             "swift-protobuf, GPBMessage) and the message names under each, then "
+             "swift-protobuf, GPBMessage, protobuf-c) and the message names under each, then "
              "exit — a quick overview without full extraction.",
     )
 
@@ -332,6 +332,8 @@ def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native)
             print(f"    {note}")
         else:
             print(f"\n  {s.label} — {len(s.names)} message(s){tag}:")
+            if note:
+                print(f"    ({note})")
             for n in s.names:
                 print(f"    {n}")
     if summaries:
@@ -340,9 +342,10 @@ def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native)
             "swift-protobuf (names+numbers; types from reflection, int "
             "subtype/oneof limited)."
             "\n    Detect-only: C++ libprotobuf-lite (descriptors stripped — "
-            "names/numbers unrecoverable), GPBMessage (not yet decoded)."
+            "names/numbers unrecoverable), GPBMessage (not yet decoded), "
+            "protobuf-c (descriptor names listed; fields not decoded)."
             "\n    Cache-native (--framework) decodes PBCodable + C++-full + "
-            "swift and detects lite/GPB, all via the .symbols nlist / "
+            "swift and detects lite/GPB/protobuf-c, all via the .symbols nlist / "
             "descriptor sections."
         )
     print()

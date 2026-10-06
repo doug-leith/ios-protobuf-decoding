@@ -96,6 +96,7 @@ from proto.enums     import _qualify_enum_name, _collect_enum_definitions
 from proto.enums_debug import _emit_mode_a_debug
 from proto.config    import _class_to_proto_name
 from proto.defaults  import DEFAULT_PREFIXES
+from serializers.protobufc_detect import ProtobufCDescriptors, find_protobufc_descriptors
 
 log = logging.getLogger(__name__)
 
@@ -642,6 +643,15 @@ def cpp_protobuf_symbol_count(ctx: BinaryContext) -> int:
     return sum(cpp_protobuf_namespaces(ctx).values())
 
 
+def protobufc_descriptors(ctx: BinaryContext) -> ProtobufCDescriptors:
+    """protobuf-c (C runtime, e.g. Apple MMCS) message/enum descriptors and runtime
+    symbols in *ctx* — detection only (see :mod:`serializers.protobufc_detect`).
+    Reads data sections through the memory API, so it works in BOTH modes; memoised
+    per ctx because the warning and ``--list-serializers`` both ask."""
+    return _ctx_cache(ctx, "_protobufc_descriptors_cache",
+                      lambda: find_protobufc_descriptors(ctx))
+
+
 def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
     """Emit ONE consolidated note when an image carries protobuf messages from
     runtimes other than Apple ``PBCodable``.
@@ -649,9 +659,10 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
     The tool now *decodes* several of these in addition to PBCodable: C++
     ``google::protobuf`` (full descriptors) and swift-protobuf (field names +
     numbers) are emitted as additional, serializer-tagged ``.proto`` files (see
-    :mod:`proto.foreign`).  Google's ObjC ``GPBMessage`` is detected but not yet
-    decodable.  This distinguishes the two so the user knows what was emitted vs
-    merely flagged.  Swift/C++ detection is binary-mode only."""
+    :mod:`proto.foreign`).  Google's ObjC ``GPBMessage`` and the protobuf-c C runtime
+    are detected but not decodable.  This distinguishes the two so the user knows
+    what was emitted vs merely flagged.  Swift/C++ detection is binary-mode only;
+    protobuf-c detection works in both modes."""
     decoded: List[str] = []      # runtimes whose descriptors we emit
     detected: List[str] = []     # present but not decodable
 
@@ -685,6 +696,24 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
             "GPBDescriptor runtime; not yet decodable by this tool" % (
                 "/".join(sorted(gpb_bases)) or _GPB_RUNTIME_SUFFIX,
                 len(gpb_subs), ", ".join(sorted(gpb_subs)[:5]),
+            )
+        )
+
+    try:
+        pbc = protobufc_descriptors(ctx)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        log.debug("protobuf-c detection failed: %s", exc)
+        pbc = None
+    if pbc:
+        detected.append(
+            "protobuf-c (C runtime): %d message + %d enum descriptor(s)%s%s — a static "
+            "ProtobufCMessageDescriptor table; field layouts not decoded by this tool" % (
+                len(pbc.messages), len(pbc.enums),
+                ", e.g. " + ", ".join(pbc.messages[:5]) if pbc.messages else "",
+                "" if pbc.messages or pbc.enums else
+                " (runtime symbols only: %d _protobuf_c_* symbol(s))" % len(pbc.symbols),
             )
         )
 
@@ -1802,6 +1831,7 @@ __all__ = [
     "swift_protobuf_messages",
     "cpp_protobuf_namespaces",
     "cpp_protobuf_symbol_count",
+    "protobufc_descriptors",
     "SelectorsUnresolvedError",
     "_identify_string_write_helpers",
     "_find_string_write_helper",
