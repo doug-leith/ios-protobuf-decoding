@@ -108,6 +108,10 @@ class SwiftMessage:
     fields: List[SwiftField] = field(default_factory=list)
     is_enum: bool = False
     shape: str = ""                 # which lowering produced it (diagnostic)
+    # True when no name-map entries were recovered AND Swift reflection independently
+    # lists no stored proto field for the struct: the message is genuinely EMPTY (only
+    # swift-protobuf's unknownFields), not one whose name map could not be read.
+    fieldless: bool = False
 
     @property
     def qualified(self) -> str:
@@ -640,8 +644,8 @@ def _shared_once_init_targets(insns) -> List[int]:
     conditional branch (``cmn``/``b.ne`` etc.) first and is rejected here --
     without this gate, an `adr` sitting anywhere later in that LONGER function
     (its cold path, e.g.) would be wrongly treated as a shape-D builder
-    reference (#74 regression: remindd's UnmigrateRequest, a genuinely-empty
-    once-init message, picked up its sibling `Option` enum's builder this way).
+    reference (#74 regression: remindd's UnmigrateRequest picked up its sibling
+    `Option` enum's builder this way).
 
     The once-token and storage slot live in ``__DATA`` and are routinely out
     of ``adr`` reach (+-1 MB), so the compiler materialises them with
@@ -801,6 +805,10 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
                     continue
                 got = _walk_namemap_builder(ctx, inner, enum)
                 trunc = _disasm_hit_cap(inner, 400)
+                if not got:
+                    # the closure may itself be only an arg-setup stub that tail-calls
+                    # the real builder (the Google well-known wrappers do)
+                    got = _walk_namemap_builder_hop(ctx, ct, enum)
                 if got:
                     break
         if len(got) > len(best):
@@ -814,6 +822,45 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
         for f in best:
             f.number_confirmed = False
     return best
+
+
+def _single_entry_stub(ctx: BinaryContext, va: int) -> List[SwiftField]:
+    """Shape F: a builder that is only an arg-setup stub for the shared SINGLE-entry
+    ``_NameMap`` template -- ``adrp/add x1,<slot>; adrp/add x3,<name>; mov w2,#<number>;
+    mov w4,#<len>; b <template>``.  The template stores ``x2`` (the field number), ``x3``
+    and ``x4`` (name pointer and length) as the one entry, so the number is a literal,
+    unlike the shape-B tail call where it must come from ``decodeMessage``.  Accepted only
+    when the length matches the name's cstring."""
+    try:
+        insns = disasm(ctx, va, max_insns=16, stop_at_ret=False)
+    except Exception:
+        return []
+    page: Dict[str, int] = {}
+    regs: Dict[str, int] = {}
+    imm: Dict[str, int] = {}
+    for ins in insns:
+        m, o = ins.mnemonic, ins.op_str
+        parts = [x.strip() for x in o.split(",")]
+        if m == "adrp":
+            page[parts[0]] = _adr_target(ins)
+        elif m == "adr":
+            regs[parts[0]] = _adr_target(ins)
+        elif m == "add":
+            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
+            if mm and page.get(mm.group(2)) is not None:
+                regs[mm.group(1)] = page[mm.group(2)] + int(mm.group(3), 0)
+        elif m in ("mov", "movz") and len(parts) == 2 and _imm(parts[1]) is not None:
+            imm[parts[0]] = _imm(parts[1])
+        elif m == "b":
+            break
+        elif m != "nop":
+            return []
+    if "x3" not in regs or "w2" not in imm or "w4" not in imm:
+        return []
+    name = _cstr(ctx, regs["x3"])
+    if not name or len(name) != imm["w4"] or not 1 <= imm["w2"] <= _MAX_FIELD_NUMBER:
+        return []
+    return [SwiftField(imm["w2"], name)]
 
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
@@ -1074,6 +1121,11 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     if len(got) > (0 if enum else 1) and _namemap_builder_validated(
             ctx, got, decode_va, traverse_va, enum):
         return got, "runtime-namemap"
+    # a runtime builder with exactly ONE entry is held back: the shape-B single-field
+    # path below can confirm the number from decodeMessage/traverse.  If B finds nothing
+    # (the well-known wrappers such as BoolValue), the builder's own literal entry is
+    # still exact, so it is used -- under the same oracle validation.
+    runtime_single = got if (len(got) == 1 and not enum) else None
 
     # D — shared once-init template (`adr x0,<token>; adr x1,<storage>;
     # adr x2,<builder>; b <shared-template>`): chase every `adr`'d CODE
@@ -1083,14 +1135,20 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     # arg-setup stub for a second shared template) -- oracle-validated for
     # the same reason as runtime-namemap.  #74.
     best_shared: List[SwiftField] = []
+    shared_shape = "shared-once"
     for t in _shared_once_init_targets(insns):
         if t == init_va or not _in_executable_text(ctx, t):
             continue
         got = _walk_namemap_builder_hop(ctx, t, enum)
+        stub = False
+        if not got and not enum:
+            got = _single_entry_stub(ctx, t)
+            stub = bool(got)
         if len(got) > len(best_shared):
             best_shared = got
+            shared_shape = "single-stub" if stub else "shared-once"
     if best_shared and _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum):
-        return best_shared, "shared-once"
+        return best_shared, shared_shape
 
     # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the
     # getter hands a string literal + length to a shared template.  Placed after
@@ -1131,6 +1189,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     got = _single_field_tail_call(ctx, insns, decode_va, traverse_va)
     if got:
         return got, "single"
+    if runtime_single and _namemap_builder_validated(ctx, runtime_single, decode_va, traverse_va):
+        return runtime_single, "runtime-single"
     return [], "none"
 
 
@@ -1206,6 +1266,11 @@ def _norm(name: str) -> str:
     return name.replace("_", "").lower()
 
 
+# Readings with no cross-check of their own (one builder entry / one stub entry): kept only
+# when Swift reflection agrees the message has that field.
+_REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single", "single-stub"})
+
+
 def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
     """Recover field TYPES from Swift field metadata and bind them onto the
     name+number fields by normalised field name (best-effort; leaves proto_type
@@ -1214,9 +1279,19 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
     so oneof/storage-backed fields are now covered too."""
     try:
         from serializers import swift_type_recovery
-        by_type, incomplete = swift_type_recovery._collect_field_types(ctx)
+        by_type, incomplete, fieldless = swift_type_recovery._collect_field_types_ex(ctx)
     except Exception:
         return
+    for m in msgs:
+        if m.shape in _REFLECTION_CONFIRMED_SHAPES and m.fields:
+            # single-entry readings whose only support is the literal itself: the struct's
+            # reflection must list that field, or the reading is another type's
+            # (e.g. an empty message whose getter reaches a sibling's closure).
+            refl = {_norm(k) for k in by_type.get(m.name, {})}
+            if _norm(m.fields[0].name) not in refl:
+                m.fields, m.shape = [], "none"
+        if not m.fields and m.name in fieldless:
+            m.fieldless = True
     if not by_type:
         return
     # the type map is keyed by the type's QUALIFIED name (Outer.Inner); look up by

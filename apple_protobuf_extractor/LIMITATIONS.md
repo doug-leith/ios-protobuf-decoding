@@ -447,8 +447,20 @@ image's own name maps (another module such as `Ckcode_*`, or the well-known type
 `Google_Protobuf_*`) is emitted as `bytes` with an `unresolved:` note. That is
 wire-correct for a message but not for an enum from another module.
 
-**(e) Messages with no fields.** A genuinely empty message and a message whose name map
-could not be read are both written as `// (no fields recovered)`.
+**(e) Messages with no fields.** Two different things used to be written as
+`// (no fields recovered)`. A message is now marked `// opaque passthrough — serializes
+only PBUnknownFields (no typed fields in this build)` when no name-map entries were read
+**and** Swift reflection independently lists no stored proto field for the struct: it is
+genuinely empty (only swift-protobuf's `unknownFields`). `// (no fields recovered)` is
+kept for a message whose name map could not be read, so it now means a real miss. In the
+30 swift-protobuf images surveyed (2,351 messages), 185 have no fields: 139 are the first
+kind and 46 the second (31 of them in `PegasusAPI`, which uses several further getter
+lowerings, 5 built inline in `StrokeAnimation`, and a handful elsewhere).
+
+Two readings have no cross-check of their own, a runtime-built name map with exactly one
+entry and a one-entry arg-setup stub, so they are accepted only if the struct's
+reflection lists a field with that name (a sibling type's closure otherwise gets
+read as the message's own).
 
 **Unrecovered types.** A fully-unrecovered type is emitted as `bytes` with the inline
 `// swift-protobuf: type not recovered` note rather than a guess.

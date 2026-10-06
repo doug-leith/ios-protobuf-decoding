@@ -479,10 +479,20 @@ def _owner_type_name(ctx, desc) -> Optional[str]:
 
 
 def _collect_field_types(ctx):
-    """Walk ``__swift5_types`` once and return ``(types, incomplete)``:
+    """``(types, incomplete)`` -- see :func:`_collect_field_types_ex`."""
+    out, incomplete, _ = _collect_field_types_ex(ctx)
+    return out, incomplete
+
+
+def _collect_field_types_ex(ctx):
+    """Walk ``__swift5_types`` once and return ``(types, incomplete, fieldless)``:
       * ``types``      — ``{qualified_type_name: {field_name: proto_type}}``
       * ``incomplete`` — ``{qualified_type_name: set(field_names)}`` for fields whose
         ``proto_type`` carries a ``bytes`` guess filler (#67).
+      * ``fieldless``  — qualified names of struct types whose reflection metadata
+        lists NO stored proto field (own struct, COW storage class and oneof members
+        all empty): the independent proof that a message with no recovered name-map
+        entries is genuinely EMPTY rather than unread.
 
     Covers the message struct's directly-stored proto fields, the fields moved into
     a copy-on-write ``_StorageClass`` for larger messages, AND the members of a
@@ -491,9 +501,10 @@ def _collect_field_types(ctx):
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
     except Exception:
-        return {}, {}
+        return {}, {}, set()
     out: Dict[str, Dict[str, str]] = {}
     incomplete: Dict[str, set] = {}
+    structs: set = set()
     for i in range(sec.vmsize // 4):
         # one malformed descriptor must never abort whole-image recovery.
         try:
@@ -516,6 +527,8 @@ def _collect_field_types(ctx):
                 continue
             if not key:
                 continue
+            if kind == _STRUCT_KIND:
+                structs.add(key)
             fields, inc = _read_field_types(ctx, desc)
             if fields:
                 out.setdefault(key, {}).update(fields)
@@ -523,7 +536,7 @@ def _collect_field_types(ctx):
                 incomplete.setdefault(key, set()).update(inc)
         except Exception:
             continue
-    return out, incomplete
+    return out, incomplete, structs - set(out)
 
 
 def recover_field_types(ctx) -> Dict[str, Dict[str, str]]:

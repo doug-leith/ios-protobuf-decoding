@@ -323,7 +323,10 @@ def swift_messages(ctx) -> List[ProtoMessage]:
         pkg = _sanitize_pkg(m.module) if m.module else "swift_protobuf"
         fields = [_swift_field(f, m.module, types) for f in m.fields]
         pm = ProtoMessage(name=_flat(m.name), class_name=_flat(m.name),
-                          package=pkg, serializer=SWIFT_SERIALIZER, fields=fields)
+                          package=pkg, serializer=SWIFT_SERIALIZER, fields=fields,
+                          # reflection lists no field either: genuinely empty (only the
+                          # unknown-fields bag), not an unread name map
+                          opaque_passthrough=bool(m.fieldless and not m.fields))
         out.append(pm)
         by_key[(m.module, m.name)] = pm
     _attach_swift_enums(enum_defs, out, by_key)

@@ -638,11 +638,24 @@ class TestLiveRemindd(unittest.TestCase):
             {(1, "time_elapsed"), (2, "is_observer"),
              (3, "lists_migrated"), (4, "reminders_migrated")})
 
+    def test_well_known_wrappers_single_runtime_entry(self):
+        # BoolValue & co: a runtime-built name map with ONE entry, reached through a closure
+        # that is only a stub tail-calling the real builder.  Held back before (the
+        # single-field path found nothing), and confirmed against reflection now.
+        for name, typ in (("Google_Protobuf_BoolValue", "bool"), ("Google_Protobuf_StringValue", "string"),
+                          ("Google_Protobuf_Int64Value", "int64"), ("Google_Protobuf_DoubleValue", "double")):
+            self.assertEqual(_fieldset(self.msgs[name]), {(1, "value")}, name)
+            self.assertEqual(self.msgs[name].fields[0].proto_type, typ)
+
     def test_empty_message(self):
         # A message whose nameMap carries no entries recovers as zero fields —
         # not an error, not a spurious field.
         self.assertEqual(self.msgs["Google_Protobuf_Empty"].fields, [])
-        self.assertEqual(self.msgs["UnmigrateRequest"].fields, [])
+        self.assertTrue(self.msgs["Google_Protobuf_Empty"].fieldless)   # reflection agrees
+        # UnmigrateRequest was long believed empty (its runtime name map has ONE entry, which
+        # the extractor declined to read).  It is not: the struct has `options: UInt32`,
+        # decodeMessage switches on field 1 and traverse visits 1.
+        self.assertEqual(_fieldset(self.msgs["UnmigrateRequest"]), {(1, "options")})
 
     def test_numbers_confirmed(self):
         m = self.msgs["StartMigrationRequest.Credential"]
@@ -751,6 +764,13 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
         for name in ("ReportHealthResponse", "PushHealthInquiryRequest",
                      "ValidatePeersRequest", "GetSupportAppInfoRequest"):
             self.assertEqual(self.msgs[name].fields, [], name)
+
+    def test_every_empty_message_is_proven_empty_by_reflection(self):
+        # none of the 9 is merely unread: Swift reflection lists no stored proto field
+        empty = [m for m in self.msgs.values() if not m.fields]
+        self.assertEqual(len(empty), 9)
+        self.assertTrue(all(m.fieldless for m in empty), [m.name for m in empty if not m.fieldless])
+        self.assertFalse(any(m.fieldless for m in self.msgs.values() if m.fields))
 
     def test_most_messages_recovered(self):
         # 64/73 have fields; the other 9 are empty request/response stubs.
@@ -1070,6 +1090,49 @@ class TestDispatchStub(unittest.TestCase):
 
     def test_no_branch_is_not_a_stub(self):
         self.assertFalse(S._is_dispatch_stub([_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #8")]))
+
+
+def _pegasus_path():
+    try:
+        import artifacts
+        p = os.path.join(artifacts.data_dir(), "iphone8_data", "dylib", "System", "Library",
+                         "PrivateFrameworks", "PegasusAPI.framework", "PegasusAPI")
+        return p if os.path.isfile(p) else None
+    except Exception:
+        return None
+
+
+@unittest.skipUnless(_pegasus_path(), "PegasusAPI image not available")
+class TestLivePegasusSingleEntryStub(unittest.TestCase):
+    """Builders that are only an arg-setup stub for the shared single-entry template:
+    ``adrp/add x1,<slot>; adrp/add x3,<name>; mov w2,#<number>; mov w4,#<len>; b <tmpl>``.
+    The number is a literal (here 2, not 1, so it is not a default)."""
+    @classmethod
+    def setUpClass(cls):
+        cls.msgs = {m.name: m for m in S.swift_messages(_load_ctx(_pegasus_path()))}
+
+    def test_number_is_read_from_the_stub(self):
+        m = self.msgs["Searchfoundation_ReferentialCommand"]
+        self.assertEqual(_fieldset(m), {(2, "referenceIdentifier")})
+        self.assertEqual(m.shape, "single-stub")
+        self.assertEqual(m.fields[0].proto_type, "string")
+
+
+class TestFieldlessMarker(unittest.TestCase):
+    def test_provably_empty_message_is_flagged_not_failed(self):
+        from proto import foreign as F
+        orig = S.swift_messages
+        sm = [S.SwiftMessage(module="m", name="Empty", fieldless=True),
+              S.SwiftMessage(module="m", name="Unread"),
+              S.SwiftMessage(module="m", name="Real", fields=[S.SwiftField(1, "a", proto_type="int32")])]
+        S.swift_messages = lambda ctx: sm
+        try:
+            msgs = {x.name: x for x in F.swift_messages(_FakeCtx(b"\x00" * 64))}
+        finally:
+            S.swift_messages = orig
+        self.assertTrue(msgs["Empty"].opaque_passthrough)
+        self.assertFalse(msgs["Unread"].opaque_passthrough)      # still reported as not recovered
+        self.assertFalse(msgs["Real"].opaque_passthrough)
 
 
 class TestLiveDecoderCrossCheck(unittest.TestCase):
