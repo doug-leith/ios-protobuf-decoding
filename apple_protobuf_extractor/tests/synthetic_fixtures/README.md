@@ -410,6 +410,31 @@ f27_compare_tree_engine_no_guard/ The newest arm64e engines' shape: a
                              guard, engine loads exactly its own class's slots
                              and nobody else's) is in
                              tests/test_newer_toolchain_fixtures.py
+f24_enum_dictrep_hybrid/    `_dictionaryRepresentation:` enum harvest, HYBRID
+                             shape: one switch lowered to a jump table for
+                             the dense low values (0,1,2,5) PLUS isolated
+                             `cmp #K; b.eq` compares for the sparse high
+                             ones (20,30,40,50,60) -- real GEOPDComponent
+                             `ComponentStatus` values. Covers
+                             `_scan_dictrep_isolated_cmps`, previously only
+                             reached by a Live real-cache test (f19's
+                             `category` is dense-only). REAL COMPILED CODE
+                             (gotcha 13, Xcode 11.1 hybrid), no hand-asm: a
+                             plain 9-case switch lowers to exactly this
+                             shape first try. Differential-checked:
+                             without the sparse harvester only 0,1,2,5
+                             recover
+f25_enum_large_bias/        `_leading_materialized_bias`: a jump-table
+                             segment whose index bias (50000) is too large
+                             for `sub #imm12`, so the compiler materialises
+                             it (`mov w8,#-0xc350 ; add w8,w2,w8`) -- the
+                             >4095 analytics/log enums (TODO #53). No
+                             fixture had values that large before. REAL
+                             COMPILED CODE (gotcha 13): a two-cluster switch
+                             (0-3, 50000-50003), old-clang hybrid so the low
+                             cluster keeps f18's shared-epilogue shape.
+                             Differential-checked: without the function
+                             only 0..3 recover
 f28_enum_dictrep_biased/    `_field_routes_through_xasstring`: a 1-based,
                              dictRep-ONLY pointer-table enum (`sub w9,w8,#1`
                              before the indexed name read -- the iOS 16

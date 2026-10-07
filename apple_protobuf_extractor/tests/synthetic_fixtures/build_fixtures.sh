@@ -403,6 +403,26 @@ if want f27_compare_tree_engine_no_guard; then
         f27_compare_tree_engine_no_guard/helpers.m
 fi
 
+if want f24_enum_dictrep_hybrid; then
+    # Hybrid `_dictionaryRepresentation:` enum (jump table for the dense low
+    # values + isolated compares for the sparse high ones), real
+    # ComponentStatus values. Real compiled code via the old-clang hybrid
+    # (gotcha 13): this repo's normal clang lowers the sparse half differently.
+    build_fixture_oldxc f24_enum_dictrep_hybrid \
+        f24_enum_dictrep_hybrid/testedh \
+        f24_enum_dictrep_hybrid/fixture.m
+fi
+
+if want f25_enum_large_bias; then
+    # _leading_materialized_bias: a jump-table segment whose index bias (50000)
+    # is too large for `sub #imm12` and is materialised in a register. Real
+    # compiled code via the old-clang hybrid (gotcha 13), so the low segment
+    # keeps the shared-epilogue shape (as f18).
+    build_fixture_oldxc f25_enum_large_bias \
+        f25_enum_large_bias/testelb \
+        f25_enum_large_bias/fixture.m
+fi
+
 if want f28_enum_dictrep_biased; then
     # 1-based dictRep-only enum (`sub w9,w8,#1 ; cmp w9,#N-1 ; b.hi ; ldr x,[table,
     # w9,uxtw #3]` -- the iOS 16 GeoServices shape of GEOPDGroundDataBuild.type,
