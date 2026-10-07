@@ -59,6 +59,7 @@ _FIXTURES = [
     ("f21_enum_long_body_extent", "testlbe"),
     ("f22_writeto_forward_array_load", "testfwd"),
     ("f23_writeto_hoisted_value", "testhoist"),
+    ("f28_enum_dictrep_biased", "testbiased"),
     ("f24_dictrep_compare_chain", "testdcc"),
     ("f25_newer_dispatch_engine", "testnde"),
     # arm64e builds of the same sources (PAC code, chained-fixup format 12) —

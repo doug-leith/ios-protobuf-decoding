@@ -410,6 +410,19 @@ f27_compare_tree_engine_no_guard/ The newest arm64e engines' shape: a
                              guard, engine loads exactly its own class's slots
                              and nobody else's) is in
                              tests/test_newer_toolchain_fixtures.py
+f28_enum_dictrep_biased/    `_field_routes_through_xasstring`: a 1-based,
+                             dictRep-ONLY pointer-table enum (`sub w9,w8,#1`
+                             before the indexed name read -- the iOS 16
+                             GeoServices shape of GEOPDGroundDataBuild.type)
+                             in a binary where a DIFFERENT class defines
+                             `typeAsString:`.  The image-wide selector pool
+                             made the field look xAsString-routed, so the
+                             bias was dropped (1..3 came out 0..2).  Also
+                             pins the other side: a field with its own
+                             kindAsString: is left to that path (no double
+                             bias).  REAL COMPILED CODE, plain build.
+                             Differential-checked: with the pool-based gate
+                             TestBuildType is 0..2
 ```
 
 f1-f5 each isolate ONE recovery mechanism in a minimal toy message (1-6

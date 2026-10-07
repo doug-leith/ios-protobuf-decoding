@@ -336,20 +336,24 @@ def _field_routes_through_xasstring(cls, st, ivar_name: str) -> bool:
     Such a field's enum is recovered (and bias-corrected) by the xAsString: path,
     so the dictRep harvester must NOT also apply a leading-sub bias to it — doing
     so would double-bias or mis-bias an enum the xAsString path already owns.
-    This is the exact dictRep-vs-xAsString discriminator the #54 census used to
-    isolate the 3 confirmed dictRep-only biased enums; checks both the resolved
-    method list and the raw selector pool (cache-native runs may not name-resolve
-    the method but the selector string is still in ``__objc_methname``)."""
+    The test is whether THIS class defines the selector.  The raw selector pool
+    (``__objc_methname``) is shared by every class in the image, so a pool hit
+    says only that SOME class has e.g. ``typeAsString:`` — on GeoServices that is
+    true of nearly every common field name, and used as the gate it silently
+    suppressed the bias for ``GEOPDGroundDataBuild.type`` (a dictRep-only 1-based
+    enum emitted 0-based: T300=0 instead of 1).  The pool is consulted only when
+    the class's own method list is empty (a class whose ``baseMethods`` could not
+    be parsed), where it is the only evidence left."""
     pname = _proto_name(ivar_name)
     if not pname:
         return False
     cap = pname[:1].upper() + pname[1:]
-    for sel in (f"{pname}AsString:", f"StringAs{cap}:"):
-        if cls.get_method(sel):
-            return True
-        if st is not None and st.find(sel):
-            return True
-    return False
+    sels = (f"{pname}AsString:", f"StringAs{cap}:")
+    if any(cls.get_method(sel) for sel in sels):
+        return True
+    if getattr(cls, 'methods', None):
+        return False                   # method list parsed: absence is real
+    return st is not None and any(st.find(sel) for sel in sels)
 
 
 # Unconditional terminals that END a jump-table case block — used to truncate the

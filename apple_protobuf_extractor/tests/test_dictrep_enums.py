@@ -120,6 +120,19 @@ class TestFieldRoutesThroughXAsString(unittest.TestCase):
         st = self._FakeSt({'laneClosureTypeAsString:'})
         self.assertTrue(_field_routes_through_xasstring(cls, st, '_laneClosureType'))
 
+    def test_selector_pool_of_other_classes_is_not_evidence(self):
+        # The pool is image-wide: `typeAsString:` there only means SOME class has it.
+        # A class whose own (parsed, non-empty) method list lacks the selector does
+        # not route through xAsString: -- GEOPDGroundDataBuild.type on iOS 16.
+        from proto.enums import _field_routes_through_xasstring
+
+        class _ParsedCls(self._FakeCls):
+            methods = [object()]          # a method list WAS parsed
+
+        cls = _ParsedCls(set())
+        st = self._FakeSt({'typeAsString:'})
+        self.assertFalse(_field_routes_through_xasstring(cls, st, '_type'))
+
     def test_dictrep_only_field_is_not_routed(self):
         # Only covers the trivial default-False branch (no method-list hit, no
         # selector-pool hit) of _field_routes_through_xasstring; the three True-
@@ -622,15 +635,12 @@ class TestDictRepEnumsLive(unittest.TestCase):
             self.assertEqual(chain.get(1), 'DIFFERENT_FROM')
             self.assertNotIn(0, chain)
 
-    def test_xasstring_routed_field_not_rebiased(self):
-        """A field WITH an xAsString: selector keeps its bias handled by that path —
-        the dictRep harvester must not shift it (guards the resultStatus/laneClosureType
-        false positives the unconditional bias produced)."""
-        d = self._harvest_field('GEOTFIncident', 'laneClosureType')
-        if not d:
-            self.skipTest('GEOTFIncident.laneClosureType dictRep enum not recovered')
-        # left at the raw 0-based table index (xAsString path owns any real bias).
-        self.assertIn(0, d, 'xAsString-routed field was wrongly re-biased off 0')
+    # (Removed test_xasstring_routed_field_not_rebiased: it asserted GEOTFIncident.
+    # laneClosureType stays 0-based because "it has an xAsString: selector".  It has
+    # none -- the image-wide selector pool hit that suggested it was another class's --
+    # and its dictRep is `sub w9,w8,#1 ; cmp w9,#9`, i.e. 1..9.  That is now pinned by
+    # TestBiasedDictRepEnumsLive; the genuine xAsString-owned side (no double bias) by
+    # the f28 TestKind fixture and TestFieldRoutesThroughXAsString.)
 
     def test_function_body_extent_closes_on_terminal(self):
         """The extent finder returns a contiguous body ending in a terminal (the
@@ -1009,6 +1019,82 @@ class TestLongMethodNotFalselyTruncatedLive(unittest.TestCase):
             self.skipTest('keyAsString: not found')
         self.assertGreaterEqual(n, 100)
         self.assertFalse(trunc, 'long-but-complete enum must NOT be flagged truncated')
+
+
+@unittest.skipUnless(_CACHE_MAIN is not None, _SKIP_MSG)
+class TestBiasedDictRepEnumsLive(unittest.TestCase):
+    """1-based dictRep-only enums on the real iOS 16 GeoServices image.
+
+    Each of these fields is serialised by ``sub w9,w8,#1 ; cmp w9,#N ; b.hs ;
+    ldr x,[table,w9,sxtw #3]`` in ``-[Class _dictionaryRepresentation:]`` and has
+    NO ``xAsString:`` selector on its own class -- but the same selector spelling
+    (``typeAsString:``, ``resultStatusAsString:``, ``laneClosureTypeAsString:``)
+    exists on OTHER classes, which used to make the image-wide selector pool read as
+    "routes through xAsString:" and drop the bias (values came out 0-based).
+    Ground truth: the ``sub #1`` / ``cmp #N`` at the cited addresses
+    (GEOPDGroundDataBuild 0x18d1173c0 N=3, GEOPDSearchQuerySpellCorrectionMetadata
+    0x18cbf20c8 N=6, GEOTFIncident 0x18c55e374 N=9) and the iOS 27 extraction."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        from macho.strings import build_string_table
+        from macho.classlist import build_class_list
+        from macho.local_symbols import apply_to_classes
+        from proto.protocore import _proto_name
+        from proto.enums import _harvest_dictrep_enums
+
+        cls.reader = DyldCacheReader(_CACHE_MAIN)
+        mv = cls.reader.find_image_header('GeoServices')
+        cls.res = {}
+        if mv is None:
+            return
+        ctx = BinaryContext.from_cache(cls.reader, mv)
+        st = build_string_table(ctx)
+        clist = build_class_list(ctx, st)
+        syms = cls.reader.image_local_symbols(mv)
+        if syms:
+            apply_to_classes(clist, syms)
+        cls.st = st
+        for cn, field in (('GEOPDGroundDataBuild', 'type'),
+                          ('GEOPDSearchQuerySpellCorrectionMetadata', 'resultStatus'),
+                          ('GEOTFIncident', 'laneClosureType')):
+            c = next((c for c in clist if c.name == cn and not c.is_meta), None)
+            if c is None:
+                continue
+            off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}.get(field)
+            cls.res[cn] = dict(_harvest_dictrep_enums(ctx, c, st).get(off, []))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.reader.close()
+
+    def _get(self, cn):
+        if not self.res.get(cn):
+            self.skipTest(f'{cn} enum not recovered / class absent')
+        return self.res[cn]
+
+    def test_selector_pool_holds_the_colliding_selectors(self):
+        # The precondition that made the old gate misfire: the pool has the selector
+        # (from other classes) although GEOPDGroundDataBuild itself has none.
+        self.assertTrue(self.st.find('typeAsString:'))
+
+    def test_ground_data_build_type_is_one_based(self):
+        d = self._get('GEOPDGroundDataBuild')
+        self.assertEqual(d, {1: 'T300', 2: 'T400', 3: 'T392C'})
+
+    def test_spell_correction_result_status_is_one_based(self):
+        d = self._get('GEOPDSearchQuerySpellCorrectionMetadata')
+        self.assertEqual(sorted(d), [1, 2, 3, 4, 5, 6])
+        self.assertEqual(d[1], 'NOT_IN_WHITE_LIST')
+        self.assertEqual(d[6], 'NOT_PROCESSED')
+
+    def test_lane_closure_type_is_one_based(self):
+        d = self._get('GEOTFIncident')
+        self.assertEqual(sorted(d), list(range(1, 10)))
+        self.assertEqual(d[1], 'LEFT_LANE')
+        self.assertEqual(d[9], 'OFF_RAMP')
 
 
 if __name__ == '__main__':

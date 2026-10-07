@@ -403,4 +403,15 @@ if want f27_compare_tree_engine_no_guard; then
         f27_compare_tree_engine_no_guard/helpers.m
 fi
 
+if want f28_enum_dictrep_biased; then
+    # 1-based dictRep-only enum (`sub w9,w8,#1 ; cmp w9,#N-1 ; b.hi ; ldr x,[table,
+    # w9,uxtw #3]` -- the iOS 16 GeoServices shape of GEOPDGroundDataBuild.type,
+    # which gates `cmp #N ; b.hs`: the same unsigned range) in a binary where
+    # ANOTHER class defines typeAsString: -- regression for the shared-selector-pool
+    # false positive in _field_routes_through_xasstring.  Plain real compiled code.
+    build_fixture f28_enum_dictrep_biased \
+        -o f28_enum_dictrep_biased/testbiased \
+        f28_enum_dictrep_biased/fixture.m
+fi
+
 echo "Done."
