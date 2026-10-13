@@ -54,7 +54,8 @@ from proto.config import _class_to_proto_name
 from proto.dispatch import _read_raw_word
 from proto.enums import (_ENUM_UNRESOLVED_COMMENT, _enum_name_from_pairs, _harvest_cbz_value0,
                          _harvest_isolated_compares, _normalize_enum_value_name,
-                         _qualify_enum_name, _read_dictrep_pointer_pairs, _sub_imm_bias)
+                         _qualify_enum_name, _read_dictrep_pointer_pairs, _sub_imm_bias,
+                         _valid_value_bitmask)
 from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
@@ -605,35 +606,6 @@ def _gate_range(span: Sequence, words: Dict[int, int], upto: int) -> int:
     return 0
 
 
-def _span_valid_mask(span: Sequence) -> Optional[int]:
-    """The validity bitmask of a sparse-enum pointer table in *span*, or ``None``.
-
-    A table with holes (values the enum does not declare) is gated by a constant mask::
-
-        mov w10,#0xff9f ; movk w10,#3,lsl #16 ; lsr w10,w10,w9 ; tbnz w10,#0,<table load>
-
-    — bit v of the mask set = value v is declared; the holes' table slots hold a filler name
-    that must not be read as a value.  The gate branches either way round (``tbnz`` to the
-    load, or ``tbz`` to the unknown branch); the mask means the same.  (Same shape as
-    :func:`proto.enums._valid_value_bitmask`, which reads only the ``tbz`` form.)"""
-    consts: Dict[str, int] = {}
-    for i, ins in enumerate(span):
-        ops, mn = split_ops(ins.op_str), ins.mnemonic
-        if mn in ('mov', 'movz') and len(ops) == 2 and ops[1].startswith('#'):
-            if _norm_reg(ops[0]) and _parse_imm(ops[1]) is not None:
-                consts[_norm_reg(ops[0])] = _parse_imm(ops[1])
-        elif mn == 'movk' and len(ops) == 3 and ops[2].startswith('lsl'):
-            r, v, sh = _norm_reg(ops[0]), _parse_imm(ops[1]), _parse_imm(ops[2].split()[-1])
-            if r in consts and v is not None and sh is not None:
-                consts[r] = (consts[r] & ~(0xFFFF << sh)) | (v << sh)
-        elif mn == 'lsr' and len(ops) == 3 and i + 1 < len(span):
-            nxt, nops = span[i + 1], split_ops(span[i + 1].op_str)
-            if _norm_reg(ops[1]) in consts and nxt.mnemonic in ('tbz', 'tbnz') and len(nops) == 3 \
-                    and _norm_reg(nops[0]) == _norm_reg(ops[0]) and _parse_imm(nops[1]) == 0:
-                return consts[_norm_reg(ops[1])]
-    return None
-
-
 def _span_enum_pairs(ctx, span: Sequence) -> Tuple[Tuple[int, str], ...]:
     """The ``(value, name)`` pairs of the enum-name switch inside *span* (one member's code in a
     dictionary representation), by the two shapes the class-level recovery reads: a compare
@@ -657,7 +629,7 @@ def _span_enum_pairs(ctx, span: Sequence) -> Tuple[Tuple[int, str], ...]:
         if n < 2 or table is None:
             continue
         bias = _sub_imm_bias(span, words, 0, i, dest_reg=idx_reg) or 0
-        mask = _span_valid_mask(span[:i])               # a sparse table: bit v set = v declared
+        mask = _valid_value_bitmask(list(span[:i + 1]), allow_tbnz=True)  # bit v set = v declared
         for v, name in _read_dictrep_pointer_pairs(ctx, table, n):
             if mask is None or (mask >> v) & 1:
                 found.setdefault(v + bias, name)

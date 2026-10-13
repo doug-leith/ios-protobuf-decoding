@@ -17,6 +17,7 @@ import unittest
 import proto.extractor as E
 import proto.structfields as SF
 import proto.writeto as W
+from proto.enums import _valid_value_bitmask as valid_value_bitmask
 import live_artifacts as V
 from proto.models import FieldLabel
 from macho.disasm import Insn
@@ -548,20 +549,44 @@ class TestEnumMemberEvidence(_Patched):
         self.assertEqual(members, {0: SF.MemberDict('time', None)})
 
 
-class TestSpanValidMask(_Patched):
-    def test_the_hole_mask_of_a_sparse_pointer_table_is_read_in_either_polarity(self):
-        # real GEOProblemDetail.problemType: values 6 and 7 (after the 1-based bias) are holes
-        for gate in ('tbnz', 'tbz'):
-            order, _ = asm((0x1000, [
-                ('ldr', 'w8, [x20]'), ('sub', 'w9, w8, #1'), ('cmp', 'w9, #0x12'),
-                ('b.hs', '#0x1100'), ('mov', 'w10, #0xff9f'), ('movk', 'w10, #3, lsl #16'),
-                ('lsr', 'w10, w10, w9'), (gate, 'w10, #0, #0x1100')]))
-            self.assertEqual(SF._span_valid_mask(order), 0x3ff9f, gate)
+class TestValidValueBitmaskPolarity(unittest.TestCase):
+    """``proto.enums._valid_value_bitmask`` on a struct member's name switch (real
+    GEOProblemDetail.problemType: values 6 and 7, after the 1-based bias, are holes)."""
+
+    HEAD = [('ldr', 'w8, [x20]'), ('sub', 'w9, w8, #1'), ('cmp', 'w9, #0x12'),
+            ('b.hs', '#0x1100'), ('mov', 'w10, #0xff9f'), ('movk', 'w10, #3, lsl #16'),
+            ('lsr', 'w10, w10, w9')]
+
+    def _mask(self, *tail, allow_tbnz=True):
+        order, _ = asm((0x1000, self.HEAD + list(tail)))
+        return valid_value_bitmask(order, allow_tbnz=allow_tbnz)
+
+    def test_tbz_gate_to_the_unknown_branch(self):
+        self.assertEqual(self._mask(('tbz', 'w10, #0, #0x1100'), ('adrp', 'x8, #0x1d5f8e000'),
+                                    ('ldr', 'x21, [x8, w9, sxtw #3]')), 0x3ff9f)
+
+    def test_tbnz_gate_to_the_table_load(self):
+        # the target (0x1028) is the table's ``add``, two instructions before the pointer load
+        self.assertEqual(self._mask(('tbnz', 'w10, #0, #0x1028'), ('adrp', 'x9, #0x1dcfa5000'),
+                                    ('adrp', 'x8, #0x1d5f8e000'), ('add', 'x8, x8, #0x648'),
+                                    ('ldr', 'x21, [x8, w9, sxtw #3]')), 0x3ff9f)
+
+    def test_tbnz_is_not_read_unless_asked_for(self):
+        # the xAsString path does not opt in: there ``lsr ; tbnz`` is not known to be a
+        # validity gate (GEOPDModule.ModuleType), so its output must not change
+        self.assertIsNone(self._mask(('tbnz', 'w10, #0, #0x1028'), ('adrp', 'x9, #0x1dcfa5000'),
+                                     ('adrp', 'x8, #0x1d5f8e000'), ('add', 'x8, x8, #0x648'),
+                                     ('ldr', 'x21, [x8, w9, sxtw #3]'), allow_tbnz=False))
+
+    def test_tbnz_to_anything_else_is_not_a_validity_gate(self):
+        # a bare ``lsr ; tbnz`` testing an unrelated bit (GEOPDModule.ModuleType has one)
+        self.assertIsNone(self._mask(('tbnz', 'w10, #0, #0x1024'), ('adrp', 'x9, #0x1dcfa5000'),
+                                     ('bl', '#0x3000'), ('ldr', 'x21, [x8, w9, sxtw #3]')))
 
     def test_no_mask_in_a_dense_table(self):
         order, _ = asm((0x1000, [('ldrsw', 'x8, [x20, #4]'), ('cmp', 'w8, #3'),
                                  ('b.hs', '#0x1100'), ('ldr', 'x21, [x9, x8, lsl #3]')]))
-        self.assertIsNone(SF._span_valid_mask(order))
+        self.assertIsNone(valid_value_bitmask(order))
 
 
 class TestMergeEnums(unittest.TestCase):

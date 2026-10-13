@@ -47,9 +47,13 @@ A key-pairing hole this exposed: `NavigationAudioFeedback`'s dictionary keys are
 without naming it (`MemberDict.key = None`; the name comes from the `@encode`), so no spelling is chosen.
 
 Sparse enums: a pointer table with holes is gated by `mov/movk ; lsr ; tbnz|tbz #0` (bit v set = declared);
-the holes' slots hold a filler name. `proto.enums._valid_value_bitmask` reads only the `tbz` polarity, so
-`structfields._span_valid_mask` reads both (**consolidate into enums.py once its other edits land**; the
-GeoProblemDetail case needs `tbnz`). The range gate is the nearest `cmp ; b.hs|b.hi` in the member's span
+the holes' slots hold a filler name. `proto.enums._valid_value_bitmask` (shared with the xAsString path) reads
+the `tbz` form by default; a struct member's dictionary representation uses the other polarity (`tbnz` TO the
+table load, GEOProblemDetail), read only with `allow_tbnz=True` and only when the `tbnz` target is a pointer-table
+load. **The xAsString path deliberately does not opt in**: reading every `lsr ; tbnz` there as a validity mask
+drops values 0-15 of `ModuleType` (GEOPDModule etc.) and the `UNKNOWN_n` fillers of ~29 enums (golden
+`GeoServices.json` caught it). Why that `tbnz` is not a bit-set=declared mask is unexplained -- open question.
+The range gate is the nearest `cmp ; b.hs|b.hi` in the member's span
 (the class-level reader's 16-instruction look-back is too short once the mask test sits in between).
 
 Owner agreement (`finalize_struct_fields`): the @encode of an array (`^{Tag=II…}`) names no members while

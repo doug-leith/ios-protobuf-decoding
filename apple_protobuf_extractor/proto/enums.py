@@ -794,7 +794,26 @@ def _detect_unrecovered_csel_chain(insns, words) -> bool:
     return False
 
 
-def _valid_value_bitmask(insns: List[Insn]) -> Optional[int]:
+def _branches_to_pointer_table_load(insns: List[Insn], branch: Insn) -> bool:
+    """True if *branch*'s target is in *insns* and leads, within a few instructions and
+    without a call or another branch, to a pointer-table load (``ldr xN,[xB, wI, ... #3]``)."""
+    ops = split_ops(branch.op_str)
+    target = _parse_imm(ops[-1]) if ops else None
+    start = next((j for j, x in enumerate(insns) if x.addr == target), None)
+    if start is None:
+        return False
+    for x in insns[start:start + 4]:
+        if x.mnemonic == 'ldr':
+            m = mem_operand(x.op_str)
+            if m is not None and m[2] is not None and m[4] == 3:
+                return True
+        elif x.mnemonic in ('b', 'bl', 'blr', 'br', 'ret') or x.mnemonic.startswith('b.') \
+                or x.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+            return False
+    return False
+
+
+def _valid_value_bitmask(insns: List[Insn], *, allow_tbnz: bool = False) -> Optional[int]:
     """The validity bitmask of a sparse-enum pointer table, or None.
 
     The newer toolchain gates a pointer table that has HOLES (values the enum does not
@@ -805,9 +824,16 @@ def _valid_value_bitmask(insns: List[Insn]) -> Optional[int]:
         lsr  w8,w8,w2 ; tbz w8,#0,default             ; bit v clear -> not a value
         ldr  x0,[x8,w2,uxtw #3]
 
+    A struct member's dictionary representation gates the same way round the other side:
+    ``tbnz`` TO the table load.  That form is read only with ``allow_tbnz=True`` and only when
+    the ``tbnz`` target is that table load (:func:`_branches_to_pointer_table_load`).  The
+    xAsString path leaves it off: there an ``lsr ; tbnz`` onto a pointer-table load does NOT
+    mean "bit set = declared" (``GEOPDModule``'s ``ModuleType`` has one, and applying it as a
+    validity mask drops its values 0-15 -- unexplained, so not read).
+
     The holes' table slots are empty, so reading the table until the first empty slot (as
     for a dense table) stopped at the first hole.  Returns the mask (bit v set = value v
-    is declared) when the ``lsr`` + ``tbz #0`` gate is present."""
+    is declared) when the ``lsr`` + ``tbz #0`` (or opted-in ``tbnz #0``) gate is present."""
     consts: Dict[int, int] = {}                # register number -> constant built so far
     for i, ins in enumerate(insns):
         ops = split_ops(ins.op_str)
@@ -823,8 +849,10 @@ def _valid_value_bitmask(insns: List[Insn]) -> Optional[int]:
             src, dst = _regnum(ops[1]), _regnum(ops[0])
             nxt = insns[i + 1]
             nops = split_ops(nxt.op_str)
-            if (src in consts and nxt.mnemonic == 'tbz' and len(nops) == 3
-                    and _regnum(nops[0]) == dst and _parse_imm(nops[1]) == 0):
+            if (src in consts and nxt.mnemonic in ('tbz', 'tbnz') and len(nops) == 3
+                    and _regnum(nops[0]) == dst and _parse_imm(nops[1]) == 0
+                    and (nxt.mnemonic == 'tbz'
+                         or (allow_tbnz and _branches_to_pointer_table_load(insns, nxt)))):
                 return consts[src]
     return None
 
