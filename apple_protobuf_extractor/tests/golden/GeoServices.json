@@ -1355,6 +1355,54 @@ true,
 false,
 false
 ],
+"GEOActiveResourceFilter.<enum:ResourceFilterScale>": [
+[
+[
+0,
+"RESOURCE_FILTER_SCALE_UNKNOWN"
+],
+[
+1,
+"RESOURCE_FILTER_SCALE_1_X"
+],
+[
+2,
+"RESOURCE_FILTER_SCALE_2_X"
+],
+[
+3,
+"RESOURCE_FILTER_SCALE_3_X"
+]
+],
+false,
+false
+],
+"GEOActiveResourceFilter.<enum:ResourceFilterScenario>": [
+[
+[
+0,
+"RESOURCE_FILTER_SCENARIO_UNKNOWN"
+],
+[
+1,
+"RESOURCE_FILTER_SCENARIO_CARPLAY"
+],
+[
+2,
+"RESOURCE_FILTER_SCENARIO_NAVIGATION"
+],
+[
+3,
+"RESOURCE_FILTER_SCENARIO_HIGHVISIBILITY"
+],
+[
+4,
+"RESOURCE_FILTER_SCENARIO_EXPLICIT"
+]
+],
+false,
+false
+],
 "GEOActiveResourceFilter.lastTimestamp": [
 "double",
 null,
@@ -1365,8 +1413,8 @@ false,
 false
 ],
 "GEOActiveResourceFilter.scale": [
-"int32",
-null,
+"ResourceFilterScale",
+"ENUM:ResourceFilterScale",
 2,
 "optional",
 true,
@@ -1374,8 +1422,8 @@ false,
 false
 ],
 "GEOActiveResourceFilter.scenario": [
-"int32",
-null,
+"ResourceFilterScenario",
+"ENUM:ResourceFilterScenario",
 3,
 "optional",
 true,
@@ -21265,6 +21313,20 @@ true,
 false,
 false
 ],
+"GEOGenericTile.<enum:GenericTileType>": [
+[
+[
+1,
+"GENERIC_TILE_TYPE_WATER"
+],
+[
+2,
+"GENERIC_TILE_TYPE_NO_TILE"
+]
+],
+false,
+false
+],
 "GEOGenericTile.resourceIndex": [
 "uint32",
 null,
@@ -21284,8 +21346,8 @@ false,
 false
 ],
 "GEOGenericTile.tileType": [
-"int32",
-null,
+"GenericTileType",
+"ENUM:GenericTileType",
 1,
 "optional",
 true,
@@ -22321,6 +22383,42 @@ true,
 false,
 false
 ],
+"GEOJunctionElement.<enum:JunctionElementType>": [
+[
+[
+0,
+"JUNCTION_ELEMENT_TYPE_NORMAL"
+],
+[
+1,
+"JUNCTION_ELEMENT_TYPE_RAMP"
+],
+[
+2,
+"JUNCTION_ELEMENT_TYPE_HIGHWAY"
+]
+],
+false,
+false
+],
+"GEOJunctionElement.<enum:JunctionElementUsage>": [
+[
+[
+0,
+"JUNCTION_ELEMENT_USAGE_NA"
+],
+[
+1,
+"JUNCTION_ELEMENT_USAGE_ENTRY"
+],
+[
+2,
+"JUNCTION_ELEMENT_USAGE_EXIT"
+]
+],
+false,
+false
+],
 "GEOJunctionElement.angle": [
 "sint32",
 null,
@@ -22331,8 +22429,8 @@ false,
 false
 ],
 "GEOJunctionElement.type": [
-"int32",
-null,
+"JunctionElementType",
+"ENUM:JunctionElementType",
 2,
 "optional",
 true,
@@ -22340,8 +22438,8 @@ false,
 false
 ],
 "GEOJunctionElement.usage": [
-"int32",
-null,
+"JunctionElementUsage",
+"ENUM:JunctionElementUsage",
 3,
 "optional",
 true,
@@ -77881,6 +77979,24 @@ true,
 false,
 false
 ],
+"GEONavigationAudioFeedback.<enum:AudioDeviceType>": [
+[
+[
+1,
+"AUDIO_DEVICE_TYPE_BT_HFP_ONLY"
+],
+[
+2,
+"AUDIO_DEVICE_TYPE_BT_COMBO"
+],
+[
+3,
+"AUDIO_DEVICE_TYPE_OTHER"
+]
+],
+false,
+false
+],
 "GEONavigationAudioFeedback.bTHFPAvailableAtEndOfNav": [
 "bool",
 null,
@@ -77909,8 +78025,8 @@ false,
 false
 ],
 "GEONavigationAudioFeedback.currentRouteTypeAtEndOfNav": [
-"int32",
-null,
+"AudioDeviceType",
+"ENUM:AudioDeviceType",
 16,
 "optional",
 true,
@@ -90453,19 +90569,10 @@ false,
 false
 ],
 "GEOPDDepartureSequence.operatingHours": [
-"bytes",
-null,
-3,
-"repeated",
-false,
-true,
-false
-],
-"GEOPDDepartureSequence.operatingHoursCount": [
-"uint64",
-null,
+"GEOPDTimeRange",
+"GEOPDTimeRange",
 11,
-"optional",
+"repeated",
 true,
 false,
 false
@@ -117360,9 +117467,79 @@ true,
 false,
 false
 ],
+"GEOProblemDetail.<enum:ProblemDetailProblemType>": [
+[
+[
+1,
+"PROBLEM_DETAIL_PROBLEM_TYPE_SEARCH_FAILED"
+],
+[
+2,
+"PROBLEM_DETAIL_PROBLEM_TYPE_FAR_FROM_ROADS"
+],
+[
+3,
+"PROBLEM_DETAIL_PROBLEM_TYPE_OUT_OF_COVERAGE"
+],
+[
+4,
+"PROBLEM_DETAIL_PROBLEM_TYPE_NO_PEDESTRIANS"
+],
+[
+5,
+"PROBLEM_DETAIL_PROBLEM_TYPE_ACROSS_WATER"
+],
+[
+8,
+"PROBLEM_DETAIL_PROBLEM_TYPE_ZILCH_MISMATCH"
+],
+[
+9,
+"PROBLEM_DETAIL_PROBLEM_TYPE_WALKING_TOO_FAR"
+],
+[
+10,
+"PROBLEM_DETAIL_PROBLEM_TYPE_BLOCKED_ROADS"
+],
+[
+11,
+"PROBLEM_DETAIL_PROBLEM_TYPE_VEHICLE_TYPE_AVOIDANCE_FAILED"
+],
+[
+12,
+"PROBLEM_DETAIL_PROBLEM_TYPE_BLOCKED_TRANSIT"
+],
+[
+13,
+"PROBLEM_DETAIL_PROBLEM_TYPE_NOT_REACHABLE"
+],
+[
+14,
+"PROBLEM_DETAIL_PROBLEM_TYPE_EV_OUT_OF_COVERAGE"
+],
+[
+15,
+"PROBLEM_DETAIL_PROBLEM_TYPE_EV_OUT_OF_RANGE"
+],
+[
+16,
+"PROBLEM_DETAIL_PROBLEM_TYPE_EV_INVALID_REQUEST"
+],
+[
+17,
+"PROBLEM_DETAIL_PROBLEM_TYPE_LPR_DISABLED"
+],
+[
+18,
+"PROBLEM_DETAIL_PROBLEM_TYPE_MAX_DISTANCE_EXCEEDED"
+]
+],
+false,
+false
+],
 "GEOProblemDetail.problemType": [
-"int32",
-null,
+"ProblemDetailProblemType",
+"ENUM:ProblemDetailProblemType",
 1,
 "optional",
 true,
@@ -146309,6 +146486,20 @@ true,
 false,
 false
 ],
+"GEOTimepoint.<enum:TimepointType>": [
+[
+[
+0,
+"TIMEPOINT_TYPE_DEPART"
+],
+[
+1,
+"TIMEPOINT_TYPE_ARRIVE"
+]
+],
+false,
+false
+],
 "GEOTimepoint.currentUserTime": [
 "double",
 null,
@@ -146328,8 +146519,8 @@ false,
 false
 ],
 "GEOTimepoint.type": [
-"int32",
-null,
+"TimepointType",
+"ENUM:TimepointType",
 2,
 "optional",
 true,
@@ -151581,6 +151772,24 @@ true,
 false,
 false
 ],
+"GEOVLFPositionContextClassification.<enum:VLFPositionContextType>": [
+[
+[
+0,
+"VLF_POSITION_CONTEXT_TYPE_UNKNOWN"
+],
+[
+1,
+"VLF_POSITION_CONTEXT_TYPE_OUTDOOR"
+],
+[
+2,
+"VLF_POSITION_CONTEXT_TYPE_INDOOR"
+]
+],
+false,
+false
+],
 "GEOVLFPositionContextClassification.indoorProbability": [
 "double",
 null,
@@ -151600,8 +151809,8 @@ false,
 false
 ],
 "GEOVLFPositionContextClassification.type": [
-"int32",
-null,
+"VLFPositionContextType",
+"ENUM:VLFPositionContextType",
 1,
 "optional",
 true,

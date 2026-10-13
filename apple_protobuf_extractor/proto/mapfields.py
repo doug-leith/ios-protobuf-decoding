@@ -387,11 +387,20 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
 
 def _scratch_slot_of(insns: Sequence, k: int) -> Optional[int]:
     """Stack offset K of the ``add x1, sp, #K`` that defines ``x1`` as the argument of
-    the call at ``insns[k]`` (the begin/end-mark idiom), else None.  Unlike
-    :func:`proto.writeto._value_is_stack_scratch` this honours call clobbers: a ``bl``
-    between the ``add`` and *k* redefines ``x1``, so a stale scratch is never reported."""
+    the call at ``insns[k]`` (the begin/end-mark idiom), else None.  A function that
+    addresses its locals from the frame pointer says ``sub x1, x29, #K`` instead; that
+    slot is reported as ``-K`` (never equal to an sp-relative one), which is all the
+    begin/end pairing needs.  Unlike :func:`proto.writeto._value_is_stack_scratch` this
+    honours call clobbers: a ``bl`` between the definition and *k* redefines ``x1``, so a
+    stale scratch is never reported."""
     d = _reaching_def(insns, k, 'x1')
-    return None if d is None else _sp_offset(insns[d])
+    if d is None:
+        return None
+    ops = split_ops(insns[d].op_str)
+    if insns[d].mnemonic == 'sub' and len(ops) == 3 and ops[1] == 'x29' and ops[2].startswith('#'):
+        k_off = _parse_imm(ops[2])
+        return None if k_off is None else -k_off
+    return _sp_offset(insns[d])
 
 
 # ── Shape A: enumerateKeysAndObjectsUsingBlock: ───────────────────────────────

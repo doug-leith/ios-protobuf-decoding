@@ -3478,7 +3478,7 @@
 "GEOPDDepartureSequence._headsignString": 13,
 "GEOPDDepartureSequence._lineId": 1,
 "GEOPDDepartureSequence._nextStopIds": 14,
-"GEOPDDepartureSequence._operatingHoursCount": 11,
+"GEOPDDepartureSequence._operatingHours": 11,
 "GEOPDDepartureSequence._originName": 18,
 "GEOPDDepartureSequence._stopId": 2,
 "GEOPDDepartureSequence._transitId": 16,

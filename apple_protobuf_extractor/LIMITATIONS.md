@@ -131,7 +131,16 @@ repeated bytes pairs = 1;  // element type could not be determined; emitted as b
   spilled to the stack before use) is emitted `field<N>` with an inline note.
 - `int32` vs `uint32` (and 64-bit) is not recoverable from the `@encode` + helper any more than
   for ordinary fields (see the README caveat); sint/fixed forms are recovered from the write
-  helper as usual. An enum-typed member (`GEOTimepoint.type`) is emitted as its integer.
+  helper as usual.
+- **Enum-typed members** (`GEOTimepoint.type`, `GEOJunctionElement.type/usage`, `GEOGenericTile.tileType`,
+  `GEONavigationAudioFeedback.currentRouteTypeAtEndOfNav`, `GEOVLFPositionContextClassification.type`) are
+  recovered as enums from the struct's dictionary representation: a member emitted through the
+  compiler-inlined `xAsString:` (a name switch ending in the CFString `"(unknown: %i)"`) is an enum, and
+  the switch's compare chain / pointer table gives the values (read by the same readers as the class-level
+  `_dictionaryRepresentation:` recovery). The enum TYPE name is reconstructed (it is not in the binary;
+  cosmetic). A member that shows the name switch but whose switch is a `br` jump table, or on which owners
+  disagree, keeps `int32` with the "unresolved enum" comment. See
+  `notes/STRUCT_ENUM_RECOVERY_2026-10-13.md`.
 
 **Source sites.** `proto/structfields.py` (recovery); `proto/extractor.py` (`record_struct_site`
 in the field loop, `finalize_struct_fields` at the end of `extract_all`;

@@ -474,7 +474,7 @@ class TestLiveInlineStructRecovery(unittest.TestCase):
 
     def test_inline_array_with_has_bit_jump_table(self):
         self.assertEqual(self._members('GEOGenericTile'),
-                         [(1, 'tileType', 'int32'), (2, 'textureIndex', 'uint32'),
+                         [(1, 'tileType', 'GenericTileType'), (2, 'textureIndex', 'uint32'),
                           (3, 'resourceIndex', 'uint32')])
         f = next(f for f in self.by['GEOTileSetVersion'].fields if f.name == 'genericTiles')
         self.assertEqual((f.type_name, f.label), ('GEOGenericTile', FieldLabel.REPEATED))
@@ -490,6 +490,208 @@ class TestLiveInlineStructRecovery(unittest.TestCase):
     def test_inlined_dictionary_representation_names_the_members(self):
         self.assertEqual(self._members('GEOCoarseLocationPoint'),
                          [(1, 'lat', 'sint32'), (2, 'lng', 'sint32')])
+
+
+# ── enum members (the struct's dictionary representation) ──────────────────────
+
+
+class _TextCtx:
+    """A ctx exposing the CFStrings in *texts* (``{cfstring VA: text}``) the way the cache does:
+    the constant's character pointer is ``0x100000 + its VA``."""
+
+    def __init__(self, texts):
+        self.texts = texts
+
+    def read_ptr(self, va):
+        return 0x100000 + (va - 16)
+
+    def read_u64(self, va):
+        return len(self.texts[va - 24])
+
+    def read_bytes(self, va, n):
+        return self.texts[va - 0x100000].encode()[:n]
+
+
+class TestEnumMemberEvidence(_Patched):
+    def _insns(self, *lines):
+        order, _ = asm((0x1000, list(lines)))
+        return order
+
+    def test_the_unknown_format_string_marks_an_enum_member(self):
+        ctx = _TextCtx({0x1d5fa03e0: '(unknown: %i)', 0x1d5fda000: 'type'})
+        enum_span = self._insns(('ldr', 'w8, [x20, #0x10]'), ('adrp', 'x2, #0x1d5fa0000'),
+                                ('add', 'x2, x2, #0x3e0'), ('bl', '#0x3000'))
+        plain_span = self._insns(('ldr', 'w2, [x20]'), ('adrp', 'x3, #0x1d5fda000'),
+                                 ('add', 'x3, x3, #0'), ('bl', '#0x3000'))
+        self.assertTrue(SF._references_unknown_format(ctx, enum_span))
+        self.assertFalse(SF._references_unknown_format(ctx, plain_span))
+
+    def test_a_key_chosen_between_two_spellings_that_differ_only_in_case(self):
+        # real GEONavigationAudioFeedback dictrep: ``isJSON ? @"BTHFPRoutesAvailable" :
+        # @"bTHFPRoutesAvailable"`` -- no name is guessed, but the member is still filed
+        # (the helper is accepted and its enum-ness read)
+        ctx = _TextCtx({0x1d5fda0e0: 'bTHFPRoutesAvailable', 0x1d5fda100: 'BTHFPRoutesAvailable'})
+        order = self._insns(
+            ('mov', 'x21, x0'), ('ldrb', 'w2, [x21, #1]'),
+            ('adrp', 'x8, #0x1d5fda000'), ('add', 'x8, x8, #0xe0'),
+            ('adrp', 'x9, #0x1d5fda000'), ('add', 'x9, x9, #0x100'),
+            ('cmp', 'w20, #0'), ('csel', 'x3, x9, x8, ne'), ('bl', '#0x3000'))
+        members, unpaired = SF._pair_members(
+            ctx, order, lambda k: 1 if order[k].mnemonic == 'ldrb' else None)
+        self.assertEqual((unpaired, members), (0, {1: SF.MemberDict(None, None)}))
+
+    def test_a_plain_member_is_not_an_enum_even_with_a_key(self):
+        ctx = _TextCtx({0x1d5fda0e0: 'time'})
+        order = self._insns(('ldr', 'd0, [x20]'), ('adrp', 'x3, #0x1d5fda000'),
+                            ('add', 'x3, x3, #0xe0'), ('bl', '#0x3000'))
+        members, _ = SF._pair_members(ctx, order, lambda k: 0 if k == 0 else None)
+        self.assertEqual(members, {0: SF.MemberDict('time', None)})
+
+
+class TestSpanValidMask(_Patched):
+    def test_the_hole_mask_of_a_sparse_pointer_table_is_read_in_either_polarity(self):
+        # real GEOProblemDetail.problemType: values 6 and 7 (after the 1-based bias) are holes
+        for gate in ('tbnz', 'tbz'):
+            order, _ = asm((0x1000, [
+                ('ldr', 'w8, [x20]'), ('sub', 'w9, w8, #1'), ('cmp', 'w9, #0x12'),
+                ('b.hs', '#0x1100'), ('mov', 'w10, #0xff9f'), ('movk', 'w10, #3, lsl #16'),
+                ('lsr', 'w10, w10, w9'), (gate, 'w10, #0, #0x1100')]))
+            self.assertEqual(SF._span_valid_mask(order), 0x3ff9f, gate)
+
+    def test_no_mask_in_a_dense_table(self):
+        order, _ = asm((0x1000, [('ldrsw', 'x8, [x20, #4]'), ('cmp', 'w8, #3'),
+                                 ('b.hs', '#0x1100'), ('ldr', 'x21, [x9, x8, lsl #3]')]))
+        self.assertIsNone(SF._span_valid_mask(order))
+
+
+class TestMergeEnums(unittest.TestCase):
+    D = staticmethod(lambda enum: {0: SF.MemberDict('type', enum)})
+
+    def test_owners_that_agree_give_the_values(self):
+        pairs = ((0, 'DEPART'), (1, 'ARRIVE'))
+        self.assertEqual(SF._merge_enums([self.D(pairs), self.D(pairs)]), {0: pairs})
+
+    def test_an_owner_that_shows_a_plain_number_vetoes_the_enum(self):
+        self.assertEqual(SF._merge_enums([self.D(((0, 'A'), (1, 'B'))), self.D(None)]), {})
+
+    def test_owners_that_name_a_value_differently_drop_the_values(self):
+        self.assertEqual(SF._merge_enums([self.D(((0, 'A'),)), self.D(((0, 'B'),))]), {0: ()})
+
+    def test_owners_that_could_not_be_read_say_nothing(self):
+        self.assertEqual(SF._merge_enums([None, self.D(((0, 'A'), (1, 'B')))]),
+                         {0: ((0, 'A'), (1, 'B'))})
+
+
+class TestMakeEnum(unittest.TestCase):
+    def test_screaming_snake_values_name_the_type_from_their_prefix(self):
+        e = SF._make_enum('NavigationAudioFeedbackCurrentRouteTypeAtEndOfNav',
+                          [(1, 'AUDIO_DEVICE_TYPE_BT_HFP_ONLY'), (2, 'AUDIO_DEVICE_TYPE_OTHER')])
+        self.assertEqual((e.name, [(v.name, v.number) for v in e.values]),
+                         ('AudioDeviceType', [('AUDIO_DEVICE_TYPE_BT_HFP_ONLY', 1),
+                                              ('AUDIO_DEVICE_TYPE_OTHER', 2)]))
+
+    def test_type_name_spelled_in_the_values_is_taken_verbatim(self):
+        e = SF._make_enum('VLFPositionContextClassificationType',
+                          [(0, 'VLFPositionContextType_UNKNOWN'), (1, 'VLFPositionContextType_OUTDOOR')])
+        self.assertEqual((e.name, [v.name for v in e.values]),
+                         ('VLFPositionContextType', ['VLF_POSITION_CONTEXT_TYPE_UNKNOWN',
+                                                     'VLF_POSITION_CONTEXT_TYPE_OUTDOOR']))
+
+    def test_unprefixed_values_keep_the_member_derived_name(self):
+        e = SF._make_enum('TimepointType', [(0, 'DEPART'), (1, 'ARRIVE')])
+        self.assertEqual((e.name, [v.name for v in e.values]),
+                         ('TimepointType', ['TIMEPOINT_TYPE_DEPART', 'TIMEPOINT_TYPE_ARRIVE']))
+
+
+class TestFramePointerScratch(_Patched):
+    """A function that addresses its locals from the frame pointer says ``sub x1, x29, #K``
+    (not ``add x1, sp, #K``) for the begin/end-mark scratch (real GEOPDDepartureSequence)."""
+
+    def test_the_begin_and_end_marks_pair_on_the_same_frame_slot(self):
+        order, _ = asm((0x1000, [
+            ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'), ('mov', 'w2, #0xb'),
+            ('bl', '#0x18dbdab88'), ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'),
+            ('bl', '#0x18dbdab94')]))
+        begin, end = SF._scratch_slot_of(order, 3), SF._scratch_slot_of(order, 6)
+        self.assertEqual(begin, end)
+        self.assertIsNotNone(begin)
+
+    def test_value_is_stack_scratch_accepts_the_frame_relative_form(self):
+        order, _ = asm((0x1000, [('sub', 'x1, x29, #0xd8'), ('mov', 'w2, #0xb'),
+                                 ('bl', '#0x18dbdab88')]))
+        self.assertTrue(W._value_is_stack_scratch(order, 2))
+        order, _ = asm((0x1000, [('sub', 'x1, x21, #0xd8'), ('mov', 'w2, #0xb'),
+                                 ('bl', '#0x18dbdab88')]))
+        self.assertFalse(W._value_is_stack_scratch(order, 2))
+
+
+class TestLiveStructEnums(unittest.TestCase):
+    """The six enum members of the inline structs that have no ObjC class, and the repeated
+    12-byte struct array the walk used to bind to its count ivar.  Values are the binary's own
+    (the name switches in the struct dictionary representations)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.by = _extract(['GEORouteAttributes', 'GEOJunctionInfo', 'GEOLogMsgEventDirections',
+                           'GEOVLFLocalizationResults', 'GEOTileSetVersion',
+                           'GEOPDDepartureSequence', 'GEOETAResponse'])
+
+    def setUp(self):
+        if self.by is None:
+            self.skipTest("GeoServices cache not available")
+
+    def _enum_of(self, tag, member):
+        f = next(f for f in self.by[tag].fields if f.name == member)
+        self.assertTrue(f.type_class and f.type_class.startswith('ENUM:'), (tag, member))
+        e = next(e for e in self.by[tag].enums if e.name == f.type_name)
+        return e.name, [(v.name, v.number) for v in e.values]
+
+    def test_compare_chain_enum(self):
+        self.assertEqual(self._enum_of('GEOTimepoint', 'type'),
+                         ('TimepointType', [('TIMEPOINT_TYPE_DEPART', 0), ('TIMEPOINT_TYPE_ARRIVE', 1)]))
+
+    def test_pointer_table_enums(self):
+        name, vals = self._enum_of('GEOJunctionElement', 'type')
+        self.assertEqual([n for n, _ in vals], ['JUNCTION_ELEMENT_TYPE_NORMAL', 'JUNCTION_ELEMENT_TYPE_RAMP',
+                                                 'JUNCTION_ELEMENT_TYPE_HIGHWAY'])
+        self.assertEqual([v for _, v in self._enum_of('GEOJunctionElement', 'usage')[1]], [0, 1, 2])
+        self.assertEqual(self._enum_of('GEOVLFPositionContextClassification', 'type')[0],
+                         'VLFPositionContextType')
+
+    def test_biased_enum_keeps_the_binary_values(self):
+        # ``sub w9,w8,#1`` before the table read: the values start at 1
+        name, vals = self._enum_of('GEONavigationAudioFeedback', 'currentRouteTypeAtEndOfNav')
+        self.assertEqual((name, [v for _, v in vals]), ('AudioDeviceType', [1, 2, 3]))
+
+    def test_enum_member_of_an_inlined_dictrep(self):
+        # GEOGenericTile's dictionary representation is inlined into GEOTileSetVersion's;
+        # tileType is 1-based by compare chain (value 0 is the unknown branch)
+        self.assertEqual(self._enum_of('GEOGenericTile', 'tileType')[1],
+                         [('GENERIC_TILE_TYPE_WATER', 1), ('GENERIC_TILE_TYPE_NO_TILE', 2)])
+
+    def test_sparse_pointer_table_enum_skips_the_holes(self):
+        # GEOProblemDetail.problemType: 1-based, values 6 and 7 are not declared (their table
+        # slots hold a filler name that must not become values)
+        name, vals = self._enum_of('GEOProblemDetail', 'problemType')
+        self.assertEqual([v for _, v in vals], [1, 2, 3, 4, 5] + list(range(8, 19)))
+        self.assertEqual(dict((v, n) for n, v in vals)[8], 'PROBLEM_DETAIL_PROBLEM_TYPE_ZILCH_MISMATCH')
+
+    def test_plain_members_stay_numbers(self):
+        for tag in ('GEOGenericTile', 'GEOJunctionElement', 'GEOTimepoint',
+                    'GEONavigationAudioFeedback', 'GEOVLFPositionContextClassification'):
+            n_enum = sum(1 for f in self.by[tag].fields if f.type_class and f.type_class.startswith('ENUM:'))
+            self.assertEqual(n_enum, len(self.by[tag].enums), tag)
+        self.assertEqual({f.name: f.type_name for f in self.by['GEOTimepoint'].fields},
+                         {'time': 'double', 'type': 'TimepointType', 'currentUserTime': 'double'})
+        self.assertEqual(self.by['GEONavigationAudioFeedback'].enums[0].name, 'AudioDeviceType')
+        self.assertEqual(len(self.by['GEONavigationAudioFeedback'].enums), 1)
+
+    def test_repeated_struct_array_binds_to_the_array_not_its_count(self):
+        owner = self.by['GEOPDDepartureSequence']
+        f = next(f for f in owner.fields if f.name == 'operatingHours')
+        self.assertEqual((f.number, f.type_name, f.label, f.number_confirmed),
+                         (11, 'GEOPDTimeRange', FieldLabel.REPEATED, True))
+        self.assertFalse([f for f in owner.fields if f.name == 'operatingHoursCount'])
 
 
 if __name__ == '__main__':

@@ -199,7 +199,8 @@ _NON_DEF_MNEMONICS = frozenset((
 
 def _value_is_stack_scratch(blk, k):
     """True if the write-helper value arg x1 at insn *k* is a STACK SCRATCH
-    (`add x1, sp, #imm`) — the begin/end-length-delimited-submessage idiom for an
+    (`add x1, sp, #imm`, or `sub x1, x29, #imm` when the function addresses its locals
+    from the frame pointer) — the begin/end-length-delimited-submessage idiom for an
     INLINE repeated message field.  begin has a field# before it; end does not.
 
     Value-independent (no lookback window): take the REACHING DEFINITION of x1 —
@@ -217,7 +218,10 @@ def _value_is_stack_scratch(blk, k):
         if not p or _norm_reg(p[0]) != 'x1':
             continue                                   # writes some other register
         # First (reaching) definition of x1 — decide on it and stop.
-        return mn == 'add' and len(p) >= 3 and _norm_reg(p[1]) == 'sp'
+        if len(p) < 3:
+            return False
+        base = _norm_reg(p[1])
+        return (mn == 'add' and base == 'sp') or (mn == 'sub' and base == 'x29')
     return False
 
 

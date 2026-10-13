@@ -18,6 +18,11 @@ Everything needed is nevertheless in the binary, and none of it is a heuristic:
   :func:`decode_struct_writer` reads ``(offset, field#, write helper, load width)`` triples
   from it; the helper's wire family (sint/fixed) is the same one :mod:`proto.write_helpers`
   already classifies;
+* **enum members** — a member that is an enum is emitted by the struct's dictionary
+  representation through the compiler-inlined ``xAsString:`` (a value-name switch ending in
+  the CFString ``"(unknown: %i)"``) before its key; a plain number goes through ``NSNumber``.
+  :func:`decode_dictrep_members` reads that per member and, from the same compare chain or
+  pointer table the class-level enum recovery reads (:mod:`proto.enums`), the value names;
 * **validation** — the writer's member offsets and load widths must match the encoding's
   layout exactly (:func:`match_layout`): every member written once, no write at an unknown
   offset.  A struct that does not match is left as the flagged ``bytes`` fallback, never
@@ -39,13 +44,19 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from macho.disasm import disasm, _parse_imm, _norm_reg
+from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _decode_ldr_reg_off,
+                               range_from_unsigned_gate)
+from macho.disasm import disasm, find_adrp_add_target, _parse_imm, _norm_reg
 from macho.memory import _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
 from proto.config import _class_to_proto_name
+from proto.dispatch import _read_raw_word
+from proto.enums import (_ENUM_UNRESOLVED_COMMENT, _enum_name_from_pairs, _harvest_cbz_value0,
+                         _harvest_isolated_compares, _normalize_enum_value_name,
+                         _qualify_enum_name, _read_dictrep_pointer_pairs, _sub_imm_bias)
 from proto.mapfields import _scratch_slot_of
-from proto.models import FieldLabel, ProtoField, ProtoMessage
+from proto.models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.protocore import _SCALAR_ENC
@@ -517,37 +528,164 @@ _IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
 _DICTREP_SELECTOR = "_dictionaryRepresentation:"
 
 
-def _cfstring(ctx, va: int) -> Optional[str]:
-    """The text of the ``CFString`` constant at *va* (``isa, flags, chars*, length``) when it
-    reads as an identifier — the only kind of key a generated dictionary representation uses
-    — else ``None``."""
+def _cfstring_text(ctx, va: int) -> Optional[str]:
+    """The ASCII text of the ``CFString`` constant at *va* (``isa, flags, chars*, length``),
+    else ``None``."""
     try:
         chars, length = ctx.read_ptr(va + 16), ctx.read_u64(va + 24)
         if not chars or not 0 < length <= 64:
             return None
-        text = ctx.read_bytes(chars, length).decode('ascii')
+        return ctx.read_bytes(chars, length).decode('ascii')
     except Exception:
         return None
-    return text if _IDENTIFIER.match(text) else None
 
 
-def _pair_keys(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, str], int]:
+def _cfstring(ctx, va: int) -> Optional[str]:
+    """The text of the ``CFString`` constant at *va* when it reads as an identifier — the only
+    kind of key a generated dictionary representation uses — else ``None``."""
+    text = _cfstring_text(ctx, va)
+    return text if text is not None and _IDENTIFIER.match(text) else None
+
+
+# The CFString a generated ``xAsString:`` falls back to for a value it has no name for.
+_UNKNOWN_FORMAT = "(unknown: %i)"
+
+
+@dataclass(frozen=True)
+class MemberDict:
+    """What a struct's dictionary representation says about one member."""
+    key: Optional[str]                                # the dictionary key (the member's name);
+    # None when the key is chosen between two spellings that differ only in case -- the member
+    # is still filed (its code is the member's), only its name is left to the @encode
+    enum: Optional[Tuple[Tuple[int, str], ...]] = None
+    # None: emitted as a plain number.  A tuple: emitted through an enum-name switch
+    # (``"(unknown: %i)"``) — the ``(value, name)`` pairs recovered from it, empty when the
+    # switch is of a shape this pass does not read.
+
+
+def _references_unknown_format(ctx, span: Sequence) -> bool:
+    """True if *span* builds the address of the ``"(unknown: %i)"`` CFString (``adrp rP ;
+    add rD, rP, #imm``)."""
+    pages: Dict[str, int] = {}
+    for ins in span:
+        ops = split_ops(ins.op_str)
+        if ins.mnemonic == 'adrp' and len(ops) == 2 and _parse_imm(ops[1]) is not None:
+            pages[ops[0]] = _parse_imm(ops[1])
+        elif ins.mnemonic == 'add' and len(ops) == 3 and ops[1] in pages \
+                and _parse_imm(ops[2]) is not None \
+                and _cfstring_text(ctx, pages[ops[1]] + _parse_imm(ops[2])) == _UNKNOWN_FORMAT:
+            return True
+    return False
+
+
+def _table_base(span: Sequence, upto: int, reg: str) -> Optional[int]:
+    """Address built into *reg* by the NEAREST ``adrp``/``add`` pair before ``span[upto]`` (a
+    span re-uses its scratch registers; the live pair is the closest one)."""
+    for j in range(upto - 1, -1, -1):
+        if span[j].mnemonic == 'adrp':
+            t = find_adrp_add_target(span[j:upto + 1], reg)
+            if t is not None:
+                return t
+    return None
+
+
+def _gate_range(span: Sequence, words: Dict[int, int], upto: int) -> int:
+    """Number of table entries the NEAREST ``cmp wN,#imm ; b.hs|b.hi`` range gate before
+    ``span[upto]`` admits (0 if none).  The span is one member's code, so the whole of it is
+    searched: a sparse table's validity-bitmask test (``mov/movk ; lsr ; tbnz``) sits between
+    the gate and the table load."""
+    for j in range(upto - 1, -1, -1):
+        cmp = _decode_cmp_imm(words.get(span[j].addr, 0))
+        if cmp is None:
+            continue
+        nxt = _decode_bcond(words.get(span[j + 1].addr, 0)) if j + 1 < len(span) else None
+        n = range_from_unsigned_gate(nxt, cmp[1])
+        if n:
+            return n
+    return 0
+
+
+def _span_valid_mask(span: Sequence) -> Optional[int]:
+    """The validity bitmask of a sparse-enum pointer table in *span*, or ``None``.
+
+    A table with holes (values the enum does not declare) is gated by a constant mask::
+
+        mov w10,#0xff9f ; movk w10,#3,lsl #16 ; lsr w10,w10,w9 ; tbnz w10,#0,<table load>
+
+    — bit v of the mask set = value v is declared; the holes' table slots hold a filler name
+    that must not be read as a value.  The gate branches either way round (``tbnz`` to the
+    load, or ``tbz`` to the unknown branch); the mask means the same.  (Same shape as
+    :func:`proto.enums._valid_value_bitmask`, which reads only the ``tbz`` form.)"""
+    consts: Dict[str, int] = {}
+    for i, ins in enumerate(span):
+        ops, mn = split_ops(ins.op_str), ins.mnemonic
+        if mn in ('mov', 'movz') and len(ops) == 2 and ops[1].startswith('#'):
+            if _norm_reg(ops[0]) and _parse_imm(ops[1]) is not None:
+                consts[_norm_reg(ops[0])] = _parse_imm(ops[1])
+        elif mn == 'movk' and len(ops) == 3 and ops[2].startswith('lsl'):
+            r, v, sh = _norm_reg(ops[0]), _parse_imm(ops[1]), _parse_imm(ops[2].split()[-1])
+            if r in consts and v is not None and sh is not None:
+                consts[r] = (consts[r] & ~(0xFFFF << sh)) | (v << sh)
+        elif mn == 'lsr' and len(ops) == 3 and i + 1 < len(span):
+            nxt, nops = span[i + 1], split_ops(span[i + 1].op_str)
+            if _norm_reg(ops[1]) in consts and nxt.mnemonic in ('tbz', 'tbnz') and len(nops) == 3 \
+                    and _norm_reg(nops[0]) == _norm_reg(ops[0]) and _parse_imm(nops[1]) == 0:
+                return consts[_norm_reg(ops[1])]
+    return None
+
+
+def _span_enum_pairs(ctx, span: Sequence) -> Tuple[Tuple[int, str], ...]:
+    """The ``(value, name)`` pairs of the enum-name switch inside *span* (one member's code in a
+    dictionary representation), by the two shapes the class-level recovery reads: a compare
+    chain (``cbz`` / ``cmp ; b.eq|b.ne``, each arm loading its CFString) and a pointer table
+    (``cmp #n ; b.hs unknown ; ldr x,[table, idx, lsl #3]``).  Empty if neither is present."""
+    words = {}
+    for ins in span:
+        w = _read_raw_word(ctx, ins.addr)
+        if w is not None:
+            words[ins.addr] = w
+    found: Dict[int, str] = {}
+    _harvest_isolated_compares(ctx, span, words, lambda v, n: found.setdefault(v, n))
+    _harvest_cbz_value0(ctx, span, words, lambda v, n: found.setdefault(v, n))
+    for i, ins in enumerate(span):
+        d = _decode_ldr_reg_off(words.get(ins.addr, 0))
+        if d is None or d[0] != 8:                                  # 64-bit pointer-table load
+            continue
+        _esz, base_rn, idx_reg, _rt = d
+        n = _gate_range(span, words, i)
+        table = _table_base(span, i, f"x{base_rn}")
+        if n < 2 or table is None:
+            continue
+        bias = _sub_imm_bias(span, words, 0, i, dest_reg=idx_reg) or 0
+        mask = _span_valid_mask(span[:i])               # a sparse table: bit v set = v declared
+        for v, name in _read_dictrep_pointer_pairs(ctx, table, n):
+            if mask is None or (mask >> v) & 1:
+                found.setdefault(v + bias, name)
+    return tuple(sorted(found.items()))
+
+
+def _pair_members(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, MemberDict], int]:
     """Pair each dictionary key in a dictionary-representation listing with the struct member
-    it files: ``(names, unpaired)`` — ``{member offset: key}`` and how many keys found no member.
+    it files: ``(members, unpaired)`` — ``{member offset: MemberDict}`` and how many keys found
+    no member.
 
     *member_at(k)* gives the member offset loaded by ``insns[k]`` (``None`` for any other
     instruction).  A key is a ``CFString`` constant built into x3 (``adrp x3 ; add x3,x3,#imm``)
     — or chosen by ``csel x3`` between two of them (``isJSON ? @"camelCase" : @"snake_case"``,
     of which the camelCase spelling, the ivar/field naming convention, is taken) — and belongs
-    to the closest preceding member load."""
-    names: Dict[int, str] = {}
+    to the closest preceding member load.  The code between that member's first load and its
+    key is the member's own: an enum member's holds the name switch (:class:`MemberDict`)."""
+    members: Dict[int, MemberDict] = {}
     unpaired = 0
     member: Optional[int] = None
+    first_load = 0                          # index of the current member's first load
     pages: Dict[str, int] = {}              # reg -> page set by the last ``adrp``
     consts: Dict[str, int] = {}             # reg -> address built by ``adrp`` + ``add``
     for k, ins in enumerate(insns):
         m = member_at(k)
         if m is not None:
+            if m != member:
+                first_load = k
             member = m
             continue
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
@@ -558,7 +696,7 @@ def _pair_keys(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, str], int]:
         if mn == 'add' and len(ops) == 3 and ops[1] == ops[0] and ops[0] in pages \
                 and _parse_imm(ops[2]) is not None:
             consts[ops[0]] = pages[ops[0]] + _parse_imm(ops[2])
-        key, is_key = None, False
+        key, is_key, case_twins = None, False, False
         if mn == 'add' and ops and ops[0] == 'x3' and 'x3' in consts:
             key = _cfstring(ctx, consts['x3'])
             is_key = key is not None
@@ -567,21 +705,30 @@ def _pair_keys(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, str], int]:
             is_key = len(cands) == 2 and None not in cands
             plain = [c for c in cands if c and '_' not in c]
             key = plain[0] if is_key and len(plain) == 1 else None
+            case_twins = (is_key and len(plain) == 2 and plain[0].lower() == plain[1].lower())
         if not is_key:
             continue
-        if key is None or member is None or member in names:
+        if (key is None and not case_twins) or member is None or member in members:
             unpaired += 1
         else:
-            names[member] = key
+            span = insns[first_load:k + 1]
+            members[member] = MemberDict(
+                key, _span_enum_pairs(ctx, span) if _references_unknown_format(ctx, span) else None)
         member = None
-    return names, unpaired
+    return members, unpaired
 
 
-def decode_dictrep_names(ctx, entry: int, offsets) -> Dict[int, str]:
-    """``{member offset: dictionary key}`` read from a struct's dictionary-representation
+def _pair_keys(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, str], int]:
+    """:func:`_pair_members` reduced to the keys: ``({member offset: key}, unpaired)``."""
+    members, unpaired = _pair_members(ctx, insns, member_at)
+    return {off: md.key for off, md in members.items() if md.key}, unpaired
+
+
+def decode_dictrep_members(ctx, entry: int, offsets) -> Dict[int, MemberDict]:
+    """``{member offset: MemberDict}`` read from a struct's dictionary-representation
     function at *entry* — ``NSDictionary *f(struct *x0)`` — or ``{}`` when it is not one (no
     key, or a key that files no member at one of the layout's *offsets*: e.g. the function of
-    a LARGER struct that merely shares the first few offsets — :func:`_pair_keys`)."""
+    a LARGER struct that merely shares the first few offsets — :func:`_pair_members`)."""
     insns = _writer_insns(ctx, entry)
     base = {'x0'}
     for ins in insns:
@@ -599,21 +746,34 @@ def decode_dictrep_names(ctx, entry: int, offsets) -> Dict[int, str]:
                 return mem[3]
         return None
 
-    names, unpaired = _pair_keys(ctx, insns, member_at)
-    return names if not unpaired else {}
+    members, unpaired = _pair_members(ctx, insns, member_at)
+    return members if not unpaired else {}
+
+
+def decode_dictrep_names(ctx, entry: int, offsets) -> Dict[int, str]:
+    """``{member offset: dictionary key}`` — :func:`decode_dictrep_members` reduced to the keys."""
+    return {off: md.key for off, md in decode_dictrep_members(ctx, entry, offsets).items()
+            if md.key}
+
+
+def decode_inline_dictrep_members(ctx, insns: Sequence, is_ivar_offset,
+                                  layout: StructLayout) -> Dict[int, MemberDict]:
+    """``{member offset: MemberDict}`` for a struct whose dictionary representation the
+    compiler inlined into the owner's ``_dictionaryRepresentation:`` (*insns*): the struct's
+    members are located through the ivar's offset variable exactly as in the inline
+    ``writeTo:`` (:func:`track_struct_loads`), so only this ivar's keys are paired."""
+    want = {m.offset for m in layout.members}
+    loads = track_struct_loads(insns, len(insns) - 1, is_ivar_offset, layout.is_array)
+    members, _unpaired = _pair_members(
+        ctx, insns, lambda k: loads[k][0] if k in loads and loads[k][0] in want else None)
+    return members
 
 
 def decode_inline_dictrep_names(ctx, insns: Sequence, is_ivar_offset,
                                 layout: StructLayout) -> Dict[int, str]:
-    """``{member offset: key}`` for a struct whose dictionary representation the compiler
-    inlined into the owner's ``_dictionaryRepresentation:`` (*insns*): the struct's members
-    are located through the ivar's offset variable exactly as in the inline ``writeTo:``
-    (:func:`track_struct_loads`), so only this ivar's keys are paired."""
-    want = {m.offset for m in layout.members}
-    loads = track_struct_loads(insns, len(insns) - 1, is_ivar_offset, layout.is_array)
-    names, _unpaired = _pair_keys(
-        ctx, insns, lambda k: loads[k][0] if k in loads and loads[k][0] in want else None)
-    return names
+    """:func:`decode_inline_dictrep_members` reduced to the keys."""
+    return {off: md.key for off, md in
+            decode_inline_dictrep_members(ctx, insns, is_ivar_offset, layout).items() if md.key}
 
 
 # ── recording sites during extraction, resolving them afterwards ──────────────
@@ -704,14 +864,20 @@ def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorte
     return None
 
 
-def _dictrep_names(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorted,
-                   memo) -> Optional[Dict[int, str]]:
-    """The member names this owner's ``_dictionaryRepresentation:`` gives *layout*.
+def _unique_keys(members: Dict[int, MemberDict]) -> bool:
+    keys = [md.key for md in members.values() if md.key]
+    return len(set(keys)) == len(keys)
+
+
+def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorted,
+                     memo) -> Optional[Dict[int, MemberDict]]:
+    """What this owner's ``_dictionaryRepresentation:`` says about *layout*'s members (key and
+    enum-ness).
 
     Either the struct's own dictionary-representation function is CALLED (the unique
-    ``{offset: key}`` among the callees whose members are exactly the layout's — several
+    ``{offset: member}`` among the callees whose members are exactly the layout's — several
     different ones mean the owner cannot say which is which), or the compiler inlined it, in
-    which case the keys are paired through the ivar's offset variable.  ``None`` if neither
+    which case the members are paired through the ivar's offset variable.  ``None`` if neither
     names every member."""
     insns = _linear_method(ctx, cls, _DICTREP_SELECTOR, foreign_sorted, memo)
     if not insns:
@@ -727,16 +893,17 @@ def _dictrep_names(ctx, cls, site: StructSite, layout: StructLayout, foreign_sor
             continue
         key = (target, frozenset(want))
         if key not in cache:
-            cache[key] = decode_dictrep_names(ctx, target, want)
-        names = cache[key]
-        if names and set(names) == want and len(set(names.values())) == len(names):
-            found.add(tuple(sorted(names.items())))
+            cache[key] = decode_dictrep_members(ctx, target, want)
+        members = cache[key]
+        if members and set(members) == want \
+                and _unique_keys(members):
+            found.add(tuple(sorted(members.items())))
     if len(found) == 1:
         return dict(next(iter(found)))
     if not found:
-        names = decode_inline_dictrep_names(ctx, insns, _ivar_offset_test(ctx, site), layout)
-        if names and len(set(names.values())) == len(names):
-            return names                     # possibly partial: unnamed members keep a placeholder
+        members = decode_inline_dictrep_members(ctx, insns, _ivar_offset_test(ctx, site), layout)
+        if members and _unique_keys(members):
+            return members                   # possibly partial: unnamed members keep a placeholder
     return None
 
 
@@ -749,6 +916,75 @@ def _merge_names(per_owner) -> Optional[Dict[int, str]]:
             if merged.setdefault(off, key) != key:
                 return None
     return merged if len(set(merged.values())) == len(merged) else None
+
+
+def _struct_member_names(items) -> Optional[Dict[int, str]]:
+    """``{member offset: name}`` over the owners of one struct tag: the names the @encodes give
+    (agreeing across the owners that give any), the dictionary representations' keys for the
+    members no @encode names; ``None`` on a disagreement or a name two members share."""
+    enc = _merge_names([{m.offset: m.name.lstrip('_') for m in l.members if m.name}
+                        for _f, l, _n, _h, _d in items])
+    if enc is None:
+        return None
+    rest = _merge_names([{off: md.key for off, md in (d or {}).items()
+                          if md.key and off not in enc}
+                         for _f, _l, _n, _h, d in items])
+    if rest is None:
+        return None
+    merged = {**rest, **enc}
+    return merged if len(set(merged.values())) == len(merged) else None
+
+
+def _merge_enums(per_owner: Sequence[Optional[Dict[int, MemberDict]]]
+                 ) -> Dict[int, Tuple[Tuple[int, str], ...]]:
+    """``{member offset: (value, name) pairs}`` for the members that are enums, merged over the
+    owners that could read their dictionary representation.
+
+    An owner either shows a member's name switch or shows the member emitted as a plain
+    number; owners that disagree on that leave the member a plain integer (nothing is
+    guessed).  The pairs of several owners are united when no value gets two names, else the
+    values are dropped (an enum whose values are not recovered: ``()``)."""
+    seen: Dict[int, list] = {}
+    for members in per_owner:
+        for off, md in (members or {}).items():
+            seen.setdefault(off, []).append(md.enum)
+    out: Dict[int, Tuple[Tuple[int, str], ...]] = {}
+    for off, enums in seen.items():
+        if any(e is None for e in enums):
+            if any(e is not None for e in enums):
+                log.debug("struct member +%#x: owners disagree on enum-ness; left a number", off)
+            continue
+        merged: Dict[int, str] = {}
+        clash = False
+        for e in enums:
+            for v, name in e:
+                clash = clash or merged.setdefault(v, name) != name
+        out[off] = () if clash else tuple(sorted(merged.items()))
+    return out
+
+
+def _make_enum(base_name: str, pairs: Sequence[Tuple[int, str]]) -> ProtoEnum:
+    """The :class:`ProtoEnum` for a struct member's recovered *pairs*: the type name is
+    reconstructed from the value names' common prefix (the binary stores no enum type names;
+    see :func:`proto.enums._enum_name_from_pairs`), the value names normalised as the
+    class-level recovery does."""
+    name = _enum_name_from_pairs(list(pairs), base_name)
+    if name == base_name:
+        # value names spelled ``TypeName_VALUE`` (not SCREAMING_SNAKE, so the prefix rule above
+        # passed on them) carry the C enum's own name
+        heads = {raw.split('_', 1)[0] for _v, raw in pairs}
+        if len(pairs) >= 2 and len(heads) == 1 and all('_' in raw for _v, raw in pairs):
+            head = next(iter(heads))
+            if re.match(r'^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$', head):
+                name = head
+    values, used = [], set()
+    for value, raw in pairs:
+        vname = _normalize_enum_value_name(name, raw)
+        if vname in used:
+            vname = f"{vname}_{value}"
+        used.add(vname)
+        values.append(ProtoEnumValue(name=vname, number=value))
+    return ProtoEnum(name=name, values=values)
 
 
 def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None) -> None:
@@ -778,19 +1014,22 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
             layout = parse_struct_encoding(site.enc)
             got = _decode_site(ctx, cls, site, layout, foreign_sorted, memo) if layout else None
             if got is not None:
-                dnames = (None if all(m.name for m in layout.members)
-                          else _dictrep_names(ctx, cls, site, layout, foreign_sorted, memo))
-                groups.setdefault(layout.tag, []).append((fld, layout, got[0], got[1], dnames))
+                dmembers = _dictrep_members(ctx, cls, site, layout, foreign_sorted, memo)
+                groups.setdefault(layout.tag, []).append((fld, layout, got[0], got[1], dmembers))
 
     for tag, items in sorted(groups.items()):
         numbers = {tuple(sorted(n.items())) for _f, _l, n, _h, _d in items}
-        names = {tuple(m.name for m in l.members) for _f, l, _n, _h, _d in items}
-        keyed = _merge_names(d for _f, _l, _n, _h, d in items)
+        shapes = {tuple((m.offset, m.code) for m in l.members) for _f, l, _n, _h, _d in items}
+        # member names: an @encode that names its members (``"_duration"I``) says so, and the
+        # unnamed form of the same struct (an array's ``^{Tag=II…}``) leaves them to the
+        # dictionary representation; every source that names a member must agree
+        keyed = _struct_member_names(items)
+        enum_pairs = _merge_enums([d for _f, _l, _n, _h, d in items])
         families: Dict[int, set] = {}
         for _f, _l, _n, helpers, _d in items:
             for off, h in helpers.items():
                 families.setdefault(off, set()).add(_classify_write_helper(ctx, h))
-        if len(numbers) != 1 or len(names) != 1 or keyed is None \
+        if len(numbers) != 1 or len(shapes) != 1 or keyed is None \
                 or any(len(v) != 1 for v in families.values()):
             log.debug("struct %s: owners disagree on layout; left as bytes", tag)
             continue
@@ -799,17 +1038,27 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
             log.debug("struct %s: name collides with an existing message; left as bytes", tag)
             continue
         layout, number_of = items[0][1], dict(items[0][2])
-        fields = []
+        fields, enums = [], []
         for m in layout.members:
             base = _SCALAR_ENC[m.code]
             ptype = _refine_scalar_by_family(base, next(iter(families[m.offset])))
-            fname = m.name.lstrip('_') if m.name else keyed.get(m.offset)
-            fields.append(ProtoField(
+            fname = keyed.get(m.offset)
+            fld = ProtoField(
                 name=fname or f"field{number_of[m.offset]}", number=number_of[m.offset],
                 type_name=ptype, label=FieldLabel.OPTIONAL, number_confirmed=True,
-                type_inference_note=None if fname else _MEMBER_NAME_MISSING))
+                type_inference_note=None if fname else _MEMBER_NAME_MISSING)
+            if m.offset in enum_pairs and ptype in ("int32", "uint32"):
+                pairs = enum_pairs[m.offset]
+                if pairs:
+                    enum = _make_enum(_qualify_enum_name(pname, fld.name[:1].upper() + fld.name[1:]),
+                                      pairs)
+                    fld.type_name, fld.type_class = enum.name, f"ENUM:{enum.name}"
+                    enums.append(enum)
+                else:
+                    fld.disambiguation_comment = _ENUM_UNRESOLVED_COMMENT
+            fields.append(fld)
         messages.append(ProtoMessage(
-            name=pname, class_name=tag, fields=fields,
+            name=pname, class_name=tag, fields=fields, enums=enums,
             inline_struct=_STRUCT_COMMENT.format(tag=tag)))
         taken_names.add(pname)
         taken_classes.add(tag)
