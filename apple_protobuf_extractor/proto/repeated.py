@@ -474,7 +474,7 @@ def _classref_windows(
             if mo is None or mo[2] is not None:
                 continue
             dest = _norm_reg(ins.op_str.split(',')[0].strip())
-            if mo[1] in pages and dest.startswith('x'):
+            if mo[1] in pages and dest is not None and dest.startswith('x'):
                 slot = pages[mo[1]] + mo[3]
                 name = _classref_name(ctx, cl, slot)
                 if name is not None:

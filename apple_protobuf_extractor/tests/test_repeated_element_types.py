@@ -129,6 +129,15 @@ class TestClassrefWindows(unittest.TestCase):
         out = self.fn(ctx, self.cl, insns, {0x7000: '_items'}, {}, is_arm=False)
         self.assertEqual(out, [('_items', ('NSMutableArray', 'GEOElem'))])
 
+    def test_floating_point_register_load_is_ignored(self):
+        # `ldr d0, [x26, #0x18]` has a non-GPR destination (_norm_reg -> None); it
+        # must not raise (which silently dropped the lever for the whole class) and is
+        # not a class reference.
+        insns = [_adrp(0, 'x26'), _ldr(4, 'd0', 'x26', 0x18),
+                 _ldr(8, 'x0', 'x26', 0x20), _bl(12, 0x7000)]
+        out = self.fn(self.ctx, self.cl, insns, {0x7000: '_items'}, {}, is_arm=False)
+        self.assertEqual(out, [('_items', ('GEOOther',))])
+
     def test_dest_register_overwrite_invalidates_cached_page(self):
         # `ldr x22,[x22,#..]` turns x22 from a page into a loaded value; a later
         # `ldr x0,[x22,#0x18]` must not be read against the stale page.
