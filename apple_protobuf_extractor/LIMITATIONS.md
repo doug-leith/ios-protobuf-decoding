@@ -324,9 +324,16 @@ of 445, CoreLocationProtobuf 0 of 530. The class-reference lever was calibrated 
 dispatch lever on the fields both resolve: 516 of 516 agree (gated in
 `tests/test_repeated_element_types.py`).
 
-**Residual name matching.** the pool-suffix match (an exact suffix match against the IMP-confirmed
-`+xyzType` pool, applied on top of a `+xyzType`-resolved class) and the selector synthesis
-(depluralise and append `Type`) remain; both only choose among IMP-confirmed answers.
+**No name matching left.** The exact-suffix refinement against the pool of all `+xyzType`
+classes (the pool-suffix match, with `_build_meta_type_pool`) was deleted too: it never fired on any
+iPhone 8 image and on iOS 27 it rewrote one field of the resolver's own answer wrongly
+(`GEOSpokenGuidance.announcements`, `GEOFormattedString` -> `GEOCompositeAnnouncement`; the
+structural lever overrode it, so no emitted output changed anywhere: the deletion is
+output-identical). The `+xyzType` lookup itself
+(the selector synthesis: depluralise the field name, append `Type`, read the class out of the method's
+IMP) is the PB runtime's own lookup (the `ProtocolBuffer` image builds `Type`/`add`/`set`/`Count`
+selectors from property names; nothing in the analysed images references them) and agrees with
+the structural levers on all 1104 fields both resolve.
 
 ---
 

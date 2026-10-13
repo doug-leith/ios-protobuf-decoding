@@ -799,44 +799,6 @@ def _resolve_repeated_type(type_sel: str, metaclass: Optional[ObjcClass],
     return ("bytes", True)
 
 
-def _build_meta_type_pool(
-    ctx: BinaryContext,
-    st: StringTable,
-    metaclass: Optional[ObjcClass],
-    cls: ObjcClass,
-    cl: Optional[ClassList],
-) -> List[str]:
-    """Scan every ``+[Cls xyzType]`` metaclass method and return a list of
-    binary-local element-class names for repeated-field type resolution.
-
-    System class names (NSString, NSData, etc.) that map to proto scalars via
-    :data:`_CLASS_TO_PROTO` are excluded: they are handled separately by the
-    write-helper reclassification pass and would pollute the Strategy-1/2
-    pool-suffix refinement (extra entries break its ``len==1`` uniqueness guard).
-
-    *metaclass* is resolved by :func:`_find_metaclass` (isa → ``cl.by_vmaddr``);
-    it is normally non-``None`` because :func:`~macho.classlist.build_class_list`
-    eagerly grafts every class's isa metaclass into the :class:`ClassList`.  When
-    it is ``None`` (no metaclass could be parsed) the pool is simply empty — the
-    former on-demand reparse fallback was removed 2026-06-09 as dead code: it ran
-    the same ``_parse_class`` on the same isa the grafting pass already tried, so
-    it could never recover a metaclass grafting had failed to add.  (*st* is
-    retained for signature stability with the resolver call chain.)
-    """
-    pool: List[str] = []
-    if metaclass is None or cl is None:
-        return pool
-
-    for mc_m in metaclass.methods:
-        if mc_m.imp == 0:
-            continue
-        found = _class_from_type_method_imp(ctx, mc_m.imp, cl)
-        if found and found not in pool and found not in _CLASS_TO_PROTO:
-            pool.append(found)
-
-    return pool
-
-
 @dataclass
 class _RepeatedTypeResult:
     """Return value of :func:`_resolve_repeated_field_type`."""
@@ -859,7 +821,6 @@ def _resolve_repeated_field_type(
     metaclass: Optional[ObjcClass],
     cl: ClassList,
     ctx: BinaryContext,
-    meta_type_pool: List[str],
     string_helper: Optional[int],
     wt_helpers: Dict[str, int],
 ) -> _RepeatedTypeResult:
@@ -880,19 +841,18 @@ def _resolve_repeated_field_type(
 
     2. The ``+[Cls xyzType]`` metaclass method via :func:`_repeated_element_type` +
        :func:`_resolve_repeated_type` (the class is read out of the method's IMP).
-       When that resolves to a concrete class (not ``"bytes"``), optionally refine
-       via an exact pool-suffix match and return.
+       When that resolves to a concrete class (not ``"bytes"``), return it.
 
     3. Otherwise the field stays as ``"bytes"`` (the safe fallback), flagged by the
        caller as an unresolved element; the caller's readFrom: dispatch / adder->ivar
        lever and element class-reference lever may still supply the class first.
 
-    The former name-suffix guess (Strategy 2) is gone -- see
-    :func:`_repeated_element_type`.  The former name-overlap fallbacks (Pass A exact
-    pool-suffix matching and the post-loop Pass B exclusion assignment) were removed
-    2026-06-08 -- a census across GeoServices / locationd / CoreLocationProtobuf
-    showed they resolved zero fields even where their pool gate fired.  The pool is
-    still consulted for the *refinement* in step 2 (an IMP-confirmed override).
+    The former name-suffix guess (Strategy 2) and the pool-suffix refinement (an
+    exact suffix match against the pool of all ``+xyzType`` classes, applied on top of
+    the resolved class) are gone: the refinement never fired on any iPhone 8 image and
+    rewrote one iOS 27 resolver answer wrongly (``GEOSpokenGuidance.announcements``;
+    masked by the structural lever, so deleting it changed no emitted field).  The older
+    Pass A / Pass B name-overlap fallbacks were removed 2026-06-08 (zero fields).
     """
     # ABI evidence first: the string write helper is never used for a message
     # element, so it decides the kind before any class-naming path runs.
@@ -905,25 +865,8 @@ def _resolve_repeated_field_type(
     type_sel = _repeated_element_type(ivar, instance_method_names, metaclass)
     resolved, elem_unresolved = _resolve_repeated_type(type_sel, metaclass, cl, ctx=ctx)
 
-    # Capitalised singular used in the pool-suffix refinement (computed once)
-    singular = pname.rstrip("s") if pname.endswith("s") else pname
-    cap      = singular[0].upper() + singular[1:] if singular else ""
-
     if resolved != "bytes":
-        # The +xyzType method resolved to a concrete class (or NSString).  When the
-        # pool has an IMP-confirmed entry with the same suffix, prefer it over the
-        # classlist-based result.
-        #
-        # Do NOT apply this when ``resolved == "string"``: that value comes from
-        # an IMP-confirmed ``+xyzType`` method returning NSString, which is already
-        # authoritative.  Overriding it with a name-suffix pool match would wrongly
-        # promote a genuine ``repeated string`` to a message type (e.g.
-        # GEOBusiness._categorys: categoryType → NSString, but a pool entry
-        # "GEOCategory" shares the "Category" suffix).
-        if resolved != "string" and meta_type_pool and cap:
-            pool_exact = [c for c in meta_type_pool if c.endswith(cap)]
-            if len(pool_exact) == 1:
-                resolved = pool_exact[0]
+        # The +xyzType method resolved to a concrete class (or NSString).
         type_class = resolved if resolved not in ("string", "bytes") else None
         # A `string` outcome is ABI-confirmed (an IMP-confirmed +xyzType returning
         # NSString) -- mark it so the tie-break never lets dispatch override it.

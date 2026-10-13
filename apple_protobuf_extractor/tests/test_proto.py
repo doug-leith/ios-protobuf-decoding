@@ -1223,22 +1223,20 @@ class TestRepeatedElementTypeSelector(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 12. Pool-gate removal — IMP-scan pool built unconditionally
+# 12. +xyzType IMP resolution end to end (formerly the "IMP-scan pool" test)
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestPoolAlwaysBuilt(unittest.TestCase):
+class TestMetaclassTypeMethodResolution(unittest.TestCase):
     """
-    Integration regression test for the pool-gate removal.
+    Integration regression test: ``GEOPDComponent._values`` has a ``+valuesType``
+    metaclass method whose IMP loads the class reference ``GEOPDComponentValue``.
+    The field must be typed from that IMP -- not from a name match, which would be
+    ambiguous (``GEODefaultsDBValue`` is also a ``*Value`` class and sorts first).
 
-    Previously, the IMP-scan pool (which disassembles every metaclass +xyzType
-    method to get authoritative element-class names) was gated on
-    ``not instance_method_names or not _mc_names_resolved``.
-
-    With ``--cache``, both conditions are False so the pool was NOT built.
-    This meant that even when the field fell through to 'bytes' (the ambiguous-suffix case), there was no pool to
-    resolve it correctly and the field would stay as 'repeated bytes'.
-
-    Fix: remove the gate entirely — the pool is always built.
+    History: this guarded the removal of the pool gate for the IMP-scan pool and the
+    uniqueness guard of the name-suffix matcher.  Both mechanisms are gone (the pool
+    refinement and the matcher were deleted 2026-10-13); the test now pins the
+    behaviour they were protecting.
 
     This test constructs a minimal but self-consistent binary context where:
       * ``GEODefaultsDBValue`` (alphabetically first, wrong) is in the classlist
@@ -1247,8 +1245,8 @@ class TestPoolAlwaysBuilt(unittest.TestCase):
         that points to GEOPDComponentValue's class data slot
       * ``instance_method_names`` is non-empty (simulating --cache)
 
-    After both fixes, ``GEOPDComponent.values`` must be typed as
-    ``GEOPDComponentValue``, not ``bytes`` or ``GEODefaultsDBValue``.
+    ``GEOPDComponent.values`` must be typed as ``GEOPDComponentValue``, not
+    ``bytes`` or ``GEODefaultsDBValue``.
     """
 
     # ── Virtual-address layout ────────────────────────────────────────────────

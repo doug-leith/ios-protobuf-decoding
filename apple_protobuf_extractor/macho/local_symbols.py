@@ -92,7 +92,7 @@ class ImageLocalSymbols:
     two.  Class methods matter for repeated-field element-type resolution: the
     ``+[Cls xyzType]`` metaclass methods are stripped from the cache's metaclass
     ``baseMethods`` (the pointer is NULL), so the ``.symbols`` table is the only
-    source.  See ``proto.extractor._build_meta_type_pool``.
+    source.  See ``proto.repeated._repeated_element_type`` / ``_resolve_repeated_type``.
     """
 
     imp_to_sel: Dict[int, str] = field(default_factory=dict)

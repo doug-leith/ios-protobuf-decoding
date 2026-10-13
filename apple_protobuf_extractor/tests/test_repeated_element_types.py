@@ -260,7 +260,7 @@ class TestClassrefLeverGuard(unittest.TestCase):
                 'NSMutableArray', 1, True,
                 dispatch_elements={}, dispatch_unambiguous=False,
                 dispatch_ivars=dispatch_ivars or {}, instance_method_names=set(),
-                metaclass=None, meta_type_pool=[], string_helper=STR_HELPER,
+                metaclass=None, string_helper=STR_HELPER,
                 wt_helpers={'_items': helper} if helper is not None else {},
                 classref_ivars={'_items': ('GEOElem', 0)} if classref else {},
                 message_helper=message_helper)

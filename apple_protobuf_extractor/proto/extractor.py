@@ -85,7 +85,7 @@ from proto.protoclass_heuristic import (
 from proto.dispatch  import _build_readfrom_core_index
 from proto.repeated  import (
     _resolve_repeated_via_dispatch, _resolve_repeated_via_dispatch_ivars,
-    _resolve_repeated_field_type, _build_meta_type_pool, _resolve_repeated_via_classrefs,
+    _resolve_repeated_field_type, _resolve_repeated_via_classrefs,
 )
 from proto.structfields import finalize_struct_fields, record_struct_site
 from proto.mapfields import (
@@ -1114,7 +1114,7 @@ def _qualify_field_enum(type_name, type_class, cls, pfx):
 def _resolve_repeated_element_type(
     ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
     *, dispatch_elements, dispatch_unambiguous, dispatch_ivars,
-    instance_method_names, metaclass, meta_type_pool, string_helper, wt_helpers,
+    instance_method_names, metaclass, string_helper, wt_helpers,
     classref_ivars=None, message_helper=None,
 ):
     """Resolve a repeated field's element type (dispatch-first, then heuristic).
@@ -1158,7 +1158,7 @@ def _resolve_repeated_element_type(
 
     _rr = _resolve_repeated_field_type(
         ivar, pname, instance_method_names, metaclass, cl, ctx,
-        meta_type_pool, string_helper, wt_helpers,
+        string_helper, wt_helpers,
     )
     if _disp is not None and not _rr.abi_confirmed:
         return _disp, _disp, None
@@ -1325,46 +1325,6 @@ def extract_proto_message(
     confirmed_field_nums: set = set(confirmed_numbers.values())
     next_unconfirmed = 1   # lowest candidate ordinal for unconfirmed fields
 
-    # ── Pre-scan metaclass type methods ──────────────────────────────────────
-    # Scan every method on the metaclass with _class_from_type_method_imp to
-    # build a pool of element-class names for repeated-field resolution.
-    #
-    # This pool supplements the +[Cls xyzType] lookup of _repeated_element_type
-    # for two cases where that lookup cannot work:
-    #
-    #   (a) Fully-unresolved binaries: instance_method_names is empty, so
-    #       selector names are unavailable for name-based matching.
-    #
-    #   (b) Half-resolved shared-cache binaries: instance method names are
-    #       resolved (enough for _REQUIRED_INSTANCE_METHODS to match), but the
-    #       metaclass method list uses preoptimised relative selectors that
-    #       weren't resolved without --cache, leaving all metaclass method
-    #       names as None.  The lookup checks ``m.name == sel`` which is always
-    #       False when names are None, so the field is left to the readFrom:
-    #       dispatch / class-reference levers (which need no names) and
-    #       otherwise falls back to `repeated bytes`.
-    #
-    # Gate: build the pool when method names are unavailable (case a) OR when
-    # the metaclass is present but its methods have no resolved names (case b).
-    # When all metaclass method names ARE resolved, the lookup works correctly
-    # and the pool is not needed (skipping it avoids unnecessary IMP scanning).
-    #
-    # Note: build_class_list now follows isa pointers to add metaclasses to the
-    # ClassList, so metaclass is normally non-None here.  The on-demand parse
-    # fallback is retained only as a defensive layer for edge cases (e.g. an
-    # isa pointer outside the binary's mapped range that caused the metaclass
-    # to be skipped during classlist construction).
-    #
-    # The pool's sole remaining consumer is the *refinement* in
-    # _resolve_repeated_field_type: when the +xyzType lookup resolves to a class
-    # but the pool holds an IMP-confirmed entry with the same suffix, the
-    # IMP-confirmed one wins.  The former name-overlap fallbacks (Pass A exact
-    # pool-suffix and the post-loop Pass B exclusion) were removed 2026-06-08 —
-    # a census across GeoServices / locationd / CoreLocationProtobuf showed they
-    # resolved zero fields even where their pool gate fired.  Unresolved repeated
-    # fields now fall back to the safe `repeated bytes`.
-    # ── Build element-class pool from metaclass type methods ────────────────
-    _meta_type_pool: List[str] = _build_meta_type_pool(ctx, st, metaclass, cls, cl)
     fields: List[ProtoField] = []
     for ordinal, ivar in enumerate(field_ivars, start=1):
         pname = _proto_name(ivar.name)
@@ -1433,7 +1393,7 @@ def extract_proto_message(
             dispatch_unambiguous=_dispatch_unambiguous,
             dispatch_ivars=dispatch_ivars,
             instance_method_names=instance_method_names,
-            metaclass=metaclass, meta_type_pool=_meta_type_pool,
+            metaclass=metaclass,
             string_helper=_string_helper, wt_helpers=_wt_helpers,
             classref_ivars=_classref_ivars, message_helper=_message_helper,
         )
