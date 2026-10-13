@@ -42,7 +42,7 @@ class TestAssemblerMatchesCapstone(unittest.TestCase):
         'ldr x23, [x26, w9, sxtw #3]', 'ldrsw x8, [x8, x27, lsl #2]', 'ldr x9, [x8, #8]',
         'ldr w2, [x19]', 'cmp w8, #4', 'cmp x27, x9', 'b.hs L', 'b.ne L', 'cbz w1, L',
         'tbnz w8, #1, L', 'b L', 'bl L', 'mov x24, x28', 'mov x28, #0', 'adr x10, L',
-        'add x10, x10, x11, lsl #2', 'br x10', 'ret', 'L:', 'ret',
+        'add x10, x10, x11, lsl #2', 'br x10', 'nop', 'ret', 'L:', 'ret',
     ]
 
     def test_every_form_round_trips(self):
@@ -199,6 +199,18 @@ class TestScalarShapes(unittest.TestCase):
         self.assertEqual(_harvest(ctx, 0x1000, [('_type', 16)]),
                          {16: [(1, 'T300'), (2, 'T400'), (3, 'T392C')]})
 
+    def test_value_names_up_to_128_characters_are_read_in_full(self):
+        # PLACECARD_ENRICHMENT_SUPPRESSION_REASON_APP_EXTENSION_UNAVAILABLE is 65 characters;
+        # a 64-character read truncated it and the value was dropped.
+        long_name = 'PLACECARD_ENRICHMENT_SUPPRESSION_REASON_APP_EXTENSION_UNAVAILABLE'
+        self.assertEqual(len(long_name), 65)
+        names = {0x9000: 'SHORT_A', 0x9020: long_name, 0x9040: 'SHORT_C'}
+        ctx = _enum_ctx(self.BIASED, strings={**names, UNK: UNKNOWN_ENUM_FORMAT},
+                        slots={0x5040: 16},
+                        ptrs={0x6100 + 8 * i: a for i, a in enumerate(sorted(names))})[0]
+        self.assertEqual(_harvest(ctx, 0x1000, [('_type', 16)]),
+                         {16: [(1, 'SHORT_A'), (2, long_name), (3, 'SHORT_C')]})
+
     SINGLE = [
         'adrp x25, #0x5000', 'ldrsw x8, [x25, #0x40]', 'ldr w8, [x21, x8]',
         'cbz w8, zero', 'adrp x2, #0x8000', 'add x2, x2, #0x20', 'bl helper', 'mov x22, x0',
@@ -221,11 +233,26 @@ class TestScalarShapes(unittest.TestCase):
         ctx = _enum_ctx(self.PLAIN, strings={UNK: UNKNOWN_ENUM_FORMAT}, slots={0x5040: 24})[0]
         self.assertEqual(_harvest(ctx, 0x1000, [('_count', 24)]), {})
 
-    def test_a_name_without_the_unknown_fallback_is_not_enough(self):
-        # compare chain that names values 0/1 but whose default path is an unrelated call
+    def test_a_single_name_that_does_not_vary_is_not_enough(self):
+        # value 0 -> a name, every other value reaches an unrelated call: nothing shows the
+        # string depends on the value (it could be any constant), so not an enum.
         code = [c for c in TestScalarShapes.SINGLE if not c.startswith(('adrp x2,', 'add x2, x2'))]
         ctx = _enum_ctx(code, strings={0x6080: 'TYPE_GENERIC'}, slots={0x5040: 24})[0]
         self.assertEqual(_harvest(ctx, 0x1000, [('_type', 24)]), {})
+
+    def test_retained_name_in_x0_is_found_by_value_dependence(self):
+        # older compilers hand the name to a retain call in x0 (not the dictionary call's x2)
+        code = [
+            'adrp x25, #0x5000', 'ldrsw x8, [x25, #0x40]', 'ldr w8, [x21, x8]',
+            'sub w9, w8, #1', 'cmp w9, #2', 'b.hi skip',
+            'adrp x8, #0x6000', 'add x8, x8, #0x40', 'ldr x0, [x8, w9, uxtw #3]',
+            'bl helper', 'skip:', 'b helper', 'helper:', 'ret',
+        ]
+        names = {0x9000: 'A_ONE', 0x9020: 'A_TWO', 0x9040: 'A_THREE'}
+        ctx = _enum_ctx(code, strings=names, slots={0x5040: 16},
+                        ptrs={0x6040 + 8 * i: a for i, a in enumerate(sorted(names))})[0]
+        self.assertEqual(_harvest(ctx, 0x1000, [('_type', 16)]),
+                         {16: [(1, 'A_ONE'), (2, 'A_TWO'), (3, 'A_THREE')]})
 
 
 class TestReachingDefinitions(unittest.TestCase):

@@ -212,17 +212,53 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         cls = _FakeCls(self.BASE, [_FakeIvar('_otherField', 999)])
         self.assertEqual(_harvest_dictrep_enums(ctx, cls, None), {})
 
-    def test_a_chain_without_the_unknown_fallback_is_not_an_enum(self):
-        # Same compares and strings, but the default path is an unrelated call: nothing
-        # says this int goes through an enum-to-string converter.
-        from proto.enums import _harvest_dictrep_enums
-        code = [c for c in self.CODE if not c.startswith(('adrp x2', 'add x2, x2'))]
+    def _ctx_without(self, drop_prefixes, strings):
+        code = [c for c in self.CODE if not c.startswith(drop_prefixes)]
         words, _ = assemble(self.BASE, code)
+        ctx = FlowCtx(self.BASE, words)
+        ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
+        ctx._strings = strings
+        return ctx
+
+    def test_two_names_without_the_unknown_fallback_are_still_an_enum(self):
+        # The default path is an unrelated call (no "(unknown: %i)"): the string handed to
+        # the call still takes two different values (0 -> ZERO, 1 -> ONE), i.e. it depends
+        # on the field's value, which is all an enum is.
+        from proto.enums import _harvest_dictrep_enums
+        ctx = self._ctx_without(('adrp x2,', 'add x2, x2,'),
+                                {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'})
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        self.assertEqual(_harvest_dictrep_enums(ctx, cls, None), {
+            self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')]})
+
+    def test_a_single_name_with_nothing_to_vary_against_is_not_an_enum(self):
+        # Only value 0 is named and every other value just skips the call: a name that
+        # does not vary with the value could be any constant string.
+        from proto.enums import _harvest_dictrep_enums
+        code = [c for c in self.CODE if c not in ('cmp w1, #1', 'b.ne unk')
+                and not c.startswith(('adrp x2,', 'add x2, x2,'))]
+        code = [c.replace('adrp x21, #0x7000', 'nop').replace('add x21, x21, #0x10', 'nop')
+                for c in code]
+        words, _ = assemble(self.BASE, code)
+        ctx = FlowCtx(self.BASE, words)
+        ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
+        ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO'}
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        self.assertNotIn(self.IVAR_OFFSET, _harvest_dictrep_enums(ctx, cls, None))
+
+    def test_values_without_a_name_may_simply_skip_the_dictionary_call(self):
+        # Older compilers emit no "(unknown: %i)": a value with no name jumps over the call.
+        from proto.enums import _harvest_dictrep_enums
+        code = [c.replace('b.ne unk', 'b.ne end') for c in self.CODE]
+        ctx = self._ctx_without(('adrp x2,', 'add x2, x2,'),
+                                {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'})
+        words, _ = assemble(self.BASE, [c for c in code if not c.startswith(('adrp x2,', 'add x2, x2,'))])
         ctx = FlowCtx(self.BASE, words)
         ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
         ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'}
         cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
-        self.assertEqual(_harvest_dictrep_enums(ctx, cls, None), {})
+        self.assertEqual(_harvest_dictrep_enums(ctx, cls, None), {
+            self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')]})
 
 
 class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):

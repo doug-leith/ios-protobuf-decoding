@@ -1162,21 +1162,26 @@ def _longest_common_prefix(strs: List[str]) -> str:
 
 
 def _read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
-    """Raw text of the string constant at *va*: a CFString (32-byte struct: isa, flags,
+    """Raw text of the string constant at *va* (up to 128 characters, the same bound as
+    :func:`_read_enum_string` / :func:`_is_valid_enum_string`): a CFString (32-byte struct: isa, flags,
     cstring pointer at +16, length at +24) or, in a binary with no ``__cfstring`` section,
     a direct C string (the same two storage formats :func:`_read_enum_string` reads).
     Unlike that function it does NOT require an identifier-shaped string, so it can read
     format strings such as ``"(unknown: %i)"``.  None if *va* holds neither."""
+    has_cfstrings = False
     for seg in ("__DATA_CONST", "__DATA", "__AUTH_CONST"):
         if ctx.has_section(seg, "__cfstring"):
+            has_cfstrings = True
             sec = ctx.section(seg, "__cfstring")
             if sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
                 try:
-                    return ctx.read_cstring(ctx.read_ptr(va + 16), max_len=64)
+                    return ctx.read_cstring(ctx.read_ptr(va + 16), max_len=128)
                 except (ValueError, UnicodeDecodeError, KeyError):
                     return None
+    if has_cfstrings:
+        return None                  # a binary with CFStrings: a pointer elsewhere is not one
     try:
-        return ctx.read_cstring(va, max_len=64)
+        return ctx.read_cstring(va, max_len=128)
     except (ValueError, UnicodeDecodeError, KeyError):
         return None
 

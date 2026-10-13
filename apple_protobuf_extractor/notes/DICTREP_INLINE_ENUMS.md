@@ -40,13 +40,20 @@ The inlined converter is a function from the loaded int to a CFString, so it is 
    the `ldrsw` of the ivar-offset slot.  Hoisting no longer matters.
 3. **Candidate values** from the comparisons the value takes part in (`V + b` affine tracking through `mov`/`add`/`sub`
    of immediates or constant registers; `sub w9,w8,#35; cmp w9,#30; b.hi` ⇒ 35..65; `cbz` ⇒ 0).
-4. Each candidate is **evaluated** through the CFG (compares, `cbz`/`tbz`, `adr`+byte/half table+`br`, pointer-table
-   loads, `csel`, hoisted `mov`) to the first call; the CFString in x2 there is the name.  Numbers therefore come from the
-   constants the code compares/indexes with, bias included, never from name order; a segmented switch is one evaluation per
-   value.  Value 0's pre-loaded name falls out of the same evaluation (no prefix guard).
-5. **A field is an enum iff a value outside every candidate reaches the converter's `"(unknown: %i)"` fallback** (the
-   signature a plain `+[NSNumber numberWithInt:]` int never has).  This replaces the `len(pairs) >= 2` rule, so single-valued
-   enums need no special case.
+4. Each candidate (and one value outside all of them) is **evaluated** through the CFG (compares, `cbz`/`tbz`,
+   `adr`+byte/half table+`br`, pointer-table loads, `csel`, hoisted `mov`) to the first call, stopping early when the
+   path returns, tail-calls out, or reaches another field's value load.  At that call the string constant in each
+   argument register x0-x7 is read.  Numbers therefore come from the constants the code compares/indexes with, bias
+   included, never from name order; a segmented switch is one evaluation per value.  Value 0's pre-loaded name falls out
+   of the same evaluation (no prefix guard).
+5. **A field is an enum iff some argument register takes at least two different strings across the runs** — that
+   register carries the name (two names; or a name and the converter's `"(unknown: %i)"` fallback on newer compilers).
+   The dictionary key, selectors and class pointers are the same for every value, and a plain `+[NSNumber
+   numberWithInt:]` int gives no string at all.  This covers every compiler shape seen: name in x2 of the dictionary
+   call (newer), name in x0 of a retain call (old Xcode-built fixtures f28), and a default that skips the call entirely
+   with no `(unknown: %i)` (f19, f24-hybrid).  It replaces the earlier "reaches `(unknown: %i)`" test, which was wrong:
+   that fallback is not universal.  A single named value with nothing to vary against and no fallback (one case, rest
+   skip the call) is not recognised — the name could be any constant string.
 
 Remaining non-derived items: a safety bound on an ordered gate's span (≤ 2^12, the width of the unshifted `cmp` immediate)
 and the enum **type name** (the binary holds only value names): the existing class+field name, refined by
@@ -74,12 +81,14 @@ and the enum **type name** (the binary holds only value names): the existing cla
 * The other session's `_valid_value_bitmask` change once dropped 29 xAsString enums (GEOPDModule ModuleType 43 → 27 values);
   it was fixed on their side (`allow_tbnz=False` default), and the committed golden equals HEAD + their hunks exactly.
 
-## How reliable is the `(unknown: %i)` signal
+## How the enum decision was validated
 
-From the task's census over 373 classes / 671 converter-backed enum properties: references never exceed the class's
-converter count (0/373 over, 347 equal, 26 lower).  Here it is the *definition* of an enum field, so a converter without the
-fallback (the census's "4 neither") would be missed — over all of GeoServices the new recovery produced no loss against
-HEAD, so none of the existing enum fields is such a case.
+Not by the `(unknown: %i)` census alone: that string is absent from the older-compiler shapes, which the three
+compiled fixtures (`f19_enum_dictrep_switch`, `f24_enum_dictrep_hybrid`, `f28_enum_dictrep_biased`) exercise.  A first
+version that required the fallback regressed all three (found only when the work was ported to this repo: the private repo's
+`run_tests.py` keeps them in a separate `proto` group that had not been run), hence the value-dependence criterion above.  For newer
+compilers the census stands (373 classes / 671 converter-backed properties: the fallback is referenced at most once per
+enum property) and the fallback is just one of the ways a string varies with the value.
 
 ## Shapes handled
 

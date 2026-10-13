@@ -19,9 +19,11 @@ CFString*, so this module recovers it as one:
    in the first-argument register at that call is the name (or ``"(unknown: %i)"``).
 
 Numbers therefore come from the constants the code compares/indexes with, never from name order,
-and a segmented sparse switch is just one evaluation per value.  A field is an enum iff a value
-outside every candidate reaches the converter's ``"(unknown: %i)"`` fallback -- the converter's
-own signature, which a plain int (``+[NSNumber numberWithInt:]``) never has.
+and a segmented sparse switch is just one evaluation per value.  A field is an enum iff it yields
+a name AND the outcome depends on the value: two different names, or a name and the converter's
+``"(unknown: %i)"`` fallback (newer compilers), or a name and *no dictionary entry at all* (older
+compilers simply omit a value that has no name).  A constant string, or an int handed to
+``+[NSNumber numberWithInt:]``, never varies that way.
 """
 from __future__ import annotations
 
@@ -296,9 +298,11 @@ class Flow:
         elif mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
             r = _norm_reg(ops[1])
             res = self.ivar_of_reg(d, r) if r else None
-        elif mn == 'ldr' and len(ops) == 2:              # container deref (PBRepeated.list)
+        elif mn == 'ldr' and len(ops) == 2 and ops[0].startswith('x'):
+            # container deref (PBRepeated.list): a POINTER loaded from the ivar's own
+            # storage, no index -- a value read out of an array is not an address
             m = _mem_regs(ops[1])
-            res = self.ivar_of_reg(d, m[0]) if m and m[0] else None
+            res = self.ivar_of_reg(d, m[0]) if m and m[0] and m[1] is None else None
         self._ivar_memo[d] = res
         return res
 
@@ -423,11 +427,16 @@ class Flow:
 
     # ── concrete evaluation of the switch for one value ─────────────────────
 
-    def evaluate(self, root: int, dest: str, value: int):
+    def evaluate(self, root: int, dest: str, value: int,
+                 stop: FrozenSet[int] = frozenset()) -> Dict[str, str]:
         """Run the code from just after the field-value load *root* with ``dest = value`` to
-        the first call and classify the CFString in the first argument register (x2):
-        ``('name', cfstring address)``, ``('unknown', None)`` for the converter's
-        ``"(unknown: %i)"`` fallback, or ``None`` if undecidable / not a CFString."""
+        the first call and return ``{argument register: text}`` for every argument register
+        (x0-x7) that then holds a string constant: the dictionary key, the name chosen for
+        the value, the converter's ``"(unknown: %i)"`` fallback...  Empty when the value is
+        never handed to a call (the code returns, or reaches another field's value load listed
+        in *stop*, first -- an older compiler simply omits the entry for a value with no name).
+        Which register carries the NAME is decided by the caller: the one whose text varies
+        with the value."""
         regs: Dict[str, int] = {dest: value}
         top: Set[str] = set()
         flags: List[Optional[Tuple[int, int, int]]] = [None]
@@ -469,16 +478,21 @@ class Flow:
         while k < len(self.insns):
             if k in seen:
                 raise _Abort()
+            if k in stop:
+                return {}
             seen.add(k)
             ins = self.insns[k]
             mn, ops = ins.mnemonic, split_ops(ins.op_str)
             nxt = k + 1
             if mn in ('bl', 'blr'):
-                return self._classify(get('x2'))
+                return self._string_args(get)
             if mn in ('ret', 'retaa', 'retab'):
-                return None
+                return {}
             if mn == 'b' and len(ops) == 1:
-                nxt = jump(_parse_imm(ops[0]))
+                target = _parse_imm(ops[0])
+                if target is not None and target not in self.addr_idx:
+                    return {}               # a tail call out of the function: the epilogue
+                nxt = jump(target)
             elif mn == 'br' and len(ops) == 1:
                 nxt = jump(get(ops[0]))
             elif _is_cond_branch(mn):
@@ -541,7 +555,7 @@ class Flow:
                     regs.pop(r, None)
                     top.add(r)
             k = nxt
-        return None
+        return {}
 
     def _load(self, mn: str, ops: List[str], get) -> Optional[int]:
         pm = _parse_mem(ops[1])
@@ -572,27 +586,36 @@ class Flow:
             raw -= 1 << (size * 8)
         return raw
 
-    def _classify(self, va: Optional[int]):
-        from proto.enums import _read_cfstring_text, _read_enum_string
-        if va is None:
-            return None
-        text = _read_cfstring_text(self.ctx, va)
-        if text == UNKNOWN_ENUM_FORMAT:
-            return ('unknown', None)
-        name = _read_enum_string(self.ctx, va)
-        return ('name', name) if name else None
+    def _string_args(self, get) -> Dict[str, str]:
+        from proto.enums import _read_cfstring_text
+        out: Dict[str, str] = {}
+        for n in range(8):
+            reg = f"x{n}"
+            va = get(reg)
+            if va is None:
+                continue
+            text = _read_cfstring_text(self.ctx, va)
+            if text:
+                out[reg] = text
+        return out
 
     # ── the enum maps of the function ───────────────────────────────────────
 
     def enum_maps(self, valid_offsets: Set[int], wanted: Optional[Set[int]] = None
                   ) -> Dict[int, List[Tuple[int, str]]]:
         """``{ivar offset: [(value, name), ...]}`` for every field of the function that is an
-        enum: its loaded value, driven through the code with every candidate value, yields
-        names, AND a value outside every candidate reaches the ``"(unknown: %i)"`` fallback.
+        enum.  The loaded value is driven through the code with every candidate value and one
+        value outside all of them, and at the first call each argument register's string is
+        read.  The NAME register is one whose string takes at least two different values
+        across those runs (two names, or a name and the converter's ``"(unknown: %i)"``
+        fallback): the dictionary key, selectors and class pointers are the same for every
+        value.  A field with no such register is not an enum -- a constant string, or an int
+        handed to ``+[NSNumber numberWithInt:]``, never varies.
         *wanted* only limits the work to those ivars; it never changes a result."""
         out: Dict[int, Dict[int, str]] = {}
-        self.rejected: List[Tuple[int, int]] = []       # (ivar, n names) names found, no fallback
-        for k, off in self.value_loads():
+        roots = self.value_loads()
+        every_root = frozenset(k for k, _ in roots)
+        for k, off in roots:
             if off not in valid_offsets or (wanted is not None and off not in wanted):
                 continue
             ins = self.insns[k]
@@ -606,24 +629,31 @@ class Flow:
             probe = next((v for v in range(max(cands) + 1, domain) if v not in cands), None)
             if probe is None:
                 continue
+            stop = every_root - {k}
             try:
-                pairs: Dict[int, str] = {}
-                for v in sorted(cands):
-                    r = self.evaluate(k, dest, v)
-                    if r is not None and r[0] == 'name':
-                        pairs[v] = r[1]
-                signature = self.evaluate(k, dest, probe)
+                seen = {v: self.evaluate(k, dest, v, stop) for v in sorted(cands | {probe})}
             except _Abort:
                 continue
-            if not pairs:
-                continue
-            if signature is None or signature[0] != 'unknown':
-                self.rejected.append((off, len(pairs)))
-                continue
-            tgt = out.setdefault(off, {})
-            for v, nm in pairs.items():
-                tgt.setdefault(v, nm)
+            best: Dict[int, str] = {}
+            for reg in {r for obs in seen.values() for r in obs}:
+                texts = {obs[reg] for obs in seen.values() if reg in obs}
+                if len(texts) < 2:
+                    continue                              # same string for every value
+                names = {v: obs[reg] for v, obs in seen.items()
+                         if v in cands and reg in obs and _is_enum_name(obs[reg])}
+                if len(set(names.values())) > len(set(best.values())):
+                    best = names
+            if best:
+                tgt = out.setdefault(off, {})
+                for v, nm in best.items():
+                    tgt.setdefault(v, nm)
         return {off: sorted(m.items()) for off, m in out.items()}
+
+
+def _is_enum_name(text: str) -> bool:
+    """A recovered string is a value name if it is an identifier (and not the fallback)."""
+    from proto.enums import _is_valid_enum_string
+    return text != UNKNOWN_ENUM_FORMAT and _is_valid_enum_string(text)
 
 
 # ── operand helpers ────────────────────────────────────────────────────────

@@ -135,6 +135,8 @@ def assemble(base, lines):
                 | (_imm(ops[1]) << 5) | _reg(ops[0])
         elif mn == 'ret':
             w = 0xD65F03C0
+        elif mn == 'nop':
+            w = 0xD503201F
         else:
             raise ValueError(f'cannot assemble {ln!r}')
         words.append(w)
