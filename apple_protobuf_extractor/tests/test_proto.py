@@ -15,6 +15,7 @@ import artifacts
 import struct
 import sys
 import unittest
+from unittest.mock import patch
 from dataclasses import dataclass, field
 from typing import List, Optional, Set
 
@@ -1017,27 +1018,32 @@ class TestRepeatedStringReclassification(unittest.TestCase):
     matches.
     """
 
+    def _meta_with(self, sel, imp=0x1000):
+        return ObjcClass(
+            vmaddr=0x8000, name='GEOThing_meta', is_meta=True,
+            superclass_vmaddr=0, superclass_name=None, ro_flags=0,
+            instance_size=32,
+            methods=[ObjcMethod(name=sel, types='', imp=imp, is_relative=False)],
+            ivars=[])
+
     def test_resolve_repeated_type_maps_system_class_name_to_string(self):
         """
-        When type_sel is an uppercase system class name (Strategy-2 result
-        already resolved to the class name), _resolve_repeated_type must
-        map it through _CLASS_TO_PROTO.  This covers the path where
-        _class_from_type_method_imp returns "NSString" via the bind table
-        and that name propagates as the selector-already-resolved shortcut.
+        The +xyzType IMP resolves to the external class NSString (bind table);
+        _resolve_repeated_type must map it through _CLASS_TO_PROTO to 'string'.
         """
         from proto.repeated import _resolve_repeated_type
-        # Simulate: type_sel is already the class name "NSString"
-        # (returned by _class_from_type_method_imp via bind table).
-        # Returns (type_name, element_unresolved); a resolved system class is
-        # never element_unresolved.
-        result = _resolve_repeated_type("NSString", metaclass=None, cl=None)
+        with patch('proto.repeated._class_from_type_method_imp', return_value='NSString'):
+            result = _resolve_repeated_type('fooType', metaclass=self._meta_with('fooType'),
+                                            cl=None, ctx=object())
         self.assertEqual(result, ("string", False),
                          "NSString must map to 'string' via _CLASS_TO_PROTO")
 
     def test_resolve_repeated_type_maps_nsdata_to_bytes(self):
         """NSData maps to a *genuine* 'bytes' — resolved, so NOT element_unresolved."""
         from proto.repeated import _resolve_repeated_type
-        result = _resolve_repeated_type("NSData", metaclass=None, cl=None)
+        with patch('proto.repeated._class_from_type_method_imp', return_value='NSData'):
+            result = _resolve_repeated_type('fooType', metaclass=self._meta_with('fooType'),
+                                            cl=None, ctx=object())
         self.assertEqual(result, ("bytes", False))
 
     def test_resolve_repeated_type_unresolved_bytes_flagged(self):
@@ -1068,11 +1074,24 @@ class TestRepeatedStringReclassification(unittest.TestCase):
                                         cl=[name_match], ctx=None)
         self.assertEqual(result, ("bytes", True))
 
-    def test_resolve_repeated_type_passes_through_local_class(self):
-        """Binary-local class names are returned unchanged (no _CLASS_TO_PROTO entry)."""
+    def test_resolve_repeated_type_returns_local_class_from_imp(self):
+        """A binary-local class read out of the +xyzType IMP is returned unchanged
+        (no _CLASS_TO_PROTO entry)."""
+        from proto.repeated import _resolve_repeated_type
+        with patch('proto.repeated._class_from_type_method_imp',
+                   return_value='GEOPDMapsResult'):
+            result = _resolve_repeated_type('mapsResultType',
+                                            metaclass=self._meta_with('mapsResultType'),
+                                            cl=None, ctx=object())
+        self.assertEqual(result, ("GEOPDMapsResult", False))
+
+    def test_resolve_repeated_type_class_name_is_not_a_selector(self):
+        """An uppercase 'selector' used to be treated as an already-resolved class name
+        (the output of the removed name-suffix matcher).  It is now just an unknown
+        selector -> the safe give-up."""
         from proto.repeated import _resolve_repeated_type
         result = _resolve_repeated_type("GEOPDMapsResult", metaclass=None, cl=None)
-        self.assertEqual(result, ("GEOPDMapsResult", False))
+        self.assertEqual(result, ("bytes", True))
 
     def test_extract_writeto_collects_helper_addresses(self):
         """
@@ -1152,114 +1171,55 @@ class TestRepeatedStringReclassification(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 11. Strategy-2 uniqueness guard — _repeated_element_type
+# 11. No name-based element-class guess — _repeated_element_type
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestStrategy2UniquenessGuard(unittest.TestCase):
+class TestRepeatedElementTypeSelector(unittest.TestCase):
     """
-    Regression tests for the uniqueness guard added to Strategy 2 of
-    _repeated_element_type.
-
-    Root cause of the PDComponent.values mis-typing bug:
-      * ivar ``_values`` → singular ``value`` → cap ``Value``
-      * Both ``GEODefaultsDBValue`` (D < P alphabetically) and
-        ``GEOPDComponentValue`` end with ``Value``.
-      * The old code returned the first alphabetical match → wrong class.
-      * Fix: require the suffix match to be *unique*; return ``"bytes"`` when
-        two or more classes share the same suffix so the IMP-scan pool can
-        resolve the field correctly.
+    _repeated_element_type only ever names the ``+[Cls xyzType]`` SELECTOR (or gives
+    up with 'bytes').  It used to have a second strategy that guessed the element class
+    from the field name (strip the plural -s, capitalise, accept a unique classlist
+    name ending with it).  That guess typed fields wrongly -- the PDComponent.values
+    ambiguity bug, then GEOPDSSearchEvChargingParameters.networks (a repeated string)
+    -> GEOLogMsgEventNetwork -- and was deleted 2026-10-13; the class now comes from
+    the binary (readFrom dispatch / class-reference lever) or the field stays bytes.
     """
 
-    def _make_cl(self, *names: str):
-        """Build a real ClassList with minimal stub ObjcClass objects."""
-        from macho.classlist import ClassList
-        classes = [
-            ObjcClass(
-                vmaddr=0x1000 * (i + 1),
-                name=name,
-                is_meta=False,
-                superclass_vmaddr=0,
-                superclass_name=None,
-                ro_flags=0,
-                instance_size=8,
-            )
-            for i, name in enumerate(names)
-        ]
-        return ClassList(classes)
+    def _meta(self, *selectors):
+        return ObjcClass(
+            vmaddr=0x9000, name="GEOPDComponent_meta", is_meta=True,
+            superclass_vmaddr=0, superclass_name=None, ro_flags=0, instance_size=8,
+            methods=[ObjcMethod(name=n, types='', imp=0x5000, is_relative=False)
+                     for n in selectors])
 
-    def test_unique_suffix_returns_the_class(self):
-        """
-        When exactly one class ends with the capitalised singular suffix,
-        Strategy 2 should return that class name.
-        """
+    def test_no_metaclass_method_is_bytes_even_with_a_unique_suffix_class(self):
+        """A class ending in 'MapsResult' exists, but there is no +mapsResultType
+        method: no name guess -> 'bytes'."""
         from proto.repeated import _repeated_element_type
-        cl = self._make_cl("GEOPDMapsResult", "GEOPDPlace", "GEOPDComponent")
         ivar = ObjcIvar(name="_mapsResults", type_enc='@"NSArray"', offset=8, size=8)
-        result = _repeated_element_type(ivar, set(), metaclass=None, cl=cl)
-        self.assertEqual(result, "GEOPDMapsResult")
-
-    def test_ambiguous_suffix_returns_bytes_not_first_alphabetical(self):
-        """
-        When two or more classes share the same suffix (e.g. 'Value'),
-        Strategy 2 must return 'bytes' instead of the alphabetically-first hit.
-
-        Regression guard: GEODefaultsDBValue (D < P) appeared before
-        GEOPDComponentValue in classlist iteration order, so the old code
-        silently returned the wrong class for GEOPDComponent._values.
-        """
-        from proto.repeated import _repeated_element_type
-        # GEODefaultsDBValue sorts BEFORE GEOPDComponentValue alphabetically.
-        # The old code would return "GEODefaultsDBValue" — the new code must
-        # return "bytes" to signal ambiguity.
-        cl = self._make_cl("GEODefaultsDBValue", "GEOPDComponentValue",
-                           "GEOPDMapsResult")
-        ivar = ObjcIvar(name="_values", type_enc='@"NSArray"', offset=8, size=8)
-        result = _repeated_element_type(ivar, set(), metaclass=None, cl=cl)
+        self.assertEqual(_repeated_element_type(ivar, set(), metaclass=None), "bytes")
         self.assertEqual(
-            result, "bytes",
-            "Ambiguous suffix must not silently pick the alphabetically-first class; "
-            "expected 'bytes' so the IMP-scan pool can resolve it correctly",
-        )
-        # Also confirm the trap class is NOT returned
-        self.assertNotEqual(result, "GEODefaultsDBValue")
-        self.assertNotEqual(result, "GEOPDComponentValue")
+            _repeated_element_type(ivar, set(), metaclass=self._meta("otherType")), "bytes")
 
-    def test_no_suffix_match_returns_bytes(self):
-        """Zero classes match the suffix → fallback to 'bytes'."""
+    def test_signature_has_no_classlist_parameter(self):
+        """The classlist was only needed by the removed name-suffix matcher."""
+        import inspect
         from proto.repeated import _repeated_element_type
-        cl = self._make_cl("GEOPDMapsResult", "GEOPDPlace")
-        ivar = ObjcIvar(name="_widgetStates", type_enc='@"NSArray"', offset=8, size=8)
-        result = _repeated_element_type(ivar, set(), metaclass=None, cl=cl)
-        self.assertEqual(result, "bytes")
+        self.assertNotIn("cl", inspect.signature(_repeated_element_type).parameters)
 
-    def test_strategy1_wins_over_ambiguous_strategy2(self):
-        """
-        When the metaclass has a resolved '+valuesType' method, Strategy 1
-        returns the selector name immediately — Strategy 2 is never reached,
-        even if it would be ambiguous.
-        """
+    def test_metaclass_selector_is_returned(self):
         from proto.repeated import _repeated_element_type
-        from macho.classlist import ClassList
-        # Two classes with the same suffix — ambiguous for Strategy 2
-        cl = self._make_cl("GEODefaultsDBValue", "GEOPDComponentValue")
-        metaclass = ObjcClass(
-            vmaddr=0x9000,
-            name="GEOPDComponent_meta",
-            is_meta=True,
-            superclass_vmaddr=0,
-            superclass_name=None,
-            ro_flags=0,
-            instance_size=8,
-            methods=[
-                ObjcMethod(name="valuesType", types='', imp=0x5000,
-                           is_relative=False),
-            ],
-        )
         ivar = ObjcIvar(name="_values", type_enc='@"NSArray"', offset=8, size=8)
-        result = _repeated_element_type(ivar, set(), metaclass=metaclass, cl=cl)
-        # Strategy 1 finds "valuesType" and returns it; downstream resolves to class
-        self.assertEqual(result, "valuesType",
-                         "Strategy 1 (metaclass method name) must take precedence")
+        self.assertEqual(
+            _repeated_element_type(ivar, set(), metaclass=self._meta("valuesType")),
+            "valuesType")
+
+    def test_singular_selector_form_is_found(self):
+        from proto.repeated import _repeated_element_type
+        ivar = ObjcIvar(name="_mapsResults", type_enc='@"NSArray"', offset=8, size=8)
+        self.assertEqual(
+            _repeated_element_type(ivar, set(), metaclass=self._meta("mapsResultType")),
+            "mapsResultType")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1275,8 +1235,7 @@ class TestPoolAlwaysBuilt(unittest.TestCase):
     ``not instance_method_names or not _mc_names_resolved``.
 
     With ``--cache``, both conditions are False so the pool was NOT built.
-    This meant that even after the Strategy-2 uniqueness fix (which makes
-    _values fall through to 'bytes' on ambiguity), there was no pool to
+    This meant that even when the field fell through to 'bytes' (the ambiguous-suffix case), there was no pool to
     resolve it correctly and the field would stay as 'repeated bytes'.
 
     Fix: remove the gate entirely — the pool is always built.
@@ -1453,17 +1412,17 @@ class TestPoolAlwaysBuilt(unittest.TestCase):
         )
 
         # Classlist order: defaults_db first so alphabetical trap fires if
-        # Strategy 2 still has the old bug.
+        # a name-based guess would pick it.
         cl = ClassList([defaults_db, comp_value, metaclass, cls])
         return cl, cls
 
     def test_values_field_typed_as_component_value_not_defaults_db_value(self):
         """
         GEOPDComponent._values must be resolved to GEOPDComponentValue via the
-        IMP-scan pool, not GEODefaultsDBValue via alphabetical Strategy 2.
+        IMP-scan pool / +valuesType method, not GEODefaultsDBValue via a name guess.
 
         This exercises the full fix path:
-          1. Strategy 2 returns 'bytes' (two classes share the 'Value' suffix).
+          1. A name guess would be ambiguous (two classes share the 'Value' suffix).
           2. Pool is built unconditionally (gate removed).
           3. Pool Pass A: only GEOPDComponentValue matches 'Value' in the pool
              (GEODefaultsDBValue is never a +xyzType return value so it is
@@ -1490,8 +1449,8 @@ class TestPoolAlwaysBuilt(unittest.TestCase):
             field_types['values'], 'GEOPDComponentValue',
             f"'values' must resolve to GEOPDComponentValue via the IMP-scan pool, "
             f"not '{field_types.get('values')}' (GEODefaultsDBValue is the "
-            f"alphabetically-first 'Value' class and would be returned by the "
-            f"old ambiguous Strategy 2)",
+            f"alphabetically-first 'Value' class and would be returned by a "
+            f"name-based guess)",
         )
         # Belt-and-suspenders: the trap class must not appear anywhere.
         for f in msg.fields:

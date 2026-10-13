@@ -12230,12 +12230,12 @@ false,
 false
 ],
 "GEOCoarseLocationTileData.territorys": [
-"bytes",
-null,
+"GEOCoarseLocationTerritoryInfo",
+"GEOCoarseLocationTerritoryInfo",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOCollectionDetails.collectionCategory": [
@@ -104419,12 +104419,12 @@ false,
 false
 ],
 "GEOPDSSearchEvChargingParameters.networks": [
-"GEOLogMsgEventNetwork",
-"GEOLogMsgEventNetwork",
+"string",
+null,
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSSearchEvChargingParameters.ports": [
@@ -106576,12 +106576,12 @@ false,
 false
 ],
 "GEOPDSearchKey64Value32PairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKey64Value32Pair",
+"GEOPDSearchKey64Value32Pair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKey64Value64Pair.key": [
@@ -106603,12 +106603,12 @@ false,
 false
 ],
 "GEOPDSearchKey64Value64PairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKey64Value64Pair",
+"GEOPDSearchKey64Value64Pair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKey64ValueBoolPair.key": [
@@ -106630,12 +106630,12 @@ false,
 false
 ],
 "GEOPDSearchKey64ValueBoolPairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKey64ValueBoolPair",
+"GEOPDSearchKey64ValueBoolPair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKey64ValueDoublePair.key": [
@@ -106657,12 +106657,12 @@ false,
 false
 ],
 "GEOPDSearchKey64ValueDoublePairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKey64ValueDoublePair",
+"GEOPDSearchKey64ValueDoublePair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKey64ValuePair.key": [
@@ -106684,12 +106684,12 @@ false,
 false
 ],
 "GEOPDSearchKey64ValuePairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKey64ValuePair",
+"GEOPDSearchKey64ValuePair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyDoubleValue64Pair.key": [
@@ -106711,12 +106711,12 @@ false,
 false
 ],
 "GEOPDSearchKeyDoubleValue64PairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyDoubleValue64Pair",
+"GEOPDSearchKeyDoubleValue64Pair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyDoubleValueDoublePair.key": [
@@ -106738,12 +106738,12 @@ false,
 false
 ],
 "GEOPDSearchKeyDoubleValueDoublePairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyDoubleValueDoublePair",
+"GEOPDSearchKeyDoubleValueDoublePair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyValue32Pair.key": [
@@ -106765,12 +106765,12 @@ false,
 false
 ],
 "GEOPDSearchKeyValue32PairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyValue32Pair",
+"GEOPDSearchKeyValue32Pair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyValue64Pair.key": [
@@ -106792,12 +106792,12 @@ false,
 false
 ],
 "GEOPDSearchKeyValue64PairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyValue64Pair",
+"GEOPDSearchKeyValue64Pair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyValueBoolPair.key": [
@@ -106819,12 +106819,12 @@ false,
 false
 ],
 "GEOPDSearchKeyValueBoolPairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyValueBoolPair",
+"GEOPDSearchKeyValueBoolPair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyValueBytesPair.key": [
@@ -106846,12 +106846,12 @@ false,
 false
 ],
 "GEOPDSearchKeyValueBytesPairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyValueBytesPair",
+"GEOPDSearchKeyValueBytesPair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyValueDoublePair.key": [
@@ -106873,12 +106873,12 @@ false,
 false
 ],
 "GEOPDSearchKeyValueDoublePairList.pairs": [
-"bytes",
-null,
+"GEOPDSearchKeyValueDoublePair",
+"GEOPDSearchKeyValueDoublePair",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchKeyValueFloatPair.key": [
@@ -109881,12 +109881,12 @@ false,
 false
 ],
 "GEOPDSearchSearchChainInfo.triggers": [
-"GEOPDSearchBrandTrigger",
-"GEOPDSearchBrandTrigger",
+"string",
+null,
 2,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDSearchSearchFilterIntent.searchFilter": [
@@ -112596,12 +112596,12 @@ false,
 false
 ],
 "GEOPDTileList.tiles": [
-"bytes",
-null,
+"GEOTileCoordinate",
+"GEOTileCoordinate",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOPDTimeRange.duration": [
@@ -120451,18 +120451,36 @@ false,
 false
 ],
 "GEORPFeatureHandle.styleAttributes": [
-"GEOStyleAttribute",
-"GEOStyleAttribute",
+"GEORPFeatureHandleStyleAttribute",
+"GEORPFeatureHandleStyleAttribute",
 8,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEORPFeatureHandle.type": [
 "RPFeatureHandleType",
 "ENUM:RPFeatureHandleType",
 7,
+"optional",
+true,
+false,
+false
+],
+"GEORPFeatureHandleStyleAttribute.key": [
+"int32",
+null,
+1,
+"optional",
+true,
+false,
+false
+],
+"GEORPFeatureHandleStyleAttribute.value": [
+"int32",
+null,
+2,
 "optional",
 true,
 false,
@@ -141184,12 +141202,12 @@ false,
 false
 ],
 "GEOSupportedTileSets.tileSets": [
-"bytes",
-null,
+"GEOTileSet",
+"GEOTileSet",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTFCompactPredictedSpeed.deltaMinutesInFuture": [
@@ -144702,12 +144720,12 @@ false,
 false
 ],
 "GEOTerritoryDataTileData.territorys": [
-"bytes",
-null,
+"GEOTerritoryDataTerritoryInfo",
+"GEOTerritoryDataTerritoryInfo",
 1,
 "repeated",
 true,
-true,
+false,
 false
 ],
 "GEOTextLink.text": [

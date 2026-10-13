@@ -211,15 +211,6 @@ def _find_metaclass(
 # `_classify_write_helper`.
 
 
-# Inline-comment text attached to a field whose element type was chosen by the
-# Strategy-2 name-suffix heuristic (an unverified guess).  Names the strategy and
-# points at the docs so the user can dig into the guess — see FIELD_TYPE_INFERENCE.md.
-_NAME_SUFFIX_GUESS_NOTE = (
-    "type guessed from field name (name-suffix heuristic / Strategy 2), unverified"
-    " — see FIELD_TYPE_INFERENCE.md"
-)
-
-
 # Inline-comment text attached to a repeated field whose element type could not
 # be determined, so it falls back to ``repeated bytes``.  Unlike a genuine
 # ``repeated bytes`` (an ``NSData`` element array), this is a degraded result: the
@@ -1133,8 +1124,8 @@ def _resolve_repeated_element_type(
 
     The packed-list guard excludes packed repeated *scalar* fields
     (``{?="list"^i…}``): their element is a scalar by construction (the ivar is a C
-    array, not an object array), so the message/name-suffix resolver must not run
-    on them — it would mis-bind a scalar list to a name-matching message class
+    array, not an object array), so the message resolvers must not run
+    on them — a name-matching message class would be mis-bound to a scalar list
     (e.g. ``geoIds`` → GEOSubPremise).  Their element type is decoded directly from
     ``^<elem>`` in ``_type_from_enc``; the label is already REPEATED.
 
@@ -1172,9 +1163,7 @@ def _resolve_repeated_element_type(
     if _disp is not None and not _rr.abi_confirmed:
         return _disp, _disp, None
     note = None
-    if _rr.via_name_suffix:
-        note = _NAME_SUFFIX_GUESS_NOTE
-    elif _rr.element_unresolved:
+    if _rr.element_unresolved:
         # Repeated field whose element type could not be determined → emitted as
         # `bytes`.  Flag it so the degradation is visible (a genuine NSData
         # byte-array has element_unresolved=False and is left unflagged).
@@ -1206,7 +1195,7 @@ def extract_proto_message(
     class_name}`` map from :func:`_build_readfrom_core_index`.  When present it
     drives the principled ``repeated <message>`` element-type resolver
     (:func:`_resolve_repeated_via_dispatch`), which takes precedence over the
-    name-suffix heuristics for fields whose readFrom: dispatch arm calls a known
+    +xyzType metaclass method for fields whose readFrom: dispatch arm calls a known
     proto class core.
 
     Both default to ``_AUTO``: when not supplied they are **lazily built + cached
@@ -1340,8 +1329,8 @@ def extract_proto_message(
     # Scan every method on the metaclass with _class_from_type_method_imp to
     # build a pool of element-class names for repeated-field resolution.
     #
-    # This pool supplements Strategy 1 of _repeated_element_type (name-based
-    # +[Cls xyzType] lookup) for two cases where Strategy 1 cannot work:
+    # This pool supplements the +[Cls xyzType] lookup of _repeated_element_type
+    # for two cases where that lookup cannot work:
     #
     #   (a) Fully-unresolved binaries: instance_method_names is empty, so
     #       selector names are unavailable for name-based matching.
@@ -1350,15 +1339,14 @@ def extract_proto_message(
     #       resolved (enough for _REQUIRED_INSTANCE_METHODS to match), but the
     #       metaclass method list uses preoptimised relative selectors that
     #       weren't resolved without --cache, leaving all metaclass method
-    #       names as None.  Strategy 1 checks ``m.name == sel`` which is
-    #       always False when names are None, so it falls through to Strategy 2
-    #       (name-suffix matching), which can return the wrong class when the
-    #       suffix is generic (e.g. "Value" matching GEODefaultsDBValue instead
-    #       of GEOPDComponentValue).
+    #       names as None.  The lookup checks ``m.name == sel`` which is always
+    #       False when names are None, so the field is left to the readFrom:
+    #       dispatch / class-reference levers (which need no names) and
+    #       otherwise falls back to `repeated bytes`.
     #
     # Gate: build the pool when method names are unavailable (case a) OR when
     # the metaclass is present but its methods have no resolved names (case b).
-    # When all metaclass method names ARE resolved, Strategy 1 works correctly
+    # When all metaclass method names ARE resolved, the lookup works correctly
     # and the pool is not needed (skipping it avoids unnecessary IMP scanning).
     #
     # Note: build_class_list now follows isa pointers to add metaclasses to the
@@ -1367,8 +1355,8 @@ def extract_proto_message(
     # isa pointer outside the binary's mapped range that caused the metaclass
     # to be skipped during classlist construction).
     #
-    # The pool's sole remaining consumer is the Strategy-1/2 *refinement* in
-    # _resolve_repeated_field_type: when Strategy 2 resolves to a classlist name
+    # The pool's sole remaining consumer is the *refinement* in
+    # _resolve_repeated_field_type: when the +xyzType lookup resolves to a class
     # but the pool holds an IMP-confirmed entry with the same suffix, the
     # IMP-confirmed one wins.  The former name-overlap fallbacks (Pass A exact
     # pool-suffix and the post-loop Pass B exclusion) were removed 2026-06-08 —
@@ -1436,9 +1424,9 @@ def extract_proto_message(
             confirmed = False
             next_unconfirmed += 1
 
-        # Resolve a repeated field's element type (dispatch-first, then heuristic)
-        # and flag a name-suffix guess / unresolved element.  Alerts the user via
-        # an inline `//` comment when the TYPE is an unverified guess (Strategy 2).
+        # Resolve a repeated field's element type (dispatch-first, then the write
+        # helper / +xyzType) and flag an unresolved element.  Alerts the user via
+        # an inline `//` comment when the element type could not be determined.
         type_name, type_class, _type_note = _resolve_repeated_element_type(
             ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
             dispatch_elements=dispatch_elements,

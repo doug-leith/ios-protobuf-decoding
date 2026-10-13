@@ -149,7 +149,7 @@ in the field loop, `finalize_struct_fields` at the end of `extract_all`;
 
 **Heuristic.** The recovery itself is principled. Its only judgement calls are two cosmetic
 naming choices (the camelCase key spelling and the `field<N>` placeholder above); the residual
-is the `bytes` default-type fallback. (Distinct from the *name-suffix* fallback in (7); this
+is the `bytes` default-type fallback. (Distinct from the (now removed) name-suffix fallback that used to be limitation (7); this
 one fires when the type cannot be named at all.)
 
 ---
@@ -290,49 +290,43 @@ emitter reconciliation `_collect_enums` / `_best_in_compat_group` (`proto/emitte
 Analysis: `notes/ENUM_NAME_FROM_PREFIX.md`.
 
 
-## 7. A few repeated-element types are inferred from the field *name*  — to-do #45
+## 7. ~~A few repeated-element types are inferred from the field *name*~~  — CLOSED 2026-10-13 (to-do #45)
 
-**Symptom.** For a small number of `repeated <Message>` fields, the element type is
-recovered not from the binary's dispatch but from the **field name** (e.g.
-`photoPositions` → `GEOPDPhotoPosition`). These are flagged inline:
+**Status: removed.** Until 2026-10-13 a small number of `repeated <Message>` fields took their
+element type from the **field name** ("Strategy 2" in `proto/repeated.py::_repeated_element_type`:
+strip the plural `-s`, capitalise, accept the result if it uniquely matched a classlist name's
+suffix) and were flagged inline with `// type guessed from field name (name-suffix heuristic /
+Strategy 2), unverified`. That matcher is **deleted**, because the binary does encode the answer
+and the guess was wrong where it could be checked:
 
-```proto
-repeated GEOPDPhotoPosition photoPositions = 3;  // type guessed from field name (name-suffix heuristic / Strategy 2), unverified — see FIELD_TYPE_INFERENCE.md
-```
+* `GEOPDSSearchEvChargingParameters.networks` and `GEOPDSearchSearchChainInfo.triggers` are
+  `repeated string` (their `writeTo:` calls the NSString write helper) but were typed
+  `GEOLogMsgEventNetwork` / `GEOPDSearchBrandTrigger`.
+* locationd `TRANSITPbLocationFingerprintsV1.locationFingerprints` took the sibling class
+  `TRANSITPbLocationFingerprint` (the reader loads `TRANSITPbLocationFingerprintV1`).
 
-**Why.** The element type is normally bound from the `readFrom:`/`writeTo:` dispatch.
-For these classes that path yields nothing: the class has a `readFrom`, but its
-dispatch core does not resolve (no compare chain, and the jump table doesn't decode),
-and the per-field reader (`-[Cls _read<Field>]`) reads the element through a **generic
-reader keyed by a descriptor pointer** — e.g. `_readPhotoPositions` makes no
-`bl _<Element>ReadAllFrom` and carries no `_OBJC_CLASS_$_<Element>` class-ref, only a
-generic helper + a descriptor (`0x18d8547b4` family). So **no structural site names the
-element type** — only the ivar/method name does. This is intrinsic: the binary genuinely
-doesn't encode the element class at the field site.
+**What replaces it** (all read from the binary, none from names):
 
-**How it's recovered (and bounded).** `proto/repeated.py` (`_repeated_element_type`,
-Strategy 2) strips a plural `-s`, capitalises, and accepts the result **only if it
-uniquely matches a class in the classlist**. It is a guess from convention, so it is
-flagged inline rather than presented as confirmed. The companion refinements in
-`_resolve_repeated_field_type` (pool-suffix + write-helper string check) are *not*
-guesses — they read ground truth — and are unaffected.
+1. the field's `writeTo:` helper — the NSString helper is checked first and decides `repeated
+   string` (`_resolve_repeated_field_type`);
+2. the readFrom: dispatch / adder->ivar lever (`ReadAllFrom` cores in the dispatch arms);
+3. the **element class-reference lever** (`_resolve_repeated_via_classrefs`): the reader loads the
+   element class (`[[Element alloc] init]`) right before calling the field's add-accessor — a direct
+   `bl`, or an `_objc_msgSend$<selector>` stub for old-style classes — applied only to fields written
+   by the message write helper;
+4. the inline-C-struct encoding (`GEORPFeatureHandle.styleAttributes` is now the named struct
+   message `RPFeatureHandleStyleAttribute`);
+5. otherwise the honest `repeated bytes` plus the "element type could not be determined" flag.
 
-**Known affected fields.** 22 fields (GeoServices 20, locationd 2, CoreLocationProtobuf 0),
-e.g. `GEOPDGroundMetadataTile.photoPositions`, `GEOPDSearchACHintMetadata.*`.
+Effect on the iPhone 8 artifacts: GeoServices 18 of 8048 fields changed (2 string fixes, 16 formerly
+unresolved `repeated bytes` now typed, e.g. `GEOPDTileList.tiles` -> `GEOTileCoordinate`), locationd 2
+of 445, CoreLocationProtobuf 0 of 530. The class-reference lever was calibrated against the
+dispatch lever on the fields both resolve: 516 of 516 agree (gated in
+`tests/test_repeated_element_types.py`).
 
-**Workaround for consumers.** Treat the element type on a flagged field as a best-effort
-guess; confirm it by hand against the owning class's `readFrom:`/`writeTo:` (or the
-generic-reader descriptor). The field number and `repeated` label are correct.
-
-**Source sites.** The guess is produced in `proto/repeated.py` (`_repeated_element_type`,
-Strategy 2); the inline flag `_NAME_SUFFIX_GUESS_NOTE` is defined and attached in
-`proto/extractor.py`. Detailed analysis: `notes/FIELD_TYPE_INFERENCE.md`. (Note: this
-flag points readers to `FIELD_TYPE_INFERENCE.md` — the dedicated write-up — rather than
-back to this file, unlike limitations (1)/(2)/(4).)
-
-**Heuristic.** Four fallbacks: `_repeated_element_type` Strategies 2 and 1,
-`_resolve_repeated_type`, and `_resolve_repeated_field_type` (base-candidate only — its pool-match + write-helper
-refinements read ground truth and are NOT part of this limitation).
+**Residual name matching.** the pool-suffix match (an exact suffix match against the IMP-confirmed
+`+xyzType` pool, applied on top of a `+xyzType`-resolved class) and the selector synthesis
+(depluralise and append `Type`) remain; both only choose among IMP-confirmed answers.
 
 ---
 

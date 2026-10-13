@@ -28,74 +28,37 @@ def _repeated_element_type(
     ivar: ObjcIvar,
     instance_methods: Set[str],
     metaclass: Optional[ObjcClass],
-    cl: Optional["ClassList"] = None,
 ) -> str:
     """
-    For a repeated field, find the element proto type.
+    For a repeated field, find the selector of the ``+[Cls xyzType]`` metaclass method
+    that names the element type, or ``"bytes"`` when there is none.
 
-    Three strategies are tried in order:
+    The metaclass exposes a selector like ``mapsResultsType`` whose body returns
+    ``[GEOPDMapsResult class]``; the field name is depluralised (``mapsResults`` ->
+    ``mapsResult``) and ``Type`` appended to form the candidate selector.  The class
+    itself is read out of the method's IMP by :func:`_resolve_repeated_type`, so only the
+    SELECTOR is chosen here.
 
-    1. **+[Cls xyzType] class method** (primary, works for standalone binaries
-       where selector names are resolved): the metaclass exposes a selector
-       like ``mapsResultsType`` whose body returns ``[GEOPDMapsResult class]``.
-
-    2. **Name-based suffix matching** (shared-cache fallback): strip plural
-       suffixes from the ivar name to form a singular, capitalise it, and look
-       for a known class whose name ends with that string.  Covers the common
-       case where the ivar name is a direct pluralisation of the element class
-       suffix (e.g. ``_mapsResults`` → ``MapsResult`` → ``GEOPDMapsResult``).
-
-       **Uniqueness guard**: if two or more classes share the same capitalised
-       suffix (e.g. ``"Value"`` matches both ``GEODefaultsDBValue`` and
-       ``GEOPDComponentValue``), this strategy returns ``"bytes"`` instead of
-       the first alphabetical hit.  The principled readFrom: dispatch resolver
-       (:func:`_resolve_repeated_via_dispatch`, keyed by ReadAllFrom callee
-       address) is the authoritative resolver for such ambiguous fields; when it
-       can't follow the field the value stays the safe ``"bytes"``.
-
-    3. **"bytes" fallback** when neither strategy succeeds.
+    There is deliberately NO fallback that guesses the element class from the field
+    name (the former "Strategy 2": strip the plural ``-s``, capitalise, accept a unique
+    classlist name ending with the result).  It typed fields wrongly --
+    ``GEOPDSSearchEvChargingParameters.networks`` (a repeated string) became
+    ``GEOLogMsgEventNetwork`` and ``TRANSITPbLocationFingerprintsV1`` took the sibling
+    class -- and everything it resolved is now recovered from the binary:
+    the readFrom: dispatch / adder->ivar lever (``_resolve_repeated_via_dispatch_ivars``),
+    the element class-reference lever (``_resolve_repeated_via_classrefs``), the write
+    helper (string), or the inline-struct encoding.  A field none of them resolves stays
+    the honest ``repeated bytes`` (flagged by the caller).
     """
     pname = _proto_name(ivar.name)
     singular = pname.rstrip("s") if pname.endswith("s") else pname
     type_sel = f"{singular}Type"
     type_sel_plural = f"{pname}Type"
 
-    # Strategy 1: +[Cls xyzType] metaclass method
+    # +[Cls xyzType] metaclass method
     for sel in (type_sel, type_sel_plural):
         if metaclass and any(m.name == sel for m in metaclass.methods):
             return sel
-
-    # Strategy 2: name-based suffix matching — only when the match is unique.
-    # Multiple classes sharing the same suffix (generic suffixes like "Value",
-    # "Result", "Info") are genuinely ambiguous; returning the first
-    # alphabetical hit would silently assign the wrong type.  Instead, fall
-    # back to "bytes" (the safe fallback).
-    #
-    # KEEP THIS — it does real work.  Per-path tally of every repeated-message
-    # field across three binaries (dispatch / Strategy-1 rows: 2026-06-08;
-    # Strategy-2 row re-measured 2026-06-09):
-    #   path                  GeoServices  locationd  CoreLocationProtobuf
-    #   dispatch (by address)      17          23            27   (2026-06-08)
-    #   Strategy 1 (metaclass)    503           5            16   (2026-06-08)
-    #   Strategy 2 (this)          40           2             0   (2026-06-09)
-    # Strategy 2 is the SOLE resolver for ~42 message fields that neither the
-    # readFrom: dispatch walk nor the metaclass +xyzType method can reach (e.g.
-    # GEOLPRWorld.powerTypes→GEOLPRPowerType, TRANSITPbLocationFingerprint.macs→
-    # TRANSITPbTransitMac).  (The Strategy-2 count fell 80→40 since 2026-06-08 as
-    # intervening dispatch/lever work resolves more fields structurally; counting
-    # via `via_name_suffix`-flagged emitted fields.)  It is a NAME-BASED GUESS,
-    # though — the uniqueness guard (`len(matches)==1`) is the only safety net —
-    # so every field it resolves is tagged with `via_name_suffix` and emitted with
-    # an inline warning comment.  (By contrast the former Pass A / Pass B
-    # name-overlap fallbacks resolved 0 fields and were removed; and the unguarded
-    # name-suffix fallback in `_resolve_repeated_type` was removed 2026-06-09 —
-    # this guarded one is the only name-suffix matcher that remains.)
-    # See FIELD_TYPE_INFERENCE.md.  Accepted limitation: LIMITATIONS.md (7), #45.
-    if cl is not None and singular:
-        cap = singular[0].upper() + singular[1:]
-        matches = [c.name for c in cl if not c.is_meta and c.name.endswith(cap)]
-        if len(matches) == 1:
-            return matches[0]
 
     return "bytes"
 
@@ -797,30 +760,12 @@ def _resolve_repeated_type(type_sel: str, metaclass: Optional[ObjcClass],
     element type could be determined); ``False`` for any resolved outcome,
     including a genuine ``"bytes"`` from a resolved ``NSData`` element.
 
-    Also handles *type_sel* already being a resolved ObjC class name — as
-    returned by Strategy 2 of :func:`_repeated_element_type` when the metaclass
-    is unavailable but the class was found by name-suffix matching (routine in
-    shared-cache-extracted binaries, where ``_find_metaclass`` often returns
-    None because the metaclass lives in ``__DATA_DIRTY`` and isn't in the
-    classlist).  Since selector names always start lowercase, a *type_sel*
-    starting uppercase is already a class name and is returned directly; system
-    class names (NSString, NSData) are mapped through :data:`_CLASS_TO_PROTO`.
-
     When ``ctx`` is provided and the method is found by selector name, its IMP
     is disassembled via :func:`_class_from_type_method_imp` to resolve the class
     directly — covering the ``--cache`` path where NSString isn't in the
     binary's own classlist.  Failure falls back to ``"bytes"``
-    (``element_unresolved=True``); it does NOT guess by name suffix (that
-    unguarded guess was removed — the *guarded* Strategy-2 matcher in
-    :func:`_repeated_element_type` is a separate, retained path).
+    (``element_unresolved=True``); it does NOT guess by name suffix.
     """
-    # Strategy 2 result or system class: type_sel is already a resolved name.
-    if type_sel and type_sel[0].isupper():
-        # Map system class names (NSString → "string", NSData → "bytes") to
-        # their proto equivalents; pass through binary-local class names as-is.
-        # Resolved (incl. a genuine NSData → "bytes"), so NOT element_unresolved.
-        return (_CLASS_TO_PROTO.get(type_sel, type_sel), False)
-
     if metaclass is None:
         return ("bytes", True)
     m = next((m for m in metaclass.methods if m.name == type_sel), None)
@@ -848,11 +793,9 @@ def _resolve_repeated_type(type_sel: str, metaclass: Optional[ObjcClass],
     # supported artifact (IMP resolution always succeeds when the method exists),
     # so deleting it is output-identical there.  "bytes" is wire-honest, and the
     # give-up is surfaced via element_unresolved → the caller attaches
-    # `_ELEMENT_UNRESOLVED_NOTE` so the degradation is visible.
-    #
-    # NB: the *guarded* (len==1) and *flagged* (`via_name_suffix`) name-suffix
-    # matcher in `_repeated_element_type` (Strategy 2) is a DIFFERENT path and is
-    # deliberately kept — it is unaffected by this removal.
+    # `_ELEMENT_UNRESOLVED_NOTE` so the degradation is visible.  (The guarded,
+    # flagged name-suffix matcher that used to live in `_repeated_element_type` was
+    # removed too -- see that function's docstring.)
     return ("bytes", True)
 
 
@@ -899,7 +842,6 @@ class _RepeatedTypeResult:
     """Return value of :func:`_resolve_repeated_field_type`."""
     type_name:        str
     type_class:       Optional[str]
-    via_name_suffix:  bool = False   # True → type came from Strategy 2 (a guess)
     abi_confirmed:    bool = False   # True → element type is ABI ground truth (a
                                      # distinct write-helper / +xyzType→NSString), so
                                      # it must NOT be overridden by a number-keyed
@@ -936,21 +878,21 @@ def _resolve_repeated_field_type(
        method exists (``GEOPDComponent.versionDomains``) or the method returns
        the external NSString (``GEOPDPlaceResponse.displayLanguages``).
 
-    2. **Strategy 1/2** via :func:`_repeated_element_type` +
-       :func:`_resolve_repeated_type`.  When that resolves to a concrete class
-       (not ``"bytes"``), optionally refine via an exact pool-suffix match (IMP
-       disassembly is more authoritative than classlist suffix-matching) and
-       return.
+    2. The ``+[Cls xyzType]`` metaclass method via :func:`_repeated_element_type` +
+       :func:`_resolve_repeated_type` (the class is read out of the method's IMP).
+       When that resolves to a concrete class (not ``"bytes"``), optionally refine
+       via an exact pool-suffix match and return.
 
-    3. Otherwise the field stays as ``"bytes"`` (the safe fallback).
+    3. Otherwise the field stays as ``"bytes"`` (the safe fallback), flagged by the
+       caller as an unresolved element; the caller's readFrom: dispatch / adder->ivar
+       lever and element class-reference lever may still supply the class first.
 
-    Note: the former name-overlap fallbacks (Pass A exact pool-suffix matching
-    and the post-loop Pass B exclusion assignment) were removed 2026-06-08 -- a
-    census across GeoServices / locationd / CoreLocationProtobuf showed they
-    resolved zero fields even where their pool gate fired, while the principled
-    readFrom: dispatch resolver + Strategy 1 cover those cases.  The pool is
-    still consulted for the Strategy-1/2 *refinement* in step 2 (an IMP-confirmed
-    override), which is structural, not a name guess.
+    The former name-suffix guess (Strategy 2) is gone -- see
+    :func:`_repeated_element_type`.  The former name-overlap fallbacks (Pass A exact
+    pool-suffix matching and the post-loop Pass B exclusion assignment) were removed
+    2026-06-08 -- a census across GeoServices / locationd / CoreLocationProtobuf
+    showed they resolved zero fields even where their pool gate fired.  The pool is
+    still consulted for the *refinement* in step 2 (an IMP-confirmed override).
     """
     # ABI evidence first: the string write helper is never used for a message
     # element, so it decides the kind before any class-naming path runs.
@@ -960,7 +902,7 @@ def _resolve_repeated_field_type(
         return _RepeatedTypeResult(type_name="string", type_class=None,
                                    abi_confirmed=True)
 
-    type_sel = _repeated_element_type(ivar, instance_method_names, metaclass, cl)
+    type_sel = _repeated_element_type(ivar, instance_method_names, metaclass)
     resolved, elem_unresolved = _resolve_repeated_type(type_sel, metaclass, cl, ctx=ctx)
 
     # Capitalised singular used in the pool-suffix refinement (computed once)
@@ -968,37 +910,26 @@ def _resolve_repeated_field_type(
     cap      = singular[0].upper() + singular[1:] if singular else ""
 
     if resolved != "bytes":
-        # Provenance: _repeated_element_type returns a SELECTOR (lowercase, e.g.
-        # "fooType") for Strategy 1 (metaclass +xyzType, IMP-confirmed/structural)
-        # and a CLASS NAME (uppercase first char) for Strategy 2 (name-suffix
-        # classlist match — an unverified guess).  Capture which one produced this
-        # concrete class BEFORE the refinement below so the caller can flag the
-        # field.
-        via_name_suffix = bool(type_sel) and type_sel[0].isupper()
-
-        # Strategy 1/2 found a concrete class.  When the pool has an IMP-confirmed
-        # entry with the same suffix, prefer it over the classlist-based result.
-        # e.g. Strategy 2 finds "GEODotPlace" but pool has "GEOPDDotPlace";
-        # the runtime xyzType method IS "GEOPDDotPlace", so use that.
+        # The +xyzType method resolved to a concrete class (or NSString).  When the
+        # pool has an IMP-confirmed entry with the same suffix, prefer it over the
+        # classlist-based result.
         #
         # Do NOT apply this when ``resolved == "string"``: that value comes from
-        # an IMP-confirmed ``+xyzType`` method returning NSString (Strategy 1),
-        # which is already authoritative.  Overriding it with a name-suffix pool
-        # match would wrongly promote a genuine ``repeated string`` to a message
-        # type (e.g. GEOBusiness._categorys: categoryType → NSString, but a pool
-        # entry "GEOCategory" shares the "Category" suffix).
+        # an IMP-confirmed ``+xyzType`` method returning NSString, which is already
+        # authoritative.  Overriding it with a name-suffix pool match would wrongly
+        # promote a genuine ``repeated string`` to a message type (e.g.
+        # GEOBusiness._categorys: categoryType → NSString, but a pool entry
+        # "GEOCategory" shares the "Category" suffix).
         if resolved != "string" and meta_type_pool and cap:
             pool_exact = [c for c in meta_type_pool if c.endswith(cap)]
             if len(pool_exact) == 1:
                 resolved = pool_exact[0]
         type_class = resolved if resolved not in ("string", "bytes") else None
-        # Only a concrete *message* class can be a name-suffix guess; a `string`
-        # outcome is ABI-confirmed (an IMP-confirmed +xyzType returning NSString),
-        # not a guess — mark it so the tie-break never lets dispatch override it.
+        # A `string` outcome is ABI-confirmed (an IMP-confirmed +xyzType returning
+        # NSString) -- mark it so the tie-break never lets dispatch override it.
         return _RepeatedTypeResult(
             type_name       = resolved,
             type_class      = type_class,
-            via_name_suffix = via_name_suffix and type_class is not None,
             abi_confirmed   = resolved == "string",
         )
 

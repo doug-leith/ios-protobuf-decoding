@@ -230,9 +230,9 @@ if want f13_writeto_accessor_sourced; then
 fi
 
 if want f14_repeated_suffix_ambiguity; then
-    # Repeated-message element-type Strategy 2 (name-suffix classlist match)
-    # and its uniqueness guard — pure name-matching, no disassembly. Zero
-    # prior synthetic coverage.
+    # Repeated fields with no structural element-type evidence: originally the
+    # fixture for the (since deleted) name-suffix matcher and its uniqueness
+    # guard; now the guard against re-introducing a name-based guess.
     build_fixture f14_repeated_suffix_ambiguity \
         -o f14_repeated_suffix_ambiguity/testrsa \
         f14_repeated_suffix_ambiguity/fixture.m

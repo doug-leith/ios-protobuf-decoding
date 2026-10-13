@@ -1,5 +1,14 @@
 # How repeated-message field types are inferred
 
+> **Status 2026-10-13 -- HISTORICAL.** Strategy 2 (the name-suffix classlist match described
+> below) has been **deleted** from `proto/repeated.py`, together with `via_name_suffix` and the
+> `_NAME_SUFFIX_GUESS_NOTE` inline flag. Its last remaining answers were recovered from the
+> binary instead (write-helper kind, the element class-reference lever, the inline-struct
+> encoding); 3 of the 5 it still produced were wrong. This document records why it was kept
+> until then. See `LIMITATIONS.md` (7) and `report_on_apple_location_services/notes/codex_eval/
+> extractor_networks_type_bug.md`.
+
+
 When this tool emits a `.proto`, the element type of a `repeated <message>` field
 is not stored anywhere in the binary as a name — it has to be recovered from the
 compiled code. The tool uses four tiers, tried in order of decreasing

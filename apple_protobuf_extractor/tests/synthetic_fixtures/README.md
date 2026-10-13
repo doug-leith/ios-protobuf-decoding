@@ -116,19 +116,17 @@ f13_writeto_accessor_sourced/ writeTo: field-NUMBER binding for a message-
                              the wrong number (file cites a real case,
                              _CPUsageEnvelope.context, estimated 6, actual
                              14); zero prior synthetic coverage
-f14_repeated_suffix_ambiguity/ Repeated-message element-type Strategy 2
-                             (proto/repeated.py:_repeated_element_type's
-                             pure classlist name-suffix match) AND its
-                             uniqueness guard — one unique-suffix field
-                             (resolves) + one deliberately AMBIGUOUS field
-                             (2 classes share a suffix -> safe `bytes`
-                             fallback), both isolated from Strategy 1/
-                             dispatch (no readFrom:, no +xyzType anywhere).
-                             NOT a zero-coverage gap in the raw line-count
-                             sense (see the fixture's own header comment
-                             for why) — but the first fixture to isolate
-                             Strategy 2 deliberately and the first to cover
-                             a genuinely ambiguous (2+ match) case at all
+f14_repeated_suffix_ambiguity/ No name-based element-class guessing
+                             (proto/repeated.py:_repeated_element_type).
+                             Two repeated fields with NO structural evidence
+                             (no readFrom:, no +xyzType anywhere): one whose
+                             name matches exactly one class suffix and one
+                             whose name matches two.  Originally the fixture
+                             for the name-suffix matcher (unique suffix ->
+                             resolved, ambiguous suffix -> bytes); since
+                             2026-10-13 that matcher is deleted, so BOTH are
+                             the honest `repeated bytes` -- the guard
+                             against re-introducing a guess.
 f15_opaque_passthrough/     Opaque-passthrough detector
                              (proto/extractor.py:_is_opaque_passthrough): a
                              field-less class whose writeTo: is a pure
@@ -390,8 +388,8 @@ f27_compare_tree_engine_no_guard/ The newest arm64e engines' shape: a
                              calls ANOTHER class's engine (the nested-reader
                              case — the ownership check's whole purpose).
                              Field names are unrelated to the element class
-                             names so the classlist name-suffix fallback
-                             can't resolve them behind the tier's back.
+                             names so no name-based match could resolve
+                             them behind the tier's back.
                              Built for arm64 and arm64e. FOUND, NOT
                              DESIGNED, while building it: (1) `_func_end`
                              follows a plain-arm64 function's final tail
@@ -762,10 +760,11 @@ for the full trace. `dispatch.py`: 78% → 85% synthetic-only coverage.
 ## Repeated-field element-type recovery coverage (2026-09, f12/f14/f17)
 
 `proto/repeated.py` resolves a repeated-message field's element type via
-four independent strategies: the `+[Cls xyzType]` metaclass method
-(Strategy 1, dominant real-world path — f12), name-suffix classlist
-matching with a uniqueness guard (Strategy 2 — f14), the readFrom: dispatch
-walk (f2/f5/f8, already covered before this session), and the
+independent sources: the `+[Cls xyzType]` metaclass method
+(dominant real-world path — f12), the readFrom: dispatch
+walk (f2/f5/f8, already covered before this session), the element
+class-reference lever (live GeoServices/locationd tests; no synthetic
+fixture), and the
 **adder→ivar lever** (`_resolve_repeated_element_ivars` / `_adder_array_ivar`
 — f17, RESOLVED, see below).
 

@@ -180,9 +180,10 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
     _resolve_repeated_field_type determines the concrete element type for one
     repeated NSArray field.  Returns _RepeatedTypeResult(type_name, type_class).
 
-    Resolution order: Strategy 1/2 (with IMP-confirmed pool-suffix refinement) →
-    write-helper string reclassification → safe `bytes` fallback.  The former
-    Pass-A / Pass-B name-overlap fallbacks were removed 2026-06-08.
+    Resolution order: write-helper string check → +xyzType metaclass method (with
+    IMP-confirmed pool-suffix refinement) → safe `bytes` fallback.  The former
+    Pass-A / Pass-B name-overlap fallbacks were removed 2026-06-08 and the
+    name-suffix class guess ("Strategy 2") on 2026-10-13.
     """
 
     def setUp(self):
@@ -195,8 +196,7 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
               resolved_type: str = 'bytes',
               element_sel: str = '_sel_',
               element_unresolved: bool = False):
-        # element_sel mimics _repeated_element_type's return: a lowercase
-        # SELECTOR for Strategy 1, an uppercase CLASS NAME for Strategy 2.
+        # element_sel mimics _repeated_element_type's return: a +xyzType SELECTOR.
         # _resolve_repeated_type now returns (type_name, element_unresolved).
         ivar = ObjcIvar(name=ivar_name, type_enc='@', offset=8, size=8)
         with patch('proto.repeated._repeated_element_type', return_value=element_sel), \
@@ -223,36 +223,22 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
         self.assertEqual(r.type_name, 'string')
         self.assertIsNone(r.type_class)
 
-    # ── Strategy-2 guess provenance flag (via_name_suffix) ────────────────────
+    def test_string_outcome_is_abi_confirmed(self):
+        # A `string` outcome is ABI-confirmed (NSString mapping), not a guess.
+        r = self._call('_names', 'names', pool=[],
+                       resolved_type='string', element_sel='nameType')
+        self.assertEqual(r.type_name, 'string')
+        self.assertTrue(r.abi_confirmed)
 
-    def test_strategy2_class_name_sets_via_name_suffix(self):
-        # _repeated_element_type returned a CLASS NAME (uppercase) → Strategy 2,
-        # an unverified name-suffix guess → flag set so the emitter warns.
-        r = self._call('_widgets', 'widgets', pool=[],
-                       resolved_type='GEOWidget', element_sel='GEOWidget')
-        self.assertEqual(r.type_class, 'GEOWidget')
-        self.assertTrue(r.via_name_suffix)
-
-    def test_strategy1_selector_does_not_set_via_name_suffix(self):
-        # _repeated_element_type returned a SELECTOR (lowercase) → Strategy 1
-        # (metaclass +xyzType, IMP-confirmed) → NOT a guess.
+    def test_resolved_class_is_not_abi_confirmed(self):
         r = self._call('_widgets', 'widgets', pool=[],
                        resolved_type='GEOWidget', element_sel='widgetType')
         self.assertEqual(r.type_class, 'GEOWidget')
-        self.assertFalse(r.via_name_suffix)
+        self.assertFalse(r.abi_confirmed)
 
-    def test_string_outcome_is_not_flagged_as_guess(self):
-        # A `string` outcome is ABI-confirmed (NSString mapping), not a guess,
-        # even when the candidate selector was an uppercase class name.
-        r = self._call('_names', 'names', pool=[],
-                       resolved_type='string', element_sel='GEOName')
-        self.assertEqual(r.type_name, 'string')
-        self.assertFalse(r.via_name_suffix)
-
-    def test_bytes_outcome_is_not_flagged_as_guess(self):
-        r = self._call('_items', 'items', pool=[], resolved_type='bytes')
-        self.assertEqual(r.type_name, 'bytes')
-        self.assertFalse(r.via_name_suffix)
+    def test_result_has_no_name_guess_flag(self):
+        # via_name_suffix was the Strategy-2 provenance flag; the strategy is gone.
+        self.assertFalse(hasattr(self._call('_items', 'items', pool=[]), 'via_name_suffix'))
 
     def test_genuine_bytes_not_element_unresolved(self):
         # A resolved NSData element → ("bytes", False): genuine repeated bytes,
@@ -282,12 +268,12 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
         self.assertTrue(r.element_unresolved)
 
     def test_resolved_class_pool_refinement_unique_match_wins(self):
-        # Strategy 2 finds "GEODotPlace"; pool has "GEOPDDotPlace" which also
-        # ends with "Place" — pool entry takes precedence.
+        # The +xyzType lookup resolved "GEODotPlace"; pool has "GEOPDDotPlace" which
+        # also ends with "Place" — the IMP-confirmed pool entry takes precedence.
         r = self._call('_places', 'places', pool=['GEOPDDotPlace'],
                        resolved_type='GEODotPlace')
         self.assertEqual(r.type_name, 'GEOPDDotPlace',
-                         "Unique pool suffix match must override Strategy 2")
+                         "Unique pool suffix match must override the resolved class")
 
     def test_resolved_string_not_overridden_by_pool_suffix(self):
         # When Strategy 1 resolves to "string" (an IMP-confirmed +xyzType method
@@ -309,24 +295,23 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
 
     # ── string write helper is checked FIRST (ABI evidence outranks any class) ─
 
-    def test_string_helper_beats_strategy2_name_guess(self):
-        # GEOPDSSearchEvChargingParameters.networks: Strategy 2 matched the unique
+    def test_string_helper_beats_a_resolved_message_class(self):
+        # GEOPDSSearchEvChargingParameters.networks: a name guess used to pick the unique
         # class ending in "Network" (GEOLogMsgEventNetwork) but writeTo: writes the
         # field with the binary-wide NSString helper -> it is a repeated string.
         r = self._call('_networks', 'networks', pool=[],
                        string_helper=0xAAAA, wt_helpers={'_networks': 0xAAAA},
                        resolved_type='GEOLogMsgEventNetwork',
-                       element_sel='GEOLogMsgEventNetwork')
+                       element_sel='networkType')
         self.assertEqual(r.type_name, 'string')
         self.assertIsNone(r.type_class)
-        self.assertFalse(r.via_name_suffix)
         self.assertTrue(r.abi_confirmed)
 
     def test_string_helper_beats_pool_suffix_refinement(self):
         r = self._call('_triggers', 'triggers', pool=['GEOPDSearchBrandTrigger'],
                        string_helper=0xAAAA, wt_helpers={'_triggers': 0xAAAA},
                        resolved_type='GEOPDSearchBrandTrigger',
-                       element_sel='GEOPDSearchBrandTrigger')
+                       element_sel='triggerType')
         self.assertEqual(r.type_name, 'string')
         self.assertIsNone(r.type_class)
 
@@ -358,7 +343,7 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
     def test_unresolved_unique_pool_suffix_no_longer_matched(self):
         # Pre-removal this was "Pass A": pname="routes" → cap="Route" → unique
         # pool entry "GEOPDRoute" was assigned.  Pass A is gone, so a field that
-        # Strategy 1/2 could not resolve now falls back to the safe `bytes`,
+        # the +xyzType lookup could not resolve now falls back to the safe `bytes`,
         # regardless of a tempting unique pool-suffix match.
         r = self._call('_routes', 'routes', pool=['GEOPDRoute'])
         self.assertEqual(r.type_name, 'bytes')
