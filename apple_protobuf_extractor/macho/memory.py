@@ -243,6 +243,9 @@ class BinaryContext:
         # extract_proto_message callers (extract_all builds + passes them directly).
         # None == not yet built; an empty set/dict is a valid built result.
         self._string_write_helpers:  Optional[frozenset] = None
+        # (helper_va_or_None,) once built; None == not yet built (see
+        # proto.write_helpers._ensure_message_write_helper).
+        self._message_write_helper:  Optional[tuple] = None
         self._readfrom_core_index:   Optional[dict] = None
 
         (_, cputype, cpusubtype, _filetype,

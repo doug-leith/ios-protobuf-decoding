@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
-from macho.memory    import BinaryContext
+from macho.memory    import BinaryContext, _ctx_cache
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm    import disasm, _parse_imm, _norm_reg
@@ -425,6 +425,217 @@ def _resolve_repeated_via_dispatch_ivars(
     return out
 
 
+def _classref_name(ctx: BinaryContext, cl: ClassList, slot_va: int) -> Optional[str]:
+    """Name of the class whose ``__objc_classrefs`` slot is at *slot_va*, or None.
+
+    A binary-local class resolves through ``cl.by_vmaddr``; an external class (a
+    chained-fixup bind) through :meth:`BinaryContext.bind_name_for`.  Returns None
+    when the slot is not a class reference at all (a selector reference, an ivar
+    offset slot, ...), which is how a class-ref load is told from other ``ldr``s."""
+    try:
+        v = ctx.read_ptr(slot_va)
+        if v:
+            c = cl.by_vmaddr(v)
+            if c is not None and not c.is_meta:
+                return c.name
+        b = ctx.bind_name_for(slot_va)
+        if b and b.startswith("_OBJC_CLASS_$_"):      # not an _OBJC_IVAR_$_ offset slot
+            return b[len("_OBJC_CLASS_$_"):]
+    except Exception:
+        pass
+    return None
+
+
+def _selref_name(ctx: BinaryContext, slot_va: int) -> Optional[str]:
+    """Selector string of the ``__objc_selrefs`` slot at *slot_va*, or None."""
+    try:
+        v = ctx.read_ptr(slot_va)
+        return ctx.read_cstring(v) if v else None
+    except Exception:
+        return None
+
+
+def _msgsend_stub_selector(ctx: BinaryContext, va: int) -> Optional[str]:
+    """Selector baked into the ``_objc_msgSend$<selector>`` stub at *va*, or None.
+
+    The linker emits one such stub per selector a binary messages::
+
+        adrp  x1, <page>
+        ldr   x1, [x1, #off]      ; the __objc_selrefs slot  -> x1 = the selector
+        adrp  x16, ... ; ldr x16, [x16, ...] ; br x16     ; tail to objc_msgSend
+
+    so a ``bl`` to it is a message send of that selector.  Memoised on *ctx*."""
+    cache = _ctx_cache(ctx, "_msgsend_stub_sel", dict)
+    if va in cache:
+        return cache[va]
+    sel: Optional[str] = None
+    try:
+        ins = disasm(ctx, va, max_insns=2, stop_at_ret=False)
+        if (len(ins) == 2 and ins[0].mnemonic == 'adrp' and ins[1].mnemonic == 'ldr'):
+            pa = parse_adrp(ins[0].op_str)
+            mo = mem_operand(ins[1].op_str)
+            if (pa is not None and mo is not None and mo[2] is None
+                    and mo[1] == pa[0] and _norm_reg(mo[0]) == 'x1'):
+                sel = _selref_name(ctx, pa[1] + mo[3])
+    except Exception:
+        sel = None
+    cache[va] = sel
+    return sel
+
+
+def _classref_windows(
+    ctx: BinaryContext, cl: ClassList, insns: List[Any],
+    adder_ivar: Dict[int, str], adder_sel: Dict[str, str], *, is_arm: bool,
+) -> List[Tuple[str, Tuple[str, ...]]]:
+    """Walk *insns* in order and return ``[(ivar_name, class_refs_seen)]``: one entry
+    per call of an add-accessor, holding every class reference loaded since the
+    previous add-accessor call (or the start of the stream).
+
+    A call is a direct ``bl`` to the accessor's IMP (``adder_ivar``), or, for readers
+    that message it, a ``bl`` to the accessor's ``_objc_msgSend$<selector>`` stub or a
+    load of its selector reference (``adder_sel``).  A dispatch arm (*is_arm*) ends at
+    its first branch/return, exactly as the adder->ivar lever reads one."""
+    pages: Dict[str, int] = {}
+    recent: List[str] = []
+    out: List[Tuple[str, Tuple[str, ...]]] = []
+    for ins in insns:
+        mn = ins.mnemonic
+        if is_arm and mn in ('b', 'br', 'ret', 'retaa', 'retab'):
+            break
+        if mn == 'adrp':
+            pa = parse_adrp(ins.op_str)
+            if pa is not None:
+                pages[pa[0]] = pa[1]
+        elif mn == 'ldr':
+            mo = mem_operand(ins.op_str)
+            if mo is None or mo[2] is not None:
+                continue
+            dest = _norm_reg(ins.op_str.split(',')[0].strip())
+            if mo[1] in pages and dest.startswith('x'):
+                slot = pages[mo[1]] + mo[3]
+                name = _classref_name(ctx, cl, slot)
+                if name is not None:
+                    recent.append(name)
+                else:
+                    sel = _selref_name(ctx, slot)
+                    if sel is not None and sel in adder_sel:
+                        out.append((adder_sel[sel], tuple(recent)))
+                        recent = []
+            pages.pop(dest, None)       # dest now holds a loaded value, not a page
+        elif mn == 'bl':
+            t = _parse_imm(ins.op_str)
+            if t in adder_ivar:
+                out.append((adder_ivar[t], tuple(recent)))
+                recent = []
+            elif adder_sel and t is not None:
+                sel = _msgsend_stub_selector(ctx, t)
+                if sel is not None and sel in adder_sel:
+                    out.append((adder_sel[sel], tuple(recent)))
+                    recent = []
+    return out
+
+
+def _resolve_repeated_via_classrefs(
+    ctx: BinaryContext,
+    cls: ObjcClass,
+    cl: ClassList,
+    core_index: Dict[int, str],
+) -> Dict[str, Tuple[str, int]]:
+    """Bind ``{ivar_name: (element_class, field_number)}`` from the **element class
+    reference** the reader loads next to the add-accessor call -- the class-ref
+    counterpart of the adder->ivar lever.
+
+    A generated reader builds each repeated-message element with
+    ``[[ElementClass alloc] init]``, reads it, then appends it with the field's own
+    ``-add<X>:`` accessor.  The element class therefore appears in the binary as a
+    class-reference load immediately before the accessor call, whatever helper does
+    the reading.  This is the structural source for readers that do NOT call a
+    ``<Class>ReadAllFrom`` core (which :func:`_resolve_repeated_element_ivars`
+    keys on), e.g. the small inline-reader messages (``GEOPDTileList.tiles`` ->
+    ``GEOTileCoordinate``) and the old-style classes that message the accessor via
+    ``objc_msgSend`` (locationd ``TRANSITPbLocationFingerprints*``).
+
+    The accessor is identified structurally (the own IMP whose body loads the
+    backing array's ivar offset, :func:`_adder_array_ivar`), never by the ivar name;
+    its selector is used only to spot an ``objc_msgSend`` call site.  Streams read:
+    every dispatch arm, the C read function, the dispatch core and the ObjC
+    ``readFrom:`` body.
+
+    Strict by construction (precision over recall): an ivar is bound only if EVERY
+    call site of its accessor has exactly one distinct class reference in its
+    window and all sites agree, and that class is a binary-local class.  Zero or
+    several candidates, or disagreeing sites, bind nothing.  The result is an
+    element TYPE only (the field number is informational)."""
+    array_offsets: FrozenSet[int] = frozenset(
+        iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_IVAR_ENCS)
+    if not array_offsets:
+        return {}
+    off_to_ivar: Dict[int, ObjcIvar] = {iv.offset: iv for iv in cls.ivars}
+    adder_ivar: Dict[int, str] = {}
+    adder_sel: Dict[str, str] = {}
+    for m in cls.methods:
+        if not m.imp:
+            continue
+        # With resolved selector names, restrict to the add-accessors themselves
+        # (other own methods -- readFrom:, writeTo:, copyWithZone: -- also touch the
+        # array).  Without names the structural test below is all there is.
+        if m.name is not None and not (m.name.startswith('add')
+                                       or m.name.startswith('_addNoFlags')):
+            continue
+        off = _adder_array_ivar(ctx, m.imp, array_offsets)
+        if off is None:
+            continue
+        adder_ivar[m.imp] = off_to_ivar[off].name
+        if m.name is not None:
+            adder_sel[m.name] = off_to_ivar[off].name
+    if not adder_ivar:
+        return {}
+
+    arms, core_va, readfrom_va = _locate_dispatch_arms(ctx, cls, core_index)
+    streams: List[Tuple[int, bool, int]] = []        # (start_va, is_arm, field_number)
+    seen: Set[int] = set()
+    for va in (readfrom_va, core_va,
+               next((m.imp for m in cls.methods if m.name == 'readFrom:' and m.imp), None)):
+        if va and va not in seen:
+            seen.add(va)
+            streams.append((va, False, 0))
+    for fn, av in (arms or {}).items():
+        streams.append((av, True, fn))
+
+    sites: Dict[str, List[Tuple[str, ...]]] = {}
+    field_of: Dict[str, int] = {}
+    for va, is_arm, fn in streams:
+        try:
+            if is_arm:
+                insns = disasm(ctx, va, max_insns=_ARM_MAX_INSNS, stop_at_ret=False)
+            else:
+                end = _func_end(ctx, va)
+                if end is None:
+                    continue
+                insns = disasm(ctx, va, max_insns=max(1, (end - va) // 4),
+                               stop_at_ret=False)
+        except Exception:
+            continue
+        for ivn, window in _classref_windows(ctx, cl, insns, adder_ivar, adder_sel,
+                                             is_arm=is_arm):
+            sites.setdefault(ivn, []).append(window)
+            if is_arm:
+                field_of.setdefault(ivn, fn)
+
+    out: Dict[str, Tuple[str, int]] = {}
+    for ivn, windows in sites.items():
+        # every site must name exactly one class, and the same one
+        verdicts = {(w[0] if len(set(w)) == 1 else None) for w in windows}
+        if len(verdicts) != 1 or None in verdicts:
+            continue
+        name = next(iter(verdicts))
+        c = cl.find(name)
+        if c is None or c.is_meta:           # external / system class: not an element message
+            continue
+        out[ivn] = (name, field_of.get(ivn, 0))
+    return out
+
+
 def _resolve_repeated_via_dispatch(
     ctx: BinaryContext,
     cls: ObjcClass,
@@ -714,26 +925,41 @@ def _resolve_repeated_field_type(
 
     Implements, in order:
 
-    1. **Strategy 1/2** via :func:`_repeated_element_type` +
+    1. **Write-helper string check** (ABI evidence, checked FIRST): if the ivar's
+       write-helper address matches the binary-wide string write-helper, the field
+       is definitively ``"string"`` -- the NSString writer is never used for a
+       message element.  This outranks every class-naming path below, so a
+       name-based guess (Strategy 2) can no longer turn a string into a message
+       (``GEOPDSSearchEvChargingParameters.networks`` was typed
+       ``GEOLogMsgEventNetwork`` because the check only ran once a guess had
+       failed).  Previously also needed when no ``+versionDomainType``-style
+       method exists (``GEOPDComponent.versionDomains``) or the method returns
+       the external NSString (``GEOPDPlaceResponse.displayLanguages``).
+
+    2. **Strategy 1/2** via :func:`_repeated_element_type` +
        :func:`_resolve_repeated_type`.  When that resolves to a concrete class
        (not ``"bytes"``), optionally refine via an exact pool-suffix match (IMP
        disassembly is more authoritative than classlist suffix-matching) and
        return.
 
-    2. **Write-helper reclassification** (Cause-2 fix): if the ivar's write-helper
-       address matches the binary-wide string write-helper, the field is
-       definitively ``"string"``.
-
     3. Otherwise the field stays as ``"bytes"`` (the safe fallback).
 
     Note: the former name-overlap fallbacks (Pass A exact pool-suffix matching
-    and the post-loop Pass B exclusion assignment) were removed 2026-06-08 — a
+    and the post-loop Pass B exclusion assignment) were removed 2026-06-08 -- a
     census across GeoServices / locationd / CoreLocationProtobuf showed they
     resolved zero fields even where their pool gate fired, while the principled
     readFrom: dispatch resolver + Strategy 1 cover those cases.  The pool is
-    still consulted for the Strategy-1/2 *refinement* in step 1 (an IMP-confirmed
+    still consulted for the Strategy-1/2 *refinement* in step 2 (an IMP-confirmed
     override), which is structural, not a name guess.
     """
+    # ABI evidence first: the string write helper is never used for a message
+    # element, so it decides the kind before any class-naming path runs.
+    if string_helper is not None and wt_helpers.get(ivar.name) == string_helper:
+        log.debug("%s: repeated string via writeTo: helper 0x%x",
+                  pname, string_helper)
+        return _RepeatedTypeResult(type_name="string", type_class=None,
+                                   abi_confirmed=True)
+
     type_sel = _repeated_element_type(ivar, instance_method_names, metaclass, cl)
     resolved, elem_unresolved = _resolve_repeated_type(type_sel, metaclass, cl, ctx=ctx)
 
@@ -777,18 +1003,6 @@ def _resolve_repeated_field_type(
         )
 
     # ── resolved == "bytes" ───────────────────────────────────────────────────
-
-    # Write-helper string reclassification (Cause-2 fix): a distinct ABI write
-    # helper for NSString vs message is definitive evidence of `repeated string`.
-    if string_helper is not None:
-        field_helper = wt_helpers.get(ivar.name)
-        if field_helper is not None and field_helper == string_helper:
-            log.debug(
-                "%s: reclassified repeated bytes → string via writeTo: helper 0x%x",
-                pname, field_helper,
-            )
-            return _RepeatedTypeResult(type_name="string", type_class=None,
-                                       abi_confirmed=True)
 
     # No principled signal — fall back to the safe `repeated bytes`.  Carry the
     # element_unresolved flag so the caller can flag a give-up bytes (element type

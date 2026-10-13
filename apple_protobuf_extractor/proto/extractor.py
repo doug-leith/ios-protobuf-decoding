@@ -69,7 +69,7 @@ from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegr
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
     _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree,
-    _ensure_string_write_helpers,
+    _ensure_string_write_helpers, _ensure_message_write_helper, _same_write_helper,
 )
 from proto.protocore import (
     _is_proto_flags_ivar, _is_real_field_ivar, _type_from_enc,
@@ -85,7 +85,7 @@ from proto.protoclass_heuristic import (
 from proto.dispatch  import _build_readfrom_core_index
 from proto.repeated  import (
     _resolve_repeated_via_dispatch, _resolve_repeated_via_dispatch_ivars,
-    _resolve_repeated_field_type, _build_meta_type_pool,
+    _resolve_repeated_field_type, _build_meta_type_pool, _resolve_repeated_via_classrefs,
 )
 from proto.structfields import finalize_struct_fields, record_struct_site
 from proto.mapfields import (
@@ -887,6 +887,23 @@ def _resolve_dispatch_context(
     return dispatch_elements, dispatch_ivars, unambiguous
 
 
+def _resolve_classref_context(
+    ctx: BinaryContext, cls: ObjcClass, cl: ClassList,
+    readfrom_core_index: "Optional[Dict[int, str]]",
+) -> "Dict[str, Tuple[str, int]]":
+    """``{ivar_name: (element_class, field_number)}`` from the element class-reference
+    lever (:func:`proto.repeated._resolve_repeated_via_classrefs`).  Kept apart from
+    the dispatch context because its result is only trustworthy for a field whose
+    writeTo: helper is the MESSAGE helper (see :func:`_resolve_repeated_element_type`):
+    the lever reads a class reference near the add-accessor call, which a neighbouring
+    singular field can also provide for a repeated bytes/string field."""
+    try:
+        return _resolve_repeated_via_classrefs(ctx, cls, cl, readfrom_core_index or {})
+    except Exception as exc:
+        log.debug("class-ref ivar resolve failed for %s: %s", cls.name, exc)
+        return {}
+
+
 def _is_backing_store_phantom(
     fld: "ProtoField", ivar_enc_by_pname: Dict[str, str]
 ) -> bool:
@@ -1107,6 +1124,7 @@ def _resolve_repeated_element_type(
     ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
     *, dispatch_elements, dispatch_unambiguous, dispatch_ivars,
     instance_method_names, metaclass, meta_type_pool, string_helper, wt_helpers,
+    classref_ivars=None, message_helper=None,
 ):
     """Resolve a repeated field's element type (dispatch-first, then heuristic).
 
@@ -1140,6 +1158,12 @@ def _resolve_repeated_element_type(
         _disp = next(iter(dispatch_elements.values()))
     if _disp is None and ivar.name in dispatch_ivars:
         _disp = dispatch_ivars[ivar.name][0]
+    if (_disp is None and classref_ivars and ivar.name in classref_ivars
+            and _same_write_helper(ctx, wt_helpers.get(ivar.name), message_helper)):
+        # Element class from the reader's class-reference load next to the
+        # add-accessor call, applied only to a field written by the message helper
+        # (a repeated bytes/string field can have an unrelated class ref nearby).
+        _disp = classref_ivars[ivar.name][0]
 
     _rr = _resolve_repeated_field_type(
         ivar, pname, instance_method_names, metaclass, cl, ctx,
@@ -1215,6 +1239,7 @@ def extract_proto_message(
         string_write_helpers = _ensure_string_write_helpers(ctx, cl)
     if readfrom_core_index is _AUTO:
         readfrom_core_index = _ensure_readfrom_core_index(ctx, cl)
+    _message_helper = _ensure_message_write_helper(ctx, cl)
 
     # Resolve the two threaded knobs: prefixes default to the canonical set; the
     # enum-debug writer is simply absent (a no-op) when the caller passes none.
@@ -1303,6 +1328,7 @@ def extract_proto_message(
     # ── Principled repeated-<message> element types (readFrom: dispatch) ───────
     dispatch_elements, dispatch_ivars, _dispatch_unambiguous = _resolve_dispatch_context(
         ctx, cls, readfrom_core_index, field_ivars)
+    _classref_ivars = _resolve_classref_context(ctx, cls, cl, readfrom_core_index)
 
     # ── Build ProtoField list ─────────────────────────────────────────────────
     # Build a set of field numbers already taken by confirmed fields so that
@@ -1421,6 +1447,7 @@ def extract_proto_message(
             instance_method_names=instance_method_names,
             metaclass=metaclass, meta_type_pool=_meta_type_pool,
             string_helper=_string_helper, wt_helpers=_wt_helpers,
+            classref_ivars=_classref_ivars, message_helper=_message_helper,
         )
 
         # protobuf map<> field: remember its entry writer for the post-extraction
@@ -1649,7 +1676,7 @@ def extract_all(
     # object that does not allow attribute assignment.
     for _cache_attr in ("_wrapper_cluster_cache", "_dispatch_arms_cache",
                         "_writeto_indeg", "_writeto_foreign_imps",
-                        "_string_write_helpers", "_readfrom_core_index",
+                        "_string_write_helpers", "_message_write_helper", "_readfrom_core_index",
                         "_dictrep_truncated_classes", "_proto_class_names_cache",
                         "_proto_inherits", "_proto_class_heuristic_only",
                         "_proto_class_cluster_only", "_helper_votes",

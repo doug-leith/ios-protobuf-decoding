@@ -307,6 +307,44 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
         self.assertEqual(r.type_name, 'GEODotPlace',
                          "Ambiguous pool must not override resolved type")
 
+    # ── string write helper is checked FIRST (ABI evidence outranks any class) ─
+
+    def test_string_helper_beats_strategy2_name_guess(self):
+        # GEOPDSSearchEvChargingParameters.networks: Strategy 2 matched the unique
+        # class ending in "Network" (GEOLogMsgEventNetwork) but writeTo: writes the
+        # field with the binary-wide NSString helper -> it is a repeated string.
+        r = self._call('_networks', 'networks', pool=[],
+                       string_helper=0xAAAA, wt_helpers={'_networks': 0xAAAA},
+                       resolved_type='GEOLogMsgEventNetwork',
+                       element_sel='GEOLogMsgEventNetwork')
+        self.assertEqual(r.type_name, 'string')
+        self.assertIsNone(r.type_class)
+        self.assertFalse(r.via_name_suffix)
+        self.assertTrue(r.abi_confirmed)
+
+    def test_string_helper_beats_pool_suffix_refinement(self):
+        r = self._call('_triggers', 'triggers', pool=['GEOPDSearchBrandTrigger'],
+                       string_helper=0xAAAA, wt_helpers={'_triggers': 0xAAAA},
+                       resolved_type='GEOPDSearchBrandTrigger',
+                       element_sel='GEOPDSearchBrandTrigger')
+        self.assertEqual(r.type_name, 'string')
+        self.assertIsNone(r.type_class)
+
+    def test_non_string_helper_does_not_override_resolved_class(self):
+        # The field's writer is a different helper (the message writer): the
+        # resolved class stands.
+        r = self._call('_places', 'places', pool=[],
+                       string_helper=0xAAAA, wt_helpers={'_places': 0xBBBB},
+                       resolved_type='GEOPDPlace', element_sel='placeType')
+        self.assertEqual(r.type_class, 'GEOPDPlace')
+        self.assertFalse(r.abi_confirmed)
+
+    def test_no_string_helper_known_does_not_override_resolved_class(self):
+        r = self._call('_places', 'places', pool=[], string_helper=None,
+                       wt_helpers={'_places': 0xAAAA},
+                       resolved_type='GEOPDPlace', element_sel='placeType')
+        self.assertEqual(r.type_class, 'GEOPDPlace')
+
     # ── resolved == "bytes", string helper matches ────────────────────────────
 
     def test_string_helper_match_reclassifies_to_string(self):
