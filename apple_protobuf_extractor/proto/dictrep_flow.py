@@ -1,0 +1,667 @@
+"""proto/dictrep_flow.py -- enum (value -> name) recovery from ``_dictionaryRepresentation:`` by
+data-flow analysis, not by instruction windows.
+
+An enum field with no ``xAsString:`` converter has the converter INLINED into the class's
+``-_dictionaryRepresentation:``: the field's int is loaded from its ivar, run through a switch
+(compare chain, jump table, pointer table, or a mix, possibly in several segments and possibly
+inside the loop that walks a repeated field) to a CFString, and the CFString is handed to the
+dictionary / array by the next call.  Whatever the shape, that is a *function from the int to a
+CFString*, so this module recovers it as one:
+
+1. ``Flow`` builds the function's CFG (jump-table arms injected) and its **reaching
+   definitions**.  A register's constant (a table base, a name hoisted out of a loop) is known
+   iff exactly one definition reaches the use and that definition is a constant expression.
+2. The field is identified by **use-def chain**: the loaded value's address register traces back,
+   through ``add`` / container-deref / ``mov``, to the ``ldrsw`` of the ivar-offset slot.
+3. **Candidate values** are read off the comparisons the loaded value actually takes part in
+   (``V + b`` affine form, so ``sub w9, w8, #0x23; cmp w9, #0x1e`` yields V in [35, 65]).
+4. Each candidate is **evaluated** concretely through the CFG up to the first call; the CFString
+   in the first-argument register at that call is the name (or ``"(unknown: %i)"``).
+
+Numbers therefore come from the constants the code compares/indexes with, never from name order,
+and a segmented sparse switch is just one evaluation per value.  A field is an enum iff a value
+outside every candidate reaches the converter's ``"(unknown: %i)"`` fallback -- the converter's
+own signature, which a plain int (``+[NSNumber numberWithInt:]``) never has.
+"""
+from __future__ import annotations
+
+import logging
+from collections import deque
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+
+from macho.disasm import Insn, _norm_reg, _parse_imm, _SOURCE_FIRST_MNEMONICS
+from proto.arm64cfg import build_blocks, inject_arm_edges, parse_adrp, split_ops
+
+log = logging.getLogger(__name__)
+
+# The CFString the compiler-inlined converter falls back to for a value with no name.
+UNKNOWN_ENUM_FORMAT = "(unknown: %i)"
+
+_ENTRY = -1                                   # pseudo-definition: value on function entry
+_CALLER_SAVED = tuple(f"x{n}" for n in range(0, 19)) + ("x30",)
+_REGS = tuple(f"x{n}" for n in range(0, 31))
+# Mnemonics whose first operand is NOT a destination (and calls, handled separately).
+_NO_DEST = _SOURCE_FIRST_MNEMONICS | {
+    'b', 'bl', 'blr', 'br', 'nop', 'ccmp', 'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz', 'cmp', 'cmn', 'tst',
+    'prfm', 'dmb', 'dsb', 'isb',
+}
+_LOADS = {'ldr': None, 'ldrb': 1, 'ldrh': 2, 'ldrsw': 4, 'ldrsb': 1, 'ldrsh': 2}
+_ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
+
+# [cap:INPUT-SANITY] An ordered gate (`cmp w, #imm12; b.hi`) spans at most 2^12 values by the
+# encoding of the immediate; a wider span cannot come from one unshifted compare.  Only a gate
+# whose register then indexes a table is expanded to the whole interval.
+_MAX_GATE_SPAN = 1 << 12
+
+
+def _is_cond_branch(mn: str) -> bool:
+    return mn.startswith('b.')
+
+
+def _writes(ins: Insn) -> List[str]:
+    """Registers (xN form) *ins* overwrites."""
+    mn = ins.mnemonic
+    if mn in ('bl', 'blr'):
+        return list(_CALLER_SAVED)
+    if mn in _NO_DEST or _is_cond_branch(mn):
+        return []
+    ops = split_ops(ins.op_str)
+    out = []
+    if ops:
+        r = _norm_reg(ops[0])
+        if r is not None and r != 'xzr' and r != 'sp':
+            out.append(r)
+    if mn in ('ldp', 'ldnp', 'ldpsw') and len(ops) > 1:
+        r = _norm_reg(ops[1])
+        if r is not None and r != 'xzr' and r != 'sp':
+            out.append(r)
+    return out
+
+
+def _mask(tok: str) -> int:
+    return 0xFFFFFFFF if tok.strip().lower().startswith('w') else 0xFFFFFFFFFFFFFFFF
+
+
+def _eval_cond(cond: str, flags: Tuple[int, int, int]) -> Optional[bool]:
+    """Truth of *cond* after ``cmp a, b`` (flags = (a, b, bit width))."""
+    a, b, width = flags
+    m = (1 << width) - 1
+    ua, ub = a & m, b & m
+    sign = 1 << (width - 1)
+    sa, sb = (ua - (1 << width) if ua & sign else ua), (ub - (1 << width) if ub & sign else ub)
+    table = {
+        'eq': ua == ub, 'ne': ua != ub,
+        'hs': ua >= ub, 'cs': ua >= ub, 'lo': ua < ub, 'cc': ua < ub,
+        'hi': ua > ub, 'ls': ua <= ub,
+        'ge': sa >= sb, 'lt': sa < sb, 'gt': sa > sb, 'le': sa <= sb,
+        'mi': sa - sb < 0, 'pl': sa - sb >= 0,
+    }
+    return table.get(cond)
+
+
+class _Abort(Exception):
+    """The evaluation reached something it cannot decide (unknown branch condition, an
+    unbounded jump, a revisited instruction)."""
+
+
+class Flow:
+    """CFG + reaching definitions + the enum evaluator for ONE function body."""
+
+    def __init__(self, ctx, insns: List[Insn], jump_table_arms: Iterable[int] = ()):
+        self.ctx = ctx
+        self.insns = insns
+        self.addr_idx = {ins.addr: k for k, ins in enumerate(insns)}
+        self.cfg = build_blocks(insns)
+        inject_arm_edges(self.cfg, jump_table_arms)
+        self._block_of: Dict[int, int] = {}          # insn index -> block leader address
+        self._first_in_block: Dict[int, int] = {}    # block leader -> index of its first insn
+        for b in self.cfg.order:
+            body = self.cfg.blocks[b]
+            self._first_in_block[b] = self.addr_idx[body[0].addr]
+            for ins in body:
+                self._block_of[self.addr_idx[ins.addr]] = b
+        self._wr: List[List[str]] = [_writes(i) for i in insns]       # registers each insn writes
+        self._gen: Dict[int, Dict[str, FrozenSet[int]]] = {}          # block -> last def of each reg
+        for b in self.cfg.order:
+            first = self._first_in_block[b]
+            gen: Dict[str, FrozenSet[int]] = {}
+            for k in range(first, first + len(self.cfg.blocks[b])):
+                for r in self._wr[k]:
+                    gen[r] = frozenset((k,))
+            self._gen[b] = gen
+        self._in: Dict[int, Dict[str, FrozenSet[int]]] = {}
+        self._solve()
+        self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
+        self._ivar_memo: Dict[int, Optional[int]] = {}
+
+    # ── reaching definitions ────────────────────────────────────────────────
+
+    def _solve(self) -> None:
+        """Forward reaching-definitions fixpoint: sweep the blocks in reverse postorder, joining
+        the predecessors' OUT sets, until nothing changes (a few sweeps for a reducible CFG)."""
+        cfg = self.cfg
+        if cfg.entry is None:
+            return
+        preds: Dict[int, List[int]] = {b: [] for b in cfg.order}
+        for b in cfg.order:
+            for s in cfg.succ.get(b, []):
+                preds.setdefault(s, []).append(b)
+        post: List[int] = []
+        seen = {cfg.entry}
+        stack = [(cfg.entry, iter(cfg.succ.get(cfg.entry, [])))]
+        while stack:
+            node, it = stack[-1]
+            nxt = next((s for s in it if s not in seen), None)
+            if nxt is None:
+                post.append(node)
+                stack.pop()
+            else:
+                seen.add(nxt)
+                stack.append((nxt, iter(cfg.succ.get(nxt, []))))
+        rpo = list(reversed(post))
+        entry_state = {r: frozenset((_ENTRY,)) for r in _REGS}
+        out: Dict[int, Dict[str, FrozenSet[int]]] = {}
+        changed = True
+        while changed:
+            changed = False
+            for b in rpo:
+                if b == cfg.entry:
+                    inn = entry_state
+                else:
+                    ps = [out[p] for p in preds[b] if p in out]
+                    if not ps:
+                        continue
+                    if len(ps) == 1:
+                        inn = ps[0]
+                    else:
+                        inn = {}
+                        for r in _REGS:
+                            first = ps[0][r]
+                            inn[r] = first if all(o[r] is first or o[r] == first for o in ps[1:]) \
+                                else frozenset().union(*(o[r] for o in ps))
+                self._in[b] = inn
+                state = dict(inn)
+                state.update(self._gen[b])
+                if out.get(b) != state:
+                    out[b] = state
+                    changed = True
+
+    def defs_before(self, k: int, reg: str) -> FrozenSet[int]:
+        """Indices of the definitions of *reg* that reach ``insns[k]`` (``-1`` = function
+        entry); empty if the instruction is unreachable."""
+        b = self._block_of.get(k)
+        if b is None or b not in self._in or reg not in _REGS:
+            return frozenset()
+        state = self._in[b][reg]
+        for j in range(self._first_in_block[b], k):
+            if reg in self._wr[j]:
+                state = frozenset((j,))
+        return state
+
+    def _only_def(self, k: int, reg: str) -> Optional[int]:
+        d = self.defs_before(k, reg)
+        if len(d) != 1:
+            return None
+        (x,) = d
+        return x if x >= 0 else None
+
+    # ── constants ───────────────────────────────────────────────────────────
+
+    def const_before(self, k: int, reg: str) -> Optional[int]:
+        """Value of *reg* before ``insns[k]`` if exactly one constant definition reaches it."""
+        if reg == 'xzr':
+            return 0
+        key = (k, reg)
+        if key in self._const_memo:
+            return self._const_memo[key]
+        self._const_memo[key] = None                     # break cycles (loops)
+        d = self._only_def(k, reg)
+        val = self._const_of_def(d) if d is not None else None
+        self._const_memo[key] = val
+        return val
+
+    def _const_of_def(self, d: int) -> Optional[int]:
+        ins = self.insns[d]
+        mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        if mn == 'adrp':
+            pa = parse_adrp(ins.op_str)
+            return pa[1] if pa else None
+        if mn == 'adr' and len(ops) == 2:
+            return _parse_imm(ops[1])
+        if mn in ('mov', 'movz') and len(ops) == 2:
+            if ops[1].startswith('#'):
+                v = _parse_imm(ops[1])
+                return None if v is None else v & _mask(ops[0])
+            r = _norm_reg(ops[1])
+            return self.const_before(d, r) if r else None
+        if mn == 'movn' and len(ops) >= 2:
+            v = _parse_imm(ops[1])
+            sh = _parse_imm(ops[2]) if len(ops) > 2 else 0
+            return None if v is None else (~(v << (sh or 0))) & _mask(ops[0])
+        if mn == 'movk' and len(ops) >= 2:
+            base = self.const_before(d, _norm_reg(ops[0]))
+            v = _parse_imm(ops[1])
+            sh = (_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0
+            if base is None or v is None:
+                return None
+            return ((base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh)) & _mask(ops[0])
+        if mn in ('add', 'sub') and len(ops) == 3:
+            rn = _norm_reg(ops[1])
+            a = self.const_before(d, rn) if rn else None
+            if a is None:
+                return None
+            if ops[2].startswith('#'):
+                b = _parse_imm(ops[2])
+            else:
+                rm = _norm_reg(ops[2])
+                b = self.const_before(d, rm) if rm else None
+            if b is None:
+                return None
+            return (a + b if mn == 'add' else a - b) & _mask(ops[0])
+        return None
+
+    # ── which ivar a load reads ─────────────────────────────────────────────
+
+    def ivar_of_reg(self, k: int, reg: str) -> Optional[int]:
+        """Ivar byte offset that the ADDRESS held in *reg* before ``insns[k]`` was computed
+        from, by use-def chain; None if it is not derived from exactly one ivar-offset slot."""
+        found: Set[int] = set()
+        for d in self.defs_before(k, reg):
+            if d < 0:
+                continue
+            off = self._ivar_of_def(d)
+            if off is not None:
+                found.add(off)
+        return next(iter(found)) if len(found) == 1 else None
+
+    def _ivar_of_def(self, d: int) -> Optional[int]:
+        if d in self._ivar_memo:
+            return self._ivar_memo[d]
+        self._ivar_memo[d] = None                        # break cycles (loop counters)
+        ins = self.insns[d]
+        mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        res: Optional[int] = None
+        if mn == 'ldrsw' and len(ops) == 2:              # the ivar-offset slot itself
+            addr = self._mem_const_addr(d, ops[1])
+            if addr is not None:
+                try:
+                    res = self.ctx.read_s32(addr)
+                except (ValueError, KeyError, IndexError):
+                    res = None
+        elif mn == 'add' and len(ops) >= 3:              # obj + offset  /  array + index
+            cands = {self.ivar_of_reg(d, r) for r in (_norm_reg(ops[1]),
+                     _norm_reg(ops[2]) if not ops[2].startswith('#') else None) if r}
+            cands.discard(None)
+            res = next(iter(cands)) if len(cands) == 1 else None
+        elif mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
+            r = _norm_reg(ops[1])
+            res = self.ivar_of_reg(d, r) if r else None
+        elif mn == 'ldr' and len(ops) == 2:              # container deref (PBRepeated.list)
+            m = _mem_regs(ops[1])
+            res = self.ivar_of_reg(d, m[0]) if m and m[0] else None
+        self._ivar_memo[d] = res
+        return res
+
+    def _mem_const_addr(self, k: int, mem: str) -> Optional[int]:
+        """Address of ``[Rn, #imm]`` / ``[Rn]`` when Rn is a constant, else None."""
+        m = _mem_regs(mem)
+        if not m or m[0] is None or m[1] is not None:
+            return None
+        base = self.const_before(k, m[0])
+        return None if base is None else base + m[2]
+
+    def value_loads(self) -> List[Tuple[int, int]]:
+        """``[(insn index, ivar offset)]`` for every load whose address derives from an
+        ivar-offset slot (the field-value loads, and the container derefs/counts behind them)."""
+        out = []
+        for k, ins in enumerate(self.insns):
+            if ins.mnemonic not in _LOADS or k not in self._block_of:
+                continue
+            ops = split_ops(ins.op_str)
+            if len(ops) != 2:
+                continue
+            m = _mem_regs(ops[1])
+            if not m or m[0] is None:
+                continue
+            offs = {o for o in (self.ivar_of_reg(k, m[0]),
+                                self.ivar_of_reg(k, m[1]) if m[1] else None) if o is not None}
+            if len(offs) == 1:
+                out.append((k, next(iter(offs))))
+        return out
+
+    # ── candidate values: the constants V is compared / indexed against ─────
+
+    def candidates(self, root: int, dest: str, domain: int) -> Set[int]:
+        """Values of the loaded integer worth evaluating, from the comparisons it takes part
+        in.  Registers are tracked as ``V + b`` through ``mov`` / ``add|sub`` of an immediate
+        or of a constant register; comparing such a register with *c* gives the point
+        ``c - b``, and an ordered gate (``b.hi`` / ``b.hs`` / ...) gives the whole interval it
+        guards (``sub w9,w8,#35; cmp w9,#30; b.hi`` -> V in 35..65).  The scan follows the CFG
+        from the load and stops each path at its first call (where the name is consumed)."""
+        cands: Set[int] = {0}
+        root_blk = self._block_of.get(root)
+        if root_blk is None:
+            return cands
+        gates: Dict[str, Tuple[int, int]] = {}   # reg -> V interval of its last ordered gate
+        entry: Dict[int, Dict[str, int]] = {}
+        work: deque = deque()
+
+        def push(blk: int, st: Dict[str, int]) -> None:
+            cur = entry.get(blk)
+            if cur is None:
+                entry[blk] = dict(st)
+            else:
+                merged = {r: b for r, b in cur.items() if st.get(r) == b}
+                if merged == cur:
+                    return
+                entry[blk] = merged
+            work.append(blk)
+
+        def run(blk: int, st: Dict[str, int], lo: int) -> bool:
+            hi = self._first_in_block[blk] + len(self.cfg.blocks[blk])
+            for k in range(lo, hi):
+                if self.insns[k].mnemonic in ('bl', 'blr'):
+                    return False
+                self._candidate_step(cands, gates, st, k)
+            for succ in self.cfg.succ.get(blk, []):
+                push(succ, st)
+            return True
+
+        run(root_blk, {dest: 0}, root + 1)
+        while work:
+            blk = work.popleft()
+            run(blk, dict(entry[blk]), self._first_in_block[blk])
+        return {v for v in cands if 0 <= v < domain}
+
+    def _candidate_step(self, cands: Set[int], gates: Dict[str, Tuple[int, int]],
+                        st: Dict[str, int], k: int) -> None:
+        ins = self.insns[k]
+        mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        if mn == 'cmp' and len(ops) == 2:
+            r = _norm_reg(ops[0])
+            if r in st:
+                c = _parse_imm(ops[1]) if ops[1].startswith('#') else self._const_reg(k, ops[1])
+                if c is not None:
+                    nxt = self.insns[k + 1].mnemonic if k + 1 < len(self.insns) else ''
+                    cond = nxt[2:] if nxt.startswith('b.') else ''
+                    point = c - st[r]
+                    cands.add(point)
+                    if cond in _ORDERED_CONDS:
+                        gates[r] = tuple(sorted((-st[r], point)))
+        elif mn in ('cbz', 'cbnz') and ops:
+            r = _norm_reg(ops[0])
+            if r in st:
+                cands.add(-st[r])
+        elif mn in _LOADS and len(ops) == 2:
+            # A table indexed by a gated register: every index the gate lets through is a
+            # distinct case, so the whole interval (not just its end point) is a candidate.
+            pm = _parse_mem(ops[1])
+            if pm and pm[1] in gates and pm[1] in st:
+                lo, hi = gates[pm[1]]
+                if hi - lo <= _MAX_GATE_SPAN:
+                    cands.update(range(lo, hi + 1))
+        new: Optional[Tuple[str, int]] = None
+        if mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
+            rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
+            if rs in st and rd:
+                new = (rd, st[rs])
+        elif mn in ('add', 'sub') and len(ops) == 3:
+            rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
+            if rs in st and rd:
+                c = (_parse_imm(ops[2]) if ops[2].startswith('#')
+                     else _signed(self._const_reg(k, ops[2]), ops[2]))
+                if c is not None:
+                    new = (rd, st[rs] + (c if mn == 'add' else -c))
+        for r in _writes(ins):
+            st.pop(r, None)
+        if new is not None:
+            st[new[0]] = new[1]
+
+    def _const_reg(self, k: int, tok: str) -> Optional[int]:
+        r = _norm_reg(tok)
+        return self.const_before(k, r) if r else None
+
+    # ── concrete evaluation of the switch for one value ─────────────────────
+
+    def evaluate(self, root: int, dest: str, value: int):
+        """Run the code from just after the field-value load *root* with ``dest = value`` to
+        the first call and classify the CFString in the first argument register (x2):
+        ``('name', cfstring address)``, ``('unknown', None)`` for the converter's
+        ``"(unknown: %i)"`` fallback, or ``None`` if undecidable / not a CFString."""
+        regs: Dict[str, int] = {dest: value}
+        top: Set[str] = set()
+        flags: List[Optional[Tuple[int, int, int]]] = [None]
+        seen: Set[int] = set()
+
+        def get(tok: str) -> Optional[int]:
+            r = _norm_reg(tok)
+            if r is None:
+                return None
+            if r == 'xzr':
+                return 0
+            if r in regs:
+                v = regs[r]
+            elif r in top:
+                return None
+            else:
+                v = self.const_before(root, r)
+                if v is None:
+                    return None
+            return v & _mask(tok)
+
+        def put(tok: str, v: Optional[int]) -> None:
+            r = _norm_reg(tok)
+            if r is None or r in ('xzr', 'sp'):
+                return
+            if v is None:
+                regs.pop(r, None)
+                top.add(r)
+            else:
+                regs[r] = v & _mask(tok)
+                top.discard(r)
+
+        def jump(target: Optional[int]) -> int:
+            if target is None or target not in self.addr_idx:
+                raise _Abort()
+            return self.addr_idx[target]
+
+        k = root + 1
+        while k < len(self.insns):
+            if k in seen:
+                raise _Abort()
+            seen.add(k)
+            ins = self.insns[k]
+            mn, ops = ins.mnemonic, split_ops(ins.op_str)
+            nxt = k + 1
+            if mn in ('bl', 'blr'):
+                return self._classify(get('x2'))
+            if mn in ('ret', 'retaa', 'retab'):
+                return None
+            if mn == 'b' and len(ops) == 1:
+                nxt = jump(_parse_imm(ops[0]))
+            elif mn == 'br' and len(ops) == 1:
+                nxt = jump(get(ops[0]))
+            elif _is_cond_branch(mn):
+                if flags[0] is None:
+                    raise _Abort()
+                taken = _eval_cond(mn[2:], flags[0])
+                if taken is None:
+                    raise _Abort()
+                if taken:
+                    nxt = jump(_parse_imm(ops[0]))
+            elif mn in ('cbz', 'cbnz') and len(ops) == 2:
+                v = get(ops[0])
+                if v is None:
+                    raise _Abort()
+                if (v == 0) == (mn == 'cbz'):
+                    nxt = jump(_parse_imm(ops[1]))
+            elif mn in ('tbz', 'tbnz') and len(ops) == 3:
+                v = get(ops[0])
+                if v is None:
+                    raise _Abort()
+                if (((v >> (_parse_imm(ops[1]) or 0)) & 1) == 0) == (mn == 'tbz'):
+                    nxt = jump(_parse_imm(ops[2]))
+            elif mn == 'cmp' and len(ops) == 2:
+                a = get(ops[0])
+                b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
+                flags[0] = (a, b, 32 if ops[0].startswith('w') else 64) \
+                    if a is not None and b is not None else None
+            elif mn in ('mov', 'movz') and len(ops) == 2:
+                put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1]))
+            elif mn == 'movn' and len(ops) >= 2:
+                v = _parse_imm(ops[1])
+                put(ops[0], None if v is None else ~(v << ((_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0)))
+            elif mn == 'movk' and len(ops) >= 2:
+                base, v = get(ops[0]), _parse_imm(ops[1])
+                sh = (_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0
+                put(ops[0], None if base is None or v is None
+                    else (base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh))
+            elif mn in ('adrp', 'adr') and len(ops) == 2:
+                v = (parse_adrp(ins.op_str) or (None, None))[1] if mn == 'adrp' else _parse_imm(ops[1])
+                put(ops[0], v)
+            elif mn in ('add', 'sub') and len(ops) >= 3:
+                a = get(ops[1])
+                if ops[2].startswith('#'):
+                    b = _parse_imm(ops[2])
+                else:
+                    b = get(ops[2])
+                    if b is not None and len(ops) > 3:
+                        b = _shifted(b, ops[3])
+                put(ops[0], None if a is None or b is None else (a + b if mn == 'add' else a - b))
+            elif mn == 'csel' and len(ops) == 4:
+                if flags[0] is None:
+                    put(ops[0], None)
+                else:
+                    c = _eval_cond(ops[3], flags[0])
+                    put(ops[0], None if c is None else get(ops[1] if c else ops[2]))
+            elif mn in _LOADS and len(ops) == 2:
+                put(ops[0], self._load(mn, ops, get))
+            else:
+                for r in _writes(ins):
+                    regs.pop(r, None)
+                    top.add(r)
+            k = nxt
+        return None
+
+    def _load(self, mn: str, ops: List[str], get) -> Optional[int]:
+        pm = _parse_mem(ops[1])
+        if pm is None:
+            return None
+        base, index, disp, ext, shift, idx_w = pm
+        addr = get(base) if base else None
+        if addr is None:
+            return None
+        if index:
+            iv = get(index)
+            if iv is None:
+                return None
+            if idx_w or ext in ('sxtw', 'uxtw'):
+                iv &= 0xFFFFFFFF
+                if ext == 'sxtw' and iv & 0x80000000:
+                    iv -= 1 << 32
+            addr += iv << shift
+        addr += disp
+        size = _LOADS[mn] or (4 if ops[0].startswith('w') else 8)
+        try:
+            if size == 8:
+                return self.ctx.read_ptr(addr)
+            raw = int.from_bytes(self.ctx.read_bytes(addr, size), 'little')
+        except (ValueError, KeyError, IndexError):
+            return None
+        if mn in ('ldrsw', 'ldrsb', 'ldrsh') and raw & (1 << (size * 8 - 1)):
+            raw -= 1 << (size * 8)
+        return raw
+
+    def _classify(self, va: Optional[int]):
+        from proto.enums import _read_cfstring_text, _read_enum_string
+        if va is None:
+            return None
+        text = _read_cfstring_text(self.ctx, va)
+        if text == UNKNOWN_ENUM_FORMAT:
+            return ('unknown', None)
+        name = _read_enum_string(self.ctx, va)
+        return ('name', name) if name else None
+
+    # ── the enum maps of the function ───────────────────────────────────────
+
+    def enum_maps(self, valid_offsets: Set[int], wanted: Optional[Set[int]] = None
+                  ) -> Dict[int, List[Tuple[int, str]]]:
+        """``{ivar offset: [(value, name), ...]}`` for every field of the function that is an
+        enum: its loaded value, driven through the code with every candidate value, yields
+        names, AND a value outside every candidate reaches the ``"(unknown: %i)"`` fallback.
+        *wanted* only limits the work to those ivars; it never changes a result."""
+        out: Dict[int, Dict[int, str]] = {}
+        self.rejected: List[Tuple[int, int]] = []       # (ivar, n names) names found, no fallback
+        for k, off in self.value_loads():
+            if off not in valid_offsets or (wanted is not None and off not in wanted):
+                continue
+            ins = self.insns[k]
+            ops = split_ops(ins.op_str)
+            dest = _norm_reg(ops[0])
+            size = _LOADS[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
+            if size == 8 or dest is None:
+                continue                                  # a pointer load, not an enum value
+            domain = (1 << (8 * size)) if size < 4 else (1 << 31)
+            cands = self.candidates(k, dest, domain)
+            probe = next((v for v in range(max(cands) + 1, domain) if v not in cands), None)
+            if probe is None:
+                continue
+            try:
+                pairs: Dict[int, str] = {}
+                for v in sorted(cands):
+                    r = self.evaluate(k, dest, v)
+                    if r is not None and r[0] == 'name':
+                        pairs[v] = r[1]
+                signature = self.evaluate(k, dest, probe)
+            except _Abort:
+                continue
+            if not pairs:
+                continue
+            if signature is None or signature[0] != 'unknown':
+                self.rejected.append((off, len(pairs)))
+                continue
+            tgt = out.setdefault(off, {})
+            for v, nm in pairs.items():
+                tgt.setdefault(v, nm)
+        return {off: sorted(m.items()) for off, m in out.items()}
+
+
+# ── operand helpers ────────────────────────────────────────────────────────
+
+def _parse_mem(op: str):
+    """``[Rn, Rm{, ext #s}]`` / ``[Rn, #imm]`` -> (base, index, disp, ext, shift, index is w-reg)."""
+    if '[' not in op or ']' not in op:
+        return None
+    parts = [p.strip() for p in op[op.index('[') + 1: op.index(']')].split(',')]
+    base = _norm_reg(parts[0])
+    index, disp, ext, shift, idx_w = None, 0, None, 0, False
+    if len(parts) >= 2:
+        if parts[1].startswith('#'):
+            disp = _parse_imm(parts[1]) or 0
+        else:
+            index, idx_w = _norm_reg(parts[1]), parts[1].startswith('w')
+    if len(parts) >= 3:
+        ext = parts[2].split()[0]
+        shift = (_parse_imm(parts[2]) or 0) if '#' in parts[2] else 0
+    return base, index, disp, ext, shift, idx_w
+
+
+def _mem_regs(op: str):
+    """(base, index or None, displacement) of a memory operand, or None."""
+    pm = _parse_mem(op)
+    return None if pm is None else (pm[0], pm[1], pm[2])
+
+
+def _signed(v: Optional[int], tok: str) -> Optional[int]:
+    """*v*, a register's unsigned content, as the signed number it stands for (a bias
+    materialised as ``mov w9, #-0x3bc4`` reads back as 0xFFFFC43C)."""
+    if v is None:
+        return None
+    bits = 32 if tok.strip().lower().startswith('w') else 64
+    return v - (1 << bits) if v >> (bits - 1) else v
+
+
+def _shifted(v: int, op: str) -> int:
+    """Apply a shifted-register operand (``lsl #n``) to *v*."""
+    toks = op.split()
+    return (v << (_parse_imm(op) or 0)) if toks and toks[0] == 'lsl' else v

@@ -29,6 +29,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from macho.arm64decode import _decode_ldr_reg_off
 from proto.enums import _longest_common_prefix
 from tests.conftest import WordCtx as _WordCtx
+from tests._a64asm import assemble, FlowCtx
 from macho.disasm import disasm
 
 
@@ -84,66 +85,6 @@ class TestDictRepBiasHelpers(unittest.TestCase):
         self.assertEqual(_sub_imm_bias(insns, words, 0, len(insns), dest_reg=8), 0)
 
 
-class TestFieldRoutesThroughXAsString(unittest.TestCase):
-    """The dictRep→xAsString discriminator: a field with an ``xAsString:``/
-    ``StringAsX:`` selector has its bias handled by the xAsString path, so the
-    dictRep harvester must NOT re-bias it (else double-/mis-bias)."""
-
-    class _FakeCls:
-        def __init__(self, sels):
-            self._sels = set(sels)
-        def get_method(self, sel):
-            return object() if sel in self._sels else None
-
-    class _FakeSt:
-        def __init__(self, sels):
-            self._sels = set(sels)
-        def find(self, sel):
-            return 1 if sel in self._sels else 0
-
-    def test_method_list_hit(self):
-        from proto.enums import _field_routes_through_xasstring
-        cls = self._FakeCls({'relationshipAsString:'})
-        self.assertTrue(_field_routes_through_xasstring(cls, self._FakeSt(set()),
-                                                        '_relationship'))
-
-    def test_stringas_form_hit(self):
-        from proto.enums import _field_routes_through_xasstring
-        cls = self._FakeCls({'StringAsResultStatus:'})
-        self.assertTrue(_field_routes_through_xasstring(cls, self._FakeSt(set()),
-                                                        '_resultStatus'))
-
-    def test_selector_pool_fallback(self):
-        # cache-native: method not name-resolved, selector still in __objc_methname.
-        from proto.enums import _field_routes_through_xasstring
-        cls = self._FakeCls(set())
-        st = self._FakeSt({'laneClosureTypeAsString:'})
-        self.assertTrue(_field_routes_through_xasstring(cls, st, '_laneClosureType'))
-
-    def test_selector_pool_of_other_classes_is_not_evidence(self):
-        # The pool is image-wide: `typeAsString:` there only means SOME class has it.
-        # A class whose own (parsed, non-empty) method list lacks the selector does
-        # not route through xAsString: -- GEOPDGroundDataBuild.type on iOS 16.
-        from proto.enums import _field_routes_through_xasstring
-
-        class _ParsedCls(self._FakeCls):
-            methods = [object()]          # a method list WAS parsed
-
-        cls = _ParsedCls(set())
-        st = self._FakeSt({'typeAsString:'})
-        self.assertFalse(_field_routes_through_xasstring(cls, st, '_type'))
-
-    def test_dictrep_only_field_is_not_routed(self):
-        # Only covers the trivial default-False branch (no method-list hit, no
-        # selector-pool hit) of _field_routes_through_xasstring; the three True-
-        # case siblings above (same class) are what actually catch a revert of
-        # this detector.
-        from proto.enums import _field_routes_through_xasstring
-        cls = self._FakeCls(set())
-        self.assertFalse(_field_routes_through_xasstring(cls, self._FakeSt(set()),
-                                                         '_tagSource'))
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Synthetic decoder tests (no binary needed)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -191,178 +132,141 @@ class TestLongestCommonPrefix(unittest.TestCase):
         self.assertEqual(_longest_common_prefix([]), '')
 
 
-class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
-    """``_harvest_dictrep_enums``'s third pass recovers an enum's int->name map
-    from an inlined BINARY-SEARCH TREE of `cmp`/range-branch comparisons inside
-    `dictionaryRepresentation`, on a newer toolchain that has no separate
-    `xAsString:` method and no `_dictionaryRepresentation:` jump table either
-    (both already handled) for this field.
+class _FakeMethod:
+    def __init__(self, imp):
+        self.imp = imp
 
-    Regression test for the compare-chain harvester (commit 9d07d15): built
-    from real, capstone-verified instruction words modelling the exact shape
-    found on GEOBatchPlaceResult.statusCode -- a has-bits `tbz` gate, the
-    field's own `adrp+ldrsw` ivar-offset lookup, a `cbz` for value 0, and a
-    `cmp+b.ne` for value 1, bounded by the first `bl` (the chain itself proven
-    to contain none)."""
+
+class _FakeIvar:
+    def __init__(self, name, offset):
+        self.name = name
+        self.offset = offset
+
+
+class _FakeCls:
+    name = 'GEOFakeResult'
+
+    def __init__(self, dictrep_imp, ivars):
+        self._dictrep_imp = dictrep_imp
+        self.ivars = ivars
+
+    def get_method(self, sel):
+        if sel == '_dictionaryRepresentation:':
+            return _FakeMethod(self._dictrep_imp)
+        return None
+
+
+_UNKNOWN_FMT = '(unknown: %i)'
+
+
+class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
+    """``_harvest_dictrep_enums`` recovers an inlined compare chain: the field's value is
+    loaded from its ivar (``ldr w1, [x19, x8]`` with x8 from the ivar-offset slot), a ``cbz``
+    names value 0, ``cmp #1; b.ne`` names value 1, every other value reaches the converter's
+    ``"(unknown: %i)"`` fallback, and the chosen name reaches the call as its first argument.
+    Modelled on GEOBatchPlaceResult.statusCode (assembled by ``tests/_a64asm.py``)."""
 
     BASE = 0x1000
     IVAR_OFFSET_TABLE = 0x5040   # holds the field's own ivar byte offset (16)
     IVAR_OFFSET = 16
-    STR0_ADDR = 0x6080           # direct C-string address for value 0's name
-    STR1_ADDR = 0x7010           # direct C-string address for value 1's name
+    STR0_ADDR, STR1_ADDR, UNKNOWN_ADDR = 0x6080, 0x7010, 0x8020
 
-    # Hand-built, capstone-verified (see commit 9d07d15's dev notes): a
-    # has-bits gate, this field's own adrp+ldrsw ivar-offset lookup, a `cbz`
-    # leaf for value 0, a `cmp+b.ne` leaf for value 1, then a `bl` (unrelated
-    # merge-point helper -- must NOT be reached by the harvester) and `ret`.
-    WORDS = [
-        0x360001a0,   # tbz  w0, #0, #0x1034            (has-bits gate)
-        0x90000028,   # adrp x8, #0x5000
-        0xb9804108,   # ldrsw x8, [x8, #0x40]            -> IVAR_OFFSET_TABLE
-        0x340000c1,   # cbz  w1, #0x1024                 (value 0 -> label0)
-        0x7100043f,   # cmp  w1, #1
-        0x540000e1,   # b.ne #0x1030                     (value 1 falls through)
-        0xd0000020,   # adrp x0, #0x7000                 (value 1's string)
-        0x91004000,   # add  x0, x0, #0x10               -> STR1_ADDR
-        0x14000005,   # b    #0x1034
-        0xb0000020,   # adrp x0, #0x6000                 (value 0's string, label0)
-        0x91020000,   # add  x0, x0, #0x80               -> STR0_ADDR
-        0x14000002,   # b    #0x1034
-        0x94000000,   # bl   #0x1030 (self)              -- chain must stop here
-        0xd65f03c0,   # ret
+    CODE = [
+        'tbz w0, #0, end',                    # has-bits gate
+        'adrp x8, #0x5000', 'ldrsw x8, [x8, #0x40]',   # this field's ivar-offset lookup
+        'ldr w1, [x19, x8]',                  # the value
+        'cbz w1, l0',                         # value 0
+        'cmp w1, #1', 'b.ne unk',             # value 1, else unknown
+        'adrp x21, #0x7000', 'add x21, x21, #0x10', 'b merge',
+        'l0:', 'adrp x21, #0x6000', 'add x21, x21, #0x80', 'b merge',
+        'unk:', 'adrp x2, #0x8000', 'add x2, x2, #0x20', 'bl helper', 'b end',
+        'merge:', 'mov x2, x21', 'bl helper',
+        'end:', 'b helper',                   # tail-call epilogue, as in the real code
+        'helper:', 'ret',
     ]
 
-    class _FakeMethod:
-        def __init__(self, imp):
-            self.imp = imp
-
-    class _FakeIvar:
-        def __init__(self, name, offset):
-            self.name = name
-            self.offset = offset
-
-    class _FakeCls:
-        name = 'GEOFakeResult'
-
-        def __init__(self, dictrep_imp, ivars):
-            self._dictrep_imp = dictrep_imp
-            self.ivars = ivars
-
-        def get_method(self, sel):
-            if sel == '_dictionaryRepresentation:':
-                return TestHarvestDictrepEnumsCompareChain._FakeMethod(self._dictrep_imp)
-            return None
-
     def _build_ctx(self):
-        ctx = _WordCtx(self.BASE, self.WORDS)
+        words, _ = assemble(self.BASE, self.CODE)
+        ctx = FlowCtx(self.BASE, words)
         ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
         ctx._strings = {
-            self.STR0_ADDR: 'MY_VALUE_ZERO',
-            self.STR1_ADDR: 'MY_VALUE_ONE',
+            self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE',
+            self.UNKNOWN_ADDR: _UNKNOWN_FMT,
         }
         return ctx
 
     def test_recovers_both_values_from_the_compare_chain(self):
         from proto.enums import _harvest_dictrep_enums
         ctx = self._build_ctx()
-        cls = self._FakeCls(self.BASE, [self._FakeIvar('_myField', self.IVAR_OFFSET)])
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
         result = _harvest_dictrep_enums(ctx, cls, None)
         self.assertEqual(result, {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')],
         })
 
     def test_not_attributed_to_an_unrelated_ivar_offset(self):
-        # If the field's REAL offset isn't in the class's own ivar list (e.g.
-        # the class under test doesn't actually declare this field), the
-        # chain must not be attributed to it -- valid_offsets is exactly
-        # cls.ivars's own offsets.
+        # If the field's REAL offset isn't in the class's own ivar list, the chain must
+        # not be attributed to it -- valid_offsets is exactly cls.ivars's own offsets.
         from proto.enums import _harvest_dictrep_enums
         ctx = self._build_ctx()
-        cls = self._FakeCls(self.BASE, [self._FakeIvar('_otherField', 999)])
-        result = _harvest_dictrep_enums(ctx, cls, None)
-        self.assertEqual(result, {})
+        cls = _FakeCls(self.BASE, [_FakeIvar('_otherField', 999)])
+        self.assertEqual(_harvest_dictrep_enums(ctx, cls, None), {})
+
+    def test_a_chain_without_the_unknown_fallback_is_not_an_enum(self):
+        # Same compares and strings, but the default path is an unrelated call: nothing
+        # says this int goes through an enum-to-string converter.
+        from proto.enums import _harvest_dictrep_enums
+        code = [c for c in self.CODE if not c.startswith(('adrp x2', 'add x2, x2'))]
+        words, _ = assemble(self.BASE, code)
+        ctx = FlowCtx(self.BASE, words)
+        ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
+        ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'}
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        self.assertEqual(_harvest_dictrep_enums(ctx, cls, None), {})
 
 
 class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
-    """_harvest_dictrep_enums's compare-chain pass must attribute each chain
-    to ITS OWN field even when the compiler lays the gated blocks out of line.
-
-    Regression test for the ivar-lookup anchor (found by the compiled f24
-    fixture; the earlier has-bits-gate anchor lost the first field's chain
-    here).  The shape is the one clang emits for a dictionaryRepresentation
-    with several gated fields: the has-bits byte is loaded ONCE, a tbnz
-    cascade branches on each field's bit straight to that field's block, and
-    those blocks sit AFTER the epilogue -- so a chain is not adjacent to (nor
-    after) its own gate in linear order.  Field A (statusCode, values 1/5/60)
-    is a cmp+b.eq chain, field B (mode, values 0/1) a cbz-0 + cmp
-    chain, and count is a plain int with an ivar-offset lookup but no
-    compares at all (must not become an enum).  The epilogue is a TAIL branch,
-    as in the real code, so a linear scan carries on into the out-of-line
-    blocks.  Every word is capstone-verified; the trailing comment on each is
-    its disassembly."""
+    """Each chain must be attributed to ITS OWN field even when the compiler lays the gated
+    blocks out of line (found by the compiled f24 fixture).  The has-bits byte is loaded
+    ONCE, a tbnz cascade branches on each field's bit straight to that field's block, and
+    those blocks sit AFTER the epilogue.  Field A (statusCode, values 1/5/60) is a cmp+b.eq
+    chain, field B (mode, values 0/1) a cbz-0 + cmp chain; ``count`` is a plain int that goes
+    straight to ``+numberWithInt:`` (must not become an enum), as does the has-bits byte."""
 
     BASE = 0x1000
-    # ivar-offset slots (the data words the adrp+ldrsw lookups read):
     SLOT_FLAGS, SLOT_STATUS, SLOT_MODE, SLOT_COUNT = 0x5010, 0x5020, 0x5024, 0x5028
     OFF_FLAGS, OFF_STATUS, OFF_MODE, OFF_COUNT = 8, 16, 20, 24
     STRINGS = {
         0x6040: 'TEST_STATUS_FAILED', 0x6080: 'TEST_STATUS_INVALID',
         0x60c0: 'TEST_STATUS_MISMATCH',
         0x7000: 'TEST_MODE_OFF', 0x7040: 'TEST_MODE_ON',
+        0x8020: _UNKNOWN_FMT,
     }
 
-    WORDS = [
-    0x90000036,   # 0x1000 top      adrp x22, #0x5000
-    0xb98012c8,   # 0x1004          ldrsw x8, [x22, #0x10]
-    0x38686a68,   # 0x1008          ldrb w8, [x19, x8]
-    0x370000e8,   # 0x100c          tbnz w8, #0, #0x1028
-    0x37080368,   # 0x1010          tbnz w8, #1, #0x107c
-    0x90000028,   # 0x1014 cnt      adrp x8, #0x5000
-    0xb9802908,   # 0x1018          ldrsw x8, [x8, #0x28]
-    0xb9400262,   # 0x101c          ldr w2, [x19]
-    0x94000026,   # 0x1020          bl #0x10b8
-    0x14000025,   # 0x1024 ret      b #0x10b8
-    0x90000028,   # 0x1028 chainA   adrp x8, #0x5000
-    0xb9802108,   # 0x102c          ldrsw x8, [x8, #0x20]
-    0xb8686a68,   # 0x1030          ldr w8, [x19, x8]
-    0x7100051f,   # 0x1034          cmp w8, #1
-    0x54000100,   # 0x1038          b.eq #0x1058
-    0x7100f11f,   # 0x103c          cmp w8, #0x3c
-    0x54000120,   # 0x1040          b.eq #0x1064
-    0x7100151f,   # 0x1044          cmp w8, #5
-    0x54000141,   # 0x1048          b.ne #0x1070
-    0xb0000035,   # 0x104c leaf5    adrp x21, #0x6000
-    0x910202b5,   # 0x1050          add x21, x21, #0x80
-    0x14000008,   # 0x1054          b #0x1074
-    0xb0000035,   # 0x1058 leaf1    adrp x21, #0x6000
-    0x910102b5,   # 0x105c          add x21, x21, #0x40
-    0x14000005,   # 0x1060          b #0x1074
-    0xb0000035,   # 0x1064 leaf60   adrp x21, #0x6000
-    0x910302b5,   # 0x1068          add x21, x21, #0xc0
-    0x14000002,   # 0x106c          b #0x1074
-    0x94000012,   # 0x1070 dflt     bl #0x10b8
-    0x94000011,   # 0x1074 merge    bl #0x10b8
-    0x17ffffeb,   # 0x1078          b #0x1024
-    0x90000028,   # 0x107c chainB   adrp x8, #0x5000
-    0xb9802508,   # 0x1080          ldrsw x8, [x8, #0x24]
-    0xb8686a68,   # 0x1084          ldr w8, [x19, x8]
-    0x340000c8,   # 0x1088          cbz w8, #0x10a0
-    0x7100051f,   # 0x108c          cmp w8, #1
-    0x540000e1,   # 0x1090          b.ne #0x10ac
-    0xd0000035,   # 0x1094 m1       adrp x21, #0x7000
-    0x910102b5,   # 0x1098          add x21, x21, #0x40
-    0x14000005,   # 0x109c          b #0x10b0
-    0xd0000035,   # 0x10a0 m0       adrp x21, #0x7000
-    0x910002b5,   # 0x10a4          add x21, x21, #0
-    0x14000002,   # 0x10a8          b #0x10b0
-    0x94000003,   # 0x10ac mdflt    bl #0x10b8
-    0x94000002,   # 0x10b0 mmerge   bl #0x10b8
-    0x17ffffdc,   # 0x10b4          b #0x1024
-    0xd65f03c0,   # 0x10b8 helper   ret 
+    CODE = [
+        'adrp x22, #0x5000', 'ldrsw x8, [x22, #0x10]', 'ldrb w8, [x19, x8]',
+        'tbnz w8, #0, chainA', 'tbnz w8, #1, chainB',
+        'adrp x8, #0x5000', 'ldrsw x8, [x8, #0x28]', 'ldr w2, [x19, x8]', 'bl helper',
+        'epilogue:', 'b helper',                                     # tail branch
+        'chainA:', 'adrp x8, #0x5000', 'ldrsw x8, [x8, #0x20]', 'ldr w8, [x19, x8]',
+        'cmp w8, #1', 'b.eq a1', 'cmp w8, #0x3c', 'b.eq a60', 'cmp w8, #5', 'b.ne adflt',
+        'adrp x21, #0x6000', 'add x21, x21, #0x80', 'b amerge',
+        'a1:', 'adrp x21, #0x6000', 'add x21, x21, #0x40', 'b amerge',
+        'a60:', 'adrp x21, #0x6000', 'add x21, x21, #0xc0', 'b amerge',
+        'adflt:', 'adrp x2, #0x8000', 'add x2, x2, #0x20', 'bl helper',
+        'amerge:', 'mov x2, x21', 'bl helper', 'b epilogue',
+        'chainB:', 'adrp x8, #0x5000', 'ldrsw x8, [x8, #0x24]', 'ldr w8, [x19, x8]',
+        'cbz w8, b0', 'cmp w8, #1', 'b.ne bdflt',
+        'adrp x21, #0x7000', 'add x21, x21, #0x40', 'b bmerge',
+        'b0:', 'adrp x21, #0x7000', 'add x21, x21, #0', 'b bmerge',
+        'bdflt:', 'adrp x2, #0x8000', 'add x2, x2, #0x20', 'bl helper',
+        'bmerge:', 'mov x2, x21', 'bl helper', 'b epilogue',
+        'helper:', 'ret',
     ]
 
     def _ctx(self):
-        ctx = _WordCtx(self.BASE, self.WORDS)
+        words, _ = assemble(self.BASE, self.CODE)
+        ctx = FlowCtx(self.BASE, words)
         ctx._m[self.SLOT_FLAGS] = self.OFF_FLAGS
         ctx._m[self.SLOT_STATUS] = self.OFF_STATUS
         ctx._m[self.SLOT_MODE] = self.OFF_MODE
@@ -371,10 +275,9 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
         return ctx
 
     def _cls(self):
-        Ivar = TestHarvestDictrepEnumsCompareChain._FakeIvar
-        return TestHarvestDictrepEnumsCompareChain._FakeCls(self.BASE, [
-            Ivar('_has', self.OFF_FLAGS), Ivar('_statusCode', self.OFF_STATUS),
-            Ivar('_mode', self.OFF_MODE), Ivar('_count', self.OFF_COUNT)])
+        return _FakeCls(self.BASE, [
+            _FakeIvar('_has', self.OFF_FLAGS), _FakeIvar('_statusCode', self.OFF_STATUS),
+            _FakeIvar('_mode', self.OFF_MODE), _FakeIvar('_count', self.OFF_COUNT)])
 
     def test_each_out_of_line_chain_goes_to_its_own_field(self):
         from proto.enums import _harvest_dictrep_enums
@@ -392,19 +295,19 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
         self.assertNotIn(self.OFF_COUNT, result)
         self.assertNotIn(self.OFF_FLAGS, result)
 
-    def test_ivar_offset_lookups_in_instruction_order(self):
-        """Every adrp+ldrsw ivar-offset lookup, in order — including the
-        has-bits one, whose page register (x22) is loaded once at the top and
-        reused, and the two out-of-line ones that come after the epilogue."""
-        from proto.enums import _ivar_offset_lookups
+    def test_value_loads_found_by_use_def_chain_in_instruction_order(self):
+        """Every load whose address derives from an ivar-offset slot (the has-bits byte via
+        the hoisted x22 page, the plain int, and the two out-of-line chains)."""
+        from proto.dictrep_flow import Flow
         ctx = self._ctx()
         insns = disasm(ctx, self.BASE, max_insns=200, stop_at_ret=False)
-        got = [(insns[i].addr, off) for i, off in _ivar_offset_lookups(ctx, insns)]
+        flow = Flow(ctx, insns)
+        got = [(insns[k].addr, off) for k, off in flow.value_loads()]
         self.assertEqual(got, [
-            (0x1004, self.OFF_FLAGS),    # has-bits, via the hoisted adrp x22
-            (0x1018, self.OFF_COUNT),    # inline block
-            (0x102c, self.OFF_STATUS),   # out of line (after the epilogue)
-            (0x1080, self.OFF_MODE),     # out of line
+            (0x1008, self.OFF_FLAGS),    # ldrb w8, [x19, x8]
+            (0x101c, self.OFF_COUNT),    # ldr w2, [x19, x8]
+            (0x1030, self.OFF_STATUS),   # out of line (after the epilogue)
+            (0x1090, self.OFF_MODE),     # out of line
         ])
 
 

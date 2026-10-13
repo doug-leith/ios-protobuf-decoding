@@ -15,7 +15,6 @@ imports back from here.
 from __future__ import annotations
 import logging
 import re
-from collections import Counter
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from macho.memory     import BinaryContext, _ctx_cache
@@ -23,15 +22,15 @@ from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from macho.disasm     import (disasm, Insn, _parse_imm, _norm_reg,
                               find_adrp_add_target, find_indexed_load_base)
-from proto.arm64cfg   import (parse_adrp, split_ops, mem_operand, _CALLEE_SAVED,
-                              ivar_slot_loads)
+from proto.arm64cfg   import parse_adrp, split_ops, mem_operand, _CALLEE_SAVED
 from macho.arm64decode import (jumptable_arm_target, _bcond_branch_target, _decode_cmp_reg, _materialized_value,
     _decode_adr, _decode_bcond, _decode_cmp_imm, _decode_ldr_reg_off, _decode_sub_imm,
     _is_br_insn, _COND_EQ, _COND_NE, _COND_LO, _COND_LS,
     _SUB_W_IMM_MASK, _SUB_W_IMM_PATTERN, range_from_unsigned_gate)
 from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix
 from proto.protocore  import _proto_name
-from proto.dispatch   import _find_field_count, _read_raw_word
+from proto.dispatch   import _find_field_count, _read_raw_word, _jump_table_arm_addrs
+from proto.dictrep_flow import Flow
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
 
@@ -328,32 +327,6 @@ def _leading_materialized_bias(insns, lo: int, hi: int, value_reg: int) -> int:
             if cand is not None and 0 < cand < _MATERIALIZED_BIAS_MAX:
                 bias = cand
     return bias
-
-
-def _field_routes_through_xasstring(cls, st, ivar_name: str) -> bool:
-    """True if ``ivar_name``'s field has an ``xAsString:``/``StringAsX:`` selector.
-
-    Such a field's enum is recovered (and bias-corrected) by the xAsString: path,
-    so the dictRep harvester must NOT also apply a leading-sub bias to it — doing
-    so would double-bias or mis-bias an enum the xAsString path already owns.
-    The test is whether THIS class defines the selector.  The raw selector pool
-    (``__objc_methname``) is shared by every class in the image, so a pool hit
-    says only that SOME class has e.g. ``typeAsString:`` — on GeoServices that is
-    true of nearly every common field name, and used as the gate it silently
-    suppressed the bias for ``GEOPDGroundDataBuild.type`` (a dictRep-only 1-based
-    enum emitted 0-based: T300=0 instead of 1).  The pool is consulted only when
-    the class's own method list is empty (a class whose ``baseMethods`` could not
-    be parsed), where it is the only evidence left."""
-    pname = _proto_name(ivar_name)
-    if not pname:
-        return False
-    cap = pname[:1].upper() + pname[1:]
-    sels = (f"{pname}AsString:", f"StringAs{cap}:")
-    if any(cls.get_method(sel) for sel in sels):
-        return True
-    if getattr(cls, 'methods', None):
-        return False                   # method list parsed: absence is real
-    return st is not None and any(st.find(sel) for sel in sels)
 
 
 # Unconditional terminals that END a jump-table case block — used to truncate the
@@ -1175,71 +1148,6 @@ def _block_adrp_add_target_in(
     return None
 
 
-def _block_cfstring_target(
-    ctx: BinaryContext, insns: list
-) -> Optional[int]:
-    """First adrp+add target (any GPR) pointing into the cfstring section.
-
-    Shared-cache-extracted dylibs normally place ``__cfstring`` in
-    ``__DATA_CONST``; an arm64e cache (e.g. the macOS system cache) instead
-    places it in ``__AUTH_CONST`` (mirrors the section search in
-    :func:`_read_enum_string`).  Both are tried, first match wins."""
-    for segname in ("__DATA_CONST", "__AUTH_CONST"):
-        target = _block_adrp_add_target_in(ctx, insns, segname, "__cfstring")
-        if target is not None:
-            return target
-    return None
-
-
-def _last_ivar_offset_in_window(
-    ctx: BinaryContext, win: list
-) -> Optional[int]:
-    """Return the byte offset value referenced by the LAST ``adrp+ldrsw`` pair in
-    *win* (the ivar-offset global feeding the switch), or None.
-
-    Each enum switch is immediately preceded by loading its field's ivar-offset
-    variable via ``adrp Xn,#page; ldrsw Xn,[Xn,#off]``; the slot at ``page+off``
-    holds the ivar byte offset.  Taking the closest such pair before the dispatch
-    selects this field's ivar (earlier pairs load the has-bits ``_flags`` ivar)."""
-    pages: Dict[str, int] = {}
-    last_slot: Optional[int] = None
-    for ins in win:
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None:
-                pages[pa[0]] = pa[1]
-        elif ins.mnemonic == 'ldrsw':
-            mo = mem_operand(ins.op_str)        # immediate/no-offset form only
-            if mo is not None and mo[2] is None and mo[1] in pages:
-                last_slot = pages[mo[1]] + mo[3]
-    if last_slot is None:
-        return None
-    try:
-        return ctx.read_s32(last_slot)
-    except (ValueError, KeyError):
-        return None
-
-
-def _ivar_offset_lookups(
-    ctx: BinaryContext, insns: list
-) -> List[Tuple[int, int]]:
-    """Return ``[(insn_index, ivar_byte_offset), …]`` for every ivar-offset-
-    variable load in *insns*: ``adrp Xn,#page; ldrsw Xm,[Xn,#off]`` where the
-    slot at ``page+off`` holds a field's ivar byte offset (see
-    :func:`_last_ivar_offset_in_window`).  ``insn_index`` is the ``ldrsw``.
-
-    Unlike :func:`_last_ivar_offset_in_window` the ``adrp`` need not lie
-    inside the same window as the ``ldrsw`` — a compiler may hoist one page
-    register across several lookups."""
-    out: List[Tuple[int, int]] = []
-    for i, slot in ivar_slot_loads(insns):
-        try:
-            out.append((i, ctx.read_s32(slot)))
-        except (ValueError, KeyError):
-            pass
-    return out
-
-
 def _longest_common_prefix(strs: List[str]) -> str:
     """Return the longest common character prefix of *strs* (``""`` if none)."""
     if not strs:
@@ -1253,119 +1161,24 @@ def _longest_common_prefix(strs: List[str]) -> str:
     return pre
 
 
-def _read_dictrep_switch_pairs(
-    ctx: BinaryContext,
-    case_base: int,
-    table_va: int,
-    entry_size: int,
-    range_val: int,
-    default_name: Optional[str],
-) -> Tuple[List[Tuple[int, str]], Optional[int]]:
-    """Walk a dictRep jump table and return ``(pairs, merge_target)``.
-
-    ``case_target = case_base + table[value] * 4`` (a 4-byte ``ldrsw`` entry is instead
-    a signed byte delta, unscaled — :func:`macho.arm64decode.jumptable_arm_target`).  Gap values and the default
-    all route to one shared merge block (the most common table entry); those are
-    identified by that modal entry and skipped — every other value has its own
-    case block whose first ``adrp+add`` cfstring is its name.  The lowest
-    merge-routed value (usually 0) inherits *default_name*, but only when it
-    shares the value names' common prefix, which rejects the dictionary-key
-    string (e.g. the field name ``"status"``) picked up at the merge block.
-
-    ``merge_target`` (the convergence address shared by the case blocks) is also
-    returned so the caller can bound an isolated-comparison scan for sparse
-    high values."""
-    # Read the whole index table first so the shared merge target can be found.
-    entries: List[int] = []        # arm ADDRESSES, one per value (modal one = default)
-    for v in range(range_val):
-        try:
-            raw = ctx.read_bytes(table_va + v * entry_size, entry_size)
-        except (ValueError, IndexError):
-            break
-        entries.append(jumptable_arm_target(case_base, entry_size, raw))
-    if len(entries) < 2:
-        return [], None
-
-    # Two targets carry no value string: the explicit default block shared by
-    # the in-range gap values (the modal entry, count ≥ 2) and the merge block
-    # that value 0 routes to directly (UNKNOWN is pre-loaded).  The merge block
-    # loads the dictionary KEY, so reading a string there yields the field name
-    # — both must be excluded.  The merge address is the unconditional-branch
-    # target of any real case block.
-    counts = Counter(entries)
-    modal_entry, modal_count = counts.most_common(1)[0]
-    default_entry = modal_entry if modal_count >= 2 else None
-
-    # Read each case block up to its OWN terminal instruction (same idiom as
-    # _read_case_string below), not a fixed instruction count: a case block
-    # is exactly as long as it needs to be -- e.g. it may reload the
-    # dictionary KEY string (a second adrp+add) before the merge branch, on
-    # top of the VALUE cfstring's own adrp+add, so a block can legitimately
-    # run to 5+ instructions. A hardcoded small cap (this used max_insns=4)
-    # can cut off before reaching the block's own `b`, silently returning
-    # merge_target=None even though the block ends in a perfectly ordinary
-    # branch -- found via f19_enum_dictrep_switch's real compiled `category`
-    # field, whose case blocks are genuinely 5 instructions long. max_insns
-    # here is now just a generous safety cap, not the actual stop condition.
-    merge_target: Optional[int] = None
-    for entry in entries:
-        if entry == default_entry:
-            continue
-        try:
-            blk0 = disasm(ctx, entry, max_insns=8)
-        except Exception:
-            continue
-        for ci in blk0:
-            if ci.mnemonic in _CASE_TERMINALS:
-                if ci.mnemonic == 'b':
-                    merge_target = _parse_imm(ci.op_str)
-                break
-        if merge_target is not None:
-            break
-
-    named: List[Tuple[int, str]] = []
-    seen: Set[int] = set()
-    default_idx: Optional[int] = None
-    for v, entry in enumerate(entries):
-        case_target = entry
-        if entry == default_entry or case_target == merge_target:
-            if default_idx is None:
-                default_idx = v
-            continue
-        try:
-            # A real case block is `adrp/add Xr, <value cfstring>` then either a
-            # `b merge` or a fall-through into the merge; the value string is the
-            # FIRST adrp+add, so a short window suffices and avoids the merge key.
-            blk = disasm(ctx, case_target, max_insns=4)
-        except Exception:
-            continue
-        cf = _block_cfstring_target(ctx, blk)
-        if cf is not None:
-            name = _read_enum_string(ctx, cf)
-            if name and v not in seen:
-                seen.add(v)
-                named.append((v, name))
-
-    # Value 0 / first merge-routed value inherits the pre-loaded default string,
-    # but only when it shares the *dominant* first-segment prefix of the named
-    # values (guards against dict-key contamination — the field-name string used
-    # as the dictionary key).  A dominant prefix (rather than the strict longest
-    # common prefix) tolerates an odd value name that breaks the LCP, e.g. a
-    # ``STATUS_*`` enum that also contains ``INVALID_REQUEST`` still admits
-    # ``STATUS_SUCCESS`` as value 0.
-    if (default_idx is not None and default_name
-            and default_idx not in seen and len(named) >= 2):
-        seg_counts: "Counter[str]" = Counter()
-        for _, n in named:
-            sep = n.find('_')
-            if sep > 0:
-                seg_counts[n[:sep]] += 1
-        dom = seg_counts.most_common(1)[0][0] if seg_counts else ''
-        if len(dom) >= 3 and default_name.startswith(dom):
-            named.append((default_idx, default_name))
-
-    named.sort(key=lambda p: p[0])
-    return named, merge_target
+def _read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
+    """Raw text of the string constant at *va*: a CFString (32-byte struct: isa, flags,
+    cstring pointer at +16, length at +24) or, in a binary with no ``__cfstring`` section,
+    a direct C string (the same two storage formats :func:`_read_enum_string` reads).
+    Unlike that function it does NOT require an identifier-shaped string, so it can read
+    format strings such as ``"(unknown: %i)"``.  None if *va* holds neither."""
+    for seg in ("__DATA_CONST", "__DATA", "__AUTH_CONST"):
+        if ctx.has_section(seg, "__cfstring"):
+            sec = ctx.section(seg, "__cfstring")
+            if sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
+                try:
+                    return ctx.read_cstring(ctx.read_ptr(va + 16), max_len=64)
+                except (ValueError, UnicodeDecodeError, KeyError):
+                    return None
+    try:
+        return ctx.read_cstring(va, max_len=64)
+    except (ValueError, UnicodeDecodeError, KeyError):
+        return None
 
 
 def _read_dictrep_pointer_pairs(
@@ -1397,57 +1210,6 @@ def _read_dictrep_pointer_pairs(
             seen.add(v)
             pairs.append((v, name))
     pairs.sort(key=lambda p: p[0])
-    return pairs
-
-
-def _scan_dictrep_isolated_cmps(
-    ctx: BinaryContext, insns: list, words: Dict[int, int],
-    value_reg: int, start_idx: int, end_addr: int,
-) -> List[Tuple[int, str]]:
-    """Recover sparse enum values encoded as isolated ``cmp wV,#K`` + ``b.eq``/
-    ``b.ne`` comparisons rather than dense jump-table entries.
-
-    Apple emits these for the high, sparse values of a status enum (e.g.
-    ``ComponentStatus`` 20/30/40/50/60) alongside a small jump table for the
-    dense low range.  For ``b.eq`` the value string is at the branch target; for
-    ``b.ne`` it is at the fall-through.  Only comparisons on *value_reg* (the
-    field's value register) within ``[start_idx, end_addr)`` are considered, and
-    the target block must carry its own cfstring — so range-split guards
-    (``b.gt``/``b.hi``) and unrelated comparisons are ignored."""
-    pairs: List[Tuple[int, str]] = []
-    seen: Set[int] = set()
-    for j in range(start_idx, len(insns)):
-        if insns[j].addr >= end_addr:
-            break
-        cmp = _decode_cmp_imm(words.get(insns[j].addr, 0))
-        if cmp is None:
-            continue
-        reg, imm = cmp
-        if reg != value_reg or imm <= 0 or imm > _SPARSE_MAX_RANGE:
-            continue
-        if j + 1 >= len(insns):
-            continue
-        cond = _decode_bcond(words.get(insns[j + 1].addr, 0))
-        if cond == _COND_EQ:
-            blk_addr = _bcond_branch_target(words.get(insns[j + 1].addr, 0),
-                                            insns[j + 1].addr)
-        elif cond == _COND_NE:
-            if j + 2 >= len(insns):
-                continue
-            blk_addr = insns[j + 2].addr
-        else:
-            continue
-        try:
-            blk = disasm(ctx, blk_addr, max_insns=4)
-        except Exception:
-            continue
-        cf = _block_cfstring_target(ctx, blk)
-        if cf is None:
-            continue
-        name = _read_enum_string(ctx, cf)
-        if name and imm not in seen:
-            seen.add(imm)
-            pairs.append((imm, name))
     return pairs
 
 
@@ -1513,13 +1275,15 @@ def _find_dictrep_c_func(ctx: BinaryContext, cls: ObjcClass) -> Optional[int]:
 
 
 def _harvest_dictrep_enums(
-    ctx: BinaryContext, cls: ObjcClass, st: Optional[StringTable]
+    ctx: BinaryContext, cls: ObjcClass, st: Optional[StringTable],
+    wanted: Optional[Set[int]] = None,
 ) -> Dict[int, List[Tuple[int, str]]]:
-    """Extract switch-table enums from ``-[cls _dictionaryRepresentation:]``.
+    """Extract the enums inlined into ``-[cls _dictionaryRepresentation:]``.
 
     Returns ``{ivar_offset: [(value, name), …]}`` for each enum field whose
     int→name map is recovered.  Empty when the method is absent or has no
-    recoverable switches."""
+    recoverable switches.  *wanted* (ivar offsets) only limits the work to those
+    fields; it never changes a result."""
     result: Dict[int, List[Tuple[int, str]]] = {}
     imp = _find_dictrep_c_func(ctx, cls)
     if imp is None:
@@ -1557,229 +1321,11 @@ def _harvest_dictrep_enums(
             cls.name, cls.name, _DICTREP_HARD_CAP)
         _ctx_cache(ctx, "_dictrep_truncated_classes", set).add(cls.name)
 
-    words: Dict[int, int] = {}
-    for ins in insns:
-        w = _read_raw_word(ctx, ins.addr)
-        if w is not None:
-            words[ins.addr] = w
-
-    valid_offsets = {iv.offset for iv in cls.ivars}
-
-    for i, ins in enumerate(insns):
-        adr = _decode_adr(words.get(ins.addr, 0), ins.addr)
-        if adr is None:
-            continue
-        _, case_base = adr
-        # Confirm a `br` within the next few instructions (jump-table dispatch).
-        if not any(
-            _is_br_insn(words.get(insns[j].addr, 0))
-            for j in range(i, min(i + 6, len(insns)))
-        ):
-            continue
-
-        win = insns[max(0, i - 20): i + 2]
-
-        # CMP gate → range (number of table entries); record its index so the
-        # default-string search can be confined to the tight pre-dispatch region.
-        range_val = 0
-        cmp_idx = -1
-        for j in range(i - 1, max(i - 16, -1), -1):
-            cmp = _decode_cmp_imm(words.get(insns[j].addr, 0))
-            if cmp is None:
-                continue
-            _, imm = cmp
-            if imm <= 0 or imm > _SPARSE_MAX_RANGE:
-                break
-            nb = (_decode_bcond(words.get(insns[j + 1].addr, 0))
-                  if j + 1 < len(insns) else None)
-            range_val = range_from_unsigned_gate(nb, imm)
-            cmp_idx = j
-            break
-        if range_val < 2 or range_val > _SPARSE_MAX_RANGE:
-            continue
-
-        # ivar offset feeding the switch (association key)
-        ivar_off = _last_ivar_offset_in_window(ctx, win)
-        if ivar_off is None or ivar_off not in valid_offsets:
-            continue
-        if ivar_off in result:
-            continue
-
-        # Pre-loaded default/UNKNOWN string: the cfstring loaded in the tight
-        # region between the CMP gate and the dispatch (avoids the earlier
-        # dictionary-key cfstring for this field).
-        tight = insns[cmp_idx: i + 1] if cmp_idx >= 0 else win
-        cf_def = _block_cfstring_target(ctx, tight)
-        default_name = _read_enum_string(ctx, cf_def) if cf_def is not None else None
-
-        # Resolve the true entry width from the register-offset table load
-        # (ldrb→1, ldrh→2): map each load's base register to (width, index_reg).
-        # The index register is the field's value register — needed for the
-        # isolated-comparison scan below.
-        load_info: Dict[int, Tuple[int, int]] = {
-            rn: (esz, rm) for esz, rn, rm in _iter_table_loads(win, words)}
-
-        # The table base is an adrp+add target whose register also serves as the
-        # base of a register-offset load (the table read); its width gives the
-        # entry size unambiguously — no guessing.
-        best: List[Tuple[int, str]] = []
-        best_merge: Optional[int] = None
-        best_vreg: Optional[int] = None
-        # Anchor on the registers that ACTUALLY serve as a table-load base (from
-        # load_info), rather than scanning every register: each such base — with
-        # its decoded entry width and index (value) register — is a concrete
-        # table candidate, and its adrp+add target is the table base.  (Sorted by
-        # register number so ties resolve to the lowest, matching the prior
-        # x0..x28 scan order.)
-        for base_rn, (esize, vreg) in sorted(load_info.items()):
-            if esize not in (1, 2, 4):     # ldrb / ldrh / ldrsw tables (ldr x = pointer table)
-                continue
-            table_va = find_adrp_add_target(win, f"x{base_rn}")
-            if table_va is None or table_va == cf_def:
-                continue
-            pr, mt = _read_dictrep_switch_pairs(
-                ctx, case_base, table_va, esize, range_val, default_name)
-            if len(pr) > len(best):
-                best, best_merge, best_vreg = pr, mt, vreg
-        if len(best) >= 2:
-            # NOTE (TODO #54): the jump-table path deliberately does NOT apply a
-            # leading-sub bias.  A bias here is only correct for a DENSE 0-based
-            # table; but `best_vreg` is a low register (x8…) that the 20-instruction
-            # window reuses across several fields, so a neighbour's `sub #imm` passes
-            # the dest-register gate and wrongly shifts SPARSE enums (observed live on
-            # GeoServices: PlaceTypeHint/PlaceTypeLimit shifted +35, LaneClosureType
-            # +1).  The window-bleed guard that suffices for the pointer-table idiom
-            # below is not tight enough here, and no confirmed biased enum uses this
-            # path — the 3 known cases are all pointer-table.  Left unbiased on
-            # purpose; revisit only with a dominator-scoped sub search.
-            # Sparse high values may be encoded as isolated cmp+b.eq/b.ne
-            # comparisons between the dispatch and the merge block.
-            if best_merge is not None and best_vreg is not None:
-                have = {v for v, _ in best}
-                for v, nm in _scan_dictrep_isolated_cmps(
-                        ctx, insns, words, best_vreg, i, best_merge):
-                    if v not in have:
-                        best.append((v, nm))
-                        have.add(v)
-                best.sort(key=lambda p: p[0])
-            result[ivar_off] = best
-
-    # ── Pointer-table dispatch (e.g. CacheControlType) ────────────────────────
-    # A second idiom loads the value string directly from an 8-byte pointer table
-    # (`ldr xR, [table, value, lsl #3]`) instead of jumping to a per-value code
-    # block.  Anchor on that 64-bit register-offset load.
-    for i, ins in enumerate(insns):
-        d = _decode_ldr_reg_off(words.get(ins.addr, 0))
-        if d is None or d[0] != 8:        # need a 64-bit (pointer) load
-            continue
-        _esz, rn, idx_reg, _rt = d        # idx_reg = the value register feeding the table
-
-        range_val = _dictrep_cmp_range(insns, words, i)
-        # Upper bound is the 12-bit cmp-immediate ceiling (#59): the range comes
-        # from the same `cmp wN,#imm12; b.hi` gate the jump-table path uses, so a
-        # pointer table is structurally bounded by 2^12, not a tuned 512.  The
-        # route itself is by STRUCTURE (the 64-bit scaled load above), so a larger
-        # bound only lets a genuinely-dense pointer-table enum be read in full.
-        if range_val < 2 or range_val > _SPARSE_MAX_RANGE:
-            continue
-
-        lo = max(0, i - 16)
-        win = insns[lo: i + 1]
-        ivar_off = _last_ivar_offset_in_window(ctx, win)
-        if ivar_off is None or ivar_off not in valid_offsets or ivar_off in result:
-            continue
-
-        table_va = find_adrp_add_target(win, f"x{rn}")
-        if table_va is None:
-            continue
-
-        pairs = _read_dictrep_pointer_pairs(ctx, table_va, range_val)
-        if len(pairs) >= 2:
-            # A biased (e.g. 1-based) enum subtracts the bias into the index
-            # register before the table read: ``sub w<idx>, w<value>, #bias``.
-            # The pointer pairs are 0-based table indices, so add the bias back to
-            # recover the real enum values (TODO #54).  TWO guards keep this to the
-            # 3 census-confirmed cases:
-            #   • idx_reg gate — the sub's dest must be THIS load's index register,
-            #     so a neighbouring field's sub in the window can't bleed in.
-            #   • xAsString gate — a field with an xAsString:/StringAsX: selector has
-            #     its bias handled by that path; biasing it here would double-/mis-
-            #     bias it (e.g. resultStatus/laneClosureType have xAsString and are
-            #     NOT dictRep-only, so they stay out).
-            ivar_name = next((iv.name for iv in cls.ivars
-                              if iv.offset == ivar_off and iv.name), None)
-            if ivar_name and not _field_routes_through_xasstring(cls, st, ivar_name):
-                bias = _sub_imm_bias(insns, words, lo, i, dest_reg=idx_reg)
-                if bias:
-                    pairs = [(v + bias, nm) for v, nm in pairs]
-            result[ivar_off] = pairs
-
-    # ── Compare-chain / binary-search dispatch (newer toolchain) ──────────────
-    # A third idiom (observed on a macOS system dyld cache's GeoServices, e.g.
-    # GEOBatchPlaceResult/GEOETAResult, in a build otherwise identical to this
-    # session's other jump-table fixes) has no `adr`/`br` jump table at all: the
-    # int value is compared directly against a BINARY-SEARCH TREE of range and
-    # exact immediates (`cmp w8,#N; b.le/b.gt/b.eq/b.ne target`), each leaf
-    # loading its cfstring the same way the jump-table case's arms do.  The
-    # leaf-level pairs are exactly what `_harvest_isolated_compares`/
-    # `_harvest_cbz_value0` already extract from a `xAsString:` method's OWN
-    # compare chain — reused verbatim here since both scan flat instruction
-    # pairs and don't care about the surrounding tree shape.
-    #
-    # Each field's chain is anchored on its OWN ivar-offset lookup
-    # (`adrp; ldrsw Xn,[Xn,#off]` — the value load's address computation),
-    # NOT on its has-bits `tbz`/`tbnz` gate.  The gate is a poor anchor for
-    # two reasons, both confirmed directly:
-    #   * not every `tbz`/`tbnz` is a field gate (some are unrelated, e.g. a
-    #     pointer-authentication bit-62 test), and splitting on every one can
-    #     produce an over-wide block that runs into a LATER field's own lookup
-    #     (GEOBatchPlaceResult misattributed its `_statusCode` chain to
-    #     `_placeResult`'s offset this way);
-    #   * a compiler that hoists the has-bits byte and tests every field's bit
-    #     in one `tbnz` cascade lays each field's gated block OUT OF LINE, so
-    #     the chain is not adjacent to (or after) its own gate in linear
-    #     order at all — found by the f24 synthetic fixture: with four gated
-    #     fields the first field's chain sat after the function's epilogue (a
-    #     tail `b`, so the linear scan runs on past it), and
-    #     the gate-anchored window for it held an unrelated field's tail.
-    # The ivar-offset lookup has neither problem: it is what selects the
-    # field, and it always immediately precedes the value load the chain
-    # compares.  The chain itself is pure compare/branch/cfstring-address
-    # logic with no `bl` calls (the runtime helpers that consume the matched
-    # string, or handle the "value not in the table" default, are only
-    # reached AFTER the chain converges) — verified directly
-    # (GEOBatchPlaceResult's chain: 53 instructions, zero `bl`s, then a `bl`
-    # at the merge point) — so each block runs from its lookup to the first
-    # `bl` or the next lookup, whichever is first, i.e. exactly one field's
-    # own chain.  Verified against golden and the macOS system cache
-    # (GEOBatchPlaceResult.statusCode: all 9 values recovered exactly,
-    # including 1/5/60 → STATUS_FAILED/INVALID_REQUEST/VERSION_MISMATCH).
-    lookups = _ivar_offset_lookups(ctx, insns)
-    for bi, (start, ivar_off) in enumerate(lookups):
-        next_lookup = lookups[bi + 1][0] if bi + 1 < len(lookups) else len(insns)
-        stop = next(
-            (j for j in range(start, next_lookup) if insns[j].mnemonic == 'bl'),
-            next_lookup)
-        block = insns[start:stop]
-        if len(block) < 4:
-            continue
-        if ivar_off not in valid_offsets or ivar_off in result:
-            continue
-        pairs: List[Tuple[int, str]] = []
-        seen_values: Set[int] = set()
-
-        def _add(value: int, name: str) -> None:
-            if value not in seen_values:
-                seen_values.add(value)
-                pairs.append((value, name))
-
-        _harvest_isolated_compares(ctx, block, words, _add)
-        _harvest_cbz_value0(ctx, block, words, _add)
-        if len(pairs) >= 2:
-            pairs.sort(key=lambda p: p[0])
-            result[ivar_off] = pairs
-
-    return result
+    # The field's int is driven through the function's own code, value by value, to the
+    # CFString it hands to the dictionary -- see proto/dictrep_flow.py.  This replaces the
+    # earlier look-back-window passes (jump table / pointer table / compare chain).
+    flow = Flow(ctx, insns, _jump_table_arm_addrs(ctx, insns))
+    return flow.enum_maps({iv.offset for iv in cls.ivars}, wanted)
 
 
 def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
@@ -2114,12 +1660,15 @@ def _collect_enum_definitions(
     dictrep_pairs: Dict[str, List[Tuple[int, str]]] = {}
     if any(f.type_name in ("int32", "uint32") and f.type_class is None
            for f in fields):
-        dr_enums = _harvest_dictrep_enums(ctx, cls, st)
+        ivar_off_by_pname = {
+            _proto_name(iv.name): iv.offset
+            for iv in cls.ivars if iv.name
+        }
+        untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
+                           if f.type_name in ("int32", "uint32") and f.type_class is None
+                           and f.name in ivar_off_by_pname}
+        dr_enums = _harvest_dictrep_enums(ctx, cls, st, wanted=untyped_offsets)
         if dr_enums:
-            ivar_off_by_pname = {
-                _proto_name(iv.name): iv.offset
-                for iv in cls.ivars if iv.name
-            }
             cls_prefix = _class_to_proto_name(cls.name, _pfx)
             for fld in fields:
                 if fld.type_name not in ("int32", "uint32") or fld.type_class is not None:
@@ -2128,7 +1677,7 @@ def _collect_enum_definitions(
                 if off is None or off not in dr_enums:
                     continue
                 pairs = dr_enums[off]
-                if len(pairs) < 2:
+                if not pairs:
                     continue
                 qualified = _qualify_enum_name(
                     cls_prefix, fld.name[0].upper() + fld.name[1:])
