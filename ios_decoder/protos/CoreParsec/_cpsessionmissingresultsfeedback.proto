@@ -2,7 +2,6 @@
 // Serializer: Apple PBCodable (ObjC)
 // Source: CoreParsec
 // Package: _cpsessionmissingresultsfeedback  |  1 message  |  2 confirmed field numbers (100%)
-// Note: 1 field(s) with unresolved message types emitted as bytes — see inline comments
 
 edition = "2023";
 
@@ -11,5 +10,5 @@ package _cpsessionmissingresultsfeedback;
 
 message _CPSessionMissingResultsFeedback {
   uint64 timestamp = 1;
-  repeated bytes results = 2;  // unresolved: PAREngagedResult; type guessed from field name (name-suffix heuristic / Strategy 2), unverified — see FIELD_TYPE_INFERENCE.md
+  repeated bytes results = 2;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
 }

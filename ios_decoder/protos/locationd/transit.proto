@@ -24,11 +24,11 @@ message TRANSITPbLocationFingerprintV1 {
 }
 
 message TRANSITPbLocationFingerprints {
-  repeated TRANSITPbLocationFingerprint locationFingerprints = 1;  // type guessed from field name (name-suffix heuristic / Strategy 2), unverified — see FIELD_TYPE_INFERENCE.md
+  repeated TRANSITPbLocationFingerprint locationFingerprints = 1;
 }
 
 message TRANSITPbLocationFingerprintsV1 {
-  repeated TRANSITPbLocationFingerprint locationFingerprints = 1;  // type guessed from field name (name-suffix heuristic / Strategy 2), unverified — see FIELD_TYPE_INFERENCE.md
+  repeated TRANSITPbLocationFingerprintV1 locationFingerprints = 1;
 }
 
 message TRANSITPbMacModePair {
