@@ -331,11 +331,13 @@ logMessages {
     logMsgStates {
       stateType: LOG_MSG_STATE_TYPE_CAR_PLAY
       carPlay {
+        isConnected: false
       }
     }
     logMsgStates {
       stateType: LOG_MSG_STATE_TYPE_DEVICE_SETTINGS
       deviceSettings {
+        supportsAdvancedMap: false
       }
     }
     logMsgStates {
@@ -352,12 +354,15 @@ logMessages {
       deviceIdentifier {
         deviceOsVersion: "16.7.11.20H360"
         deviceHwIdentifier: "iPhone10,1"
+        isInternalTool: false
+        isInternalInstall: false
       }
     }
     logMsgStates {
       stateType: LOG_MSG_STATE_TYPE_EXPERIMENTS
       experiments {
         datasetAbStatus {
+          datasetId: 0
         }
       }
     }
@@ -376,6 +381,7 @@ logMessages {
         relativeTimestamp: 793048500
         eventTime {
           timeRoundedToHour: 793047600
+          timezoneOffsetFromGmtInHours: 0
         }
         ageOfSessionIdInSeconds: 450835
       }
@@ -388,20 +394,15 @@ logMessages {
       requestAppIdentifier: "com.apple.wifi.ThreeBarsXPCService"
       totalTime: 2073
       httpResponseCode: 200
+      redirectCount: 0
       manifestEnv: "prod"
       tilesetId: 2602162
+      mptcpServiceType: LOG_MSG_EVENT_NETWORK_MPTCP_SERVICE_TYPE_NONE
       serviceIpAddress: "17.167.200.74:443"
       requestAppIdMinorVer: "1"
       samplingRate: 10000
       taskMetrics {
-      }
-    }
-  }
-  logMessageType: LOG_MESSAGE_TYPE_LONG_SESSION_USAGE
-}
-Response body (decoded):
-apple header: version=1, responseType=1017, payloadLength=0
-(empty payload)
+...
 ```
 
 <!-- END examples -->
