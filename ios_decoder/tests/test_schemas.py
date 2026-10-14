@@ -88,3 +88,25 @@ def test_cache_invalidated_when_an_import_changes(tmp_path):
     newer = cache.stat().st_mtime + 10
     os.utime(d / "common.proto", (newer, newer))
     assert not reg._cache_is_fresh(cache, "top.proto")
+
+
+# The committed schemas are apple_protobuf_extractor output, which declares explicit presence
+# (edition 2023): Apple's writeTo: writes a field whose has-bit is set even when it is 0/NO/"",
+# and under proto3 such a value would be dropped as indistinguishable from an absent field.
+def test_committed_protos_declare_explicit_presence():
+    from ios_decoder.paths import PROTOS_ROOT
+    protos = sorted(PROTOS_ROOT.glob("*/*.proto"))
+    assert protos
+    for p in protos:
+        assert 'edition = "2023";' in p.read_text(encoding="utf-8").splitlines(), p.name
+
+
+def test_wire_zero_is_decoded_with_committed_schema(tmp_path):
+    from ios_decoder.paths import DEFAULT_PROTO_DIRS
+    reg = SchemaRegistry(DEFAULT_PROTO_DIRS, cache_dir=tmp_path / "cache")
+    # ABAssignmentRequest.clientMetadata (3) { enablePreflightVenues (19) = 0 }, as every captured
+    # A/B request sends it
+    out, unknown, nested = reg.decode_with_coverage("geo.proto", "geo.ABAssignmentRequest",
+                                                    bytes.fromhex("1a03980100"))
+    assert out.splitlines() == ["clientMetadata {", "  enablePreflightVenues: false", "}"]
+    assert unknown == [] and nested == 0

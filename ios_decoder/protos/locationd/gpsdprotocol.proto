@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: proto.gpsd  |  44 messages  |  200 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package proto.gpsd;
 
@@ -65,7 +65,7 @@ enum LtlInfoType {
 }
 
 enum Request_Type {
-  PROTOBUF_DEFAULT_2 = 0;  // renamed from "PROTOBUF_DEFAULT" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  PROTOBUF_DEFAULT_2 = 0;  // renamed from "PROTOBUF_DEFAULT" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   START = 1;
   STOP = 2;
   RESET = 3;

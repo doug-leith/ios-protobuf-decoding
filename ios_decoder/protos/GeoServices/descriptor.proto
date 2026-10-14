@@ -3,21 +3,21 @@
 // Source: GeoServices
 // Package: google.protobuf  |  27 messages  |  94 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package google.protobuf;
 
 // ── Enum types ──────────────────────────────────────────────────────────
 
 enum FieldDescriptorProto_Label {
-  FIELD_DESCRIPTOR_PROTO_LABEL_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  FIELD_DESCRIPTOR_PROTO_LABEL_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LABEL_OPTIONAL = 1;
   LABEL_REQUIRED = 2;
   LABEL_REPEATED = 3;
 }
 
 enum FieldDescriptorProto_Type {
-  FIELD_DESCRIPTOR_PROTO_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  FIELD_DESCRIPTOR_PROTO_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   TYPE_DOUBLE = 1;
   TYPE_FLOAT = 2;
   TYPE_INT64 = 3;
@@ -45,7 +45,7 @@ enum FieldOptions_CType {
 }
 
 enum FileOptions_OptimizeMode {
-  FILE_OPTIONS_OPTIMIZE_MODE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  FILE_OPTIONS_OPTIMIZE_MODE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   SPEED = 1;
   CODE_SIZE = 2;
   LITE_RUNTIME = 3;

@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: clp.logentry.tropicalsavanna  |  3 messages  |  8 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package clp.logentry.tropicalsavanna;
 

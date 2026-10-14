@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: proto.gnss  |  12 messages  |  63 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package proto.gnss;
 
@@ -17,7 +17,7 @@ enum DeleteGnssDataBitMask {
 }
 
 enum DeviceMountState {
-  DEVICE_MOUNT_STATE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  DEVICE_MOUNT_STATE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   DMS_kUnknown = 1;
   DMS_kMounted = 2;
   DMS_kNotMounted = 3;

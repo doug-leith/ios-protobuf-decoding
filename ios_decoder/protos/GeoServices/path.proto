@@ -3,14 +3,14 @@
 // Source: GeoServices
 // Package: maps.path_codec.geo3  |  3 messages  |  13 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package maps.path_codec.geo3;
 
 // ── Enum types ──────────────────────────────────────────────────────────
 
 enum RoutingPathPoint_Type {
-  ROUTING_PATH_POINT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ROUTING_PATH_POINT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   Support = 1;
   Geometry = 2;
 }

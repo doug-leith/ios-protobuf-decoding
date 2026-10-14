@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: clp.logentry.privatedata  |  80 messages  |  480 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package clp.logentry.privatedata;
 
@@ -80,7 +80,7 @@ enum DaemonLocationPrivate_UndulationModelType {
 }
 
 enum DaemonLocation_ClientLocationSuitabilityType {
-  ST_UNKNOWN_2 = 0;  // renamed from "ST_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  ST_UNKNOWN_2 = 0;  // renamed from "ST_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   ST_ROUTE_GUIDANCE = 1;
   ST_OTHER = 2;
   ST_ANY = 65535;
@@ -272,7 +272,7 @@ enum PlaceInference_UserSpecificPlaceType {
 }
 
 enum ReachabilityState_ReachabilityType {
-  RT_UNKNOWN_2 = 0;  // renamed from "RT_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  RT_UNKNOWN_2 = 0;  // renamed from "RT_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   RT_UNAVAILABLE = 1;
   RT_SMALL = 2;
   RT_LARGE = 3;

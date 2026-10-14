@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: alcm  |  10 messages  |  51 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package alcm;
@@ -187,7 +187,7 @@ enum ALCMWorkoutEventDeprecatedWorkoutType {
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "ALCMWorkoutEvent" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "ALCMWorkoutEvent" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum ALCMWorkoutEventEnum {
   ALCM_WORKOUT_EVENT_K_DID_START = 0;
   ALCM_WORKOUT_EVENT_K_DID_STOP = 1;

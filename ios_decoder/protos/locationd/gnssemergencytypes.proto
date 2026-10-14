@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: proto.gnss.emergency  |  95 messages  |  507 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package proto.gnss.emergency;
 

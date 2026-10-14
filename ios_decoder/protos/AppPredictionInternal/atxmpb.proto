@@ -3,7 +3,7 @@
 // Source: AppPredictionInternal
 // Package: atxmpb  |  18 messages  |  113 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package atxmpb;
@@ -26,7 +26,7 @@ enum ATXMPBAnchorModelEngagementTrackerEngagementType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ATXMPBAnchorModelPhaseFilterTrackerPhaseDescription {
-  ATXMPB_ANCHOR_MODEL_PHASE_FILTER_TRACKER_PHASE_DESCRIPTION_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ATXMPB_ANCHOR_MODEL_PHASE_FILTER_TRACKER_PHASE_DESCRIPTION_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ATXMPB_ANCHOR_MODEL_PHASE_FILTER_TRACKER_PHASE_DESCRIPTION_FIRST = 1;
   ATXMPB_ANCHOR_MODEL_PHASE_FILTER_TRACKER_PHASE_DESCRIPTION_SECOND = 2;
 }
@@ -61,14 +61,14 @@ enum ATXMPBAppClipSuppressionTrackerSuppressionType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ATXMPBBlendingHomeScreenWidgetTopOfStackSelectionTrackerSelectionType {
-  ATXMPB_BLENDING_HOME_SCREEN_WIDGET_TOP_OF_STACK_SELECTION_TRACKER_SELECTION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ATXMPB_BLENDING_HOME_SCREEN_WIDGET_TOP_OF_STACK_SELECTION_TRACKER_SELECTION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ATXMPB_BLENDING_HOME_SCREEN_WIDGET_TOP_OF_STACK_SELECTION_TRACKER_SELECTION_TYPE_N_PLUS_ONE = 1;
   ATXMPB_BLENDING_HOME_SCREEN_WIDGET_TOP_OF_STACK_SELECTION_TRACKER_SELECTION_TYPE_STACK_ROTATION = 2;
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ATXMPBBlendingWidgetRotationEngagementTrackerEngagementType {
-  ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_ENGAGEMENT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_ENGAGEMENT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_ENGAGEMENT_TYPE_NOT_SEEN = 1;
   ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_ENGAGEMENT_TYPE_SHOWN = 2;
   ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_ENGAGEMENT_TYPE_USER_ROTATE = 3;
@@ -81,7 +81,7 @@ enum ATXMPBBlendingWidgetRotationEngagementTrackerEngagementType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ATXMPBBlendingWidgetRotationEngagementTrackerSelectionType {
-  ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_SELECTION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_SELECTION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_SELECTION_TYPE_N_PLUS_ONE = 1;
   ATXMPB_BLENDING_WIDGET_ROTATION_ENGAGEMENT_TRACKER_SELECTION_TYPE_STACK_ROTATION = 2;
 }

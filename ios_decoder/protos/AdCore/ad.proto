@@ -3,7 +3,7 @@
 // Source: AdCore
 // Package: ad  |  23 messages  |  132 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package ad;
@@ -18,7 +18,7 @@ package ad;
 // reliable. Details: ENUM_TYPE_NAMES.md
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "ADAnalyticsEvent" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "ADAnalyticsEvent" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum ADAnalyticsEventEnum {
   AD_ANALYTICS_EVENT_PREROLL_REQUESTED = 0;
   AD_ANALYTICS_EVENT_PRIVACY_USER_TRANSPARENCY_DID_APPEAR = 1;
@@ -118,7 +118,7 @@ enum ADUserTargetingPropertiesDeviceModes {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ADUserTargetingPropertiesOverrideType {
-  AD_USER_TARGETING_PROPERTIES_OVERRIDE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  AD_USER_TARGETING_PROPERTIES_OVERRIDE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   AD_USER_TARGETING_PROPERTIES_OVERRIDE_TYPE_NO_OVERRIDE = 11000;
   AD_USER_TARGETING_PROPERTIES_OVERRIDE_TYPE_ODML_DATA = 11001;
 }

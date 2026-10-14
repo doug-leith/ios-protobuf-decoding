@@ -4,7 +4,7 @@
 // Package: geo  |  1671 messages  |  8021 confirmed field numbers (100%)
 // Note: 23 field(s) with unresolved message types emitted as bytes — see inline comments
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package geo;
@@ -795,7 +795,7 @@ enum AnnotatedItemStyle {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum AnnouncementReleasePhase {
-  ANNOUNCEMENT_RELEASE_PHASE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ANNOUNCEMENT_RELEASE_PHASE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ANNOUNCEMENT_RELEASE_PHASE_PRODUCTION = 1;
   ANNOUNCEMENT_RELEASE_PHASE_INTERNAL = 2;
   ANNOUNCEMENT_RELEASE_PHASE_BETA = 3;
@@ -892,7 +892,7 @@ enum ArGuidanceType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ArSessionCollectionCollectionTrigger {
-  AR_SESSION_COLLECTION_COLLECTION_TRIGGER_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  AR_SESSION_COLLECTION_COLLECTION_TRIGGER_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   AR_SESSION_COLLECTION_COLLECTION_TRIGGER_UNKNOWN = 1;
   AR_SESSION_COLLECTION_COLLECTION_TRIGGER_START_AR = 2;
   AR_SESSION_COLLECTION_COLLECTION_TRIGGER_END_AR = 3;
@@ -902,7 +902,7 @@ enum ArSessionCollectionCollectionTrigger {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ArrivalRegionAction {
-  ARRIVAL_REGION_ACTION_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ARRIVAL_REGION_ACTION_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ARRIVAL_REGION_ACTION_NO_ACTION = 1;
   ARRIVAL_REGION_ACTION_ISSUE_ARRIVAL = 2;
   ARRIVAL_REGION_ACTION_ISSUE_ARRIVAL_OFF_ROUTE = 3;
@@ -963,7 +963,7 @@ enum AttributionType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum AudioDeviceType {
-  AUDIO_DEVICE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  AUDIO_DEVICE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   AUDIO_DEVICE_TYPE_BT_HFP_ONLY = 1;
   AUDIO_DEVICE_TYPE_BT_COMBO = 2;
   AUDIO_DEVICE_TYPE_OTHER = 3;
@@ -1067,7 +1067,7 @@ enum AutocompleteSectionContentType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum AutomobileOptionsTrafficType {
-  AUTOMOBILE_OPTIONS_TRAFFIC_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  AUTOMOBILE_OPTIONS_TRAFFIC_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   AUTOMOBILE_OPTIONS_TRAFFIC_TYPE_STATIC_SPEEDS = 1;
   AUTOMOBILE_OPTIONS_TRAFFIC_TYPE_HISTORICAL_SPEEDS = 2;
   AUTOMOBILE_OPTIONS_TRAFFIC_TYPE_LIVE_SPEEDS = 3;
@@ -1254,7 +1254,7 @@ enum CacheMissType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum CandidateFilterReasonType {
-  CANDIDATE_FILTER_REASON_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  CANDIDATE_FILTER_REASON_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   CANDIDATE_FILTER_REASON_TYPE_NONE = 15300;
   CANDIDATE_FILTER_REASON_TYPE_OUTSIDE_VIEWPORT = 15301;
   CANDIDATE_FILTER_REASON_TYPE_UNRESOLVED_PLACE = 15302;
@@ -1504,7 +1504,7 @@ enum ClientCapabilitiesSupportsMultipointRoutings {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ClientCapabilitiesTransitMarketSupport {
-  CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_VERSION_1 = 1;
   CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_VERSION_2 = 2;
   CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_VERSION_3 = 3;
@@ -2608,7 +2608,7 @@ enum DirectionsResponseSupportedTransportTypes {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum DisplayType {
-  DISPLAY_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  DISPLAY_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   DISPLAY_TYPE_MAP = 1;
   DISPLAY_TYPE_NAVIGATION = 2;
 }
@@ -2792,7 +2792,7 @@ enum EnrouteNoticeType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ErrorType {
-  ERROR_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ERROR_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ERROR_TYPE_UNKNOWN = 1;
   ERROR_TYPE_NO_NETWORK = 2;
   ERROR_TYPE_TIMEOUT = 3;
@@ -2808,7 +2808,7 @@ enum ExtendedGeoLookupResultsStatus {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ExtensionSupport {
-  EXTENSION_SUPPORT_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  EXTENSION_SUPPORT_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   EXTENSION_SUPPORT_ALLOW_APP = 1;
   EXTENSION_SUPPORT_OFFER_APP = 2;
   EXTENSION_SUPPORT_BLACKLIST_APP = 3;
@@ -3264,7 +3264,7 @@ enum GenericSubstitutesWaypointCategory {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum GenericTileType {
-  GENERIC_TILE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  GENERIC_TILE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   GENERIC_TILE_TYPE_WATER = 1;
   GENERIC_TILE_TYPE_NO_TILE = 2;
 }
@@ -3619,7 +3619,7 @@ enum JunctionInfoManeuverType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LPRLPRFillRuleFillType {
-  LPRLPR_FILL_RULE_FILL_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  LPRLPR_FILL_RULE_FILL_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LPRLPR_FILL_RULE_FILL_TYPE_ALPHABET_OR_NUMERIC = 1;
   LPRLPR_FILL_RULE_FILL_TYPE_ALPHABET = 2;
   LPRLPR_FILL_RULE_FILL_TYPE_NUMERIC = 3;
@@ -3627,7 +3627,7 @@ enum LPRLPRFillRuleFillType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LPRRegionInfoRoutingRequiredFields {
-  LPR_REGION_INFO_ROUTING_REQUIRED_FIELDS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  LPR_REGION_INFO_ROUTING_REQUIRED_FIELDS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LPR_REGION_INFO_ROUTING_REQUIRED_FIELDS_LICENSE_PLATE = 1;
   LPR_REGION_INFO_ROUTING_REQUIRED_FIELDS_POWER_TYPE = 2;
   LPR_REGION_INFO_ROUTING_REQUIRED_FIELDS_VEHICLE_TYPE = 3;
@@ -3635,7 +3635,7 @@ enum LPRRegionInfoRoutingRequiredFields {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LPRTargetCharType {
-  LPR_TARGET_CHAR_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  LPR_TARGET_CHAR_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LPR_TARGET_CHAR_TYPE_ANY = 1;
   LPR_TARGET_CHAR_TYPE_ALPHABET = 2;
   LPR_TARGET_CHAR_TYPE_NUMERIC = 3;
@@ -3643,7 +3643,7 @@ enum LPRTargetCharType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LPRTimeConditionDayOfWeeks {
-  LPR_TIME_CONDITION_DAY_OF_WEEKS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  LPR_TIME_CONDITION_DAY_OF_WEEKS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LPR_TIME_CONDITION_DAY_OF_WEEKS_SUNDAY = 1;
   LPR_TIME_CONDITION_DAY_OF_WEEKS_MONDAY = 2;
   LPR_TIME_CONDITION_DAY_OF_WEEKS_TUESDAY = 3;
@@ -3798,7 +3798,7 @@ enum LocationTransportType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LocationType {
-  LOCATION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  LOCATION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LOCATION_TYPE_GPS = 1;
   LOCATION_TYPE_WIFI = 2;
   LOCATION_TYPE_CELL = 3;
@@ -5257,7 +5257,7 @@ enum LogMsgEventPredExTrainingDataPreferredTransportMode {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LogMsgEventProactiveSuggestionInteractionSessionListType {
-  LIST_TYPE_UNKNOWN_2 = 0;  // renamed from "LIST_TYPE_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  LIST_TYPE_UNKNOWN_2 = 0;  // renamed from "LIST_TYPE_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   LIST_TYPE_MAPS_WIDGET = 1;
   LIST_TYPE_SEARCH_TRAY = 2;
   LIST_TYPE_CAR_PLAY = 3;
@@ -5438,7 +5438,7 @@ enum LogMsgEventTimeToLeaveHypothesisTtlUiNotificationShown {
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "LogMsgEventTimeToLeaveInitialTravelTime" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "LogMsgEventTimeToLeaveInitialTravelTime" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum LogMsgEventTimeToLeaveInitialTravelTimeEnum {
   LOG_MSG_EVENT_TIME_TO_LEAVE_INITIAL_TRAVEL_TIME_TTL_INITIAL_TRAVEL_TIME_BUCKET_UNKNOWN = 0;
   LOG_MSG_EVENT_TIME_TO_LEAVE_INITIAL_TRAVEL_TIME_LESS_THAN_15_M = 1;
@@ -12507,7 +12507,7 @@ enum LogMsgStateMapUIShownActiveNavMode {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum LogMsgStateMapUIWindowSize {
-  LOG_MSG_STATE_MAP_UI_WINDOW_SIZE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  LOG_MSG_STATE_MAP_UI_WINDOW_SIZE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   LOG_MSG_STATE_MAP_UI_WINDOW_SIZE_FULL = 1;
   LOG_MSG_STATE_MAP_UI_WINDOW_SIZE_DEFAULT = 2;
   LOG_MSG_STATE_MAP_UI_WINDOW_SIZE_MODERATE = 3;
@@ -14419,14 +14419,14 @@ enum MapQueryClientImgFmt {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum MapQueryRequestType {
-  MAP_QUERY_REQUEST_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  MAP_QUERY_REQUEST_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   MAP_QUERY_REQUEST_TYPE_SEARCH_REQUEST_TYPE = 1;
   MAP_QUERY_REQUEST_TYPE_GEOCODE_REQUEST_TYPE = 2;
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum MapRegionSourceType {
-  MAP_REGION_SOURCE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  MAP_REGION_SOURCE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   MAP_REGION_SOURCE_TYPE_UNKNOWN = 1;
   MAP_REGION_SOURCE_TYPE_BASEMAP_CURATED = 2;
   MAP_REGION_SOURCE_TYPE_REV_POLYGON_PADDED = 3;
@@ -14459,7 +14459,7 @@ enum MapServiceTraitsCarHeadunitConnectionType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum MapServiceTraitsCarHeadunitInteractionModel {
-  MAP_SERVICE_TRAITS_CAR_HEADUNIT_INTERACTION_MODEL_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  MAP_SERVICE_TRAITS_CAR_HEADUNIT_INTERACTION_MODEL_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   MAP_SERVICE_TRAITS_CAR_HEADUNIT_INTERACTION_MODEL_CAR_HIFI = 1;
   MAP_SERVICE_TRAITS_CAR_HEADUNIT_INTERACTION_MODEL_CAR_LOFI = 2;
   MAP_SERVICE_TRAITS_CAR_HEADUNIT_INTERACTION_MODEL_CAR_PHYSICAL = 3;
@@ -15103,7 +15103,7 @@ enum OriginalWaypointRoutePurpose {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum OverallFilterReasonType {
-  OVERALL_FILTER_REASON_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  OVERALL_FILTER_REASON_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   OVERALL_FILTER_REASON_TYPE_NONE = 15400;
   OVERALL_FILTER_REASON_TYPE_NO_MATCHING_SCOPE = 15401;
   OVERALL_FILTER_REASON_TYPE_NON_POI_ORGANIC_RESULTS = 15402;
@@ -15139,8 +15139,8 @@ enum PBTransitTriggerRegionTransition {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDActionDataFilterLinkType {
-  LINK_TYPE_UNKNOWN_2 = 0;  // renamed from "LINK_TYPE_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
-  LINK_TYPE_QUICK_LINK_2 = 1;  // renamed from "LINK_TYPE_QUICK_LINK" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  LINK_TYPE_UNKNOWN_2 = 0;  // renamed from "LINK_TYPE_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  LINK_TYPE_QUICK_LINK_2 = 1;  // renamed from "LINK_TYPE_QUICK_LINK" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   LINK_TYPE_APP_CLIP = 2;
   LINK_TYPE_EXTENSION = 3;
 }
@@ -15486,7 +15486,7 @@ enum PDCategorySearchParametersPlaceSummaryRevision {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDClientMetadataRequiredVersion {
-  PD_CLIENT_METADATA_REQUIRED_VERSION_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_CLIENT_METADATA_REQUIRED_VERSION_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_CLIENT_METADATA_REQUIRED_VERSION_1 = 1;
   PD_CLIENT_METADATA_REQUIRED_VERSION_2 = 2;
   PD_CLIENT_METADATA_REQUIRED_VERSION_3 = 3;
@@ -15679,14 +15679,14 @@ enum PDFeatureIdGeocodingParametersFormattedAddressType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDGroundDataBuildCapabilitys {
-  PD_GROUND_DATA_BUILD_CAPABILITYS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_GROUND_DATA_BUILD_CAPABILITYS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_GROUND_DATA_BUILD_CAPABILITYS_PANORAMIC = 1;
   PD_GROUND_DATA_BUILD_CAPABILITYS_WOBBLY = 2;
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDGroundDataBuildType {
-  PD_GROUND_DATA_BUILD_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_GROUND_DATA_BUILD_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_GROUND_DATA_BUILD_TYPE_T300 = 1;
   PD_GROUND_DATA_BUILD_TYPE_T400 = 2;
   PD_GROUND_DATA_BUILD_TYPE_T392_C = 3;
@@ -15719,7 +15719,7 @@ enum PDIpGeoLookupResultStatus {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDLocationDirectedSearchParametersSearchType {
-  SEARCH_TYPE_UNKNOWN_2 = 0;  // renamed from "SEARCH_TYPE_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  SEARCH_TYPE_UNKNOWN_2 = 0;  // renamed from "SEARCH_TYPE_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   SEARCH_TYPE_DEFAULT = 1;
   SEARCH_TYPE_NEAREST_TRANSIT = 2;
 }
@@ -15995,7 +15995,7 @@ enum PDQuickLinkItemLinkType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDQuickLinkItemRelationship {
-  PD_QUICK_LINK_ITEM_RELATIONSHIP_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_QUICK_LINK_ITEM_RELATIONSHIP_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_QUICK_LINK_ITEM_RELATIONSHIP_OWNER = 1;
   PD_QUICK_LINK_ITEM_RELATIONSHIP_AUTHORIZED = 2;
   PD_QUICK_LINK_ITEM_RELATIONSHIP_OTHER = 3;
@@ -16045,7 +16045,7 @@ enum PDReverseGeocodingParametersPlaceTypeLimit {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSSearchVenueFilterSearchType {
-  SEARCH_TYPE_UNKNOWN_3 = 0;  // renamed from "SEARCH_TYPE_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  SEARCH_TYPE_UNKNOWN_3 = 0;  // renamed from "SEARCH_TYPE_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   SEARCH_TYPE_INSIDE = 1;
   SEARCH_TYPE_BUILDING_ONLY = 2;
 }
@@ -16082,7 +16082,7 @@ enum PDSearchBusinessIntentBusinessType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchChainInfoRelationshipTypes {
-  PD_SEARCH_CHAIN_INFO_RELATIONSHIP_TYPES_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_CHAIN_INFO_RELATIONSHIP_TYPES_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_CHAIN_INFO_RELATIONSHIP_TYPES_DIFFERENT_FROM = 1;
   PD_SEARCH_CHAIN_INFO_RELATIONSHIP_TYPES_PARENT_OF = 2;
   PD_SEARCH_CHAIN_INFO_RELATIONSHIP_TYPES_CHILD_OF = 3;
@@ -16102,7 +16102,7 @@ enum PDSearchFieldPlaceholderParametersVersion {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchGeoParsingResultTagSource {
-  PD_SEARCH_GEO_PARSING_RESULT_TAG_SOURCE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_GEO_PARSING_RESULT_TAG_SOURCE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_GEO_PARSING_RESULT_TAG_SOURCE_CRF = 1;
   PD_SEARCH_GEO_PARSING_RESULT_TAG_SOURCE_LSTM = 2;
   PD_SEARCH_GEO_PARSING_RESULT_TAG_SOURCE_WFST = 3;
@@ -16248,7 +16248,7 @@ enum PDSearchQueryFuzzyMatchV2MetadataRewriteTypes {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchQueryGeoNormalizerMetadataNormalizers {
-  PD_SEARCH_QUERY_GEO_NORMALIZER_METADATA_NORMALIZERS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_QUERY_GEO_NORMALIZER_METADATA_NORMALIZERS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_QUERY_GEO_NORMALIZER_METADATA_NORMALIZERS_NORMALIZE = 1;
   PD_SEARCH_QUERY_GEO_NORMALIZER_METADATA_NORMALIZERS_TOKEN_DROP = 2;
   PD_SEARCH_QUERY_GEO_NORMALIZER_METADATA_NORMALIZERS_SEGMENTATION = 3;
@@ -16258,7 +16258,7 @@ enum PDSearchQueryGeoNormalizerMetadataNormalizers {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchQueryGeoTagMetadataGeoRewriteTypes {
-  PD_SEARCH_QUERY_GEO_TAG_METADATA_GEO_REWRITE_TYPES_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_QUERY_GEO_TAG_METADATA_GEO_REWRITE_TYPES_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_QUERY_GEO_TAG_METADATA_GEO_REWRITE_TYPES_PREFIX_TO_FIRST_DIGIT = 1;
   PD_SEARCH_QUERY_GEO_TAG_METADATA_GEO_REWRITE_TYPES_MX_COLONIA_STRICT = 2;
   PD_SEARCH_QUERY_GEO_TAG_METADATA_GEO_REWRITE_TYPES_ON_IN = 3;
@@ -16269,7 +16269,7 @@ enum PDSearchQueryGeoTagMetadataGeoRewriteTypes {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchQueryGeoTagMetadataTagSources {
-  PD_SEARCH_QUERY_GEO_TAG_METADATA_TAG_SOURCES_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_QUERY_GEO_TAG_METADATA_TAG_SOURCES_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_QUERY_GEO_TAG_METADATA_TAG_SOURCES_CRF = 1;
   PD_SEARCH_QUERY_GEO_TAG_METADATA_TAG_SOURCES_LSTM = 2;
   PD_SEARCH_QUERY_GEO_TAG_METADATA_TAG_SOURCES_WFST = 3;
@@ -16338,7 +16338,7 @@ enum PDSearchQueryIntentMetadataRewrittenQueryTypes {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchQuerySpellCorrectionMetadataResultStatus {
-  PD_SEARCH_QUERY_SPELL_CORRECTION_METADATA_RESULT_STATUS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_QUERY_SPELL_CORRECTION_METADATA_RESULT_STATUS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_QUERY_SPELL_CORRECTION_METADATA_RESULT_STATUS_NOT_IN_WHITE_LIST = 1;
   PD_SEARCH_QUERY_SPELL_CORRECTION_METADATA_RESULT_STATUS_SPELL_CORRECTION_NOT_ATTEMPTED = 2;
   PD_SEARCH_QUERY_SPELL_CORRECTION_METADATA_RESULT_STATUS_NO_SUGGESTIONS = 3;
@@ -16406,7 +16406,7 @@ enum PDSearchSpellerRequestQueryType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PDSearchSpellerResponseResultStatus {
-  PD_SEARCH_SPELLER_RESPONSE_RESULT_STATUS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PD_SEARCH_SPELLER_RESPONSE_RESULT_STATUS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PD_SEARCH_SPELLER_RESPONSE_RESULT_STATUS_NOT_IN_WHITE_LIST = 1;
   PD_SEARCH_SPELLER_RESPONSE_RESULT_STATUS_SPELL_CORRECTION_NOT_ATTEMPTED = 2;
   PD_SEARCH_SPELLER_RESPONSE_RESULT_STATUS_NO_SUGGESTIONS = 3;
@@ -16888,7 +16888,7 @@ enum PlaceSearchResponseStatus {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PlaceSearchResponseStatusCodeInfo {
-  PLACE_SEARCH_RESPONSE_STATUS_CODE_INFO_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PLACE_SEARCH_RESPONSE_STATUS_CODE_INFO_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PLACE_SEARCH_RESPONSE_STATUS_CODE_INFO_TIMEOUT = 1;
   PLACE_SEARCH_RESPONSE_STATUS_CODE_INFO_INCOMPLETE_MATCH = 2;
   PLACE_SEARCH_RESPONSE_STATUS_CODE_INFO_LOW_CONFIDENCE = 3;
@@ -17062,7 +17062,7 @@ enum PreferredTransportType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum PreviousState {
-  PREVIOUS_STATE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PREVIOUS_STATE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PREVIOUS_STATE_NONE = 1;
   PREVIOUS_STATE_GRID = 2;
   PREVIOUS_STATE_MAP = 3;
@@ -17114,7 +17114,7 @@ enum ProactiveType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum ProblemDetailProblemType {
-  PROBLEM_DETAIL_PROBLEM_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  PROBLEM_DETAIL_PROBLEM_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   PROBLEM_DETAIL_PROBLEM_TYPE_SEARCH_FAILED = 1;
   PROBLEM_DETAIL_PROBLEM_TYPE_FAR_FROM_ROADS = 2;
   PROBLEM_DETAIL_PROBLEM_TYPE_OUT_OF_COVERAGE = 3;
@@ -17309,7 +17309,7 @@ enum RPButtonAction {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RPClientCapabilitiesTransitMarketSupport {
-  RP_CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  RP_CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   RP_CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_VERSION_1 = 1;
   RP_CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_VERSION_2 = 2;
   RP_CLIENT_CAPABILITIES_TRANSIT_MARKET_SUPPORT_VERSION_3 = 3;
@@ -17335,7 +17335,7 @@ enum RPDetailsDirectionsType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RPDetailsDisplayStyle {
-  RP_DETAILS_DISPLAY_STYLE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  RP_DETAILS_DISPLAY_STYLE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   RP_DETAILS_DISPLAY_STYLE_SHOW_REGION = 1;
   RP_DETAILS_DISPLAY_STYLE_SHOW_SINGLE_PIN = 2;
   RP_DETAILS_DISPLAY_STYLE_SHOW_REGION_3 = 3;
@@ -17411,7 +17411,7 @@ enum RPDirectionsEventSynthesizedStepManeuverType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RPDirectionsEventType {
-  RP_DIRECTIONS_EVENT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  RP_DIRECTIONS_EVENT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   RP_DIRECTIONS_EVENT_TYPE_SWITCHED_TO_ROUTE = 1;
   RP_DIRECTIONS_EVENT_TYPE_ERROR = 2;
   RP_DIRECTIONS_EVENT_TYPE_SYNTHESIZED_STEP = 3;
@@ -17697,7 +17697,7 @@ enum RPFeedbackResponseStatus {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RPIncidentAnnotationDetailsAnnotationType {
-  RP_INCIDENT_ANNOTATION_DETAILS_ANNOTATION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  RP_INCIDENT_ANNOTATION_DETAILS_ANNOTATION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   RP_INCIDENT_ANNOTATION_DETAILS_ANNOTATION_TYPE_ANNOTATION_TYPE_UNKNOWN = 1;
   RP_INCIDENT_ANNOTATION_DETAILS_ANNOTATION_TYPE_UP_VOTE = 2;
   RP_INCIDENT_ANNOTATION_DETAILS_ANNOTATION_TYPE_DOWN_VOTE = 3;
@@ -17905,7 +17905,7 @@ enum RPProblemResponseStatusCode {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RPProblemStatusProblemState {
-  RP_PROBLEM_STATUS_PROBLEM_STATE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  RP_PROBLEM_STATUS_PROBLEM_STATE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   RP_PROBLEM_STATUS_PROBLEM_STATE_UNRESOLVED = 1;
   RP_PROBLEM_STATUS_PROBLEM_STATE_RESOLVED = 2;
   RP_PROBLEM_STATUS_PROBLEM_STATE_REJECTED = 3;
@@ -19006,7 +19006,7 @@ enum RibbonItemType {
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "RideBookingIntentResponseFailure" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "RideBookingIntentResponseFailure" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum RideBookingIntentResponseFailureEnum {
   RIDE_BOOKING_INTENT_RESPONSE_FAILURE_RBRF_NOT_SET = 0;
   RIDE_BOOKING_INTENT_RESPONSE_FAILURE_RBRF_RESPONSE_TIMEOUT = 1;
@@ -19145,7 +19145,7 @@ enum RouteAttributesMainTransportType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RouteAttributesTrafficType {
-  ROUTE_ATTRIBUTES_TRAFFIC_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ROUTE_ATTRIBUTES_TRAFFIC_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ROUTE_ATTRIBUTES_TRAFFIC_TYPE_STATIC_SPEEDS = 1;
   ROUTE_ATTRIBUTES_TRAFFIC_TYPE_HISTORICAL_SPEEDS = 2;
   ROUTE_ATTRIBUTES_TRAFFIC_TYPE_LIVE_SPEEDS = 3;
@@ -19153,7 +19153,7 @@ enum RouteAttributesTrafficType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RouteAttributesUiContexts {
-  ROUTE_ATTRIBUTES_UI_CONTEXTS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ROUTE_ATTRIBUTES_UI_CONTEXTS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ROUTE_ATTRIBUTES_UI_CONTEXTS_SIGN = 1;
   ROUTE_ATTRIBUTES_UI_CONTEXTS_LIST = 2;
   ROUTE_ATTRIBUTES_UI_CONTEXTS_GENERIC = 3;
@@ -19188,7 +19188,7 @@ enum RouteHypothesisRequestTransportType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum RouteIncidentLaneClosureType {
-  ROUTE_INCIDENT_LANE_CLOSURE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ROUTE_INCIDENT_LANE_CLOSURE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ROUTE_INCIDENT_LANE_CLOSURE_TYPE_LEFT_LANE = 1;
   ROUTE_INCIDENT_LANE_CLOSURE_TYPE_CENTER_LANE = 2;
   ROUTE_INCIDENT_LANE_CLOSURE_TYPE_RIGHT_LANE = 3;
@@ -19256,7 +19256,7 @@ enum RouteType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum SearchAttributionSourceAttributionRequirements {
-  SEARCH_ATTRIBUTION_SOURCE_ATTRIBUTION_REQUIREMENTS_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  SEARCH_ATTRIBUTION_SOURCE_ATTRIBUTION_REQUIREMENTS_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   SEARCH_ATTRIBUTION_SOURCE_ATTRIBUTION_REQUIREMENTS_INFO = 1;
   SEARCH_ATTRIBUTION_SOURCE_ATTRIBUTION_REQUIREMENTS_REVIEWS = 2;
   SEARCH_ATTRIBUTION_SOURCE_ATTRIBUTION_REQUIREMENTS_PHOTOS = 3;
@@ -19386,8 +19386,8 @@ enum SearchTierMetadata {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum SearchType {
-  SEARCH_TYPE_UNKNOWN_4 = 0;  // renamed from "SEARCH_TYPE_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
-  SEARCH_TYPE_DEFAULT_2 = 1;  // renamed from "SEARCH_TYPE_DEFAULT" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  SEARCH_TYPE_UNKNOWN_4 = 0;  // renamed from "SEARCH_TYPE_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  SEARCH_TYPE_DEFAULT_2 = 1;  // renamed from "SEARCH_TYPE_DEFAULT" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   SEARCH_TYPE_REDO = 2;
   SEARCH_TYPE_BRAND_PROFILE = 3;
   SEARCH_TYPE_AUTO_REDO = 4;
@@ -19395,7 +19395,7 @@ enum SearchType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum SentinelTileType {
-  SENTINEL_TILE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  SENTINEL_TILE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   SENTINEL_TILE_TYPE_WATER = 1;
   SENTINEL_TILE_TYPE_NO_TILE = 2;
 }
@@ -19617,7 +19617,7 @@ enum SpokenGuidanceAlignment {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum StateTransitionFeedbackNewValue {
-  STATE_TRANSITION_FEEDBACK_NEW_VALUE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  STATE_TRANSITION_FEEDBACK_NEW_VALUE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   STATE_TRANSITION_FEEDBACK_NEW_VALUE_MAP_TYPE_STANDARD = 1;
   STATE_TRANSITION_FEEDBACK_NEW_VALUE_MAP_TYPE_SATELLITE = 2;
   STATE_TRANSITION_FEEDBACK_NEW_VALUE_MAP_TYPE_HYBRID = 3;
@@ -19641,7 +19641,7 @@ enum StateTransitionFeedbackNewValue {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum StateTransitionFeedbackOldValue {
-  STATE_TRANSITION_FEEDBACK_OLD_VALUE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  STATE_TRANSITION_FEEDBACK_OLD_VALUE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   STATE_TRANSITION_FEEDBACK_OLD_VALUE_MAP_TYPE_STANDARD = 1;
   STATE_TRANSITION_FEEDBACK_OLD_VALUE_MAP_TYPE_SATELLITE = 2;
   STATE_TRANSITION_FEEDBACK_OLD_VALUE_MAP_TYPE_HYBRID = 3;
@@ -19665,7 +19665,7 @@ enum StateTransitionFeedbackOldValue {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum StateTransitionFeedbackStateType {
-  STATE_TRANSITION_FEEDBACK_STATE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  STATE_TRANSITION_FEEDBACK_STATE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   STATE_TRANSITION_FEEDBACK_STATE_TYPE_MAP_DISPLAY_TYPE = 1;
   STATE_TRANSITION_FEEDBACK_STATE_TYPE_PITCHED = 2;
   STATE_TRANSITION_FEEDBACK_STATE_TYPE_FLYOVER = 3;
@@ -19949,7 +19949,7 @@ enum TFIncidentColor {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum TFIncidentLaneClosureType {
-  TF_INCIDENT_LANE_CLOSURE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  TF_INCIDENT_LANE_CLOSURE_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   TF_INCIDENT_LANE_CLOSURE_TYPE_LEFT_LANE = 1;
   TF_INCIDENT_LANE_CLOSURE_TYPE_CENTER_LANE = 2;
   TF_INCIDENT_LANE_CLOSURE_TYPE_RIGHT_LANE = 3;
@@ -21024,9 +21024,9 @@ enum TrafficCameraInformationTrafficCameraType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum TrafficCameraType {
-  TRAFFIC_CAMERA_TYPE_UNKNOWN_2 = 0;  // renamed from "TRAFFIC_CAMERA_TYPE_UNKNOWN" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  TRAFFIC_CAMERA_TYPE_UNKNOWN_2 = 0;  // renamed from "TRAFFIC_CAMERA_TYPE_UNKNOWN" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   TRAFFIC_CAMERA_TYPE_SPEED_LIMIT = 1;
-  TRAFFIC_CAMERA_TYPE_RED_LIGHT_2 = 2;  // renamed from "TRAFFIC_CAMERA_TYPE_RED_LIGHT" to avoid a proto3 package-scope enum-value name collision (value names are cosmetic — never on the wire)
+  TRAFFIC_CAMERA_TYPE_RED_LIGHT_2 = 2;  // renamed from "TRAFFIC_CAMERA_TYPE_RED_LIGHT" to avoid a package-scope enum-value name collision (value names are cosmetic — never on the wire)
   TRAFFIC_CAMERA_TYPE_BUS_LANE = 3;
   TRAFFIC_CAMERA_TYPE_EMERGENCY_LANE = 4;
   TRAFFIC_CAMERA_TYPE_SURVEILLANCE = 5;
@@ -21308,7 +21308,7 @@ enum VLFARStateGeoTrackingStateReason {
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "VLFDeviceOrientation" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "VLFDeviceOrientation" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum VLFDeviceOrientationEnum {
   VLF_DEVICE_ORIENTATION_TYPE_UNKNOWN = 0;
   VLF_DEVICE_ORIENTATION_TYPE_OUT_OF_POCKET = 1;
@@ -21359,7 +21359,7 @@ enum VLFLocalizationResultsVlfFinalState {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum VLFLocationType {
-  VLF_LOCATION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  VLF_LOCATION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   VLF_LOCATION_TYPE_GPS = 1;
   VLF_LOCATION_TYPE_WIFI = 2;
   VLF_LOCATION_TYPE_CELL = 3;
@@ -21375,7 +21375,7 @@ enum VLFPositionContextType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum VehicleSpecificationsLprPlateMissingReason {
-  VEHICLE_SPECIFICATIONS_LPR_PLATE_MISSING_REASON_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  VEHICLE_SPECIFICATIONS_LPR_PLATE_MISSING_REASON_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   VEHICLE_SPECIFICATIONS_LPR_PLATE_MISSING_REASON_UNSELECTED = 1;
   VEHICLE_SPECIFICATIONS_LPR_PLATE_MISSING_REASON_NO_RULES_APPLY = 2;
   VEHICLE_SPECIFICATIONS_LPR_PLATE_MISSING_REASON_UNABLE_TO_MASK_PLATE = 3;
@@ -21489,7 +21489,7 @@ enum WaypointTypedWaypointStatus {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum WaypointTypedWaypointType {
-  WAYPOINT_TYPED_WAYPOINT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  WAYPOINT_TYPED_WAYPOINT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   WAYPOINT_TYPED_WAYPOINT_TYPE_WAYPOINT_ID = 2;
   WAYPOINT_TYPED_WAYPOINT_TYPE_WAYPOINT_PLACE = 3;
   WAYPOINT_TYPED_WAYPOINT_TYPE_WAYPOINT_LOCATION = 4;

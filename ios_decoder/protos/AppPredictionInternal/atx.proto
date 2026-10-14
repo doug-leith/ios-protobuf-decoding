@@ -3,7 +3,7 @@
 // Source: AppPredictionInternal
 // Package: atx  |  44 messages  |  309 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package atx;
@@ -36,7 +36,7 @@ enum ATXNotificationsPBContextMotionAtRecieve {
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "ATXNotificationsPBEvent" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "ATXNotificationsPBEvent" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum ATXNotificationsPBEventEnum {
   ATX_NOTIFICATIONS_PB_EVENT_RECEIVED = 0;
   ATX_NOTIFICATIONS_PB_EVENT_DEFAULT_ACTION = 1;
@@ -62,7 +62,7 @@ enum ATXNotificationsPBEventEnum {
 }
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
-// renamed from reconstructed "ATXNotificationsPBResponse" to avoid a proto3 name collision with the message of that name (enum type names are cosmetic — never on the wire)
+// renamed from reconstructed "ATXNotificationsPBResponse" to avoid a name collision with the message of that name (enum type names are cosmetic — never on the wire)
 enum ATXNotificationsPBResponseEnum {
   ATX_NOTIFICATIONS_PB_RESPONSE_KEEP = 0;
   ATX_NOTIFICATIONS_PB_RESPONSE_OFF = 1;

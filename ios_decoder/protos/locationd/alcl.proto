@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: alcl  |  16 messages  |  123 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package alcl;

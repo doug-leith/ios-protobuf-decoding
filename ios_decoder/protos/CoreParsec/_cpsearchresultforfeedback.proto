@@ -3,7 +3,7 @@
 // Source: CoreParsec
 // Package: _cpsearchresultforfeedback  |  1 message  |  39 confirmed field numbers (93%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package _cpsearchresultforfeedback;

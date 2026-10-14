@@ -1,5 +1,5 @@
 """
-proto/emitter.py — Build valid proto3 files from extracted ProtoMessage objects.
+proto/emitter.py — Build valid .proto files (edition 2023) from extracted ProtoMessage objects.
 
 Pipeline
 --------
@@ -423,8 +423,14 @@ class ProtoFile:
             m.package is not None for m in self.messages
         )
 
-        # ── proto3 preamble ───────────────────────────────────────────────────
-        lines.append('syntax = "proto3";')
+        # ── edition preamble ──────────────────────────────────────────────────
+        # Edition 2023, not proto3: Apple's classes keep a `_has` bit per scalar and
+        # writeTo: writes a set field even when its value is 0/NO/"", so presence is
+        # explicit.  proto3 declares implicit presence, and a decoder then drops those
+        # wire-present zeros as indistinguishable from absent fields.  Edition 2023's
+        # defaults equal proto3's in every other feature (open enums, packed repeated
+        # scalars, UTF-8-verified strings), so the field syntax below is unchanged.
+        lines.append('edition = "2023";')
         lines.append("")
         if self.package:
             if not foreign_only:
@@ -449,7 +455,7 @@ class ProtoFile:
                 if enum.collision_origin:
                     lines.append(
                         f"// renamed from reconstructed \"{enum.collision_origin}\" "
-                        f"to avoid a proto3 name collision with the message of that "
+                        f"to avoid a name collision with the message of that "
                         f"name (enum type names are cosmetic — never on the wire)"
                     )
                 lines.extend(enum.to_proto().split("\n"))
@@ -785,7 +791,7 @@ class ProtoFile:
 
             new_values: List[ProtoEnumValue] = []
 
-            # (1) Synthesize a proto3 zero value when the enum starts above 0.
+            # (1) Synthesize a zero value (open enums need one) when the enum starts above 0.
             if not any(v.number == 0 for v in enum.values):
                 zero_name = self._unique_value_name(
                     f"{_enum_prefix(enum.name)}_UNSPECIFIED", taken
@@ -793,7 +799,7 @@ class ProtoFile:
                 taken.add(zero_name)
                 new_values.append(ProtoEnumValue(
                     name=zero_name, number=0,
-                    comment="synthesized zero value: proto3 requires a 0 value but this "
+                    comment="synthesized zero value: an open enum requires a 0 value but this "
                             "PBCodable enum starts at 1; 0 never appears on the wire",
                 ))
 
@@ -804,7 +810,7 @@ class ProtoFile:
                 if unique == v.name:
                     new_values.append(v)
                 else:
-                    note = (f"renamed from \"{v.name}\" to avoid a proto3 package-scope "
+                    note = (f"renamed from \"{v.name}\" to avoid a package-scope "
                             f"enum-value name collision (value names are cosmetic — "
                             f"never on the wire)")
                     new_values.append(ProtoEnumValue(

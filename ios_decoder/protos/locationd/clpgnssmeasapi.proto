@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: clp.logentry.privatedata  |  50 messages  |  249 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package clp.logentry.privatedata;
 

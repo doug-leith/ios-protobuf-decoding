@@ -3,7 +3,7 @@
 // Source: GeoServices
 // Package: maps.path_codec.geo3  |  4 messages  |  17 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package maps.path_codec.geo3;
 

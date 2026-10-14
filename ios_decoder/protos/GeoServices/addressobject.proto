@@ -3,7 +3,7 @@
 // Source: GeoServices
 // Package: addr_obj  |  13 messages  |  54 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package addr_obj;
 

@@ -3,7 +3,7 @@
 // Source: CoreLocationProtobuf
 // Package: clp  |  84 messages  |  530 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package clp;
@@ -19,7 +19,7 @@ package clp;
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum AltimeterCollectionRequestCollectionType {
-  ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_COLLECTION_HVAC = 1;
   ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_COLLECTION_BIAS_ESTIMATION = 2;
   ALTIMETER_COLLECTION_REQUEST_COLLECTION_TYPE_COLLECTION_SENSOR_CHARACTERIZATION = 3;
@@ -70,7 +70,7 @@ enum IndoorCMAttitudeMagneticCalibration {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum IndoorEventType {
-  INDOOR_EVENT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  INDOOR_EVENT_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   INDOOR_EVENT_TYPE_CM_ATTITUDE = 1;
   INDOOR_EVENT_TYPE_CM_PEDOMETER = 2;
   INDOOR_EVENT_TYPE_LOCATION = 3;
@@ -221,7 +221,7 @@ enum PrivacySanitizationTripSegmentType {
 
 // type name reconstructed from value-string prefix; may be inexact (cosmetic only) — see ENUM_TYPE_NAMES.md
 enum TraceCollectionRequestType {
-  TRACE_COLLECTION_REQUEST_TYPE_UNSPECIFIED = 0;  // synthesized zero value: proto3 requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
+  TRACE_COLLECTION_REQUEST_TYPE_UNSPECIFIED = 0;  // synthesized zero value: an open enum requires a 0 value but this PBCodable enum starts at 1; 0 never appears on the wire
   TRACE_COLLECTION_REQUEST_TYPE_RANDOM_COLLECTION = 1;
   TRACE_COLLECTION_REQUEST_TYPE_SCORED_COLLECTION = 2;
   TRACE_COLLECTION_REQUEST_TYPE_VISION_COLLECTION = 3;

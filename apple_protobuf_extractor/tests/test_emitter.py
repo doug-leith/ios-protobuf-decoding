@@ -423,7 +423,7 @@ class TestProtoFileEmit(unittest.TestCase):
     def test_syntax_line_present(self):
         pf = self._simple_pf()
         out = pf.emit()
-        self.assertIn('syntax = "proto3";', out)
+        self.assertIn('edition = "2023";', out)
 
     def test_package_line_present(self):
         pf = self._simple_pf()
@@ -744,7 +744,36 @@ class TestWriteProtoFiles(unittest.TestCase):
             self.assertEqual(len(written), 1)
             self.assertEqual(written[0].name, "geo.proto")
 
-    def test_file_content_is_valid_proto3(self):
+    @unittest.skipUnless(__import__("shutil").which("protoc"), "protoc not installed")
+    def test_scalar_sent_as_zero_is_kept(self):
+        """Apple's writeTo: writes a field whose has-bit is set even when its value is 0, NO or
+        "".  The emitted file declares explicit presence (edition 2023), so a decoder keeps such
+        a value instead of dropping it as an absent field; enums stay open."""
+        import subprocess
+        from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+        msg = _geo_msg("Loc", [
+            _field("motionVehicleConnected", 1, "bool"),
+            _field("mcc", 2, "int32"),
+            _field("appBundleId", 3, "string"),
+            _field("speed", 4, "double"),
+        ])
+        pf = ProtoFile("geo", "geo.proto", [msg], [], n_confirmed=4, n_estimated=0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            write_proto_files([pf], Path(tmpdir))
+            out = Path(tmpdir) / "geo.pb"
+            subprocess.run(["protoc", f"-I{tmpdir}", f"--descriptor_set_out={out}", "geo.proto"],
+                           check=True, capture_output=True)
+            fds = descriptor_pb2.FileDescriptorSet.FromString(out.read_bytes())
+        pool = descriptor_pool.DescriptorPool()
+        for f in fds.file:
+            pool.Add(f)
+        cls = message_factory.GetMessageClass(pool.FindMessageTypeByName("geo.Loc"))
+        m = cls.FromString(bytes.fromhex("0800" "1000" "1a00" "210000000000000000"))
+        self.assertEqual([f.name for f, _ in m.ListFields()],
+                         ["motionVehicleConnected", "mcc", "appBundleId", "speed"])
+        self.assertEqual(cls.FromString(b"").ListFields(), [])   # absent stays absent
+
+    def test_file_content_is_valid_edition_2023(self):
         msg = _geo_msg("Point", [
             _field("lat", 1, "double"),
             _field("lon", 2, "double"),
@@ -754,7 +783,7 @@ class TestWriteProtoFiles(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             written = write_proto_files([pf], Path(tmpdir))
             content = written[0].read_text(encoding="utf-8")
-        self.assertIn('syntax = "proto3";', content)
+        self.assertIn('edition = "2023";', content)
         self.assertIn("package geo;", content)
         self.assertIn("message Point {", content)
         self.assertIn("double lat = 1;", content)
@@ -784,7 +813,7 @@ class TestWriteProtoFiles(unittest.TestCase):
             self.assertIn("geo.proto", filenames)
             self.assertIn("clp.proto", filenames)
             geo_content = (Path(tmpdir) / "geo.proto").read_text()
-        self.assertIn('syntax = "proto3";', geo_content)
+        self.assertIn('edition = "2023";', geo_content)
         self.assertIn('import "clp.proto";', geo_content)
 
 
@@ -1277,7 +1306,7 @@ class TestEndToEnd(unittest.TestCase):
             clp_text = (Path(tmpdir) / "clp.proto").read_text()
 
         # geo.proto structure
-        self.assertIn('syntax = "proto3";', geo_text)
+        self.assertIn('edition = "2023";', geo_text)
         self.assertIn("package geo;", geo_text)
         self.assertIn('import "clp.proto";', geo_text)
         self.assertIn("message Route {", geo_text)
@@ -1286,7 +1315,7 @@ class TestEndToEnd(unittest.TestCase):
         self.assertIn("double distance = 3;", geo_text)
 
         # clp.proto structure
-        self.assertIn('syntax = "proto3";', clp_text)
+        self.assertIn('edition = "2023";', clp_text)
         self.assertIn("package clp;", clp_text)
         self.assertNotIn("import", clp_text)
         self.assertIn("message Location {", clp_text)

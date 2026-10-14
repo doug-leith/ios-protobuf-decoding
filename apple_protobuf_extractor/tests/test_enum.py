@@ -1412,7 +1412,7 @@ class TestEndToEndEnum(unittest.TestCase):
             content = (Path(tmpdir) / "geo.proto").read_text()
 
         # Valid proto3 skeleton
-        self.assertIn('syntax = "proto3";', content)
+        self.assertIn('edition = "2023";', content)
         self.assertIn("package geo;", content)
 
         # Enum block before message block

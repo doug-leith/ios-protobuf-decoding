@@ -4,7 +4,7 @@
 // Package: _cpresultsectionforfeedback  |  1 message  |  8 confirmed field numbers (89%)
 // Note: 1 field(s) with unresolved message types emitted as bytes — see inline comments
 
-syntax = "proto3";
+edition = "2023";
 
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package _cpresultsectionforfeedback;

@@ -3,7 +3,7 @@
 // Source: locationd
 // Package: clp.logentry.raven  |  19 messages  |  219 confirmed field numbers (100%)
 
-syntax = "proto3";
+edition = "2023";
 
 package clp.logentry.raven;
 
