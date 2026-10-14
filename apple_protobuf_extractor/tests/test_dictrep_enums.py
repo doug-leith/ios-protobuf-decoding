@@ -10,8 +10,8 @@ per-value ``cfstring`` names.
 
 Two layers are tested:
 
-* **Synthetic** — the raw-word decoders (`_decode_ldr_reg_off`,
-  `_longest_common_prefix`) that have no binary dependency.
+* **Synthetic** — the raw-word decoder (`_decode_ldr_reg_off`) and assembled bodies
+  (tests/_a64asm.py) that have no binary dependency.
 * **Live** — the full harvester against the real GeoServices cache, gated on the
   cache being present (``dylib/dyld_shared_cache_arm64``).  Ground truth: the
   ``GEOComponentType`` switch at ``0x18d85bb7c`` (97 entries, 8 gaps) and its
@@ -27,62 +27,9 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from macho.arm64decode import _decode_ldr_reg_off
-from proto.enums import _longest_common_prefix
 from tests.conftest import WordCtx as _WordCtx
 from tests._a64asm import assemble, FlowCtx
 from macho.disasm import disasm
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Synthetic decoder tests (no binary needed)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestDictRepBiasHelpers(unittest.TestCase):
-    """TODO #54: the dictRep off-by-bias fix.  A biased (e.g. 1-based) enum
-    re-bases the value into the table-index register with ``sub w<idx>,w<val>,#N``
-    before the pointer-table read; the harvester adds ``N`` back.  Both guards are
-    exercised here so the window-bleed false positive (#54's ``spellerRankerModelType``)
-    stays fixed without a live cache."""
-
-    @staticmethod
-    def _ins(words, base=0x1000):
-        from types import SimpleNamespace
-        insns = [SimpleNamespace(addr=base + 4 * k) for k in range(len(words))]
-        wmap = {insns[k].addr: words[k] for k in range(len(words))}
-        return insns, wmap
-
-    # proven encodings (rd in low 5 bits, imm in [21:10], shift in [23:22])
-    SUB_W8_W1_1 = 0x51000428   # sub w8, w1, #1   (bias 1, dest w8)
-    SUB_W9_W1_1 = 0x51000429   # sub w9, w1, #1   (bias 1, dest w9 — a NEIGHBOUR)
-    SUB_W8_W1_2 = 0x51000828   # sub w8, w1, #2   (bias 2, dest w8)
-    SUB_W8_LSL12 = 0x51400428  # sub w8, w1, #1, lsl #12  (shifted — not a small bias)
-    NOP = 0xD503201F
-
-    def test_bias_recovered_when_dest_is_index_reg(self):
-        from proto.enums import _sub_imm_bias
-        insns, words = self._ins([self.NOP, self.SUB_W8_W1_1, self.NOP])
-        self.assertEqual(_sub_imm_bias(insns, words, 0, len(insns), dest_reg=8), 1)
-
-    def test_window_bleed_rejected_when_dest_is_other_reg(self):
-        # The neighbour's `sub w9,...` must NOT bias a table indexed by w8.
-        from proto.enums import _sub_imm_bias
-        insns, words = self._ins([self.SUB_W9_W1_1, self.NOP])
-        self.assertEqual(_sub_imm_bias(insns, words, 0, len(insns), dest_reg=8), 0)
-
-    def test_shifted_sub_is_not_a_small_bias(self):
-        from proto.enums import _sub_imm_bias
-        insns, words = self._ins([self.SUB_W8_LSL12])
-        self.assertEqual(_sub_imm_bias(insns, words, 0, len(insns), dest_reg=8), 0)
-
-    def test_last_match_wins(self):
-        from proto.enums import _sub_imm_bias
-        insns, words = self._ins([self.SUB_W8_W1_1, self.NOP, self.SUB_W8_W1_2])
-        self.assertEqual(_sub_imm_bias(insns, words, 0, len(insns), dest_reg=8), 2)
-
-    def test_no_sub_returns_zero(self):
-        from proto.enums import _sub_imm_bias
-        insns, words = self._ins([self.NOP, self.NOP])
-        self.assertEqual(_sub_imm_bias(insns, words, 0, len(insns), dest_reg=8), 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -113,23 +60,6 @@ class TestDecodeLdrRegOff(unittest.TestCase):
         self.assertIsNone(_decode_ldr_reg_off(0xd61f0000))   # br x0
         self.assertIsNone(_decode_ldr_reg_off(0x91000021))   # add x1, x1, #0
         self.assertIsNone(_decode_ldr_reg_off(0x00000000))
-
-
-class TestLongestCommonPrefix(unittest.TestCase):
-    def test_common(self):
-        self.assertEqual(
-            _longest_common_prefix(
-                ['COMPONENT_TYPE_ENTITY', 'COMPONENT_TYPE_PLACE_INFO']),
-            'COMPONENT_TYPE_')
-
-    def test_no_common(self):
-        self.assertEqual(_longest_common_prefix(['STATUS_FAILED', 'INVALID']), '')
-
-    def test_single(self):
-        self.assertEqual(_longest_common_prefix(['ABC']), 'ABC')
-
-    def test_empty(self):
-        self.assertEqual(_longest_common_prefix([]), '')
 
 
 class _FakeMethod:
@@ -650,7 +580,7 @@ class TestHalfwordJumpTableEnumLive(unittest.TestCase):
 
     ``-[GEOTileSet styleAsString:]`` dispatches its ~100 cases through a HALFWORD
     jump table (the case-block region exceeds 1 KB, so each offset needs 2 bytes —
-    ``ldrh w11, [x9, x8, lsl #1]``).  ``_extract_jumptable_enum_values`` formerly
+    ``ldrh w11, [x9, x8, lsl #1]``).  The jump-table reader formerly
     hardcoded a 1-byte / stride-1 read and discarded the width it had already
     decoded, mis-striding every entry: it smeared value 1's ``VECTOR_STANDARD``
     across 9, 11, 13, … and dropped the wire-observed values 18 and 20 entirely.
@@ -802,8 +732,8 @@ class TestUnattributedSegmentWarnsLive(unittest.TestCase):
     cleanly-recovered enum is NOT flagged INCOMPLETE.
 
     GEOLogMessage logMessageTypeAsString: has a segment biased by the negative-add
-    idiom (`mov w8,#-50000; add w8,w2,w8; cmp w8,#3`); _leading_materialized_bias
-    now models it, so the 50000-base values ARE recovered and the enum is no longer
+    idiom (`mov w8,#-50000; add w8,w2,w8; cmp w8,#3`); the data-flow evaluator
+    (proto/dictrep_flow.py) now models it, so the 50000-base values ARE recovered and the enum is no longer
     flagged truncated.  (The seg_incomplete → truncated=True safety net still exists
     for a genuinely-unattributable segment, but no current GeoServices enum hits it.)
     GEOTileSet styleAsString: is a cleanly-recovered halfword-table enum that must
@@ -879,9 +809,8 @@ class TestUnattributedSegmentWarnsLive(unittest.TestCase):
     def test_idiomB_materialized_bias_segment_recovered_not_flagged(self):
         # seg_incomplete bias-gap fix: GEOTelemetricEntity.eventKeyAsString: routes
         # two high-value segments through a comparison-tree (Idiom B) whose bias is
-        # materialised (mov #-K; add) rather than a literal `sub #imm12`.  Idiom B's
-        # branch_gates now apply _leading_materialized_bias (mirroring Idiom A), so
-        # those segments (52020-base and 60500-base) ARE recovered and the enum is
+        # materialised (mov #-K; add) rather than a literal `sub #imm12`.  The evaluator
+        # applies the materialised bias on every path, so those segments (52020-base and 60500-base) ARE recovered and the enum is
         # no longer flagged truncated.
         self.assertIn(60500, self.telem_vals,
                       'Idiom-B 60500-base materialized-bias segment not recovered')

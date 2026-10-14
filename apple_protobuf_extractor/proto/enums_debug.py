@@ -38,7 +38,7 @@ not at module load time) to avoid a cycle; proto.extractor, which sits above
 both, imports this module normally.
 """
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Set
 
 from macho.memory     import BinaryContext
 from macho.strings    import StringTable

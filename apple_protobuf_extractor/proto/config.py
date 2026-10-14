@@ -8,7 +8,7 @@ mutable state.  When a caller omits a value, the prefix stripper falls back to t
 canonical ``DEFAULT_PREFIXES`` and the debug sink is simply absent (a no-op).  Imports
 only proto.defaults.
 """
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from proto.defaults import DEFAULT_PREFIXES
 
 

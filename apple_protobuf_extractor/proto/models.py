@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
@@ -29,13 +29,15 @@ def _enum_prefix(name: str) -> str:
 
 # ── Enum models ───────────────────────────────────────────────────────────────
 
-#: Emitted above an enum whose value-string method overran the disassembler's
-#: instruction budget, so values encoded past the cap could not be recovered.
+#: Emitted above an enum whose recovery stopped early -- the value-string method overran
+#: the disassembler's instruction budget, or a pointer-table entry could not be read -- so
+#: some values could not be recovered.
 #: Unlike a sparse-enum gap (an undefined value), this is a *tool* limit — the
 #: missing values exist in the binary but were not read.
 _ENUM_TRUNCATED_COMMENT = (
-    "// WARNING: values may be INCOMPLETE — the value-string method exceeded the "
-    "disassembly budget; values beyond the cap were not recovered."
+    "// WARNING: values may be INCOMPLETE — recovery stopped before every value was read "
+    "(the value-string method exceeded the disassembly budget, or a table entry could not "
+    "be read); the missing values exist in the binary."
 )
 
 
@@ -74,6 +76,10 @@ class ProtoEnum:
                                             # instruction budget: values encoded
                                             # past the cap are missing, so the set
                                             # below may be incomplete.
+    incomplete_reason: Optional[str] = None  # With values_truncated: WHY values may be
+                                            # missing, when it is not the disassembly
+                                            # budget (e.g. a value of the inlined
+                                            # converter could not be evaluated).
     collision_origin: Optional[str] = None  # When the RECONSTRUCTED type name
                                             # collided with a message (or other
                                             # enum) of the same name in the
@@ -87,7 +93,9 @@ class ProtoEnum:
         """Emit an enum block (proto3 syntax)."""
         lines: List[str] = []
         if self.values_truncated:
-            lines.append(_ENUM_TRUNCATED_COMMENT)
+            lines.append(
+                f"// WARNING: values may be INCOMPLETE — {self.incomplete_reason}"
+                if self.incomplete_reason else _ENUM_TRUNCATED_COMMENT)
         lines.append(f"enum {self.name} {{")
         if not self.values:
             placeholder = f"{_enum_prefix(self.name)}_UNKNOWN"
@@ -282,12 +290,48 @@ class ProtoMessage:
     # Set (to a one-line provenance comment) when this message is an INLINE C STRUCT with no
     # ObjC class behind it (proto.structfields): ``class_name`` is then the C struct tag.
     inline_struct: Optional[str] = None
+    # A one-line caveat about this message as a whole (emitted as a ``//`` comment under the
+    # message header), e.g. a decode that disagreed with another decode of the same message.
+    message_note: Optional[str] = None
 
     def __repr__(self) -> str:
         return f"ProtoMessage({self.name!r}, {len(self.fields)} fields, {len(self.enums)} enums)"
 
 
+# ── Run diagnostics ───────────────────────────────────────────────────────────
+
+@dataclass
+class ExtractionDiagnostics:
+    """Things that went wrong or were left undecided during ONE extraction run and that
+    cannot be attached to a single emitted field -- so they are reported in the run summary
+    and by the exit status instead of only in a debug log.
+
+    Fresh for every :func:`proto.extractor.extract_all` run (it is reset there); fetch it
+    with :func:`get_diagnostics`."""
+    # classes whose extraction raised: their messages are MISSING from the output
+    failed_classes: List[Tuple[str, str]] = field(default_factory=list)       # (class, error)
+    # a non-PBCodable runtime (C++/swift/protobuf-c/GPB) whose detection or decode raised:
+    # its messages are missing, or its detection result is unreliable
+    foreign_errors: List[Tuple[str, str]] = field(default_factory=list)       # (runtime, error)
+    # _dictionaryRepresentation: switches over a field's value that could not be evaluated
+    # while the field stays an untyped int (it may be an enum): (class, field, reason)
+    unevaluated_switches: List[Tuple[str, str, str]] = field(default_factory=list)
+
+    @property
+    def n_errors(self) -> int:
+        """Failures that drop output (as opposed to fields merely left undecided)."""
+        return len(self.failed_classes) + len(self.foreign_errors)
+
+
+def get_diagnostics(ctx) -> ExtractionDiagnostics:
+    """The :class:`ExtractionDiagnostics` of the current run on *ctx* (created lazily)."""
+    from macho.memory import _ctx_cache
+    return _ctx_cache(ctx, "_diagnostics", ExtractionDiagnostics)
+
+
 __all__ = [
+    "ExtractionDiagnostics",
+    "get_diagnostics",
     "FieldLabel",
     "ProtoField",
     "ProtoMessage",

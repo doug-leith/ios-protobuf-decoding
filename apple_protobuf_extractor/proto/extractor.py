@@ -64,7 +64,7 @@ from macho.memory    import BinaryContext, _ctx_cache
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
-from proto.models    import FieldLabel, ProtoField, ProtoMessage
+from proto.models    import FieldLabel, ProtoField, ProtoMessage, get_diagnostics
 from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegree
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
@@ -78,10 +78,7 @@ from proto.protocore import (
 )
 # Retired non-structural detectors — kept for investigation, fail the run if they
 # ever claim a class.  See proto/protoclass_heuristic.py.
-from proto.protoclass_heuristic import (
-    _is_proto_class, va_cluster_closure, check_no_heuristic_detection,
-    ProtoClassDetectionError, _SYSTEM_ROOT_NAMES,
-)
+from proto.protoclass_heuristic import _is_proto_class, check_no_heuristic_detection, ProtoClassDetectionError, _SYSTEM_ROOT_NAMES
 from proto.dispatch  import _build_readfrom_core_index
 from proto.repeated  import (
     _resolve_repeated_via_dispatch, _resolve_repeated_via_dispatch_ivars,
@@ -89,14 +86,17 @@ from proto.repeated  import (
 )
 from proto.structfields import finalize_struct_fields, record_struct_site
 from proto.mapfields import (
-    MAP_OBJC_CLASSES, MAP_IVAR_ENCS, MapEntryWriter, MapTypes, find_map_writers,
-    record_helper_votes, resolve_map_types,
+    MAP_OBJC_CLASSES, MAP_IVAR_ENCS, MapEntryWriter, find_map_writers,
+    record_helper_votes, _finalize_map_fields, _MAP_FIELD_NOTE,
 )
+from proto.protoclass_set import _proto_class_set
+from proto.foreign_detect import (   # noqa: F401  (public API re-exports)
+    _warn_if_foreign_protobuf, google_protobuf_classes, swift_protobuf_messages,
+    cpp_protobuf_namespaces, cpp_protobuf_symbol_count, protobufc_descriptors)
 from proto.enums     import _qualify_enum_name, _collect_enum_definitions
 from proto.enums_debug import _emit_mode_a_debug
 from proto.config    import _class_to_proto_name
 from proto.defaults  import DEFAULT_PREFIXES
-from serializers.protobufc_detect import ProtobufCDescriptors, find_protobufc_descriptors
 
 log = logging.getLogger(__name__)
 
@@ -233,18 +233,6 @@ _ELEMENT_UNRESOLVED_NOTE = (
 # were not emits as ``repeated bytes`` (each element an entry message); one with no
 # entry writer at all keeps the legacy ``bytes`` + note.  See LIMITATIONS.md (1).
 _MAP_OBJC_CLASSES = MAP_OBJC_CLASSES
-_MAP_FIELD_NOTE = (
-    "map<> field (ObjC NSMutableDictionary) emitted as bytes; no map-entry writer "
-    "found in writeTo: so key/value types not recovered — see LIMITATIONS.md (1)"
-)
-_MAP_UNRESOLVED_NOTE = (
-    "map<> field: each element is a map-entry message {{key = 1, value = 2}}; "
-    "key/value types not recovered ({reason}) — see LIMITATIONS.md (1)"
-)
-_MAP_VALUE_CLASS_NOTE = (
-    "map value is a message whose class could not be determined ({reason}); value "
-    "emitted as bytes — see LIMITATIONS.md (1)"
-)
 
 # ACCEPTED LIMITATION (field# 0): Apple emits deliberate 0-based proto fields
 # (writeTo: `mov w2,#0`, readFrom: `case 0`).  Field 0 is illegal in proto2/proto3
@@ -283,443 +271,9 @@ def _embedded_struct_note(ivar: ObjcIvar, type_name: str,
     return None
 
 
-# ── Forward-scan proto-class detection (TODO #46) ─────────────────────────────
-# Apple's generated proto message classes all descend from PBCodable (RPC
-# request/response messages via PBRequest/PBResponse).  That superclass link is
-# GROUND TRUTH — stronger than the per-class metadata heuristic (_is_proto_class),
-# which keys on a class's OWN has-bits ivar / _reader+_readerLock / readFrom:+
-# writeTo: method score and so MISSES metadata-sparse subclasses.  Recover the full
-# set with two complementary, value-independent anchors, SEEDED + sanity-checked by
-# the heuristic (so a heuristic hit is never dropped):
-#   (1) NAME-anchor (cache frameworks): walk each class's superclass chain via
-#       read_ptr (which decodes the chained-fixup pointer and reads cross-image into
-#       ProtocolBuffer.framework) until a class named PBCodable/PBRequest/… — the
-#       name IS the runtime base contract.  Catches cross-image-parented subclasses.
-#   (2) VA-cluster (all modes incl. standalone binaries, where cross-image names do
-#       NOT resolve): the non-local superclass VAs shared by heuristic-confirmed
-#       proto classes ARE the PB-root VAs (raw bind ordinals in binary mode); every
-#       class transitively subclassing one is proto.  The heuristic seeds the roots.
-# Verified: GeoServices 1637→1642 (+5 metadata-sparse subclasses), CLP 84=84,
-# locationd 65=65 (binary mode → VA-cluster only).  See TODO #46.
-_PB_ROOT_NAMES: FrozenSet[str] = frozenset(
-    {"PBCodable", "PBRequest", "PBResponse", "PBMessage"})
-
 # _SYSTEM_ROOT_NAMES (the NSObject/NSProxy cluster-root guard) moved to
 # proto.protoclass_heuristic alongside the closure it guards; re-exported above for
 # existing call sites.
-
-_OBJC_CLASS_SYM_PREFIX = "_OBJC_CLASS_$_"
-
-
-def _resolve_class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:
-    """``class_ro_t.name`` for the ObjC class at *va*, decoding the chained-fixup
-    pointer (reads cross-image in cache mode).
-
-    In standalone-binary mode the superclass is a *bind* to another dylib not
-    present in the file, so following the pointer fails; instead *va* is the raw
-    chained-fixup bind value and its ordinal resolves through the binary's own
-    imports table (``import_name_for_bind``) to the import symbol name, e.g.
-    ``_OBJC_CLASS_$_PBCodable`` → ``PBCodable``.  This is the principled binary-mode
-    NAME anchor (parity with the cache-mode cross-image read).  Returns None if
-    neither path resolves."""
-    try:
-        data = ctx.read_ptr(va + 32) & ~0x7              # class_t.data → class_ro_t
-        name = ctx.read_cstring(ctx.read_ptr(data + 24))  # class_ro_t.name
-        if name:
-            return name
-    except Exception:
-        pass
-    sym = ctx.import_name_for_bind(va)
-    if sym and sym.startswith(_OBJC_CLASS_SYM_PREFIX):
-        return sym[len(_OBJC_CLASS_SYM_PREFIX):]
-    return None
-
-
-def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
-    """Full set of proto message class NAMES (TODO #46): the ``_is_proto_class``
-    heuristic seed unioned with the PBCodable superclass-chain closure (two anchors,
-    above).  Side effect: stamps ``ctx._proto_inherits`` = {child: parent_objc_name}
-    for proto-to-proto subclasses (immediate superclass is itself a proto MESSAGE,
-    not a PB root) so the emitter can flag inherited fields.  ALSO stamps
-    ``ctx._proto_class_heuristic_only`` = frozenset of class names whose proto-ness
-    rests SOLELY on the heuristic seed (anchor 1's pure name/bind walk, re-run over
-    every class regardless of prior seed membership, did NOT independently confirm
-    them) — measured empirically to be empty in every corpus tested so far (0/1642
-    GeoServices, 0/391 across a 258-binary corpus), but computed for real on every
-    run rather than assumed, so the emitter can flag it the day it isn't.  Memoised
-    on ctx."""
-    def _build() -> FrozenSet[str]:
-        non_meta = [c for c in cl if not c.is_meta]
-        by_va: Dict[int, ObjcClass] = {c.vmaddr: c for c in non_meta}
-        seed = {c.name for c in non_meta if _is_proto_class(c)}
-        proto: Set[str] = set(seed)
-        proto_va: Set[int] = {c.vmaddr for c in non_meta if c.name in seed}
-
-        # Anchor 1 — NAME: superclass chain reaches a PB root (cache mode).
-        name_memo: Dict[int, Optional[str]] = {}
-
-        def _name(va: int) -> Optional[str]:
-            if va not in name_memo:
-                name_memo[va] = _resolve_class_name_at(ctx, va)
-            return name_memo[va]
-
-        def _reaches_pb_root(va: int, depth: int = 8) -> bool:
-            cur, seen = va, set()
-            for _ in range(depth):
-                if not cur or cur in seen:
-                    return False
-                seen.add(cur)
-                nm = _name(cur)
-                if nm is None:
-                    return False
-                if nm in _PB_ROOT_NAMES:
-                    return True
-                try:
-                    cur = ctx.read_ptr(cur + 8)            # next superclass
-                except Exception:
-                    return False
-            return False
-
-        # Track anchor 1's reach FULLY independently of the heuristic seed (run for
-        # every class, not just ones the seed hasn't already claimed) so we can
-        # later tell whether a given proto class's membership rests on the
-        # heuristic at all, or is independently confirmed by pure superclass-chain
-        # structure. Same detection, just not short-circuited by prior membership.
-        anchor1_names: Set[str] = set()
-        for c in non_meta:
-            if c.superclass_vmaddr and _reaches_pb_root(c.superclass_vmaddr):
-                anchor1_names.add(c.name)
-                if c.name not in proto:
-                    proto.add(c.name)
-                    proto_va.add(c.vmaddr)
-
-        # Anchor 2 — RETIRED heuristic-seeded VA-cluster closure, now living in
-        # proto.protoclass_heuristic.  Mutates proto/proto_va in place and returns
-        # the names it alone added, so a class resting on it can be failed below.
-        anchor2_names: Set[str] = va_cluster_closure(
-            non_meta, by_va, seed, proto, proto_va, _name)
-
-        # Proto-to-proto subclass map (immediate super is a proto MESSAGE, i.e. a
-        # local proto class or a cross-image non-PB-root class) → inheritance note.
-        inherits: Dict[str, str] = {}
-        for c in non_meta:
-            if c.name not in proto or not c.superclass_vmaddr:
-                continue
-            sv = c.superclass_vmaddr
-            parent = by_va[sv].name if sv in by_va else _name(sv)
-            if parent and parent not in _PB_ROOT_NAMES:
-                inherits[c.name] = parent
-        try:
-            ctx._proto_inherits = inherits
-        except Exception:
-            pass
-        # Classes the pure name/bind walk (anchor 1) did NOT independently reach,
-        # split by WHICH non-structural path claimed them.  Both are ERRORS, not
-        # footnotes: anchor 1 alone reproduces the full set on every corpus ever
-        # measured (391 classes/258 binaries in binary mode, 1642/1 framework in
-        # cache mode), so either set being
-        # non-empty means the structural detector failed and the class's presence in
-        # the output rests on a guess.  Computed for real every run rather than
-        # assumed empty, so the day it fires the output says so.
-        #   * cluster-only — the heuristic-seeded VA-cluster closure (anchor 2)
-        #     claimed it and the superclass chain never confirmed it.
-        #   * heuristic-only — neither structural anchor claimed it; it is in the
-        #     set solely because the per-class _is_proto_class score seeded it.
-        _cluster_only = frozenset(anchor2_names - anchor1_names)
-        _heuristic_only = frozenset(proto - anchor1_names - anchor2_names)
-        try:
-            ctx._proto_class_cluster_only = _cluster_only
-            ctx._proto_class_heuristic_only = _heuristic_only
-        except Exception:
-            pass
-        return frozenset(proto)
-
-    return _ctx_cache(ctx, "_proto_class_names_cache", _build)
-
-
-# The Google Objective-C protobuf runtime base class.  Apple statically links the
-# vendored runtime per-binary and prefixes the class to avoid ObjC duplicate-class
-# collisions, so the base appears as ``GPBMessage`` OR ``<Prefix>GPBMessage`` (e.g.
-# ``TransparencyGPBMessage`` in transparencyd) — hence a SUFFIX match.
-_GPB_RUNTIME_SUFFIX = "GPBMessage"
-
-
-def google_protobuf_classes(
-    ctx: BinaryContext, cl: ClassList
-) -> "Tuple[List[str], FrozenSet[str]]":
-    """Names of ObjC classes that subclass Google's protobuf-objc runtime, paired
-    with the runtime base class name(s) found.
-
-    These use Google's Objective-C protobuf library (``GPBMessage``), NOT Apple's
-    ``PBCodable``: their wire (de)serialization is driven by a shared ``GPBDescriptor``
-    runtime, with no per-class ``writeTo:``/``readFrom:`` to disassemble — so this tool
-    does not extract them.  Detection is purely by NAME (the runtime base always ends
-    in ``GPBMessage``), mirroring the PBCodable name anchor; ``_resolve_class_name_at``
-    supplies cross-image / bind names so it works in cache and binary mode alike."""
-    non_meta = [c for c in cl if not c.is_meta]
-    by_va: Dict[int, ObjcClass] = {c.vmaddr: c for c in non_meta}
-    name_memo: Dict[int, Optional[str]] = {}
-
-    def _name(va: int) -> Optional[str]:
-        if va not in name_memo:
-            c = by_va.get(va)
-            name_memo[va] = c.name if c is not None else _resolve_class_name_at(ctx, va)
-        return name_memo[va]
-
-    subs: List[str] = []
-    bases: Set[str] = set()
-    for c in non_meta:
-        cur, seen, depth = c.superclass_vmaddr, set(), 0
-        while cur and cur not in seen and depth < 16:
-            seen.add(cur); depth += 1
-            nm = _name(cur)
-            if nm is None:
-                break
-            if nm.endswith(_GPB_RUNTIME_SUFFIX):
-                subs.append(c.name); bases.add(nm); break
-            nxt = by_va.get(cur)
-            cur = nxt.superclass_vmaddr if nxt is not None else None
-    return subs, frozenset(bases)
-
-
-# ── Swift-protobuf (apple/swift-protobuf, vendored as InternalSwiftProtobuf) ──
-# A Swift type generated by swift-protobuf is a *struct*/*enum* conforming to the
-# library's ``Message`` / ``Enum`` protocol — there is no ObjC class and no
-# per-class writeTo:/readFrom:, so the tool cannot extract it.  The compiler emits
-# a protocol-conformance descriptor whose mangled symbol names both the conforming
-# type and the protocol, e.g.
-#   _$s14bookdatastored15PBPropertyValueV21InternalSwiftProtobuf7MessageAAMc
-#    └prefix┘└14:module──────┘└15:type──────┘V└21:proto-module───────┘└7:proto┘
-# Keying on the ``…SwiftProtobuf7Message…Mc`` (and ``…4Enum…Mc``) descriptor gives
-# exactly one hit per type and recovers its name from the mangled prefix.
-_SWIFTPB_CONFORMANCE = re.compile(
-    r'(?:Internal)?SwiftProtobuf(?P<proto>7Message|4Enum)(?:[A-Z]*)Mc$'
-)
-
-
-def _parse_swift_pb_symbol(sym: str) -> "Optional[Tuple[str, str, str]]":
-    """Parse a Swift-protobuf conformance-descriptor symbol.
-
-    Returns ``(kind, module, type_name)`` where kind is ``"message"``/``"enum"``,
-    or None if *sym* is not such a descriptor.  The mangled prefix is a run of
-    length-prefixed identifiers (module, then nesting type names) interleaved with
-    single-letter nominal-kind tags (``V`` struct / ``O`` enum / ``C`` class)."""
-    m = _SWIFTPB_CONFORMANCE.search(sym)
-    if not m:
-        return None
-    kind = "enum" if m.group("proto") == "4Enum" else "message"
-    head = sym[:m.start()]
-    for pre in ("__$s", "_$s", "$s", "__$S", "_$S", "$S"):
-        if head.startswith(pre):
-            head = head[len(pre):]
-            break
-    idents: List[str] = []
-    i, n = 0, len(head)
-    while i < n:
-        j = i
-        while j < n and head[j].isdigit():
-            j += 1
-        if j == i:                 # a nominal-kind tag (V/O/C/…) between idents
-            i += 1
-            continue
-        ln = int(head[i:j])
-        ident = head[j:j + ln]
-        if not ident:
-            break
-        idents.append(ident)
-        i = j + ln
-    if len(idents) < 2:            # need at least module + type
-        return None
-    return kind, idents[0], ".".join(idents[1:])
-
-
-def swift_protobuf_messages(
-    ctx: BinaryContext,
-) -> "Tuple[List[str], List[str], FrozenSet[str]]":
-    """Names of Swift types that conform to swift-protobuf's ``Message``/``Enum``
-    protocol, recovered from the export-trie conformance descriptors.
-
-    Returns ``(message_types, enum_types, modules)``.  Binary mode only — relies on
-    ``ctx.iter_symbol_names()`` (the dyld export trie), which is empty for cache
-    images, so this returns empty there (no false negatives that matter: the user
-    can point the tool at the standalone binary)."""
-    msgs: Set[str] = set()
-    enums: Set[str] = set()
-    modules: Set[str] = set()
-    for sym in ctx.iter_symbol_names():
-        if "SwiftProtobuf" not in sym or not sym.endswith("Mc"):
-            continue
-        parsed = _parse_swift_pb_symbol(sym)
-        if parsed is None:
-            continue
-        kind, module, type_name = parsed
-        modules.add(module)
-        (enums if kind == "enum" else msgs).add(type_name)
-    return sorted(msgs), sorted(enums), frozenset(modules)
-
-
-# ── C++ libprotobuf (google::protobuf) ───────────────────────────────────────
-# C++ protobuf messages subclass ``google::protobuf::Message`` and are driven by a
-# reflection runtime — no ObjC class, nothing to disassemble.  The signal is the
-# mangled namespace token ``6google8protobuf``, which appears in this image's OWN
-# symbols only when it statically embeds / directly references the C++ runtime.  We
-# report both:
-#   • TOP-LEVEL ``google::protobuf`` (``…N6google8protobuf``) — standard
-#     libprotobuf; AND
-#   • VENDORED, re-namespaced static copies ``<ns>::google::protobuf`` (e.g. Apple
-#     Wireless Diagnostics' ``wireless_diagnostics::google::protobuf``) — these ARE
-#     real C++ protobuf usage (e.g. locationd embeds the AWD runtime and emits AWD
-#     telemetry protobufs *in addition to* its 65 PBCodable messages), so the user
-#     should know they're present even though the tool can't extract them.
-# What this still does NOT match: merely *linking* libprotobuf.dylib with zero
-# references (a link check would false-positive — locationd links it dynamically too,
-# but that alone is not usage; the embedded-symbol references are).
-_CPP_PROTOBUF_TOKEN = "6google8protobuf"
-
-
-def _cpp_protobuf_symbol_names(ctx: BinaryContext):
-    """Symbol names to scan for the ``google::protobuf`` C++ token.
-
-    Binary mode reads ``LC_SYMTAB``/export trie via ``iter_symbol_names``;
-    cache-native that table is unaddressable, so we read the image's local
-    symbols from the cache ``.symbols`` sub-cache (pre-filtered to the token).
-    Either way the namespace parse below sees the same mangled names."""
-    reader = getattr(ctx, "_cache_reader", None)
-    if reader is not None and getattr(ctx, "is_cache_backed", False):
-        try:
-            return list(reader.image_symbol_addrs(
-                ctx.image_base, _CPP_PROTOBUF_TOKEN).keys())
-        except Exception:
-            return []
-    return ctx.iter_symbol_names()
-
-
-def cpp_protobuf_namespaces(ctx: BinaryContext) -> "Dict[str, int]":
-    """Map ``google::protobuf`` C++ namespace (top-level or vendored) -> symbol count.
-
-    e.g. ``{"google::protobuf": 12}`` or, for locationd's statically-embedded Apple
-    Wireless Diagnostics copy, ``{"wireless_diagnostics::google::protobuf": 95}``.
-    Works in both modes (cache-native reads the ``.symbols`` nlist)."""
-    out: Dict[str, int] = {}
-    for s in _cpp_protobuf_symbol_names(ctx):
-        i = s.find(_CPP_PROTOBUF_TOKEN)
-        if i < 0:
-            continue
-        pre = s[:i]
-        if pre.endswith("N") or pre.endswith("NK"):     # ::google::protobuf (top level)
-            ns = "google::protobuf"
-        else:
-            # Vendored ``<vendor>::google::protobuf`` — the Itanium nested-name has the
-            # vendor as a length-prefixed component ``<len><vendor>`` ending right
-            # before the ``6google`` token.  Collect the trailing run of mangling chars
-            # and find the ``<digits><name>`` whose name length matches and runs to the
-            # end (e.g. ``20wireless_diagnostics`` -> ``wireless_diagnostics``).
-            j = len(pre)
-            while j > 0 and (pre[j - 1].isalnum() or pre[j - 1] == "_"):
-                j -= 1
-            run = pre[j:]
-            vendor = ""
-            for m in re.finditer(r"\d+", run):
-                name = run[m.end():]
-                if name and len(name) == int(m.group()) and not name[0].isdigit():
-                    vendor = name
-                    break
-            ns = (vendor + "::google::protobuf") if vendor else "google::protobuf"
-        out[ns] = out.get(ns, 0) + 1
-    return out
-
-
-def cpp_protobuf_symbol_count(ctx: BinaryContext) -> int:
-    """Total google::protobuf C++ symbols (top-level + vendored).  Binary mode only."""
-    return sum(cpp_protobuf_namespaces(ctx).values())
-
-
-def protobufc_descriptors(ctx: BinaryContext) -> ProtobufCDescriptors:
-    """protobuf-c (C runtime, e.g. Apple MMCS) message/enum descriptors and runtime
-    symbols in *ctx* — detection only (see :mod:`serializers.protobufc_detect`).
-    Reads data sections through the memory API, so it works in BOTH modes; memoised
-    per ctx because the warning and ``--list-serializers`` both ask."""
-    return _ctx_cache(ctx, "_protobufc_descriptors_cache",
-                      lambda: find_protobufc_descriptors(ctx))
-
-
-def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
-    """Emit ONE consolidated note when an image carries protobuf messages from
-    runtimes other than Apple ``PBCodable``.
-
-    The tool now *decodes* several of these in addition to PBCodable: C++
-    ``google::protobuf`` (full descriptors) and swift-protobuf (field names +
-    numbers) are emitted as additional, serializer-tagged ``.proto`` files (see
-    :mod:`proto.foreign`).  Google's ObjC ``GPBMessage`` and the protobuf-c C runtime
-    are detected but not decodable.  This distinguishes the two so the user knows
-    what was emitted vs merely flagged.  Swift/C++ detection is binary-mode only;
-    protobuf-c detection works in both modes."""
-    decoded: List[str] = []      # runtimes whose descriptors we emit
-    detected: List[str] = []     # present but not decodable
-
-    sw_msgs, sw_enums, sw_modules = swift_protobuf_messages(ctx)
-    if sw_msgs or sw_enums:
-        decoded.append(
-            "swift-protobuf: %d Swift type(s)%s, e.g. %s (field names + numbers; "
-            "wire types not recoverable)" % (
-                len(sw_msgs) + len(sw_enums),
-                " in module %s" % "/".join(sorted(sw_modules)) if sw_modules else "",
-                ", ".join((sw_msgs + sw_enums)[:5]),
-            )
-        )
-
-    cpp_ns = cpp_protobuf_namespaces(ctx)
-    if cpp_ns:
-        total = sum(cpp_ns.values())
-        decoded.append(
-            "C++ google::protobuf: %d symbol(s) [namespace(s): %s]%s (full descriptors "
-            "from the embedded FileDescriptorProto)" % (
-                total, ", ".join(sorted(cpp_ns)),
-                " (a vendored static copy, e.g. Apple Wireless Diagnostics telemetry)"
-                if any(n != "google::protobuf" for n in cpp_ns) else "",
-            )
-        )
-
-    gpb_subs, gpb_bases = google_protobuf_classes(ctx, cl)
-    if gpb_subs:
-        detected.append(
-            "Google protobuf-objc (%s): %d ObjC class(es), e.g. %s — driven by a shared "
-            "GPBDescriptor runtime; not yet decodable by this tool" % (
-                "/".join(sorted(gpb_bases)) or _GPB_RUNTIME_SUFFIX,
-                len(gpb_subs), ", ".join(sorted(gpb_subs)[:5]),
-            )
-        )
-
-    try:
-        pbc = protobufc_descriptors(ctx)
-    except (NameError, ImportError):
-        raise
-    except Exception as exc:
-        log.debug("protobuf-c detection failed: %s", exc)
-        pbc = None
-    if pbc:
-        detected.append(
-            "protobuf-c (C runtime): %d message + %d enum descriptor(s)%s%s — a static "
-            "ProtobufCMessageDescriptor table; field layouts not decoded by this tool" % (
-                len(pbc.messages), len(pbc.enums),
-                ", e.g. " + ", ".join(pbc.messages[:5]) if pbc.messages else "",
-                "" if pbc.messages or pbc.enums else
-                " (runtime symbols only: %d _protobuf_c_* symbol(s))" % len(pbc.symbols),
-            )
-        )
-
-    if not decoded and not detected:
-        return
-
-    msg = ("this image carries protobuf messages from non-PBCodable runtime(s) "
-           "in addition to PBCodable:")
-    if decoded:
-        msg += ("\n  DECODED (emitted as separate files, each tagged "
-                "`// Serializer:`):\n    - " + "\n    - ".join(decoded))
-    if detected:
-        msg += ("\n  DETECTED but NOT decodable (no descriptor table this tool can "
-                "read — see README):\n    - " + "\n    - ".join(detected))
-    log.warning(msg)
 
 
 # ── Helpers extracted from extract_proto_message ──────────────────────────────
@@ -1629,7 +1183,7 @@ def extract_all(
                         "_proto_inherits", "_proto_class_heuristic_only",
                         "_proto_class_cluster_only", "_helper_votes",
                         "_helper_canon", "_map_writers", "_struct_sites",
-                        "_dictrep_names"):
+                        "_dictrep_names", "_diagnostics"):
         try:
             setattr(ctx, _cache_attr, None)
         except Exception:
@@ -1709,14 +1263,15 @@ def extract_all(
             # at debug for diagnosis.  Normal "not a proto class" cases return
             # None rather than raising, so they are NOT counted here.
             failed.append(cls.name)
+            get_diagnostics(ctx).failed_classes.append((cls.name, f"{type(exc).__name__}: {exc}"))
             log.debug("Failed to extract proto for %s: %s", cls.name, exc)
         if msg is not None:
             messages.append(msg)
 
     if failed:
         log.warning(
-            "extract_all: %d proto class(es) failed to extract and were "
-            "skipped (run at debug level for per-class detail): %s",
+            "extract_all: %d proto class(es) failed to extract and are MISSING from "
+            "the output (run with -v for per-class detail): %s",
             len(failed),
             ", ".join(sorted(failed)[:10]) + (" …" if len(failed) > 10 else ""),
         )
@@ -1730,61 +1285,6 @@ def extract_all(
 
     messages.sort(key=lambda m: m.class_name)
     return messages
-
-
-def _apply_map_types(fld: ProtoField, types: MapTypes) -> None:
-    """Apply resolved :class:`MapTypes` to a map field (see :func:`_finalize_map_fields`).
-
-    * key + value known  -> ``map<K, V>`` (singular; a message value is named by its ObjC
-      class and resolved by the emitter), no note — nothing is uncertain.
-    * key known, value a message of unknown class -> ``map<K, bytes>`` + note (a message is
-      length-delimited like bytes, so every entry still decodes).
-    * anything else -> ``repeated bytes`` of entry messages + note (the entries are all
-      visible, unlike a singular ``bytes`` which keeps only the last)."""
-    if types.key_type and types.value_type == "message" and types.value_class:
-        fld.map_key_type, fld.map_value_class = types.key_type, types.value_class
-        fld.type_inference_note = None
-    elif types.key_type and types.value_type not in (None, "message"):
-        fld.map_key_type, fld.map_value_type = types.key_type, types.value_type
-        fld.type_inference_note = None
-    elif types.key_type and types.value_type == "message":
-        fld.map_key_type, fld.map_value_type = types.key_type, "bytes"
-        fld.type_inference_note = _MAP_VALUE_CLASS_NOTE.format(reason=types.reason)
-    else:
-        fld.label = FieldLabel.REPEATED
-        fld.type_inference_note = _MAP_UNRESOLVED_NOTE.format(reason=types.reason)
-
-
-def _finalize_map_fields(
-    ctx: BinaryContext, cl: ClassList, messages: List[ProtoMessage],
-    core_index: Dict[int, str],
-) -> None:
-    """Post-extraction pass (#41): type every map field whose entry writer was recovered.
-
-    Runs after the whole image is extracted because a map key/value helper's type is the
-    unanimous type of the ivars that use it binary-wide (``ctx._helper_votes``, filled by
-    :func:`record_helper_votes` as each class was extracted).  A field with no entry
-    writer is left untouched (flagged ``bytes``)."""
-    writers = getattr(ctx, "_map_writers", None) or {}
-    if not writers:
-        return
-    known = _proto_class_set(ctx, cl)
-    by_name = {c.name: c for c in cl if not c.is_meta}
-    for msg in messages:
-        cls = by_name.get(msg.class_name)
-        for fld in msg.fields:
-            writer = writers.get((msg.class_name, fld.name))
-            if writer is None or cls is None:
-                continue
-            try:
-                types = resolve_map_types(ctx, cls, writer, core_index, known)
-            except (NameError, ImportError):
-                raise
-            except Exception as exc:
-                log.debug("map type resolution failed for %s.%s: %s",
-                          msg.class_name, fld.name, exc)
-                types = MapTypes(None, None, None, f"analysis failed: {type(exc).__name__}")
-            _apply_map_types(fld, types)
 
 
 def is_proto_class(cls: ObjcClass) -> bool:

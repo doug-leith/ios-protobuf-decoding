@@ -19,8 +19,7 @@ this file: `cmp w2,#5;b.eq` (value 5) / `cmp w2,#1;b.eq` (value 1) /
 `cbnz w2,<default>` (value 0, fall-through when zero) — no `csel`
 anywhere. The value string lands in a callee-saved register (x19), not
 x0 — see proto/enums.py's `_isolated_value_target`. All 3 values recover
-(values_confirmed=False, as always for this fallback path — only the
-pointer-table path ever confirms).
+(every value evaluated cleanly, so values_confirmed=True).
 """
 
 _STATUS_VALUES = [
@@ -39,7 +38,7 @@ EXPECTED = {
         "enums": {
             "TestStatus": {
                 "values": _STATUS_VALUES,
-                "values_confirmed": False,
+                "values_confirmed": True,
                 "values_truncated": False,
             },
         },

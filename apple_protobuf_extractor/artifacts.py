@@ -107,11 +107,6 @@ def geoservices_path():
     return os.path.join(data_dir(), _GEOSERVICES_CACHE_TREE_REL)
 
 
-def geod_path():
-    return os.environ.get("MACHO_TEST_GEOD", "").strip() or \
-        os.path.join(data_dir(), "geod")
-
-
 def swift_oracle_path():
     """Path to the committed swift-protobuf ORACLE fixture binary (see
     tests/swift_oracle_fixture/README.md) — a genuinely-compiled, known-schema

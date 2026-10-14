@@ -170,8 +170,8 @@ class TestSummaryAndWarning(unittest.TestCase):
         self.assertNotIn(F.PROTOBUFC_SERIALIZER, labels)
 
     def test_foreign_warning_lists_protobufc_as_not_decodable(self):
-        from proto.extractor import _warn_if_foreign_protobuf
-        with self.assertLogs("proto.extractor", level="WARNING") as cm:
+        from proto.foreign_detect import _warn_if_foreign_protobuf
+        with self.assertLogs("proto.foreign_detect", level="WARNING") as cm:
             _warn_if_foreign_protobuf(self._synthetic(), [])
         self.assertEqual(len(cm.records), 1)                # ONE consolidated warning
         text = cm.records[0].getMessage()
@@ -181,9 +181,9 @@ class TestSummaryAndWarning(unittest.TestCase):
         self.assertNotIn("DECODED", text.replace("NOT decodable", ""))
 
     def test_foreign_warning_silent_without_protobufc(self):
-        from proto.extractor import _warn_if_foreign_protobuf
+        from proto.foreign_detect import _warn_if_foreign_protobuf
         ctx, _ = _ctx([("__const", b"\0" * 64)], ["x"])
-        logger = logging.getLogger("proto.extractor")
+        logger = logging.getLogger("proto.foreign_detect")
         with self.assertLogs(logger, level="WARNING") as cm:
             logger.warning("sentinel")                      # assertLogs needs ≥1 record
             _warn_if_foreign_protobuf(ctx, [])
@@ -276,9 +276,9 @@ class TestMMCSCacheNative(_MMCSChecks, unittest.TestCase):
         self.assertEqual(len(s.names), MMCS_MESSAGES)
 
     def test_warning(self):
-        from proto.extractor import _warn_if_foreign_protobuf
+        from proto.foreign_detect import _warn_if_foreign_protobuf
         ctx, cl = self._ctx_cl("MMCS")
-        with self.assertLogs("proto.extractor", level="WARNING") as cm:
+        with self.assertLogs("proto.foreign_detect", level="WARNING") as cm:
             _warn_if_foreign_protobuf(ctx, cl)
         self.assertIn("protobuf-c", cm.records[0].getMessage())
 

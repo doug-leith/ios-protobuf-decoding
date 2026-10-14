@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.memory    import BinaryContext, _ctx_cache
-from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm    import disasm, _parse_imm, _norm_reg
 from proto.arm64cfg  import parse_adrp, mem_operand

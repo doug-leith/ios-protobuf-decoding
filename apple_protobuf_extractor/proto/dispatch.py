@@ -10,10 +10,10 @@ from __future__ import annotations
 import struct
 import logging
 import re
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from macho.memory    import BinaryContext, _ctx_cache
-from macho.classlist import ClassList, ObjcClass
+from macho.classlist import ObjcClass
 from macho.objc_abi  import CLASS_T_DATA, CLASS_RO_NAME, FAST_DATA_MASK
 from macho.disasm   import (disasm, Insn, find_adrp_add_target, _parse_imm,
                              _norm_reg, iter_bl_targets, iter_branch_targets)
@@ -21,7 +21,7 @@ from macho.arm64decode import (
     _decode_adr, _decode_b_bl_target, _decode_bcond,
     _decode_cmp_imm, _decode_ldr_reg_off, _decode_lsr_imm, _decode_sub_imm,
     _is_br_insn, _is_bl_word, _is_func_prologue_word, _is_ret_word,
-    _COND_EQ, _COND_NE, _COND_HI, _COND_HS, range_from_unsigned_gate)
+    _COND_HI, _COND_HS, range_from_unsigned_gate)
 from proto.arm64cfg import ivar_slot_loads
 from proto.protoclass_heuristic import _is_proto_class
 

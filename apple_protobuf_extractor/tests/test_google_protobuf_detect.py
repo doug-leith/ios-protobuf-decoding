@@ -13,6 +13,8 @@ import unittest
 
 from macho.classlist import ObjcClass, ClassList
 import proto.extractor as E
+import proto.foreign_detect as FD
+import proto.protoclass_set as PS
 
 
 def _cls(va, name, super_va):
@@ -36,7 +38,7 @@ class TestGoogleProtobufDetectOffline(unittest.TestCase):
         resp = _cls(0x3000, "FooResponse", 0x1000)
         plain = _cls(0x4000, "Bar", NSOBJECT)            # unrelated NSObject subclass
         cl = ClassList([base, req, resp, plain])
-        subs, bases = E.google_protobuf_classes(_NoReadCtx(), cl)
+        subs, bases = FD.google_protobuf_classes(_NoReadCtx(), cl)
         self.assertEqual(set(subs), {"FooRequest", "FooResponse"})
         self.assertEqual(set(bases), {"FooGPBMessage"})
         self.assertNotIn("Bar", subs)
@@ -47,7 +49,7 @@ class TestGoogleProtobufDetectOffline(unittest.TestCase):
         base = _cls(0x1000, "GPBMessage", NSOBJECT)      # unprefixed runtime base
         msg  = _cls(0x2000, "MyMessage", 0x1000)
         cl = ClassList([base, msg])
-        subs, bases = E.google_protobuf_classes(_NoReadCtx(), cl)
+        subs, bases = FD.google_protobuf_classes(_NoReadCtx(), cl)
         self.assertEqual(set(subs), {"MyMessage"})
         self.assertEqual(set(bases), {"GPBMessage"})
 
@@ -55,7 +57,7 @@ class TestGoogleProtobufDetectOffline(unittest.TestCase):
         NSOBJECT = 0x9000
         a = _cls(0x1000, "AThing", NSOBJECT)
         b = _cls(0x2000, "BThing", 0x1000)
-        subs, bases = E.google_protobuf_classes(_NoReadCtx(), ClassList([a, b]))
+        subs, bases = FD.google_protobuf_classes(_NoReadCtx(), ClassList([a, b]))
         self.assertEqual(subs, [])
         self.assertEqual(set(bases), set())
 
@@ -72,11 +74,11 @@ class TestGoogleProtobufDetectLive(unittest.TestCase):
     def test_transparencyd_gpb_detected_and_warned(self):
         import live_artifacts as V
         ctx, st, cl = V.load_binary("MACHO_TEST_TRANSPARENCYD", "libexec/transparencyd")
-        subs, bases = E.google_protobuf_classes(ctx, cl)
+        subs, bases = FD.google_protobuf_classes(ctx, cl)
         self.assertGreater(len(subs), 10)
         self.assertTrue(all(b.endswith("GPBMessage") for b in bases), bases)
-        self.assertEqual(len(E._proto_class_set(ctx, cl)), 0)  # no PBCodable
-        with self.assertLogs("proto.extractor", level="WARNING") as cm:
+        self.assertEqual(len(PS._proto_class_set(ctx, cl)), 0)  # no PBCodable
+        with self.assertLogs("proto.foreign_detect", level="WARNING") as cm:
             list(E.extract_all(ctx, st, cl))
         self.assertTrue(any("Google protobuf-objc" in m for m in cm.output))
 
@@ -92,7 +94,7 @@ class TestGoogleProtobufNoFalsePositive(unittest.TestCase):
     def test_pbcodable_framework_has_no_gpb(self):
         import live_artifacts as V
         ctx, st, cl = V.load_cache("GeoServices")
-        subs, _ = E.google_protobuf_classes(ctx, cl)
+        subs, _ = FD.google_protobuf_classes(ctx, cl)
         self.assertEqual(subs, [])
 
 
@@ -116,33 +118,33 @@ _SWIFT_NESTED = "_$s6MyTool5OuterV5InnerV13SwiftProtobuf7MessageAAMc"
 
 class TestSwiftProtobufParse(unittest.TestCase):
     def test_parse_message_descriptor(self):
-        self.assertEqual(E._parse_swift_pb_symbol(_SWIFT_MSG),
+        self.assertEqual(FD._parse_swift_pb_symbol(_SWIFT_MSG),
                          ("message", "bookdatastored", "PBPropertyValue"))
 
     def test_parse_enum_descriptor(self):
-        self.assertEqual(E._parse_swift_pb_symbol(_SWIFT_ENUM),
+        self.assertEqual(FD._parse_swift_pb_symbol(_SWIFT_ENUM),
                          ("enum", "bookdatastored", "MarkedAsFinishedMechanism"))
 
     def test_parse_public_framework_descriptor(self):
-        self.assertEqual(E._parse_swift_pb_symbol(_SWIFT_PUBLIC),
+        self.assertEqual(FD._parse_swift_pb_symbol(_SWIFT_PUBLIC),
                          ("message", "MyTool", "MyMessage"))
 
     def test_parse_nested_type(self):
-        self.assertEqual(E._parse_swift_pb_symbol(_SWIFT_NESTED),
+        self.assertEqual(FD._parse_swift_pb_symbol(_SWIFT_NESTED),
                          ("message", "MyTool", "Outer.Inner"))
 
     def test_degenerate_mangling_returns_none(self):
         # matches the protocol regex but has no module+type prefix -> < 2 idents
-        self.assertIsNone(E._parse_swift_pb_symbol("SwiftProtobuf7MessageAAMc"))
+        self.assertIsNone(FD._parse_swift_pb_symbol("SwiftProtobuf7MessageAAMc"))
         # protocol present but only a single identifier before it
-        self.assertIsNone(E._parse_swift_pb_symbol("_$s3FooSwiftProtobuf7MessageAAMc"))
+        self.assertIsNone(FD._parse_swift_pb_symbol("_$s3FooSwiftProtobuf7MessageAAMc"))
 
     def test_non_conformance_returns_none(self):
-        self.assertIsNone(E._parse_swift_pb_symbol("_OBJC_CLASS_$_NSString"))
+        self.assertIsNone(FD._parse_swift_pb_symbol("_OBJC_CLASS_$_NSString"))
         # _MessageImplementationBase / _ProtoNameProviding must NOT be counted as
         # the Message protocol (only the bare `7Message` descriptor is).
         impl = "_$s14bookdatastored15PBPropertyValueV21InternalSwiftProtobuf26_MessageImplementationBaseAAMc"
-        self.assertIsNone(E._parse_swift_pb_symbol(impl))
+        self.assertIsNone(FD._parse_swift_pb_symbol(impl))
 
 
 class TestSwiftProtobufDetect(unittest.TestCase):
@@ -150,13 +152,13 @@ class TestSwiftProtobufDetect(unittest.TestCase):
         ctx = _SymCtx([_SWIFT_MSG, _SWIFT_ENUM, _SWIFT_PUBLIC, "_OBJC_CLASS_$_X",
                        # the impl/nameproviding siblings must not double-count
                        "_$s14bookdatastored15PBPropertyValueV21InternalSwiftProtobuf26_MessageImplementationBaseAAMc"])
-        msgs, enums, mods = E.swift_protobuf_messages(ctx)
+        msgs, enums, mods = FD.swift_protobuf_messages(ctx)
         self.assertEqual(msgs, ["MyMessage", "PBPropertyValue"])
         self.assertEqual(enums, ["MarkedAsFinishedMechanism"])
         self.assertEqual(set(mods), {"bookdatastored", "MyTool"})
 
     def test_no_swift_returns_empty(self):
-        msgs, enums, mods = E.swift_protobuf_messages(_SymCtx(["_OBJC_CLASS_$_X"]))
+        msgs, enums, mods = FD.swift_protobuf_messages(_SymCtx(["_OBJC_CLASS_$_X"]))
         self.assertEqual((msgs, enums, list(mods)), ([], [], []))
 
 
@@ -167,8 +169,8 @@ class TestCppProtobufDetect(unittest.TestCase):
             "__ZNK6google8protobuf7Message11GetTypeNameEv",
             "_OBJC_CLASS_$_X",
         ])
-        self.assertEqual(E.cpp_protobuf_namespaces(ctx), {"google::protobuf": 2})
-        self.assertEqual(E.cpp_protobuf_symbol_count(ctx), 2)
+        self.assertEqual(FD.cpp_protobuf_namespaces(ctx), {"google::protobuf": 2})
+        self.assertEqual(FD.cpp_protobuf_symbol_count(ctx), 2)
 
     def test_vendored_awd_namespace_named_and_counted(self):
         # wireless_diagnostics::google::protobuf is the AWD telemetry runtime
@@ -178,7 +180,7 @@ class TestCppProtobufDetect(unittest.TestCase):
             "__ZN20wireless_diagnostics6google8protobuf11MessageLiteD2Ev",
             "__ZN20wireless_diagnostics6google8protobuf14DescriptorPool14generated_poolEv",
         ])
-        self.assertEqual(E.cpp_protobuf_namespaces(ctx),
+        self.assertEqual(FD.cpp_protobuf_namespaces(ctx),
                          {"wireless_diagnostics::google::protobuf": 2})
 
     def test_mixed_top_level_and_vendored(self):
@@ -186,7 +188,7 @@ class TestCppProtobufDetect(unittest.TestCase):
             "__ZN6google8protobuf11MessageLiteD2Ev",
             "__ZN20wireless_diagnostics6google8protobuf11MessageLiteD2Ev",
         ])
-        self.assertEqual(E.cpp_protobuf_namespaces(ctx),
+        self.assertEqual(FD.cpp_protobuf_namespaces(ctx),
                          {"google::protobuf": 1,
                           "wireless_diagnostics::google::protobuf": 1})
 
@@ -206,8 +208,8 @@ class TestForeignProtobufWarnings(unittest.TestCase):
         req = _cls(0x2000, "FooRequest", 0x1000)
         cl = ClassList([base, req])
         ctx = _SymClassCtx([_SWIFT_MSG, "__ZN6google8protobuf11MessageLiteD2Ev"])
-        with self.assertLogs("proto.extractor", level="WARNING") as cm:
-            E._warn_if_foreign_protobuf(ctx, cl)
+        with self.assertLogs("proto.foreign_detect", level="WARNING") as cm:
+            FD._warn_if_foreign_protobuf(ctx, cl)
         self.assertEqual(len(cm.output), 1)            # consolidated, not 3 separate
         out = cm.output[0]
         self.assertIn("non-PBCodable runtime", out)
@@ -225,8 +227,8 @@ class TestForeignProtobufWarnings(unittest.TestCase):
 
     def test_no_runtimes_no_warning(self):
         with self.assertRaises(AssertionError):       # assertLogs fails if nothing logged
-            with self.assertLogs("proto.extractor", level="WARNING"):
-                E._warn_if_foreign_protobuf(_SymClassCtx(["_OBJC_CLASS_$_X"]),
+            with self.assertLogs("proto.foreign_detect", level="WARNING"):
+                FD._warn_if_foreign_protobuf(_SymClassCtx(["_OBJC_CLASS_$_X"]),
                                             ClassList([]))
 
 
@@ -244,9 +246,9 @@ except Exception:
 class TestForeignProtobufLocationdLive(unittest.TestCase):
     def test_locationd_swift_clean_but_cpp_vendored_reported(self):
         ctx, st, cl = _VL.load_locationd()
-        msgs, enums, _ = E.swift_protobuf_messages(ctx)
+        msgs, enums, _ = FD.swift_protobuf_messages(ctx)
         self.assertEqual((msgs, enums), ([], []))           # no swift-protobuf
-        ns = E.cpp_protobuf_namespaces(ctx)
+        ns = FD.cpp_protobuf_namespaces(ctx)
         self.assertTrue(ns, "expected vendored AWD google::protobuf usage")
         self.assertTrue(any("google::protobuf" in n for n in ns), ns)
         # locationd's C++ usage is the vendored AWD copy, not standard libprotobuf

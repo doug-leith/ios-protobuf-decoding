@@ -790,10 +790,6 @@ false
 "MODULE_TYPE_ACTIONS_ROW"
 ],
 [
-13,
-"MODULE_TYPE_UNKNOWN_13"
-],
-[
 14,
 "MODULE_TYPE_RESERVATIONS"
 ],
@@ -2518,7 +2514,7 @@ false
 "ACTIVE_TILE_SET_STYLE_UNUSED_99"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOActiveTileSet.<enum:ChecksumType>": [
@@ -2532,7 +2528,7 @@ false
 "CHECKSUM_TYPE_APPENDED_MD5"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOActiveTileSet.<enum:RequestStyle>": [
@@ -2546,7 +2542,7 @@ false
 "REQUEST_STYLE_HEADER_PARAMS_VERSION_BASED_HMAC_AUTH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOActiveTileSet.<enum:TileUpdateBehavior>": [
@@ -2560,7 +2556,7 @@ false
 "TILE_UPDATE_BEHAVIOR_ETAG"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOActiveTileSet.availableTiles": [
@@ -2917,7 +2913,7 @@ false
 "ADDRESS_CORRECTION_INIT_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOAddressCorrectionInitResponse.address": [
@@ -3994,10 +3990,6 @@ false
 [
 15,
 "ANALYTICS_PIPELINE_STATE_DATA_PLACE_CARD_PLACE_CARD_TYPE_TRANSIT_PLACECARD"
-],
-[
-16,
-"ANALYTICS_PIPELINE_STATE_DATA_PLACE_CARD_PLACE_CARD_TYPE_UNKNOWN_PLACECARD_16"
 ],
 [
 17,
@@ -5754,7 +5746,7 @@ false
 "ANALYTICS_PIPELINE_STATE_DATA_RESTORE_UI_TARGET_LOOK_AROUND_PIP_PLACECARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOAnalyticsPipelineStateData.<enum:ApLayout>": [
@@ -8072,7 +8064,7 @@ false
 "BATCH_REV_GEOCODE_REQUEST_ADDITIONAL_PLACE_TYPES_PERDU_CITY"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOBatchRevGeocodeRequest.additionalPlaceTypes": [
@@ -8168,7 +8160,7 @@ false
 "BATCH_REV_GEOCODE_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOBatchRevGeocodeResponse.batchPlaceResults": [
@@ -8624,7 +8616,7 @@ false
 "BUSINESS_RESOLUTION_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOBusinessResolutionResponse.businessName": [
@@ -10421,7 +10413,7 @@ false
 "SHOW_RESULTS_IN_LIST_VIEW"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOClientACSuggestionEntry.age": [
@@ -10950,7 +10942,7 @@ false
 "CLIENT_CAPABILITIES_MAX_MANEUVER_TYPE_SUPPORTED_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOClientCapabilities.<enum:ClientCapabilitiesSupportedTransitFeatures>": [
@@ -12393,7 +12385,7 @@ false
 "COMPANION_CYCLING_STEP_DRIVING_SIDE_LEFT_SIDE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionCyclingStep.<enum:CompanionCyclingStepJunctionType>": [
@@ -12407,7 +12399,7 @@ false
 "COMPANION_CYCLING_STEP_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionCyclingStep.<enum:CompanionCyclingStepManeuverType>": [
@@ -12657,7 +12649,7 @@ false
 "COMPANION_CYCLING_STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionCyclingStep.artworkOverride": [
@@ -12770,7 +12762,7 @@ false
 "COMPANION_DRIVE_STEP_DRIVING_SIDE_LEFT_SIDE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionDriveStep.<enum:CompanionDriveStepJunctionType>": [
@@ -12784,7 +12776,7 @@ false
 "COMPANION_DRIVE_STEP_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionDriveStep.<enum:CompanionDriveStepManeuverType>": [
@@ -13034,7 +13026,7 @@ false
 "COMPANION_DRIVE_STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionDriveStep.artworkOverride": [
@@ -13165,7 +13157,7 @@ false
 "COMPANION_FERRY_STEP_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionFerryStep.<enum:CompanionFerryStepManeuverType>": [
@@ -13415,7 +13407,7 @@ false
 "COMPANION_FERRY_STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionFerryStep.artworkOverride": [
@@ -13483,7 +13475,7 @@ false
 "COMPANION_GENERIC_STEP_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionGenericStep.<enum:CompanionGenericStepManeuverType>": [
@@ -13733,7 +13725,7 @@ false
 "COMPANION_GENERIC_STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionGenericStep.<enum:CompanionGenericStepTransportType>": [
@@ -14452,7 +14444,7 @@ false
 "COMPANION_ROUTE_STATUS_HAPTICS_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionRouteStatus.alightMessage": [
@@ -14628,7 +14620,7 @@ false
 "COMPANION_ROUTE_UPDATE_TYPE_TRANSIT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionRouteUpdate.lastUpdated": [
@@ -14912,7 +14904,7 @@ false
 "COMPANION_WALK_STEP_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionWalkStep.<enum:CompanionWalkStepManeuverType>": [
@@ -15162,7 +15154,7 @@ false
 "COMPANION_WALK_STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOCompanionWalkStep.artworkOverride": [
@@ -16564,7 +16556,7 @@ false
 "DAILY_USE_SUMMARY_USE_EVENT_TYPE_MODERN_MAP_EXPLORED"
 ]
 ],
-false,
+true,
 false
 ],
 "GEODailyUseSummaryUseEvent.appType": [
@@ -17510,7 +17502,7 @@ false
 "DIRECTIONS_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEODirectionsResponse.<enum:DirectionsResponseSupportedTransportTypes>": [
@@ -18662,7 +18654,7 @@ false
 "ETA_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOETAResponse.clientMetrics": [
@@ -18890,7 +18882,7 @@ false
 "ETA_RESULT_BY_TYPE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOETAResultByType.<enum:ETAResultByTypeTransportType>": [
@@ -19768,7 +19760,7 @@ false
 "ETA_TRAFFIC_UPDATE_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOETATrafficUpdateResponse.arrivalParameters": [
@@ -20687,7 +20679,7 @@ false
 "PAYMENT_TYPE_IC_CARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOFareOptions.paymentType": [
@@ -20773,10 +20765,6 @@ false
 [
 6,
 "FORMAT_ARGUMENT_FORMAT_FREQUENCY_RANGE"
-],
-[
-7,
-"FORMAT_ARGUMENT_FORMAT_UNKNOWN_7"
 ],
 [
 8,
@@ -21961,7 +21949,7 @@ false
 "GUIDANCE_IMPORTANCE_MODE_GUIDANCE_PREFERENCE_TYPES_ALERTS_ONLY"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOGuidanceImportanceMode.guidancePreferenceTypes": [
@@ -22184,7 +22172,7 @@ false
 "IMAGE_SERVICE_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOImageServiceResponse.height": [
@@ -22521,7 +22509,7 @@ false
 "JUNCTION_INFO_DRIVING_SIDE_LEFT_SIDE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOJunctionInfo.<enum:JunctionInfoJunctionType>": [
@@ -22535,7 +22523,7 @@ false
 "JUNCTION_INFO_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOJunctionInfo.<enum:JunctionInfoManeuverType>": [
@@ -22785,7 +22773,7 @@ false
 "JUNCTION_INFO_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOJunctionInfo.drivingSide": [
@@ -23915,7 +23903,7 @@ false
 "LANE_ARROWHEAD_CATEGORY_U_TURN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLaneArrowhead.angle": [
@@ -24545,7 +24533,7 @@ false
 "LOCATION_COURSE_TYPE_DEAD_RECKONING"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLocation.<enum:LocationFormOfWay>": [
@@ -24571,10 +24559,6 @@ false
 "LOCATION_FORM_OF_WAY_PART_OF_A_ROUNDABOUT"
 ],
 [
-5,
-"LOCATION_FORM_OF_WAY_FOW_UNKNOWN_5"
-],
-[
 6,
 "LOCATION_FORM_OF_WAY_PART_OF_AN_ETA_PARKING_PLACE"
 ],
@@ -24585,10 +24569,6 @@ false
 [
 8,
 "LOCATION_FORM_OF_WAY_PART_OF_AN_ETA_UNSTRUCTURED_TRAFFIC_SQUARE"
-],
-[
-9,
-"LOCATION_FORM_OF_WAY_FOW_UNKNOWN_9"
 ],
 [
 10,
@@ -24603,20 +24583,12 @@ false
 "LOCATION_FORM_OF_WAY_ENTRANCE_EXIT_TO_FROM_A_CAR_PARK"
 ],
 [
-13,
-"LOCATION_FORM_OF_WAY_FOW_UNKNOWN_13"
-],
-[
 14,
 "LOCATION_FORM_OF_WAY_PART_OF_A_PEDESTRIAN_ZONE"
 ],
 [
 15,
 "LOCATION_FORM_OF_WAY_PART_OF_A_WALKWAY"
-],
-[
-16,
-"LOCATION_FORM_OF_WAY_FOW_UNKNOWN_16"
 ],
 [
 17,
@@ -25132,7 +25104,7 @@ false
 "LOG_MESSAGE_TYPE_LOG_DISCARD_EVENT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMessage.groupRetryCount": [
@@ -25184,10 +25156,6 @@ false
 [
 2,
 "LOG_MSG_EVENT_TYPE_STATE_TIMING"
-],
-[
-3,
-"LOG_MSG_EVENT_TYPE_UNKNOWN_3"
 ],
 [
 4,
@@ -31543,7 +31511,7 @@ false
 "LOG_MSG_EVENT_DISPLAY_ANALYTIC_DISPLAY_ACTION_TRIGGER_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgEventDisplayAnalytic.<enum:LogMsgEventDisplayAnalyticDisplayEvent>": [
@@ -31557,7 +31525,7 @@ false
 "LOG_MSG_EVENT_DISPLAY_ANALYTIC_DISPLAY_EVENT_MUNIN_MOVE_LOCATION"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgEventDisplayAnalytic.displayActionTrigger": [
@@ -31724,7 +31692,7 @@ false
 "DISPLAY_TYPE_NAVIGATION"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgEventGridDuration.<enum:GridEndState>": [
@@ -32204,7 +32172,7 @@ false
 "LOG_MSG_EVENT_MARCO_LITE_USAGE_VIO_TRIGGER_TREADSTONE_TRIGGERED"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgEventMarcoLiteUsage.totalNavTime": [
@@ -32317,10 +32285,6 @@ false
 [
 14,
 "LOG_MSG_EVENT_NETWORK_SERVICE_RESOURCE_LOADER"
-],
-[
-15,
-"LOG_MSG_EVENT_NETWORK_SERVICE_NETWORK_SERVICE_UNKNOWN_15"
 ],
 [
 16,
@@ -33385,32 +33349,16 @@ false
 "MSG_WEATHER_TYPE_CONDITION_CLOUDY"
 ],
 [
-28,
-"MSG_WEATHER_TYPE_CONDITION_NOT_AVAILABLE_28"
-],
-[
 29,
 "MSG_WEATHER_TYPE_CONDITION_MOSTLY_CLOUDY"
-],
-[
-30,
-"MSG_WEATHER_TYPE_CONDITION_NOT_AVAILABLE_30"
 ],
 [
 31,
 "MSG_WEATHER_TYPE_CONDITION_PARTLY_CLOUDY"
 ],
 [
-32,
-"MSG_WEATHER_TYPE_CONDITION_NOT_AVAILABLE_32"
-],
-[
 33,
 "MSG_WEATHER_TYPE_CONDITION_CLEAR"
-],
-[
-34,
-"MSG_WEATHER_TYPE_CONDITION_NOT_AVAILABLE_34"
 ],
 [
 35,
@@ -34866,10 +34814,6 @@ false
 [
 14,
 "LOG_MSG_EVENT_THROTTLE_NETWORK_SERVICE_RESOURCE_LOADER"
-],
-[
-15,
-"LOG_MSG_EVENT_THROTTLE_NETWORK_SERVICE_NETWORK_SERVICE_UNKNOWN_15"
 ],
 [
 16,
@@ -40159,7 +40103,7 @@ false
 "LOG_MSG_EVENT_USER_ACTION_EVENT_ACTION_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgEventUserAction.<enum:LogMsgEventUserActionEventTarget>": [
@@ -41909,7 +41853,7 @@ false
 "LOG_MSG_EVENT_USER_ACTION_EVENT_TARGET_LOOK_AROUND_PIP_PLACECARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgEventUserAction.actionRichProviderId": [
@@ -42028,10 +41972,6 @@ false
 [
 12,
 "MODULE_TYPE_ACTIONS_ROW"
-],
-[
-13,
-"MODULE_TYPE_UNKNOWN_13"
 ],
 [
 14,
@@ -42549,7 +42489,7 @@ false
 "LOG_MSG_STATE_TYPE_MAPS_PLACE_IDS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgState.account": [
@@ -47869,7 +47809,7 @@ false
 "LOG_MSG_STATE_ACCOUNT_POSSIBLE_ACTIONS_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStateAccount.possibleActions": [
@@ -52649,7 +52589,7 @@ false
 "LOG_MSG_STATE_CURATED_COLLECTION_IMPOSSIBLE_ACTIONS_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStateCuratedCollection.<enum:LogMsgStateCuratedCollectionPlacecardType>": [
@@ -52717,10 +52657,6 @@ false
 [
 15,
 "LOG_MSG_STATE_CURATED_COLLECTION_PLACECARD_TYPE_TRANSIT_PLACECARD"
-],
-[
-16,
-"LOG_MSG_STATE_CURATED_COLLECTION_PLACECARD_TYPE_UNKNOWN_PLACECARD_16"
 ],
 [
 17,
@@ -57417,7 +57353,7 @@ false
 "LOG_MSG_STATE_CURATED_COLLECTION_POSSIBLE_ACTIONS_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStateCuratedCollection.collectionDetails": [
@@ -62224,7 +62160,7 @@ false
 "LOG_MSG_STATE_DETAIL_LOOK_AROUND_LOG_RECORD_ACTION_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStateDetailLookAroundLogRecord.<enum:LogMsgStateDetailLookAroundLogRecordTarget>": [
@@ -63974,7 +63910,7 @@ false
 "LOG_MSG_STATE_DETAIL_LOOK_AROUND_LOG_RECORD_TARGET_LOOK_AROUND_PIP_PLACECARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStateDetailLookAroundLogRecord.action": [
@@ -66266,10 +66202,6 @@ false
 [
 15,
 "LOG_MSG_STATE_PLACE_CARD_PLACECARD_TYPE_TRANSIT_PLACECARD"
-],
-[
-16,
-"LOG_MSG_STATE_PLACE_CARD_PLACECARD_TYPE_UNKNOWN_PLACECARD_16"
 ],
 [
 17,
@@ -70966,7 +70898,7 @@ false
 "LOG_MSG_STATE_PLACE_CARD_POSSIBLE_ACTIONS_PAN_RIGHT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStatePlaceCard.<enum:LogMsgStatePlaceCardUnactionableUiElements>": [
@@ -73225,7 +73157,7 @@ false
 "LOG_MSG_STATE_RAP_ENTRY_POINT_LOOK_AROUND_PIP_PLACECARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOLogMsgStateRAP.duration": [
@@ -74032,7 +73964,7 @@ false
 "MANEUVER_DATA_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOManeuverData.junctionInfo": [
@@ -74212,7 +74144,7 @@ false
 "MAP_ITEM_HANDLE_TYPE_PLACE_REFINEMENT_PARAMETERS_TYPE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOMapItemHandle.clientAttributes": [
@@ -75552,7 +75484,7 @@ false
 "MAP_SERVICE_TRAITS_REQUEST_PURPOSE_ROUTE_WAYPOINT_RESOLUTION"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOMapServiceTraits.<enum:MapServiceTraitsSearchOriginationType>": [
@@ -77916,7 +77848,7 @@ false
 "NAV_CAMERA_STATE_UPCOMING_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEONavCameraState.distanceToManeuver": [
@@ -78877,7 +78809,7 @@ false
 "GEOOriginalRoute.<enum:OriginalRoutePurpose>": [
 [],
 false,
-false
+true
 ],
 "GEOOriginalRoute.originalDirectionsResponseID": [
 "bytes",
@@ -79121,7 +79053,7 @@ false
 "ARTWORK_BADGE_WARNING"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPBTransitArtwork.<enum:ArtworkType>": [
@@ -79153,10 +79085,6 @@ false
 "ARTWORK_USE_LINE"
 ],
 [
-2,
-"ARTWORK_USE_UNKNOWN_2"
-],
-[
 3,
 "ARTWORK_USE_MODE"
 ],
@@ -79175,10 +79103,6 @@ false
 [
 7,
 "ARTWORK_USE_STATION"
-],
-[
-8,
-"ARTWORK_USE_UNKNOWN_8"
 ],
 [
 9,
@@ -80127,27 +80051,27 @@ false
 "GEOPBTransitStation.<enum:PBTransitStationStructureType>": [
 [
 [
-0,
+-1,
 "PB_TRANSIT_STATION_STRUCTURE_TYPE_TRANSIT_STRUCTURE_TYPE_UNKOWN"
 ],
 [
-1,
+0,
 "PB_TRANSIT_STATION_STRUCTURE_TYPE_TRANSIT_STRUCTURE_TYPE_NONE"
 ],
 [
-2,
+1,
 "PB_TRANSIT_STATION_STRUCTURE_TYPE_SHELTER"
 ],
 [
-3,
+2,
 "PB_TRANSIT_STATION_STRUCTURE_TYPE_BUILDING"
 ],
 [
-4,
+3,
 "PB_TRANSIT_STATION_STRUCTURE_TYPE_UNDERGROUND"
 ],
 [
-5,
+4,
 "PB_TRANSIT_STATION_STRUCTURE_TYPE_ELEVATED"
 ]
 ],
@@ -82196,7 +82120,7 @@ false
 "PD_AUTOCOMPLETE_ENTRY_ADDRESS_PLACE_TYPE_PHYSICAL_FEATURE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDAutocompleteEntryAddress.center": [
@@ -82487,7 +82411,7 @@ false
 "SHOW_RESULTS_IN_LIST_VIEW"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDAutocompleteEntryQuery.completion": [
@@ -82635,7 +82559,7 @@ false
 "PD_AUTOCOMPLETE_FILTER_PLACE_TYPE_FILTERS_PHYSICAL_FEATURE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDAutocompleteFilter.<enum:PDAutocompleteFilterRequestedEntryTypes>": [
@@ -86944,10 +86868,6 @@ false
 "CLIENT_REVISION_CAN_HANDLE_SIRI_TRAFFIC_INCIDENTS"
 ],
 [
-9,
-"CLIENT_REVISION_UNKNOWN_9"
-],
-[
 10,
 "CLIENT_REVISION_AZUL_RELEASE"
 ],
@@ -86956,72 +86876,8 @@ false
 "CLIENT_REVISION_CAN_HANDLE_SMART_CARD_DYNAMIC_LAYOUT"
 ],
 [
-12,
-"CLIENT_REVISION_UNKNOWN_12"
-],
-[
-13,
-"CLIENT_REVISION_UNKNOWN_13"
-],
-[
-14,
-"CLIENT_REVISION_UNKNOWN_14"
-],
-[
-15,
-"CLIENT_REVISION_UNKNOWN_15"
-],
-[
-16,
-"CLIENT_REVISION_UNKNOWN_16"
-],
-[
-17,
-"CLIENT_REVISION_UNKNOWN_17"
-],
-[
-18,
-"CLIENT_REVISION_UNKNOWN_18"
-],
-[
-19,
-"CLIENT_REVISION_UNKNOWN_19"
-],
-[
 20,
 "CLIENT_REVISION_SKY_RELEASE"
-],
-[
-21,
-"CLIENT_REVISION_UNKNOWN_21"
-],
-[
-22,
-"CLIENT_REVISION_UNKNOWN_22"
-],
-[
-23,
-"CLIENT_REVISION_UNKNOWN_23"
-],
-[
-24,
-"CLIENT_REVISION_UNKNOWN_24"
-],
-[
-25,
-"CLIENT_REVISION_UNKNOWN_25"
-],
-[
-26,
-"CLIENT_REVISION_UNKNOWN_26"
-],
-[
-27,
-"CLIENT_REVISION_UNKNOWN_27"
-],
-[
-28,
-"CLIENT_REVISION_UNKNOWN_28"
 ],
 [
 29,
@@ -87098,7 +86954,7 @@ false
 "PD_CLIENT_METADATA_RESULT_LIST_ATTRIBUTION_SUPPORT_MULTIPLE_ATTRIBUTIONS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDClientMetadata.<enum:ResolvedItemType>": [
@@ -91640,7 +91496,7 @@ false
 "PD_ENTITY_TYPE_PHYSICAL_FEATURE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDEntity.<enum:PlaceDisplayStyle>": [
@@ -94067,7 +93923,7 @@ false
 "GROUP_BUTTON_TYPE_GROUP"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDGroupParams.actionDataItemIndex": [
@@ -97049,10 +96905,6 @@ false
 "MODULE_TYPE_ACTIONS_ROW"
 ],
 [
-13,
-"MODULE_TYPE_UNKNOWN_13"
-],
-[
 14,
 "MODULE_TYPE_RESERVATIONS"
 ],
@@ -98219,7 +98071,7 @@ false
 "PD_PLACE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDPlace.components": [
@@ -100688,7 +100540,7 @@ false
 "PD_PLACE_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDPlaceResponse.<enum:RequestType>": [
@@ -102056,7 +101908,7 @@ false
 "PD_PLACE_SUMMARY_RESULT_LAYOUT_TEMPLATE_PAIR_PLACE_TYPES_PHYSICAL_FEATURE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPDPlaceSummaryResultLayoutTemplatePair.layoutTemplate": [
@@ -113987,10 +113839,6 @@ false
 "PD_STOREFRONT_FEATURE_TYPE_POI_BUILDING_FACE_WITH_ENTRY"
 ],
 [
-3,
-"PD_STOREFRONT_FEATURE_TYPE_POI_UNSPECIFIED_3"
-],
-[
 4,
 "PD_STOREFRONT_FEATURE_TYPE_POI_OTHER_BUILDING_FACE"
 ],
@@ -116676,7 +116524,7 @@ false
 "PLACE_TYPE_PERDU_CITY"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPlace.address": [
@@ -117106,10 +116954,6 @@ false
 [
 12,
 "MODULE_TYPE_ACTIONS_ROW"
-],
-[
-13,
-"MODULE_TYPE_UNKNOWN_13"
 ],
 [
 14,
@@ -117790,7 +117634,7 @@ false
 "PLACE_SEARCH_REQUEST_ADDITIONAL_PLACE_TYPES_PERDU_CITY"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPlaceSearchRequest.<enum:PlaceSearchRequestBusinessSortOrder>": [
@@ -117995,7 +117839,7 @@ false
 "PLACE_SEARCH_REQUEST_PLACE_TYPE_LIMIT_PERDU_CITY"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPlaceSearchRequest.<enum:PlaceSearchRequestSearchSource>": [
@@ -118803,7 +118647,7 @@ false
 "PLACE_SEARCH_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOPlaceSearchResponse.<enum:PlaceSearchResponseStatusCodeInfo>": [
@@ -120217,7 +120061,7 @@ false
 "RP_BUTTON_ACTION_OPEN_REPORTS_HOME"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPButton.buttonAction": [
@@ -120501,7 +120345,7 @@ false
 "FLAG_TYPE_ACCEPTS_APPLE_PAY"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPCorrectedFlag.correctedValue": [
@@ -120912,10 +120756,6 @@ false
 "RP_DETAILS_DISPLAY_STYLE_SHOW_SINGLE_PIN"
 ],
 [
-3,
-"RP_DETAILS_DISPLAY_STYLE_SHOW_REGION_3"
-],
-[
 4,
 "RP_DETAILS_DISPLAY_STYLE_SHOW_MAP_LABEL"
 ],
@@ -121313,7 +121153,7 @@ false
 "RP_DIRECTIONS_EVENT_SYNTHESIZED_STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPDirectionsEvent.<enum:RPDirectionsEventType>": [
@@ -122169,7 +122009,7 @@ false
 "RP_FEATURE_HANDLE_STYLE_UNUSED_99"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeatureHandle.<enum:RPFeatureHandleType>": [
@@ -122450,43 +122290,43 @@ false
 "GEORPFeedbackCommonContext.<enum:RPFeedbackCommonContextPinType>": [
 [
 [
-0,
+-1,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_PIN_TYPE_UNKNOWN"
 ],
 [
-1,
+0,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_SEARCH_RESULT"
 ],
 [
-2,
+1,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_POI_ICON"
 ],
 [
-3,
+2,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_DROPPED_PIN"
 ],
 [
-4,
+3,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_CONTACT"
 ],
 [
-5,
+4,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_CURRENT_LOCATION"
 ],
 [
-6,
+5,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_BOOKMARK"
 ],
 [
-7,
+6,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_EXTERNAL"
 ],
 [
-8,
+7,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_PIN_TYPE_SEARCH_AUTOCOMPLETE"
 ],
 [
-9,
+8,
 "RP_FEEDBACK_COMMON_CONTEXT_PIN_TYPE_BRAND_ICON"
 ]
 ],
@@ -122630,30 +122470,6 @@ false
 [
 33,
 "RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_IM_LOST"
-],
-[
-34,
-"RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_USER_PATH_ITEM_UNKNOWN_34"
-],
-[
-35,
-"RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_USER_PATH_ITEM_UNKNOWN_35"
-],
-[
-36,
-"RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_USER_PATH_ITEM_UNKNOWN_36"
-],
-[
-37,
-"RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_USER_PATH_ITEM_UNKNOWN_37"
-],
-[
-38,
-"RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_USER_PATH_ITEM_UNKNOWN_38"
-],
-[
-39,
-"RP_FEEDBACK_COMMON_CONTEXT_USER_PATHS_USER_PATH_ITEM_UNKNOWN_39"
 ],
 [
 40,
@@ -122973,7 +122789,7 @@ false
 "RP_FEEDBACK_COMPONENT_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackComponent.status": [
@@ -123934,7 +123750,7 @@ false
 "FEEDBACK_FIELD_OPTION_CHOICE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackFieldOption.annotations": [
@@ -124024,10 +123840,6 @@ false
 [
 7,
 "RP_FEEDBACK_FIELD_VALUE_TYPE_FIELD_BOOLEAN"
-],
-[
-8,
-"RP_FEEDBACK_FIELD_VALUE_TYPE_UNKNOWN_FIELD_TYPE_8"
 ],
 [
 9,
@@ -124472,7 +124284,7 @@ false
 "FEEDBACK_FIELD_KEY_PHOTOS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackFormField.annotations": [
@@ -124732,7 +124544,7 @@ false
 "RP_FEEDBACK_INFO_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackInfo.feedbackComponents": [
@@ -124878,10 +124690,6 @@ false
 "FEEDBACK_LAYOUT_ADDRESS_UNKNOWN"
 ],
 [
-1,
-"FEEDBACK_LAYOUT_ADDRESS_UNKNOWN_1"
-],
-[
 2,
 "FEEDBACK_LAYOUT_ADDRESS_LOCATION"
 ],
@@ -124980,22 +124788,6 @@ false
 [
 7,
 "FEEDBACK_LAYOUT_GROUNDVIEW_SUBTYPE_OTHER"
-],
-[
-8,
-"FEEDBACK_LAYOUT_GROUNDVIEW_UNKNOWN_8"
-],
-[
-9,
-"FEEDBACK_LAYOUT_GROUNDVIEW_UNKNOWN_9"
-],
-[
-10,
-"FEEDBACK_LAYOUT_GROUNDVIEW_UNKNOWN_10"
-],
-[
-11,
-"FEEDBACK_LAYOUT_GROUNDVIEW_UNKNOWN_11"
 ],
 [
 12,
@@ -125423,7 +125215,7 @@ false
 "FEEDBACK_LOG_EVENT_TYPE_RAP_NOTIFICATION"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackLogEventParameters.clientEventUuid": [
@@ -125803,7 +125595,7 @@ false
 "FEEDBACK_CLIENT_CAPABILITIES_COMMUNITY_ID"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackRequest.<enum:FeedbackRequestType>": [
@@ -126074,7 +125866,7 @@ false
 "RP_FEEDBACK_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPFeedbackResponse.attestationNotFound": [
@@ -129165,259 +128957,259 @@ false
 "GEORPProblem.<enum:RPProblemType>": [
 [
 [
-0,
+-1,
 "RP_PROBLEM_TYPE_PROBLEM_TYPE_UNKNOWN"
 ],
 [
-1,
+0,
 "RP_PROBLEM_TYPE_INCORRECT_INFO"
 ],
 [
-2,
+1,
 "RP_PROBLEM_TYPE_INCORRECT_MAP_LABEL"
 ],
 [
-3,
+2,
 "RP_PROBLEM_TYPE_MISSING_LOCATION"
 ],
 [
-4,
+3,
 "RP_PROBLEM_TYPE_INCORRECT_PIN_LOCATION"
 ],
 [
-5,
+4,
 "RP_PROBLEM_TYPE_CLOSED_PERMANENTLY"
 ],
 [
-6,
+5,
 "RP_PROBLEM_TYPE_DOES_NOT_EXIST_INCORRECT_PIN_LOCATION"
 ],
 [
-7,
+6,
 "RP_PROBLEM_TYPE_DOES_NOT_EXIST_NO_SUCH_PLACE"
 ],
 [
-8,
+7,
 "RP_PROBLEM_TYPE_DOES_NOT_EXIST_OTHER"
 ],
 [
-9,
+8,
 "RP_PROBLEM_TYPE_SEARCH_UNEXPECTED"
 ],
 [
-10,
+9,
 "RP_PROBLEM_TYPE_SEARCH_SELECTED_WRONG_PIN"
 ],
 [
-11,
+10,
 "RP_PROBLEM_TYPE_SEARCH_SHOULD_NOT_HAVE_MOVED_MAP"
 ],
 [
-12,
+11,
 "RP_PROBLEM_TYPE_SEARCH_SHOULD_HAVE_MOVED_MAP"
 ],
 [
-13,
+12,
 "RP_PROBLEM_TYPE_SEARCH_NOT_LISTED"
 ],
 [
-14,
+13,
 "RP_PROBLEM_TYPE_SATELLITE_OUTDATED"
 ],
 [
-15,
+14,
 "RP_PROBLEM_TYPE_SATELLITE_QUALITY"
 ],
 [
-16,
+15,
 "RP_PROBLEM_TYPE_SATELLITE_NOT_LISTED"
 ],
 [
-17,
+16,
 "RP_PROBLEM_TYPE_DIRECTIONS_PROBLEM_BASIC"
 ],
 [
-18,
+17,
 "RP_PROBLEM_TYPE_DIRECTIONS_DESTINATION_WRONG"
 ],
 [
-21,
+20,
 "RP_PROBLEM_TYPE_DIRECTIONS_THROUGH_TRAFFIC"
 ],
 [
-22,
+21,
 "RP_PROBLEM_TYPE_DIRECTIONS_THROUGH_CLOSURE"
 ],
 [
-23,
+22,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_WRONG_WAY"
 ],
 [
-24,
+23,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_PROHIBITED"
 ],
 [
-25,
+24,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_CLOSED_ROAD"
 ],
 [
-26,
+25,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_UNNEEDED"
 ],
 [
-27,
+26,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_MISSING_BEFORE"
 ],
 [
-28,
+27,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_MISSING_AFTER"
 ],
 [
-29,
+28,
 "RP_PROBLEM_TYPE_DIRECTIONS_STEP_NOT_LISTED"
 ],
 [
-30,
+29,
 "RP_PROBLEM_TYPE_DIRECTIONS_NOT_LISTED"
 ],
 [
-31,
+30,
 "RP_PROBLEM_TYPE_TRAFFIC_INCIDENT_INCORRECT"
 ],
 [
-32,
+31,
 "RP_PROBLEM_TYPE_TRAFFIC_INCIDENT_MISSING"
 ],
 [
-33,
+32,
 "RP_PROBLEM_TYPE_TRAFFIC_FLOW_INCORRECT"
 ],
 [
-34,
+33,
 "RP_PROBLEM_TYPE_TRAFFIC_FLOW_MISSING"
 ],
 [
-35,
+34,
 "RP_PROBLEM_TYPE_TRAFFIC_NOT_LISTED"
 ],
 [
-36,
+35,
 "RP_PROBLEM_TYPE_NOT_LISTED"
 ],
 [
-37,
+36,
 "RP_PROBLEM_TYPE_DIRECTIONS_INCORRECT_INSTRUCTIONS"
 ],
 [
-38,
+37,
 "RP_PROBLEM_TYPE_DIRECTIONS_ROUTE_WRONG"
 ],
 [
-39,
+38,
 "RP_PROBLEM_TYPE_DIRECTIONS_PROBLEM_WITH_TRANSFER"
 ],
 [
-40,
+39,
 "RP_PROBLEM_TYPE_DIRECTIONS_INCORRECT_ETA"
 ],
 [
-41,
+40,
 "RP_PROBLEM_TYPE_TRANSIT_DELAY"
 ],
 [
-42,
+41,
 "RP_PROBLEM_TYPE_TRANSIT_INCORRECT_SCHEDULE"
 ],
 [
-44,
+43,
 "RP_PROBLEM_TYPE_INCORRECT_ENTRY_OR_EXIT"
 ],
 [
-46,
+45,
 "RP_PROBLEM_TYPE_INCORRECT_SHAPE"
 ],
 [
-47,
+46,
 "RP_PROBLEM_TYPE_OTHER_FEEDBACK"
 ],
 [
-48,
+47,
 "RP_PROBLEM_TYPE_CLOSED_TEMPORARILY"
 ],
 [
-49,
+48,
 "RP_PROBLEM_TYPE_CLOSED_HOURS_CHANGED"
 ],
 [
-50,
+49,
 "RP_PROBLEM_TYPE_TRANSIT_CANCELATION"
 ],
 [
-51,
+50,
 "RP_PROBLEM_TYPE_TRANSIT_SERVICE_CHANGED"
 ],
 [
-55,
+54,
 "RP_PROBLEM_TYPE_SEARCH_AUTOCOMPLETE_POI"
 ],
 [
-56,
+55,
 "RP_PROBLEM_TYPE_SEARCH_AUTOCOMPLETE_POI_CATEGORY"
 ],
 [
-57,
+56,
 "RP_PROBLEM_TYPE_SEARCH_AUTOCOMPLETE_ADDRESS"
 ],
 [
-58,
+57,
 "RP_PROBLEM_TYPE_SEARCH_AUTOCOMPLETE_LOCALITY"
 ],
 [
-59,
+58,
 "RP_PROBLEM_TYPE_SEARCH_AUTOCOMPLETE_OTHER"
 ],
 [
-60,
+59,
 "RP_PROBLEM_TYPE_TRANSIT_LINE_INCORRECT_NAME"
 ],
 [
-61,
+60,
 "RP_PROBLEM_TYPE_DIRECTIONS_ARRIVAL_ENTRY_POINT_INCORRECT"
 ],
 [
-62,
+61,
 "RP_PROBLEM_TYPE_PERSONALIZED_MAP_LOCATION_INCORRECT"
 ],
 [
-63,
+62,
 "RP_PROBLEM_TYPE_MISSING_LOCATION_BUSINESS"
 ],
 [
-64,
+63,
 "RP_PROBLEM_TYPE_MISSING_LOCATION_STREET"
 ],
 [
-65,
+64,
 "RP_PROBLEM_TYPE_MISSING_LOCATION_OTHER"
 ],
 [
-66,
+65,
 "RP_PROBLEM_TYPE_MERCHANT_LOOKUP"
 ],
 [
-67,
+66,
 "RP_PROBLEM_TYPE_GROUND_VIEW_CENSOR_REQUEST"
 ],
 [
-68,
+67,
 "RP_PROBLEM_TYPE_GROUND_VIEW_IMAGE_QUALITY"
 ],
 [
-69,
+68,
 "RP_PROBLEM_TYPE_GROUND_VIEW_STOREFRONT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPProblem.<enum:RPProblemUserPaths>": [
@@ -129557,30 +129349,6 @@ false
 [
 33,
 "RP_PROBLEM_USER_PATHS_IM_LOST"
-],
-[
-34,
-"RP_PROBLEM_USER_PATHS_USER_PATH_ITEM_UNKNOWN_34"
-],
-[
-35,
-"RP_PROBLEM_USER_PATHS_USER_PATH_ITEM_UNKNOWN_35"
-],
-[
-36,
-"RP_PROBLEM_USER_PATHS_USER_PATH_ITEM_UNKNOWN_36"
-],
-[
-37,
-"RP_PROBLEM_USER_PATHS_USER_PATH_ITEM_UNKNOWN_37"
-],
-[
-38,
-"RP_PROBLEM_USER_PATHS_USER_PATH_ITEM_UNKNOWN_38"
-],
-[
-39,
-"RP_PROBLEM_USER_PATHS_USER_PATH_ITEM_UNKNOWN_39"
 ],
 [
 40,
@@ -129844,7 +129612,7 @@ false
 "RP_PROBLEM_COLLECTION_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPProblemCollectionResponse.problemId": [
@@ -129868,43 +129636,43 @@ false
 "GEORPProblemContext.<enum:RPProblemContextPinType>": [
 [
 [
-0,
+-1,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_PIN_TYPE_UNKNOWN"
 ],
 [
-1,
+0,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_SEARCH_RESULT"
 ],
 [
-2,
+1,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_POI_ICON"
 ],
 [
-3,
+2,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_DROPPED_PIN"
 ],
 [
-4,
+3,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_CONTACT"
 ],
 [
-5,
+4,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_CURRENT_LOCATION"
 ],
 [
-6,
+5,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_BOOKMARK"
 ],
 [
-7,
+6,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_EXTERNAL"
 ],
 [
-8,
+7,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_PIN_TYPE_SEARCH_AUTOCOMPLETE"
 ],
 [
-9,
+8,
 "RP_PROBLEM_CONTEXT_PIN_TYPE_BRAND_ICON"
 ]
 ],
@@ -130328,7 +130096,7 @@ false
 "RP_PROBLEM_OPT_IN_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPProblemOptInResponse.statusCode": [
@@ -130469,7 +130237,7 @@ false
 "RP_PROBLEM_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPProblemResponse.isNotificationSupported": [
@@ -130690,7 +130458,7 @@ false
 "RP_PROBLEM_STATUS_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPProblemStatusResponse.problemStatus": [
@@ -131600,7 +131368,7 @@ false
 "THIRD_PARTY_PHOTO_SHARING_PREFERENCE_UPDATE_ERROR_OUTDATED"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPThirdPartyPhotoSharingPreferenceUpdateResult.errors": [
@@ -131933,7 +131701,7 @@ false
 "RAP_RESPONSE_USER_FORM_STYLE_PHOTOS_COMMENTS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPUserFormDetails.userFormStyle": [
@@ -133728,7 +133496,7 @@ false
 "RP_USER_PATH_NATIVE_PATHS_LOOK_AROUND_PIP_PLACECARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPUserPath.nativePaths": [
@@ -134235,7 +134003,7 @@ false
 "RP_VISIBLE_TILE_SET_STYLE_UNUSED_99"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORPVisibleTileSet.identifier": [
@@ -134395,7 +134163,7 @@ false
 "RR_REQUEST_RESPONSE_EVENT_REQUEST_TYPE_GEO_ADDRESS_CORRECTION_TAGGED_LOCATION"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORRRequestResponseEvent.<enum:RRRequestResponseEventType>": [
@@ -134991,7 +134759,7 @@ false
 "RESOURCE_UPDATE_METHOD_ETAG"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOResource.<enum:ResourceValidationMethod>": [
@@ -135005,7 +134773,7 @@ false
 "RESOURCE_VALIDATION_METHOD_CMS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOResource.alternateResourceURLIndex": [
@@ -135941,10 +135709,6 @@ false
 "MODULE_TYPE_ACTIONS_ROW"
 ],
 [
-13,
-"MODULE_TYPE_UNKNOWN_13"
-],
-[
 14,
 "MODULE_TYPE_RESERVATIONS"
 ],
@@ -136224,7 +135988,7 @@ false
 "MODULE_BUTTON_TYPE_ADD_WEBSITE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORevealedPlaceCardModuleButton.isGroup": [
@@ -136886,7 +136650,7 @@ false
 "ROUTE_DRIVING_SIDE_LEFT_SIDE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORoute.<enum:RouteTransportType>": [
@@ -137673,7 +137437,7 @@ false
 "ROUTE_ATTRIBUTES_INITIAL_PROMPT_TYPES_PROMPT_DISCOVER_INCIDENTS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORouteAttributes.<enum:RouteAttributesMainTransportType>": [
@@ -138085,7 +137849,7 @@ false
 "PAYMENT_TYPE_IC_CARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORouteDisplayHints.<enum:TransitPrioritize>": [
@@ -138374,7 +138138,7 @@ false
 "ROUTE_INCIDENT_TYPE_TIME_BASED_RESTRICTION"
 ]
 ],
-false,
+true,
 false
 ],
 "GEORouteIncident.artwork": [
@@ -139353,7 +139117,7 @@ false
 "SENTINEL_TILE_TYPE_NO_TILE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOSentinelTile.resourceName": [
@@ -140071,7 +139835,7 @@ false
 "SIGN_GUIDANCE_MANEUVER_ARROW_OVERRIDE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOSignGuidance.artworkOverride": [
@@ -140437,7 +140201,7 @@ false
 "SPATIAL_LOOKUP_BATCH_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOSpatialLookupBatchResponse.responses": [
@@ -140631,7 +140395,7 @@ false
 "SPATIAL_LOOKUP_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOSpatialLookupResponse.places": [
@@ -141078,7 +140842,7 @@ false
 "STEP_JUNCTION_TYPE_JCTTYPE_ROUNDABOUT"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOStep.<enum:StepManeuverType>": [
@@ -141328,7 +141092,7 @@ false
 "STEP_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOStep.<enum:StepOverrideDrivingSide>": [
@@ -141342,7 +141106,7 @@ false
 "STEP_OVERRIDE_DRIVING_SIDE_LEFT_SIDE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOStep.<enum:StepOverrideTransportType>": [
@@ -141968,7 +141732,7 @@ false
 "STEP_FEEDBACK_MANEUVER_TYPE_RESUME_ROUTE_WITH_U_TURN"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOStepFeedback.completedStep": [
@@ -143334,6 +143098,60 @@ false
 false,
 false
 ],
+"GEOTFIncident.<enum:TFIncidentType>": [
+[
+[
+3,
+"TF_INCIDENT_TYPE_ROAD_CLOSURE"
+],
+[
+4,
+"TF_INCIDENT_TYPE_LANE_CLOSURE"
+],
+[
+7,
+"TF_INCIDENT_TYPE_WEATHER"
+],
+[
+8,
+"TF_INCIDENT_TYPE_EVENT"
+],
+[
+9,
+"TF_INCIDENT_TYPE_ACCIDENT"
+],
+[
+10,
+"TF_INCIDENT_TYPE_HAZARD"
+],
+[
+11,
+"TF_INCIDENT_TYPE_ROADWORKS"
+],
+[
+12,
+"TF_INCIDENT_TYPE_RAMP_CLOSURE"
+],
+[
+13,
+"TF_INCIDENT_TYPE_OTHER"
+],
+[
+14,
+"TF_INCIDENT_TYPE_TRAFFIC"
+],
+[
+15,
+"TF_INCIDENT_TYPE_WALKING_CLOSURE"
+],
+[
+16,
+"TF_INCIDENT_TYPE_NO_THOROUGHFARE_CLOSURE"
+]
+],
+false,
+false
+],
 "GEOTFIncident.alertCCode": [
 "uint32",
 null,
@@ -143578,8 +143396,8 @@ false,
 false
 ],
 "GEOTFIncident.type": [
-"int32",
-null,
+"TFIncidentType",
+"ENUM:TFIncidentType",
 1,
 "optional",
 true,
@@ -145672,7 +145490,7 @@ false
 "TARGET_LAYOUT_UI_TARGET_LOOK_AROUND_PIP_PLACECARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTargetLayout.layoutInfo": [
@@ -145707,46 +145525,6 @@ false
 [
 0,
 "TELEMETRIC_ENTITY_EVENT_KEY_TELEMETRIC_EVENT_KEY_UNKNOWN"
-],
-[
-369,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_SERVER_ERROR_COUNT"
-],
-[
-370,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_INVALID_REQUEST_COUNT"
-],
-[
-371,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_CANCELLED_REQUEST_COUNT"
-],
-[
-372,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_REQUEST_COMPLETE_TIME_MS"
-],
-[
-373,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_TRANSIT_COMPONENTS_TIME_MS"
-],
-[
-374,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_POI_COMPONENTS_TIME_MS"
-],
-[
-375,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_TRANSIT_DATA_ACCESS_TIME_MS"
-],
-[
-376,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_TRANSIT_LOCALIZATION_TIME_MS"
-],
-[
-377,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_POI_DATA_ACCESS_TIME_MS"
-],
-[
-378,
-"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_POI_LOCALIZATION_TIME_MS"
 ],
 [
 1000,
@@ -146467,9 +146245,49 @@ false
 [
 60686,
 "TELEMETRIC_ENTITY_EVENT_KEY_MSL_MIXEDINTENT_CATMARKERPOI_BOUNDED_BIZ_SEARCH_ERROR_COUNT"
+],
+[
+70001,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_SERVER_ERROR_COUNT"
+],
+[
+70002,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_INVALID_REQUEST_COUNT"
+],
+[
+70003,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_CANCELLED_REQUEST_COUNT"
+],
+[
+70004,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_REQUEST_COMPLETE_TIME_MS"
+],
+[
+70005,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_TRANSIT_COMPONENTS_TIME_MS"
+],
+[
+70006,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_POI_COMPONENTS_TIME_MS"
+],
+[
+70007,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_TRANSIT_DATA_ACCESS_TIME_MS"
+],
+[
+70008,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_TRANSIT_LOCALIZATION_TIME_MS"
+],
+[
+70009,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_POI_DATA_ACCESS_TIME_MS"
+],
+[
+70010,
+"TELEMETRIC_ENTITY_EVENT_KEY_MSL_PLACES_POI_LOCALIZATION_TIME_MS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTelemetricEntity.eventDetail": [
@@ -146784,7 +146602,7 @@ false
 "CHECKSUM_TYPE_APPENDED_MD5"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTileSet.<enum:RequestStyle>": [
@@ -146798,7 +146616,7 @@ false
 "REQUEST_STYLE_HEADER_PARAMS_VERSION_BASED_HMAC_AUTH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTileSet.<enum:TileSetScale>": [
@@ -147220,7 +147038,7 @@ false
 "TILE_SET_STYLE_UNUSED_99"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTileSet.<enum:TileUpdateBehavior>": [
@@ -147234,7 +147052,7 @@ false
 "TILE_UPDATE_BEHAVIOR_ETAG"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTileSet.alternativeMultipathTCPPort": [
@@ -147782,7 +147600,7 @@ false
 "TILE_SET_INFO_STYLE_UNUSED_99"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTileSetInfo.count": [
@@ -148258,7 +148076,7 @@ false
 "TILE_SET_USAGE_STYLE_UNUSED_99"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTileSetUsage.count": [
@@ -149488,7 +149306,7 @@ false
 "PAYMENT_TYPE_IC_CARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTransitBaseFare.cashOnly": [
@@ -150703,7 +150521,7 @@ false
 "TRANSIT_ROUTE_UPDATE_RESPONSE_STATUS_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTransitRouteUpdateResponse.datasetAbStatus": [
@@ -151561,7 +151379,7 @@ false
 "PAYMENT_TYPE_IC_CARD"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTransitSurcharge.numberOfLegs": [
@@ -151668,7 +151486,7 @@ false
 "TRANSIT_VEHICLE_INFO_PICKUP_DROPOFF_TYPE_STOP_SKIPPED"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOTransitVehicleInfo.arrivalTime": [
@@ -152750,7 +152568,7 @@ false
 "URL_TIME_POINT_TYPE_ARRIVAL"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOURLTimePoint.time": [
@@ -154406,7 +154224,7 @@ false
 "WAYPOINT_ID_PLACE_TYPE_HINT_PHYSICAL_FEATURE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOWaypointID.addressGeocodeAccuracyHint": [
@@ -154672,7 +154490,7 @@ false
 "WAYPOINT_ROUTE_DRIVING_SIDE_LEFT_SIDE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOWaypointRoute.<enum:WaypointRouteInitialPromptTypes>": [
@@ -154686,7 +154504,7 @@ false
 "WAYPOINT_ROUTE_INITIAL_PROMPT_TYPES_PROMPT_DISCOVER_INCIDENTS"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOWaypointRoute.<enum:WaypointRouteTransportType>": [
@@ -157034,7 +156852,7 @@ false
 "WI_FI_QUALITY_FEEDBACK_TYPE_USER_TYPE"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOWiFiQualityFeedback.maxValue": [
@@ -157433,7 +157251,7 @@ false
 "WI_FI_QUALITY_SERVICE_RESPONSE_STATUS_CODE_VERSION_MISMATCH"
 ]
 ],
-false,
+true,
 false
 ],
 "GEOWiFiQualityServiceResponse.locationResults": [

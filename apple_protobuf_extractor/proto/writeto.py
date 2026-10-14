@@ -55,11 +55,6 @@ import re
 log = logging.getLogger(__name__)
 
 
-# Type encoding for a proto write/copy/merge method: void return, three args
-# (self @ 0, SEL @ 8, writer/source @ 16), total frame = 24 bytes.
-_WRITETO_TYPE_ENC = 'v24@0:8@16'
-
-
 # Function-epilogue instructions the compiler may hoist between the field-number
 # load (`mov w2,#N`) and a tail-call (`b`) to the write helper.  ``unk`` is
 # included because the native mini-decoder renders some ldp/stp variants

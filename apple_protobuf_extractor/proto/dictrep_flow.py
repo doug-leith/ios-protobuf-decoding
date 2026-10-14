@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
+from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm, _SOURCE_FIRST_MNEMONICS
@@ -102,8 +103,8 @@ def _eval_cond(cond: str, flags: Tuple[int, int, int]) -> Optional[bool]:
 
 
 class _Abort(Exception):
-    """The evaluation reached something it cannot decide (unknown branch condition, an
-    unbounded jump, a revisited instruction)."""
+    """The evaluation reached something it cannot decide (a branch on a value the analysis
+    does not track, an unbounded jump, a revisited instruction); the message says which."""
 
 
 class Flow:
@@ -191,6 +192,8 @@ class Flow:
     def defs_before(self, k: int, reg: str) -> FrozenSet[int]:
         """Indices of the definitions of *reg* that reach ``insns[k]`` (``-1`` = function
         entry); empty if the instruction is unreachable."""
+        if k < 0:                                   # the function's entry (a root of -1)
+            return frozenset((_ENTRY,)) if reg in _REGS else frozenset()
         b = self._block_of.get(k)
         if b is None or b not in self._in or reg not in _REGS:
             return frozenset()
@@ -247,13 +250,13 @@ class Flow:
             if base is None or v is None:
                 return None
             return ((base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh)) & _mask(ops[0])
-        if mn in ('add', 'sub') and len(ops) == 3:
+        if mn in ('add', 'sub') and len(ops) >= 3:
             rn = _norm_reg(ops[1])
             a = self.const_before(d, rn) if rn else None
             if a is None:
                 return None
             if ops[2].startswith('#'):
-                b = _parse_imm(ops[2])
+                b = _imm_operand(ops, 2)
             else:
                 rm = _norm_reg(ops[2])
                 b = self.const_before(d, rm) if rm else None
@@ -335,18 +338,20 @@ class Flow:
 
     # ── candidate values: the constants V is compared / indexed against ─────
 
-    def candidates(self, root: int, dest: str, domain: int) -> Set[int]:
+    def candidates(self, root: int, dest: str, domain) -> Set[int]:
         """Values of the loaded integer worth evaluating, from the comparisons it takes part
         in.  Registers are tracked as ``V + b`` through ``mov`` / ``add|sub`` of an immediate
         or of a constant register; comparing such a register with *c* gives the point
         ``c - b``, and an ordered gate (``b.hi`` / ``b.hs`` / ...) gives the whole interval it
         guards (``sub w9,w8,#35; cmp w9,#30; b.hi`` -> V in 35..65).  The scan follows the CFG
-        from the load and stops each path at its first call (where the name is consumed)."""
+        from the load and stops each path at its first call (where the name is consumed).
+        *domain* is ``hi`` (values ``0 <= v < hi``) or ``(lo, hi)``: a 4-byte value is a signed
+        int32, so an enum may start below zero (``add w8, w2, #1; cmp w8, #10`` is -1..8)."""
         cands: Set[int] = {0}
-        root_blk = self._block_of.get(root)
+        self._gate_capped = False        # set when a table gate was wider than _MAX_GATE_SPAN
+        root_blk = self._block_of.get(root) if root >= 0 else self.cfg.entry
         if root_blk is None:
             return cands
-        gates: Dict[str, Tuple[int, int]] = {}   # reg -> V interval of its last ordered gate
         entry: Dict[int, Dict[str, int]] = {}
         work: deque = deque()
 
@@ -366,7 +371,7 @@ class Flow:
             for k in range(lo, hi):
                 if self.insns[k].mnemonic in ('bl', 'blr'):
                     return False
-                self._candidate_step(cands, gates, st, k)
+                self._candidate_step(cands, st, k)
             for succ in self.cfg.succ.get(blk, []):
                 push(succ, st)
             return True
@@ -375,23 +380,28 @@ class Flow:
         while work:
             blk = work.popleft()
             run(blk, dict(entry[blk]), self._first_in_block[blk])
-        return {v for v in cands if 0 <= v < domain}
+        lo, hi = domain if isinstance(domain, tuple) else (0, domain)
+        return {v for v in cands if lo <= v < hi}
 
-    def _candidate_step(self, cands: Set[int], gates: Dict[str, Tuple[int, int]],
-                        st: Dict[str, int], k: int) -> None:
+    def _candidate_step(self, cands: Set[int], st: Dict[str, int], k: int) -> None:
+        """One instruction of the candidate scan.  *st* maps a register to its offset ``b`` in
+        ``V + b``; it ALSO carries, per path, the interval of the last ordered gate on each
+        offset (keys ``gate_lo:<b>`` / ``gate_hi:<b>``), so a table is expanded by ITS OWN
+        gate and not by an unrelated compare of the same value met on another path."""
         ins = self.insns[k]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        if mn == 'cmp' and len(ops) == 2:
+        if mn == 'cmp' and len(ops) in (2, 3):
             r = _norm_reg(ops[0])
             if r in st:
-                c = _parse_imm(ops[1]) if ops[1].startswith('#') else self._const_reg(k, ops[1])
+                c = _imm_operand(ops, 1) if ops[1].startswith('#') else self._const_reg(k, ops[1])
                 if c is not None:
                     nxt = self.insns[k + 1].mnemonic if k + 1 < len(self.insns) else ''
                     cond = nxt[2:] if nxt.startswith('b.') else ''
                     point = c - st[r]
                     cands.add(point)
                     if cond in _ORDERED_CONDS:
-                        gates[r] = tuple(sorted((-st[r], point)))
+                        lo, hi = sorted((-st[r], point))
+                        st[f"gate_lo:{st[r]}"], st[f"gate_hi:{st[r]}"] = lo, hi   # keyed by the VALUE's offset: a register copy keeps it
         elif mn in ('cbz', 'cbnz') and ops:
             r = _norm_reg(ops[0])
             if r in st:
@@ -400,19 +410,21 @@ class Flow:
             # A table indexed by a gated register: every index the gate lets through is a
             # distinct case, so the whole interval (not just its end point) is a candidate.
             pm = _parse_mem(ops[1])
-            if pm and pm[1] in gates and pm[1] in st:
-                lo, hi = gates[pm[1]]
+            if pm and pm[1] in st and f"gate_lo:{st[pm[1]]}" in st:
+                lo, hi = st[f"gate_lo:{st[pm[1]]}"], st[f"gate_hi:{st[pm[1]]}"]
                 if hi - lo <= _MAX_GATE_SPAN:
                     cands.update(range(lo, hi + 1))
+                else:
+                    self._gate_capped = True
         new: Optional[Tuple[str, int]] = None
         if mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
             rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
             if rs in st and rd:
                 new = (rd, st[rs])
-        elif mn in ('add', 'sub') and len(ops) == 3:
+        elif mn in ('add', 'sub') and len(ops) >= 3:      # 4th operand: ``lsl #12`` of an immediate
             rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
             if rs in st and rd:
-                c = (_parse_imm(ops[2]) if ops[2].startswith('#')
+                c = (_imm_operand(ops, 2) if ops[2].startswith('#')
                      else _signed(self._const_reg(k, ops[2]), ops[2]))
                 if c is not None:
                     new = (rd, st[rs] + (c if mn == 'add' else -c))
@@ -425,19 +437,37 @@ class Flow:
         r = _norm_reg(tok)
         return self.const_before(k, r) if r else None
 
+    def _skip_trap_branch(self, k: int, target: Optional[int], mn: str, ins: Insn) -> int:
+        """Index to continue at after a test of a register the analysis does not track, when one
+        side of the branch is a trap (``brk``/``udf``).  Such a test is a runtime check that
+        passes on every execution that returns -- the arm64e pointer-authentication return
+        check ``eor x16,x30,x30,lsl #1; tbz x16,#62,ok; brk`` -- so the evaluation follows the
+        other side.  Any other untracked test cannot be decided and aborts the value."""
+        def traps(i: Optional[int]) -> bool:
+            return i is not None and 0 <= i < len(self.insns) \
+                and self.insns[i].mnemonic in ('brk', 'udf')
+        t = self.addr_idx.get(target) if target is not None else None
+        if traps(t) and not traps(k + 1):
+            return k + 1
+        if traps(k + 1) and t is not None and not traps(t):
+            return t
+        raise _Abort(f"{mn} at {ins.addr:#x} tests an untracked register")
+
     # ── concrete evaluation of the switch for one value ─────────────────────
 
     def evaluate(self, root: int, dest: str, value: int,
-                 stop: FrozenSet[int] = frozenset()) -> Dict[str, str]:
-        """Run the code from just after the field-value load *root* with ``dest = value`` to
-        the first call and return ``{argument register: text}`` for every argument register
-        (x0-x7) that then holds a string constant: the dictionary key, the name chosen for
-        the value, the converter's ``"(unknown: %i)"`` fallback...  Empty when the value is
-        never handed to a call (the code returns, or reaches another field's value load listed
-        in *stop*, first -- an older compiler simply omits the entry for a value with no name).
-        Which register carries the NAME is decided by the caller: the one whose text varies
-        with the value."""
-        regs: Dict[str, int] = {dest: value}
+                 stop: FrozenSet[int] = frozenset(), direct: bool = False) -> Dict[str, str]:
+        """Run the code from just after the field-value load *root* (the function's entry for
+        ``root == -1``) with ``dest = value`` to the first call -- or to the return / tail call
+        out of the function, where a converter hands back its result -- and return
+        ``{argument register: text}`` for every argument register (x0-x7) that then holds a
+        string constant: the dictionary key, the name chosen for the value, the converter's
+        ``"(unknown: %i)"`` fallback...  Empty when the value never reaches one (it reaches
+        another field's value load listed in *stop* first -- an older compiler simply omits the
+        entry for a value with no name).  *direct* also accepts plain C strings from
+        ``__TEXT,__cstring`` (standalone binaries' name tables).  Which register carries the
+        NAME is decided by the caller: the one whose text varies with the value."""
+        regs: Dict[str, int] = {dest: value & 0xFFFFFFFF if value < 0 else value}
         top: Set[str] = set()
         flags: List[Optional[Tuple[int, int, int]]] = [None]
         seen: Set[int] = set()
@@ -471,53 +501,51 @@ class Flow:
 
         def jump(target: Optional[int]) -> int:
             if target is None or target not in self.addr_idx:
-                raise _Abort()
+                raise _Abort(f"indirect/unresolvable jump at {self.insns[k].addr:#x}")
             return self.addr_idx[target]
 
         k = root + 1
         while k < len(self.insns):
             if k in seen:
-                raise _Abort()
+                raise _Abort(f"loop at {self.insns[k].addr:#x}")
             if k in stop:
                 return {}
             seen.add(k)
             ins = self.insns[k]
             mn, ops = ins.mnemonic, split_ops(ins.op_str)
             nxt = k + 1
-            if mn in ('bl', 'blr'):
-                return self._string_args(get)
-            if mn in ('ret', 'retaa', 'retab'):
-                return {}
+            if mn in ('bl', 'blr', 'ret', 'retaa', 'retab'):
+                return self._string_args(get, direct)
             if mn == 'b' and len(ops) == 1:
                 target = _parse_imm(ops[0])
                 if target is not None and target not in self.addr_idx:
-                    return {}               # a tail call out of the function: the epilogue
+                    return self._string_args(get, direct)   # a tail call out of the function
                 nxt = jump(target)
             elif mn == 'br' and len(ops) == 1:
                 nxt = jump(get(ops[0]))
             elif _is_cond_branch(mn):
                 if flags[0] is None:
-                    raise _Abort()
+                    raise _Abort(f"{mn} at {ins.addr:#x} tests flags the analysis cannot compute")
                 taken = _eval_cond(mn[2:], flags[0])
                 if taken is None:
-                    raise _Abort()
+                    raise _Abort(f"unmodelled condition {mn} at {ins.addr:#x}")
                 if taken:
                     nxt = jump(_parse_imm(ops[0]))
             elif mn in ('cbz', 'cbnz') and len(ops) == 2:
                 v = get(ops[0])
                 if v is None:
-                    raise _Abort()
-                if (v == 0) == (mn == 'cbz'):
+                    nxt = self._skip_trap_branch(k, _parse_imm(ops[1]), mn, ins)
+                elif (v == 0) == (mn == 'cbz'):
                     nxt = jump(_parse_imm(ops[1]))
             elif mn in ('tbz', 'tbnz') and len(ops) == 3:
                 v = get(ops[0])
                 if v is None:
-                    raise _Abort()
-                if (((v >> (_parse_imm(ops[1]) or 0)) & 1) == 0) == (mn == 'tbz'):
+                    nxt = self._skip_trap_branch(k, _parse_imm(ops[2]), mn, ins)
+                elif (((v >> (_parse_imm(ops[1]) or 0)) & 1) == 0) == (mn == 'tbz'):
                     nxt = jump(_parse_imm(ops[2]))
-            elif mn == 'cmp' and len(ops) == 2:
+            elif mn == 'cmp' and len(ops) in (2, 3):        # 3: ``cmp w2, #4, lsl #12``
                 a = get(ops[0])
-                b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
+                b = _imm_operand(ops, 1) if ops[1].startswith('#') else get(ops[1])
                 flags[0] = (a, b, 32 if ops[0].startswith('w') else 64) \
                     if a is not None and b is not None else None
             elif mn in ('mov', 'movz') and len(ops) == 2:
@@ -536,7 +564,7 @@ class Flow:
             elif mn in ('add', 'sub') and len(ops) >= 3:
                 a = get(ops[1])
                 if ops[2].startswith('#'):
-                    b = _parse_imm(ops[2])
+                    b = _imm_operand(ops, 2)
                 else:
                     b = get(ops[2])
                     if b is not None and len(ops) > 3:
@@ -548,6 +576,36 @@ class Flow:
                 else:
                     c = _eval_cond(ops[3], flags[0])
                     put(ops[0], None if c is None else get(ops[1] if c else ops[2]))
+            elif mn in _SHIFTS and len(ops) == 3:
+                a = get(ops[1])
+                n = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+                put(ops[0], None if a is None or n is None else _shift(mn, a, n, ops[0]))
+            elif mn in ('and', 'orr', 'eor') and len(ops) >= 3:
+                a = get(ops[1])
+                b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+                if b is not None and len(ops) > 3 and not ops[2].startswith('#'):
+                    b = _shifted(b, ops[3])
+                put(ops[0], None if a is None or b is None
+                    else {'and': a & b, 'orr': a | b, 'eor': a ^ b}[mn])
+            elif mn == 'ubfx' and len(ops) == 4:
+                a, lsb, width = get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
+                put(ops[0], None if a is None or lsb is None or not width
+                    else (a >> lsb) & ((1 << width) - 1))
+            elif mn == 'tst' and len(ops) == 2:          # Z <=> (a & b) == 0
+                a = get(ops[0])
+                b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
+                flags[0] = ((a & b), 0, 32 if ops[0].startswith('w') else 64) \
+                    if a is not None and b is not None else None
+            elif mn in ('subs', 'adds') and len(ops) == 3:
+                a = get(ops[1])
+                b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+                if a is not None and b is not None:
+                    width = 32 if ops[0].startswith('w') else 64
+                    flags[0] = (a, b if mn == 'subs' else -b, width)
+                    put(ops[0], a - b if mn == 'subs' else a + b)
+                else:
+                    flags[0] = None
+                    put(ops[0], None)
             elif mn in _LOADS and len(ops) == 2:
                 put(ops[0], self._load(mn, ops, get))
             else:
@@ -586,33 +644,106 @@ class Flow:
             raw -= 1 << (size * 8)
         return raw
 
-    def _string_args(self, get) -> Dict[str, str]:
-        from proto.enums import _read_cfstring_text
+    def _string_args(self, get, direct: bool = False) -> Dict[str, str]:
         out: Dict[str, str] = {}
         for n in range(8):
             reg = f"x{n}"
             va = get(reg)
             if va is None:
                 continue
-            text = _read_cfstring_text(self.ctx, va)
+            text = self._text_at(va, direct)
             if text:
                 out[reg] = text
         return out
 
+    def _text_at(self, va: int, direct: bool) -> Optional[str]:
+        """The string constant at *va*: a CFString; with *direct*, also a plain C string in
+        ``__TEXT,__cstring`` (not a selector name or any other pointer into the image)."""
+        from proto.enums import _read_cfstring_text
+        text = _read_cfstring_text(self.ctx, va)
+        if text is not None or not direct:
+            return text
+        try:
+            if not self.ctx.has_section("__TEXT", "__cstring"):
+                return None
+            sec = self.ctx.section("__TEXT", "__cstring")
+            if not sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
+                return None
+            return self.ctx.read_cstring(va, max_len=128)
+        except (ValueError, KeyError, UnicodeDecodeError, AttributeError):
+            return None
+
     # ── the enum maps of the function ───────────────────────────────────────
+
+    def analyse_root(self, k: int, dest: str, size: int, stop: FrozenSet[int],
+                     direct: bool = False) -> "RootResult":
+        """Drive the integer loaded into *dest* by ``insns[k]`` (``k == -1``: the function's
+        entry, the value arriving in *dest*) through the code with every candidate value and one
+        value outside all of them, and read what each run hands to its first call.
+
+        The NAME register is one whose string takes at least two different values across the
+        runs (two names, or a name and the converter's ``"(unknown: %i)"`` fallback): the
+        dictionary key, selectors and class pointers are the same for every value.  No such
+        register means no enum -- a constant string, or an int handed to
+        ``+[NSNumber numberWithInt:]``, never varies.  *size* is the load width in bytes (the
+        value's domain); *stop* holds the other fields' value loads, where a run has left this
+        field's code."""
+        domain = (0, 1 << (8 * size)) if size < 4 else (-(1 << 31), 1 << 31)   # int32 is signed
+        cands = self.candidates(k, dest, domain)
+        problems: List[str] = []
+        if self._gate_capped:
+            problems.append(f"a table gate is wider than {_MAX_GATE_SPAN} values")
+        probe = next((v for v in range(max(cands) + 1, domain[1]) if v not in cands), None)
+        if probe is None:
+            problems.append("no value outside the candidates to probe")
+            values = sorted(cands)
+        else:
+            values = sorted(cands | {probe})
+        seen: Dict[int, Dict[str, str]] = {}
+        for v in values:
+            try:
+                seen[v] = self.evaluate(k, dest, v, stop, direct)
+            except _Abort as exc:
+                problems.append(f"value {v}: {exc}")
+        best: Dict[int, str] = {}
+        for reg in sorted({r for obs in seen.values() for r in obs}):   # sorted: ties must not depend on hash order
+            texts = {obs[reg] for obs in seen.values() if reg in obs}
+            if len(texts) < 2:
+                continue                              # same string for every value
+            names = {v: obs[reg] for v, obs in seen.items()
+                     if v in cands and reg in obs and _is_enum_name(obs[reg])}
+            if len(set(names.values())) > len(set(best.values())):
+                best = names
+        return RootResult(best, problems, len(cands))
+
+    def enum_of_load(self, k: int, stop: FrozenSet[int] = frozenset()) -> Optional["RootResult"]:
+        """:meth:`analyse_root` for the integer loaded by ``insns[k]`` -- a struct member's
+        value, whose root is given rather than found through an ivar slot.  ``None`` when
+        ``insns[k]`` does not load an integer of at most 4 bytes."""
+        ins = self.insns[k]
+        ops = split_ops(ins.op_str)
+        if ins.mnemonic not in _LOADS or len(ops) != 2:
+            return None
+        dest = _norm_reg(ops[0])
+        size = _LOADS[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
+        if dest is None or size == 8:
+            return None
+        return self.analyse_root(k, dest, size, stop)
 
     def enum_maps(self, valid_offsets: Set[int], wanted: Optional[Set[int]] = None
                   ) -> Dict[int, List[Tuple[int, str]]]:
         """``{ivar offset: [(value, name), ...]}`` for every field of the function that is an
-        enum.  The loaded value is driven through the code with every candidate value and one
-        value outside all of them, and at the first call each argument register's string is
-        read.  The NAME register is one whose string takes at least two different values
-        across those runs (two names, or a name and the converter's ``"(unknown: %i)"``
-        fallback): the dictionary key, selectors and class pointers are the same for every
-        value.  A field with no such register is not an enum -- a constant string, or an int
-        handed to ``+[NSNumber numberWithInt:]``, never varies.
-        *wanted* only limits the work to those ivars; it never changes a result."""
+        enum (see :meth:`analyse_root` for the decision).  *wanted* only limits the work to
+        those ivars; it never changes a result."""
         out: Dict[int, Dict[int, str]] = {}
+        # What the evaluation could NOT settle, by ivar offset -- reported, never silent:
+        #   incomplete:  a field that WAS recovered as an enum but some value could not be
+        #                evaluated (or a table gate was too wide to enumerate): values may be
+        #                missing from it
+        #   unevaluated: an enum-like switch (two or more compare constants / table indices)
+        #                that yielded nothing: the field may be an enum that stays untyped
+        self.incomplete: Dict[int, str] = {}
+        self.unevaluated: Dict[int, str] = {}
         roots = self.value_loads()
         every_root = frozenset(k for k, _ in roots)
         for k, off in roots:
@@ -624,30 +755,26 @@ class Flow:
             size = _LOADS[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
             if size == 8 or dest is None:
                 continue                                  # a pointer load, not an enum value
-            domain = (1 << (8 * size)) if size < 4 else (1 << 31)
-            cands = self.candidates(k, dest, domain)
-            probe = next((v for v in range(max(cands) + 1, domain) if v not in cands), None)
-            if probe is None:
-                continue
-            stop = every_root - {k}
-            try:
-                seen = {v: self.evaluate(k, dest, v, stop) for v in sorted(cands | {probe})}
-            except _Abort:
-                continue
-            best: Dict[int, str] = {}
-            for reg in {r for obs in seen.values() for r in obs}:
-                texts = {obs[reg] for obs in seen.values() if reg in obs}
-                if len(texts) < 2:
-                    continue                              # same string for every value
-                names = {v: obs[reg] for v, obs in seen.items()
-                         if v in cands and reg in obs and _is_enum_name(obs[reg])}
-                if len(set(names.values())) > len(set(best.values())):
-                    best = names
-            if best:
+            res = self.analyse_root(k, dest, size, every_root - {k})
+            if res.pairs:
                 tgt = out.setdefault(off, {})
-                for v, nm in best.items():
+                for v, nm in res.pairs.items():
                     tgt.setdefault(v, nm)
+                if res.problems:
+                    self.incomplete.setdefault(off, "; ".join(res.problems[:3]))
+            elif res.problems and res.n_candidates >= 3:
+                self.unevaluated.setdefault(off, "; ".join(res.problems[:3]))
+        for off in out:
+            self.unevaluated.pop(off, None)
         return {off: sorted(m.items()) for off, m in out.items()}
+
+
+@dataclass
+class RootResult:
+    """What :meth:`Flow.analyse_root` found for one integer value."""
+    pairs: Dict[int, str]          # value -> name; empty: not an enum (or not evaluable)
+    problems: List[str]            # values/gates the evaluation could not settle
+    n_candidates: int              # how many distinct values the code compares / indexes with
 
 
 def _is_enum_name(text: str) -> bool:
@@ -682,6 +809,22 @@ def _mem_regs(op: str):
     return None if pm is None else (pm[0], pm[1], pm[2])
 
 
+_SHIFTS = ('lsr', 'lsl', 'asr')
+
+
+def _shift(mn: str, a: int, n: int, dest_tok: str) -> int:
+    """``lsr`` / ``lsl`` / ``asr`` of *a* by *n*, in the destination's width."""
+    bits = 32 if dest_tok.strip().lower().startswith('w') else 64
+    n %= bits
+    a &= (1 << bits) - 1
+    if mn == 'lsl':
+        return a << n
+    if mn == 'lsr':
+        return a >> n
+    sa = a - (1 << bits) if a >> (bits - 1) else a
+    return sa >> n
+
+
 def _signed(v: Optional[int], tok: str) -> Optional[int]:
     """*v*, a register's unsigned content, as the signed number it stands for (a bias
     materialised as ``mov w9, #-0x3bc4`` reads back as 0xFFFFC43C)."""
@@ -689,6 +832,17 @@ def _signed(v: Optional[int], tok: str) -> Optional[int]:
         return None
     bits = 32 if tok.strip().lower().startswith('w') else 64
     return v - (1 << bits) if v >> (bits - 1) else v
+
+
+def _imm_operand(ops: List[str], i: int) -> Optional[int]:
+    """The immediate at ``ops[i]`` including an optional ``lsl #12`` shift operand after it
+    (``sub w8, w2, #0x11, lsl #12`` is 0x11000)."""
+    v = _parse_imm(ops[i])
+    if v is None:
+        return None
+    if len(ops) > i + 1 and ops[i + 1].startswith('lsl'):
+        v <<= _parse_imm(ops[i + 1]) or 0
+    return v
 
 
 def _shifted(v: int, op: str) -> int:

@@ -4,7 +4,7 @@ Proto-class detection is supposed to be STRUCTURAL: an ObjC class is a protobuf
 message because its superclass chain reaches PBCodable/PBRequest/PBResponse/
 PBMessage, resolved BY NAME (cross-image ``read_ptr`` in cache mode, the
 LC_DYLD_CHAINED_FIXUPS imports table in standalone-binary mode).  That walk —
-``extractor._proto_class_set`` anchor 1 — is ground truth and is the sole detector
+``protoclass_set._proto_class_set`` anchor 1 — is ground truth and is the sole detector
 this tool relies on.
 
 This module holds the two things that used to detect proto classes and no longer

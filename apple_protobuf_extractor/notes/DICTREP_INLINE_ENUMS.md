@@ -1,14 +1,25 @@
 # Enums whose name map is inlined into `_dictionaryRepresentation:` (2026-10-13)
 
-Status: **implemented, uncommitted** — `proto/dictrep_flow.py` (new), `proto/enums.py`
-(`_harvest_dictrep_enums` body replaced, dead window helpers removed, caller passes `wanted`),
-`tests/test_dictrep_inline_enums.py` + `tests/_a64asm.py` (new), `tests/test_dictrep_enums.py`
-(fixtures rebuilt, xAsString-gate tests removed).
-`ios_decoder/protos` and the paper were not touched.
+Status: **implemented, uncommitted** — `proto/dictrep_flow.py` (new), `proto/enums.py`, `proto/structfields.py`,
+`heuristic_registry.py` (`xas-flow`, `dictrep-flow`), `tests/test_dictrep_inline_enums.py` + `tests/test_xasstring_flow.py`
++ `tests/_a64asm.py` (new), `tests/test_dictrep_enums.py` (fixtures rebuilt).  `ios_decoder/protos` and the paper were not
+touched.
+
+**2026-10-14 update — one engine for all three enum sources.**  The same evaluator now also recovers (a) the
+`xAsString:` method (`_extract_xasstring`, value register x2, name read at the call/return) and (b) the name switches of
+struct members (`structfields._member_enum`).  The window/idiom decoders they replaced (`_harvest_jumptable_segments`,
+`_harvest_isolated_compares`, `_harvest_cbz_value0`, `_valid_value_bitmask`, `_find_index_bias`, `_sub_imm_bias`,
+`_leading_materialized_bias`, `_detect_unreached_branch_gate`, `_detect_unrecovered_csel_chain`, the pointer-table reader
+`_extract_enum_values_windows`, …; ~1070 lines of `proto/enums.py`) are deleted.  What could not be evaluated is reported
+(`XasResult.reason` → `ProtoEnum.incomplete_reason`, `ExtractionDiagnostics.unevaluated_switches`, summary rows, exit code 3)
+instead of being dropped.  Golden diff caused by this: `XASSTRING_FLOW_golden_diff.md` (all three goldens differ; every
+difference is an old-output defect fixed — filler holes emitted as `NAME_UNKNOWN_<n>`, off-by-one numbering for
+`add wN,w2,#1`-biased tables, 369–378 instead of 70001–70010 because `lsl #12` was ignored, negative biases — or
+`values_confirmed` False→True because "confirmed" now means "no value failed to evaluate").
 
 ## Why the Extractor typed these fields int32
 
-The enum recovery already read `_dictionaryRepresentation:` (`_harvest_dictrep_enums`: jump-table, pointer-table and
+(Historical.)  The enum recovery already read `_dictionaryRepresentation:` (`_harvest_dictrep_enums`: jump-table, pointer-table and
 compare-chain passes through 16/20-instruction look-back windows).  It returned **0 of the 37** ObjC-class fields in
 the 45-field `more_specific_cases.tsv` of the private repo's Codex/Claude descriptor-recovery eval, for four independent reasons:
 

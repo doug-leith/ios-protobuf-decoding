@@ -383,11 +383,18 @@ def _recover_method_names_from_symbols(cache, mach_va, cl) -> None:
         )
 
 
-def _build_and_write_output(messages, args, source_name) -> int:
+#: Exit status of a run that COMPLETED but dropped or distrusts part of its output: a class or
+#: a protobuf runtime failed (its messages are missing), or enum fields were left unresolved
+#: where that is a tool bug.  0 = clean, 1 = could not run / bad input, 2 = usage (argparse).
+EXIT_INCOMPLETE = 3
+
+
+def _build_and_write_output(messages, args, source_name, ctx) -> int:
     """Resolve cross-references, group by package, print the summary, and write
-    the .proto files (unless --dry-run).  Returns the process exit code."""
+    the .proto files (unless --dry-run).  Returns the process exit code
+    (``EXIT_INCOMPLETE`` when the output is known to be missing something)."""
     from proto.emitter import (build_proto_files, write_proto_files,
-                               print_summary, package_for_class)
+                               print_summary, package_for_class, enum_error_escalated)
     t = _step("resolving cross-references and grouping by package")
     proto_files = build_proto_files(
         messages,
@@ -397,11 +404,16 @@ def _build_and_write_output(messages, args, source_name) -> int:
     )
     _done(t)
 
-    print_summary(messages, proto_files, source_name=source_name)
+    from proto.models import get_diagnostics
+    diag = get_diagnostics(ctx)
+    print_summary(messages, proto_files, source_name=source_name, diagnostics=diag)
+    # A run that completed but is known to have dropped or distrusted output must not exit 0.
+    status = (EXIT_INCOMPLETE if diag.n_errors or enum_error_escalated(messages, proto_files)
+              else 0)
 
     if args.dry_run:
         print("\n(dry run — no files written)", file=sys.stderr)
-        return 0
+        return status
 
     output_dir = Path(args.output)
     class_to_pkg = {
@@ -425,7 +437,7 @@ def _build_and_write_output(messages, args, source_name) -> int:
         n_msgs = len(msgs.messages) if msgs else 0
         print(f"  {path}  ({n_msgs} messages)", file=sys.stderr)
 
-    return 0
+    return status
 
 
 # ── main() helpers ─────────────────────────────────────────────────────────────
@@ -797,10 +809,17 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not messages:
         print("warning: no proto messages found", file=sys.stderr)
+        from proto.models import get_diagnostics
+        from proto.emitter import print_summary
+        diag = get_diagnostics(ctx)
+        if diag.n_errors:
+            # nothing was written AND something failed: not a clean "there is no protobuf here"
+            print_summary([], [], source_name=source_name, diagnostics=diag)
+            return EXIT_INCOMPLETE
         return 0
 
     # ── Build + write proto files ──────────────────────────────────────────────
-    return _build_and_write_output(messages, args, source_name)
+    return _build_and_write_output(messages, args, source_name, ctx)
 
 
 if __name__ == "__main__":

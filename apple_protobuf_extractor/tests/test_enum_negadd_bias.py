@@ -1,8 +1,9 @@
 """TODO #53 — large index biases materialised as a register constant then add/sub-ed
 with the value reg (the >4095 analytics/log enums).  A 12-bit `sub #imm` can't hold a
 bias like 50000, so LLVM emits e.g. `mov w8,#-0xc350; add w8,w2,w8; cmp w8,#3; <jump
-table>`.  `_leading_materialized_bias` recovers the bias (TIED to the gate's compared
-register, so a neighbouring segment's materialise+add can't bleed in).
+table>`.  The data-flow evaluator (proto/dictrep_flow.py) recovers the bias because it
+evaluates the register the table is indexed with; the synthetic forms are covered in
+tests/test_xasstring_flow.py.
 
 Live-gated on GeoServices.  Two guards:
   • RECOVERY  — LogMessageType gains its 50000-class segment (was capped at 40000).
@@ -12,64 +13,12 @@ Live-gated on GeoServices.  Two guards:
 import unittest
 
 import proto.extractor as E
-from proto.enums import _leading_materialized_bias
-from tests.test_disasm import make_insn
 
 try:
     import live_artifacts as _V
     _HAVE = _V.load_cache('GeoServices') is not None
 except Exception:
     _HAVE = False
-
-
-class TestLeadingMaterializedBiasUnit(unittest.TestCase):
-    """Direct synthetic unit tests for _leading_materialized_bias, covering both
-    families documented in its docstring: NEGATIVE-ADD (only ever exercised
-    indirectly, via the live GeoServices tests below) and the "defensive sibling"
-    materialised-positive-SUB form, which previously had no test at all (neither
-    live nor synthetic)."""
-
-    def test_negative_add_form(self):
-        # mov w8,#-50000 ; add w2,w2,w8  (value_reg=2) -> bias 50000.
-        # _leading_materialized_bias reads op_str textually (not the raw word), so
-        # build the mov/add pair directly as the decoder would render them.
-        insns = [
-            make_insn(0x1000, 'mov', 'w8, #-50000'),
-            make_insn(0x1004, 'add', 'w2, w2, w8'),
-        ]
-        bias = _leading_materialized_bias(insns, 0, len(insns), value_reg=2)
-        self.assertEqual(bias, 50000)
-
-    def test_materialized_positive_sub_form(self):
-        # movz w8,#50000 ; sub w2,w2,w8  (value_reg=2) -> bias 50000.
-        # This is the "same family; defensive" SUB form from the docstring, which
-        # (unlike the ADD form above) had zero coverage anywhere in the suite.
-        insns = [
-            make_insn(0x1000, 'movz', 'w8, #50000'),
-            make_insn(0x1004, 'sub', 'w2, w2, w8'),
-        ]
-        bias = _leading_materialized_bias(insns, 0, len(insns), value_reg=2)
-        self.assertEqual(bias, 50000)
-
-    def test_sub_form_wrong_register_not_biased(self):
-        # The sub targets w3, not the gate's value_reg=2 -> must NOT contribute.
-        insns = [
-            make_insn(0x1000, 'movz', 'w8, #50000'),
-            make_insn(0x1004, 'sub', 'w3, w3, w8'),
-        ]
-        bias = _leading_materialized_bias(insns, 0, len(insns), value_reg=2)
-        self.assertEqual(bias, 0)
-
-    def test_sub_form_negative_constant_not_used_as_bias(self):
-        # sub with a NEGATIVE materialised constant doesn't match the documented
-        # "positive constant subtracted" shape -> no bias (only the mov/add pair
-        # models negative constants).
-        insns = [
-            make_insn(0x1000, 'mov', 'w8, #-50000'),
-            make_insn(0x1004, 'sub', 'w2, w2, w8'),
-        ]
-        bias = _leading_materialized_bias(insns, 0, len(insns), value_reg=2)
-        self.assertEqual(bias, 0)
 
 
 @unittest.skipUnless(_HAVE, 'GeoServices cache not available')

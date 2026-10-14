@@ -11,6 +11,7 @@ as a cstring section would yield garbage entries from raw pointer bytes.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional
 
@@ -102,7 +103,13 @@ def build_string_table(ctx: BinaryContext) -> StringTable:
         if not ctx.has_section(segname, sectname):
             continue
         sect = ctx.section(segname, sectname)
-        if sect.size == 0 or sect.size > _MAX_SECTION_SIZE:
+        if sect.size == 0:
+            continue
+        if sect.size > _MAX_SECTION_SIZE:
+            logging.getLogger(__name__).warning(
+                "section %s,%s is %d bytes (> %d): its strings are NOT scanned, so selector "
+                "or value names stored there may be missing", segname, sectname,
+                sect.size, _MAX_SECTION_SIZE)
             continue
         if not sect.has_file_content:
             continue

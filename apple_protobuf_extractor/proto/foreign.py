@@ -33,6 +33,9 @@ from serializers import cpp_descriptor_extract as _cpp
 from serializers import swift_descriptor_extract as _swift
 
 from .models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage
+from .protoclass_set import _proto_class_set
+from .foreign_detect import (google_protobuf_classes, swift_protobuf_messages,
+                             cpp_protobuf_namespaces, protobufc_descriptors)
 
 log = logging.getLogger(__name__)
 
@@ -202,14 +205,15 @@ def _cpp_protos_to_messages(file_protos) -> List[ProtoMessage]:
 
 
 def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
-    """Drop duplicate ``(package, name)`` messages, keeping the first.
+    """Drop duplicate ``(package, name)`` messages, keeping the one with MORE fields.
 
     The well-known ``descriptor.proto`` (package ``google.protobuf``) is embedded
     by — and so decoded once per — every C++ image that registers a descriptor,
     so the same messages can appear several times.  proto3 rejects a redefinition
     ("X is already defined"), so collapse exact-name duplicates within a package.
-    A duplicate that DIFFERS in field count is surfaced (it would be a real
-    conflict, not a benign re-decode) rather than silently dropped."""
+    A duplicate that DIFFERS in field count (different protobuf versions of the same
+    well-known message) keeps the larger field set, so no field is lost, and the message
+    is annotated and warned about -- never silently resolved by discovery order."""
     seen: Dict[tuple, ProtoMessage] = {}
     out: List[ProtoMessage] = []
     for m in messages:
@@ -220,9 +224,15 @@ def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
             out.append(m)
             continue
         if len(prev.fields) != len(m.fields):
+            keep, drop = (m, prev) if len(m.fields) > len(prev.fields) else (prev, m)
             log.warning("C++ message %r in package %r decoded twice with differing "
-                        "field counts (%d vs %d); keeping the first",
+                        "field counts (%d vs %d); keeping the larger",
                         m.name, m.package, len(prev.fields), len(m.fields))
+            keep.message_note = (f"decoded from more than one image with differing field counts "
+                                 f"({len(keep.fields)} kept, {len(drop.fields)} dropped): "
+                                 f"different protobuf versions of this message")
+            seen[key] = keep
+            out[out.index(prev)] = keep
     return out
 
 
@@ -308,14 +318,14 @@ def swift_messages(ctx) -> List[ProtoMessage]:
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("swift enum scan failed: %s", exc)
+        _foreign_failed(ctx, "swift-protobuf", "enum scan", exc)
         enums = set()
     try:
         enum_defs = [e for e in _swift.swift_enums(ctx) if e.fields]
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("swift enum recovery failed: %s", exc)
+        _foreign_failed(ctx, "swift-protobuf", "enum recovery", exc)
         enum_defs = []
     types = _SwiftTypes(sw, enums, enum_defs)
     out: List[ProtoMessage] = []
@@ -477,9 +487,6 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
     * GPBMessage — the GPB subclass set (detected, not decodable);
     * protobuf-c — descriptor-magic scan of the data sections (detected, not decodable).
     """
-    from proto.extractor import (_proto_class_set, google_protobuf_classes,
-                                 swift_protobuf_messages, cpp_protobuf_namespaces,
-                                 protobufc_descriptors)
     out: List[SerializerSummary] = []
 
     pb = sorted(_proto_class_set(ctx, cl))
@@ -498,7 +505,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("C++ descriptor inventory failed: %s", exc)
+        _foreign_failed(ctx, "C++ libprotobuf", "descriptor inventory", exc)
     if cpp_names:
         out.append(SerializerSummary(CPP_SERIALIZER, True, sorted(cpp_names)))
     else:
@@ -512,7 +519,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
         except (NameError, ImportError):
             raise
         except Exception as exc:
-            log.debug("C++ namespace scan failed: %s", exc)
+            _foreign_failed(ctx, "C++ libprotobuf", "namespace scan", exc)
             cpp_ns = {}
         if cpp_ns:
             total = sum(cpp_ns.values())
@@ -528,7 +535,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("swift conformance scan failed: %s", exc)
+        _foreign_failed(ctx, "swift-protobuf", "conformance scan", exc)
         sw_msgs, sw_enums = [], []
     sw_names = sorted(sw_msgs) + sorted(sw_enums)
     if not sw_names:
@@ -540,7 +547,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
         except (NameError, ImportError):
             raise
         except Exception as exc:
-            log.debug("swift nameMap inventory failed: %s", exc)
+            _foreign_failed(ctx, "swift-protobuf", "detection", exc)
             sw_names = []
     if sw_names:
         out.append(SerializerSummary(SWIFT_SERIALIZER, True, sw_names))
@@ -550,7 +557,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("GPBMessage detection failed: %s", exc)
+        _foreign_failed(ctx, "Google protobuf-objc (GPBMessage)", "detection", exc)
         gpb_subs = []
     if gpb_subs:
         # Detect-only — accepted limitation, see LIMITATIONS.md (8), #64.
@@ -562,7 +569,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("protobuf-c detection failed: %s", exc)
+        _foreign_failed(ctx, PROTOBUFC_SERIALIZER, "detection", exc)
         pbc = None
     if pbc:
         # Detect-only — accepted limitation, see LIMITATIONS.md (12).  Names are the
@@ -573,6 +580,16 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
         out.append(SerializerSummary(PROTOBUFC_SERIALIZER, False,
                                      pbc.messages, note=note))
     return out
+
+
+def _foreign_failed(ctx, runtime: str, phase: str, exc: Exception) -> None:
+    """A non-PBCodable runtime's *phase* raised: its messages are missing (or its detection
+    is unreliable).  Recorded for the run summary / exit status and warned, never only
+    debug-logged -- the 'DECODED' line printed earlier would otherwise be a false promise."""
+    from proto.models import get_diagnostics
+    get_diagnostics(ctx).foreign_errors.append((runtime, f"{phase}: {type(exc).__name__}: {exc}"))
+    log.warning("%s %s FAILED (%s: %s); its messages may be missing from the output",
+                runtime, phase, type(exc).__name__, exc)
 
 
 def collect_foreign_messages(ctx, data: Optional[bytes]) -> List[ProtoMessage]:
@@ -586,11 +603,11 @@ def collect_foreign_messages(ctx, data: Optional[bytes]) -> List[ProtoMessage]:
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("C++ message collection failed: %s", exc)
+        _foreign_failed(ctx, "C++ libprotobuf", "message collection", exc)
     try:
         out += swift_messages(ctx)
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("swift message collection failed: %s", exc)
+        _foreign_failed(ctx, "swift-protobuf", "message collection", exc)
     return out

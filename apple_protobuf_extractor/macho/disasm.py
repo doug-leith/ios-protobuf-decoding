@@ -28,6 +28,7 @@ Public API
 
 from __future__ import annotations
 
+import logging
 import re
 import struct
 from dataclasses import dataclass
@@ -391,9 +392,29 @@ def disasm(
 
     try:
         import capstone
-        return _disasm_capstone(data, vmaddr, max_insns, capstone, stop_at_ret)
     except ImportError:
+        capstone = None
+    if capstone is None:
+        _warn_native_decoder_once()
         return _disasm_native(data, vmaddr, max_insns, stop_at_ret)
+    # (outside the try: an ImportError raised INSIDE the capstone path is a real bug)
+    return _disasm_capstone(data, vmaddr, max_insns, capstone, stop_at_ret)
+
+
+_native_decoder_warned = False
+
+
+def _warn_native_decoder_once() -> None:
+    """capstone is absent: the built-in decoder is used, which does not decode every load /
+    store form (register-offset loads come out as ``unk``), so enum and field recovery can
+    silently be less complete.  Say so once per process."""
+    global _native_decoder_warned
+    if not _native_decoder_warned:
+        _native_decoder_warned = True
+        logging.getLogger(__name__).warning(
+            "capstone is not installed: using the built-in arm64 decoder, which does not "
+            "decode every instruction form; enum and field recovery may be incomplete "
+            "(install capstone: pip install capstone)")
 
 
 def _read_available(ctx: BinaryContext, vmaddr: int, want: int) -> bytes:

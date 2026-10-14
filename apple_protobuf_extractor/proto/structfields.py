@@ -44,20 +44,15 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _decode_ldr_reg_off,
-                               range_from_unsigned_gate)
-from macho.disasm import disasm, find_adrp_add_target, _parse_imm, _norm_reg
+from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
 from proto.config import _class_to_proto_name
-from proto.dispatch import _read_raw_word
-from proto.enums import (_ENUM_UNRESOLVED_COMMENT, _enum_name_from_pairs, _harvest_cbz_value0,
-                         _harvest_isolated_compares, _normalize_enum_value_name,
-                         _qualify_enum_name, _read_dictrep_pointer_pairs, _sub_imm_bias,
-                         _valid_value_bitmask)
+from proto.dispatch import _jump_table_arm_addrs
+from proto.enums import _ENUM_UNRESOLVED_COMMENT, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.mapfields import _scratch_slot_of
-from proto.models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage
+from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.protocore import _SCALAR_ENC
@@ -69,10 +64,6 @@ log = logging.getLogger(__name__)
 # C scalar @encode char -> size in bytes (also its natural alignment).
 _SCALAR_SIZE = {'c': 1, 'C': 1, 'B': 1, 's': 2, 'S': 2, 'i': 4, 'I': 4, 'l': 4, 'L': 4,
                 'f': 4, 'q': 8, 'Q': 8, 'd': 8}
-
-# The anonymous has-bits struct ``{?=b1b1…}`` (and its named form ``"_has"{?="x"b1…}``) is
-# presence bookkeeping, not data.  Clang packs it as an ``unsigned int`` bitfield group.
-_HAS_BITS_SIZE = 4
 
 
 @dataclass(frozen=True)
@@ -548,10 +539,6 @@ def _cfstring(ctx, va: int) -> Optional[str]:
     return text if text is not None and _IDENTIFIER.match(text) else None
 
 
-# The CFString a generated ``xAsString:`` falls back to for a value it has no name for.
-_UNKNOWN_FORMAT = "(unknown: %i)"
-
-
 @dataclass(frozen=True)
 class MemberDict:
     """What a struct's dictionary representation says about one member."""
@@ -559,81 +546,42 @@ class MemberDict:
     # None when the key is chosen between two spellings that differ only in case -- the member
     # is still filed (its code is the member's), only its name is left to the @encode
     enum: Optional[Tuple[Tuple[int, str], ...]] = None
-    # None: emitted as a plain number.  A tuple: emitted through an enum-name switch
-    # (``"(unknown: %i)"``) — the ``(value, name)`` pairs recovered from it, empty when the
-    # switch is of a shape this pass does not read.
+    # None: emitted as a plain number.  A tuple: the member's value is driven through an
+    # enum-name switch (proto.dictrep_flow decides: the string handed to the call varies
+    # with the value) -- the ``(value, name)`` pairs recovered from it, empty when the code
+    # shows an enum-like switch that could not be evaluated.
 
 
-def _references_unknown_format(ctx, span: Sequence) -> bool:
-    """True if *span* builds the address of the ``"(unknown: %i)"`` CFString (``adrp rP ;
-    add rD, rP, #imm``)."""
-    pages: Dict[str, int] = {}
-    for ins in span:
-        ops = split_ops(ins.op_str)
-        if ins.mnemonic == 'adrp' and len(ops) == 2 and _parse_imm(ops[1]) is not None:
-            pages[ops[0]] = _parse_imm(ops[1])
-        elif ins.mnemonic == 'add' and len(ops) == 3 and ops[1] in pages \
-                and _parse_imm(ops[2]) is not None \
-                and _cfstring_text(ctx, pages[ops[1]] + _parse_imm(ops[2])) == _UNKNOWN_FORMAT:
-            return True
-    return False
+def _member_enum(ctx, insns: Sequence, root: int, member_at) -> Optional[Tuple[Tuple[int, str], ...]]:
+    """The enum ``(value, name)`` pairs of the struct member loaded by ``insns[root]``, ``()``
+    for an enum-like switch that could not be evaluated, or ``None`` for a plain number.
+
+    The member's value is driven through *insns* by :class:`proto.dictrep_flow.Flow`, the same
+    analysis the class-level recovery uses; the other members' loads bound its code."""
+    flow = _flow_for(ctx, insns)
+    stop = frozenset(k for k in range(len(insns)) if member_at(k) is not None) - {root}
+    res = flow.enum_of_load(root, stop)
+    if res is None:
+        return None
+    if res.pairs:
+        return tuple(sorted(res.pairs.items()))
+    return () if res.problems and res.n_candidates >= 3 else None
 
 
-def _table_base(span: Sequence, upto: int, reg: str) -> Optional[int]:
-    """Address built into *reg* by the NEAREST ``adrp``/``add`` pair before ``span[upto]`` (a
-    span re-uses its scratch registers; the live pair is the closest one)."""
-    for j in range(upto - 1, -1, -1):
-        if span[j].mnemonic == 'adrp':
-            t = find_adrp_add_target(span[j:upto + 1], reg)
-            if t is not None:
-                return t
-    return None
-
-
-def _gate_range(span: Sequence, words: Dict[int, int], upto: int) -> int:
-    """Number of table entries the NEAREST ``cmp wN,#imm ; b.hs|b.hi`` range gate before
-    ``span[upto]`` admits (0 if none).  The span is one member's code, so the whole of it is
-    searched: a sparse table's validity-bitmask test (``mov/movk ; lsr ; tbnz``) sits between
-    the gate and the table load."""
-    for j in range(upto - 1, -1, -1):
-        cmp = _decode_cmp_imm(words.get(span[j].addr, 0))
-        if cmp is None:
-            continue
-        nxt = _decode_bcond(words.get(span[j + 1].addr, 0)) if j + 1 < len(span) else None
-        n = range_from_unsigned_gate(nxt, cmp[1])
-        if n:
-            return n
-    return 0
-
-
-def _span_enum_pairs(ctx, span: Sequence) -> Tuple[Tuple[int, str], ...]:
-    """The ``(value, name)`` pairs of the enum-name switch inside *span* (one member's code in a
-    dictionary representation), by the two shapes the class-level recovery reads: a compare
-    chain (``cbz`` / ``cmp ; b.eq|b.ne``, each arm loading its CFString) and a pointer table
-    (``cmp #n ; b.hs unknown ; ldr x,[table, idx, lsl #3]``).  Empty if neither is present."""
-    words = {}
-    for ins in span:
-        w = _read_raw_word(ctx, ins.addr)
-        if w is not None:
-            words[ins.addr] = w
-    found: Dict[int, str] = {}
-    _harvest_isolated_compares(ctx, span, words, lambda v, n: found.setdefault(v, n))
-    _harvest_cbz_value0(ctx, span, words, lambda v, n: found.setdefault(v, n))
-    for i, ins in enumerate(span):
-        d = _decode_ldr_reg_off(words.get(ins.addr, 0))
-        if d is None or d[0] != 8:                                  # 64-bit pointer-table load
-            continue
-        _esz, base_rn, idx_reg, _rt = d
-        n = _gate_range(span, words, i)
-        table = _table_base(span, i, f"x{base_rn}")
-        if n < 2 or table is None:
-            continue
-        bias = _sub_imm_bias(span, words, 0, i, dest_reg=idx_reg) or 0
-        mask = _valid_value_bitmask(list(span[:i + 1]), allow_tbnz=True)  # bit v set = v declared
-        for v, name in _read_dictrep_pointer_pairs(ctx, table, n):
-            if mask is None or (mask >> v) & 1:
-                found.setdefault(v + bias, name)
-    return tuple(sorted(found.items()))
+def _flow_for(ctx, insns: Sequence):
+    """The :class:`Flow` of *insns* (memoised per list: one owner's members share it)."""
+    from proto.dictrep_flow import Flow
+    cache = _ctx_cache(ctx, "_member_flows", dict)
+    key = id(insns)
+    hit = cache.get(key)
+    if hit is None or hit[0] is not insns:
+        try:
+            arms = _jump_table_arm_addrs(ctx, list(insns))
+        except Exception:                      # CFG completion only; the evaluation itself
+            arms = ()                          # follows `br` targets and does not need it
+        hit = (insns, Flow(ctx, list(insns), arms))
+        cache[key] = hit
+    return hit[1]
 
 
 def _pair_members(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, MemberDict], int]:
@@ -683,9 +631,7 @@ def _pair_members(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, MemberDict
         if (key is None and not case_twins) or member is None or member in members:
             unpaired += 1
         else:
-            span = insns[first_load:k + 1]
-            members[member] = MemberDict(
-                key, _span_enum_pairs(ctx, span) if _references_unknown_format(ctx, span) else None)
+            members[member] = MemberDict(key, _member_enum(ctx, insns, first_load, member_at))
         member = None
     return members, unpaired
 
@@ -949,13 +895,7 @@ def _make_enum(base_name: str, pairs: Sequence[Tuple[int, str]]) -> ProtoEnum:
             head = next(iter(heads))
             if re.match(r'^[A-Z][A-Za-z0-9]*[a-z][A-Za-z0-9]*$', head):
                 name = head
-    values, used = [], set()
-    for value, raw in pairs:
-        vname = _normalize_enum_value_name(name, raw)
-        if vname in used:
-            vname = f"{vname}_{value}"
-        used.add(vname)
-        values.append(ProtoEnumValue(name=vname, number=value))
+    values = _enum_values_from_pairs(name, pairs)
     return ProtoEnum(name=name, values=values)
 
 

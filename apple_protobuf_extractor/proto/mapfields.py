@@ -47,7 +47,7 @@ from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from macho.memory import BinaryContext, _ctx_cache
-from macho.classlist import ObjcClass, ObjcIvar
+from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import disasm, _parse_imm, _norm_reg
 
 from proto.arm64cfg import (
@@ -60,7 +60,9 @@ from proto.writeto import (
 from proto.write_helpers import (
     _helper_real_target, _classify_write_helper, _refine_scalar_by_family,
 )
+from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
+from proto.protoclass_set import _proto_class_set
 from proto.dispatch import (
     _locate_dispatch_arms, _func_end, _find_field_number_register,
     _compare_handlers, _classref_class_name,
@@ -691,3 +693,78 @@ def resolve_map_types(
             else:
                 value_type = None
     return MapTypes(key_type, value_type, value_class, "; ".join(reasons) or None)
+
+
+# ── Post-extraction finalisation (moved from proto.extractor) ───────────────
+
+_MAP_FIELD_NOTE = (
+    "map<> field (ObjC NSMutableDictionary) emitted as bytes; no map-entry writer "
+    "found in writeTo: so key/value types not recovered — see LIMITATIONS.md (1)"
+)
+
+
+_MAP_UNRESOLVED_NOTE = (
+    "map<> field: each element is a map-entry message {{key = 1, value = 2}}; "
+    "key/value types not recovered ({reason}) — see LIMITATIONS.md (1)"
+)
+
+
+_MAP_VALUE_CLASS_NOTE = (
+    "map value is a message whose class could not be determined ({reason}); value "
+    "emitted as bytes — see LIMITATIONS.md (1)"
+)
+
+
+def _apply_map_types(fld: ProtoField, types: MapTypes) -> None:
+    """Apply resolved :class:`MapTypes` to a map field (see :func:`_finalize_map_fields`).
+
+    * key + value known  -> ``map<K, V>`` (singular; a message value is named by its ObjC
+      class and resolved by the emitter), no note — nothing is uncertain.
+    * key known, value a message of unknown class -> ``map<K, bytes>`` + note (a message is
+      length-delimited like bytes, so every entry still decodes).
+    * anything else -> ``repeated bytes`` of entry messages + note (the entries are all
+      visible, unlike a singular ``bytes`` which keeps only the last)."""
+    if types.key_type and types.value_type == "message" and types.value_class:
+        fld.map_key_type, fld.map_value_class = types.key_type, types.value_class
+        fld.type_inference_note = None
+    elif types.key_type and types.value_type not in (None, "message"):
+        fld.map_key_type, fld.map_value_type = types.key_type, types.value_type
+        fld.type_inference_note = None
+    elif types.key_type and types.value_type == "message":
+        fld.map_key_type, fld.map_value_type = types.key_type, "bytes"
+        fld.type_inference_note = _MAP_VALUE_CLASS_NOTE.format(reason=types.reason)
+    else:
+        fld.label = FieldLabel.REPEATED
+        fld.type_inference_note = _MAP_UNRESOLVED_NOTE.format(reason=types.reason)
+
+
+def _finalize_map_fields(
+    ctx: BinaryContext, cl: ClassList, messages: List[ProtoMessage],
+    core_index: Dict[int, str],
+) -> None:
+    """Post-extraction pass (#41): type every map field whose entry writer was recovered.
+
+    Runs after the whole image is extracted because a map key/value helper's type is the
+    unanimous type of the ivars that use it binary-wide (``ctx._helper_votes``, filled by
+    :func:`record_helper_votes` as each class was extracted).  A field with no entry
+    writer is left untouched (flagged ``bytes``)."""
+    writers = getattr(ctx, "_map_writers", None) or {}
+    if not writers:
+        return
+    known = _proto_class_set(ctx, cl)
+    by_name = {c.name: c for c in cl if not c.is_meta}
+    for msg in messages:
+        cls = by_name.get(msg.class_name)
+        for fld in msg.fields:
+            writer = writers.get((msg.class_name, fld.name))
+            if writer is None or cls is None:
+                continue
+            try:
+                types = resolve_map_types(ctx, cls, writer, core_index, known)
+            except (NameError, ImportError):
+                raise
+            except Exception as exc:
+                log.debug("map type resolution failed for %s.%s: %s",
+                          msg.class_name, fld.name, exc)
+                types = MapTypes(None, None, None, f"analysis failed: {type(exc).__name__}")
+            _apply_map_types(fld, types)

@@ -102,9 +102,13 @@ def assemble(base, lines):
                 w = 0xF9400000 | ((imm // 8) << 10) | (_reg(m[0]) << 5) | _reg(ops[0])
             else:
                 w = 0xB9400000 | ((imm // 4) << 10) | (_reg(m[0]) << 5) | _reg(ops[0])
+        elif mn == 'sub' and not ops[2].startswith('#'):          # sub wd, wn, wm
+            w = (0x4B000000 if ops[0].startswith('w') else 0xCB000000) \
+                | (_reg(ops[2]) << 16) | (_reg(ops[1]) << 5) | _reg(ops[0])
         elif mn == 'add' and not ops[2].startswith('#'):
             sh = _imm(ops[3].split()[1]) if len(ops) > 3 else 0     # add xd, xn, xm{, lsl #s}
-            w = 0x8B000000 | (_reg(ops[2]) << 16) | (sh << 10) | (_reg(ops[1]) << 5) | _reg(ops[0])
+            w = (0x0B000000 if ops[0].startswith('w') else 0x8B000000) \
+                | (_reg(ops[2]) << 16) | (sh << 10) | (_reg(ops[1]) << 5) | _reg(ops[0])
         elif mn == 'adr':
             off = target(ops[1]) - pc
             w = 0x10000000 | ((off & 3) << 29) | (((off >> 2) & 0x7FFFF) << 5) | _reg(ops[0])
@@ -130,11 +134,23 @@ def assemble(base, lines):
             w = 0x94000000 | rel(ops[0], 26)
         elif mn == 'mov' and not ops[1].startswith('#'):
             w = 0xAA0003E0 | (_reg(ops[1]) << 16) | _reg(ops[0])
+        elif mn == 'mov' and _imm(ops[1]) < 0:                    # MOVN: rd = ~imm16
+            w = (0x12800000 if ops[0].startswith('w') else 0x92800000) \
+                | ((~_imm(ops[1]) & 0xFFFF) << 5) | _reg(ops[0])
         elif mn == 'mov':
             w = (0x52800000 if ops[0].startswith('w') else 0xD2800000) \
                 | (_imm(ops[1]) << 5) | _reg(ops[0])
         elif mn == 'ret':
             w = 0xD65F03C0
+        elif mn == 'lsr' and not ops[2].startswith('#'):          # LSRV: lsr wd, wn, wm
+            w = (0x1AC02400 if ops[0].startswith('w') else 0x9AC02400) \
+                | (_reg(ops[2]) << 16) | (_reg(ops[1]) << 5) | _reg(ops[0])
+        elif mn == 'brk':
+            w = 0xD4200000 | (_imm(ops[0]) << 5)
+        elif mn == 'eor' and len(ops) == 4:                       # eor xd, xn, xm, lsl #s
+            w = (0x4A000000 if ops[0].startswith('w') else 0xCA000000) \
+                | (_reg(ops[2]) << 16) | (_imm(ops[3].split()[1]) << 10) \
+                | (_reg(ops[1]) << 5) | _reg(ops[0])
         elif mn == 'nop':
             w = 0xD503201F
         else:

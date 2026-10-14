@@ -510,20 +510,19 @@ class TestSummarizeLite(unittest.TestCase):
     """libprotobuf-lite (google::protobuf symbols, no descriptors) must surface as
     a name-less DETECT-ONLY entry; a FULL image must NOT also get a lite entry."""
     def _run(self, cpp_protos, cpp_ns):
-        import proto.extractor as EX
-        saved = (EX._proto_class_set, EX.google_protobuf_classes,
-                 EX.swift_protobuf_messages, EX.cpp_protobuf_namespaces,
+        saved = (F._proto_class_set, F.google_protobuf_classes,
+                 F.swift_protobuf_messages, F.cpp_protobuf_namespaces,
                  F._cpp.extract_cpp_protos_from_ctx)
-        EX._proto_class_set = lambda ctx, cl: []
-        EX.google_protobuf_classes = lambda ctx, cl: ([], [])
-        EX.swift_protobuf_messages = lambda ctx: ([], [], [])
-        EX.cpp_protobuf_namespaces = lambda ctx: cpp_ns
+        F._proto_class_set = lambda ctx, cl: []
+        F.google_protobuf_classes = lambda ctx, cl: ([], [])
+        F.swift_protobuf_messages = lambda ctx: ([], [], [])
+        F.cpp_protobuf_namespaces = lambda ctx: cpp_ns
         F._cpp.extract_cpp_protos_from_ctx = lambda ctx: cpp_protos
         try:
             return {s.label: s for s in F.summarize_serializers(object(), [], None)}
         finally:
-            (EX._proto_class_set, EX.google_protobuf_classes,
-             EX.swift_protobuf_messages, EX.cpp_protobuf_namespaces,
+            (F._proto_class_set, F.google_protobuf_classes,
+             F.swift_protobuf_messages, F.cpp_protobuf_namespaces,
              F._cpp.extract_cpp_protos_from_ctx) = saved
 
     def test_lite_detect_only_entry(self):

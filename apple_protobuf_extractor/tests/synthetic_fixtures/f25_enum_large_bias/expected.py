@@ -11,10 +11,9 @@ fixture.m, not derived from any tool output.
       Kind kind = 3;
     }
 
-Covers proto/enums.py's _leading_materialized_bias (an index bias too large for
-`sub #imm12`, materialised with `mov w8,#-0xc350 ; add w8,w2,w8`). Differential
-check: with that function disabled only 0..3 are recovered and the high cluster
-(50000..50003) is lost entirely (see fixture.m for the disassembly).
+Covers an index bias too large for `sub #imm12`, materialised with
+`mov w8,#-0xc350 ; add w8,w2,w8`: the evaluator follows the add, so the high cluster
+(50000..50003) is numbered correctly (see fixture.m for the disassembly).
 """
 
 _KIND_VALUES = [
@@ -38,7 +37,7 @@ EXPECTED = {
         "enums": {
             "TestBias": {
                 "values": _KIND_VALUES,
-                "values_confirmed": False,
+                "values_confirmed": True,
                 "values_truncated": False,
             },
         },

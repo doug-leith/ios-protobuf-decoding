@@ -530,7 +530,7 @@ class TestResolveMapTypes(unittest.TestCase):
 def _field(**kw):
     base = dict(name='m', number=1, type_name='NSMutableDictionary', label=FieldLabel.OPTIONAL,
                 type_class='NSMutableDictionary', number_confirmed=True,
-                type_inference_note=E._MAP_FIELD_NOTE)
+                type_inference_note=M._MAP_FIELD_NOTE)
     base.update(kw)
     return ProtoField(**base)
 
@@ -539,25 +539,25 @@ class TestApplyMapTypes(unittest.TestCase):
 
     def test_full_recovery_clears_the_note_and_stays_singular(self):
         f = _field()
-        E._apply_map_types(f, M.MapTypes('string', 'message', 'GEOVal'))
+        M._apply_map_types(f, M.MapTypes('string', 'message', 'GEOVal'))
         self.assertEqual((f.map_key_type, f.map_value_class, f.map_value_type), ('string', 'GEOVal', None))
         self.assertIsNone(f.type_inference_note)
         self.assertIs(f.label, FieldLabel.OPTIONAL)
 
     def test_scalar_value(self):
         f = _field()
-        E._apply_map_types(f, M.MapTypes('string', 'uint32'))
+        M._apply_map_types(f, M.MapTypes('string', 'uint32'))
         self.assertEqual((f.map_key_type, f.map_value_type), ('string', 'uint32'))
 
     def test_message_value_of_unknown_class_degrades_to_bytes_with_a_note(self):
         f = _field()
-        E._apply_map_types(f, M.MapTypes('string', 'message', None, 'why'))
+        M._apply_map_types(f, M.MapTypes('string', 'message', None, 'why'))
         self.assertEqual((f.map_key_type, f.map_value_type), ('string', 'bytes'))
         self.assertIn('why', f.type_inference_note)
 
     def test_unrecovered_types_become_repeated_bytes_of_entries(self):
         f = _field()
-        E._apply_map_types(f, M.MapTypes(None, 'string', None, 'key write helper not identified'))
+        M._apply_map_types(f, M.MapTypes(None, 'string', None, 'key write helper not identified'))
         self.assertIsNone(f.map_key_type)
         self.assertIs(f.label, FieldLabel.REPEATED)
         self.assertIn('map-entry message', f.type_inference_note)
@@ -656,7 +656,7 @@ class TestMapEmission(unittest.TestCase):
 
     def test_repeated_bytes_fallback_keeps_its_note(self):
         f = _field(name='m', number=3, label=FieldLabel.REPEATED,
-                   type_inference_note=E._MAP_UNRESOLVED_NOTE.format(reason='r'))
+                   type_inference_note=M._MAP_UNRESOLVED_NOTE.format(reason='r'))
         out = _emit(_msg('GEOX', f))['geo.proto']
         self.assertIn('repeated bytes m = 3;', out)
         self.assertIn('map-entry message', out)

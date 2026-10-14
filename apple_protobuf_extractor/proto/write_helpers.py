@@ -24,7 +24,7 @@ Layering: depends only on ``macho.*`` + ``proto.protocore`` / ``proto.writeto`` 
 from __future__ import annotations
 
 import logging
-from typing import Dict, FrozenSet, List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from macho.memory    import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcIvar

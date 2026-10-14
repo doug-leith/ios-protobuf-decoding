@@ -13,6 +13,7 @@ import unittest
 
 from macho.classlist import ObjcClass, ObjcIvar, ClassList
 import proto.extractor as E
+import proto.protoclass_set as PS
 
 
 def _ivar(name):
@@ -75,7 +76,7 @@ class TestProtoClassSetOffline(unittest.TestCase):
         ctx = _NoReadCtx()
 
         with _allow_heuristic():
-            pset = E._proto_class_set(ctx, cl)
+            pset = PS._proto_class_set(ctx, cl)
         self.assertEqual(pset, frozenset({"AReq", "BReq", "CSub"}))
         self.assertNotIn("DPlain", pset)
         # CSub's immediate superclass is the local proto class AReq → inheritance note.
@@ -102,8 +103,8 @@ class TestProtoClassSetOffline(unittest.TestCase):
         def _fake_name(_ctx, va):
             return "NSObject" if va == NSOBJECT else None
 
-        with _allow_heuristic(), mock.patch.object(E, "_resolve_class_name_at", _fake_name):
-            pset = E._proto_class_set(ctx, cl)
+        with _allow_heuristic(), mock.patch.object(PS, "_resolve_class_name_at", _fake_name):
+            pset = PS._proto_class_set(ctx, cl)
         # The false seed itself is still present (it IS the heuristic seed), but the
         # NSObject-root guard stops the unrelated sibling from being swept in.
         self.assertIn("FalseSeed", pset)
@@ -122,7 +123,7 @@ class TestProtoClassSetOffline(unittest.TestCase):
         ctx = _NoReadCtx()
 
         with _allow_heuristic():
-            E._proto_class_set(ctx, cl)
+            PS._proto_class_set(ctx, cl)
         self.assertEqual(ctx._proto_class_heuristic_only, frozenset({"AReq"}))
         self.assertEqual(ctx._proto_class_cluster_only, frozenset({"BReq", "CSub"}))
 
@@ -135,9 +136,9 @@ class TestProtoClassSetOffline(unittest.TestCase):
         cl = ClassList([a])
         ctx = _NoReadCtx()
 
-        with mock.patch.object(E, "_resolve_class_name_at",
+        with mock.patch.object(PS, "_resolve_class_name_at",
                                lambda _c, va: "PBCodable" if va == PB else None):
-            pset = E._proto_class_set(ctx, cl)
+            pset = PS._proto_class_set(ctx, cl)
         self.assertIn("AReq", pset)
         self.assertEqual(ctx._proto_class_heuristic_only, frozenset())
         self.assertEqual(ctx._proto_class_cluster_only, frozenset())
@@ -205,7 +206,7 @@ class TestNonStructuralDetectionFailsTheRun(unittest.TestCase):
         self.assertTrue(any("BReq" in r for r in logs.output))
         # Extraction continued: the suspect class is still in the set, and is
         # flagged rather than dropped.
-        self.assertIn("BReq", E._proto_class_set(ctx, cl))
+        self.assertIn("BReq", PS._proto_class_set(ctx, cl))
 
     def test_clean_binary_does_not_raise(self):
         """The check must be inert on a structurally-confirmed class set.
@@ -224,7 +225,7 @@ class TestNonStructuralDetectionFailsTheRun(unittest.TestCase):
         ctx.is_cache_backed = False
         ctx.is_executable = False
         ctx.iter_symbol_names = lambda: iter(())
-        with mock.patch.object(E, "_resolve_class_name_at",
+        with mock.patch.object(PS, "_resolve_class_name_at",
                                lambda _c, va: "PBCodable" if va == PB else None):
             msgs = E.extract_all(ctx, None, cl)   # must not raise
         self.assertTrue(any(m.class_name == "AReq" for m in msgs))
@@ -337,7 +338,7 @@ class TestProtoClassSetLive(unittest.TestCase):
     def test_set_is_superset_of_heuristic(self):
         from proto.protoclass_heuristic import _is_proto_class
         heur = {c.name for c in self.cl if not c.is_meta and _is_proto_class(c)}
-        pset = E._proto_class_set(self.ctx, self.cl)
+        pset = PS._proto_class_set(self.ctx, self.cl)
         self.assertTrue(heur <= pset, "forward-scan set must never drop a heuristic hit")
         self.assertEqual(len(pset - heur), 5)  # the 5 metadata-sparse subclasses
 
@@ -368,19 +369,19 @@ class TestProtoClassSetBinaryNameAnchor(unittest.TestCase):
         sub = next(c for c in self.cl if not c.is_meta and _is_proto_class(c)
                    and c.superclass_vmaddr and c.superclass_vmaddr not in
                    {x.vmaddr for x in self.cl})
-        self.assertEqual(E._resolve_class_name_at(self.ctx, sub.superclass_vmaddr),
+        self.assertEqual(PS._resolve_class_name_at(self.ctx, sub.superclass_vmaddr),
                          "PBCodable")
 
     def test_name_anchor_alone_reproduces_full_set(self):
         from unittest import mock
-        full = E._proto_class_set(self.ctx, self.cl)
+        full = PS._proto_class_set(self.ctx, self.cl)
         self.assertTrue(full, "locationd should have proto classes")
         # Disable the heuristic seed: the principled name anchor alone must recover
         # the same set in binary mode (heuristic retired as primary).
         if hasattr(self.ctx, "_proto_class_names_cache"):
             delattr(self.ctx, "_proto_class_names_cache")
         with mock.patch.object(E, "_is_proto_class", lambda c: False):
-            anchor_only = E._proto_class_set(self.ctx, self.cl)
+            anchor_only = PS._proto_class_set(self.ctx, self.cl)
         if hasattr(self.ctx, "_proto_class_names_cache"):
             delattr(self.ctx, "_proto_class_names_cache")
         self.assertEqual(anchor_only, full,

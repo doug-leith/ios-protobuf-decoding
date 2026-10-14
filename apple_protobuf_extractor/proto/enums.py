@@ -1,8 +1,10 @@
 """proto/enums — enum-value harvesting + enum-name derivation.
 
-Carved from proto.extractor (#11 split, step 5b, final): the jump-table and dictrep
-enum-value harvesters and enum-name derivation — the single largest concern in the
-old monolith. Imports macho.* + arm64decode + protocore + dispatch + config (never
+Carved from proto.extractor (#11 split, step 5b, final): enum-value recovery and
+enum-name derivation.  The number->name maps are recovered by evaluating the code that
+produces the names (:mod:`proto.dictrep_flow`) for both sources: the ``xAsString:`` method
+(:func:`_extract_xasstring`) and the converter inlined into ``_dictionaryRepresentation:``
+(:func:`_harvest_dictrep`).  Imports macho.* + arm64decode + protocore + dispatch + config (never
 proto.extractor) -> cycle-free; extractor re-imports the surface so call sites +
 tests are unchanged.
 
@@ -15,35 +17,21 @@ imports back from here.
 from __future__ import annotations
 import logging
 import re
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from macho.memory     import BinaryContext, _ctx_cache
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
-from macho.disasm     import (disasm, Insn, _parse_imm, _norm_reg,
-                              find_adrp_add_target, find_indexed_load_base)
-from proto.arm64cfg   import parse_adrp, split_ops, mem_operand, _CALLEE_SAVED
-from macho.arm64decode import (jumptable_arm_target, _bcond_branch_target, _decode_cmp_reg, _materialized_value,
-    _decode_adr, _decode_bcond, _decode_cmp_imm, _decode_ldr_reg_off, _decode_sub_imm,
-    _is_br_insn, _COND_EQ, _COND_NE, _COND_LO, _COND_LS,
-    _SUB_W_IMM_MASK, _SUB_W_IMM_PATTERN, range_from_unsigned_gate)
-from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix
+from macho.disasm     import disasm, Insn, _parse_imm
+from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
 from proto.protocore  import _proto_name
-from proto.dispatch   import _find_field_count, _read_raw_word, _jump_table_arm_addrs
+from proto.dispatch   import _jump_table_arm_addrs
 from proto.dictrep_flow import Flow
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
 
 log = logging.getLogger(__name__)
-
-
-# [cap:COSMETIC — verified 2026-06-09] Bounds the search for the pointer-table base
-# (an adrp+add in the method preamble).  If not found within the cap the code falls
-# through to the jump-table path, never to a wrong answer.  Raising ×8 (80→640) gave
-# 0 descriptor diffs across all 3 artifacts.  Value is cosmetic.  (Distinct from the
-# enum-value *harvest*, which is bounded by field COUNT and, for the jump-table path,
-# flagged when it overruns via ProtoEnum.values_truncated.)
-_ENUM_MAX_INSNS = 80
 
 
 def _is_valid_enum_string(s: str) -> bool:
@@ -54,9 +42,8 @@ def _is_valid_enum_string(s: str) -> bool:
     membership for that — and it is not load-bearing on the structured read path
     (which already yields real strings).  Its only job is to reject garbage for
     the *probe-and-filter* callers that legitimately can't know in advance whether
-    a candidate pointer targets a string at all: the jump-table scan
-    (:func:`_extract_jumptable_enum_values`), the dictrep walkers, and the
-    table-base register probe in :func:`_extract_enum_values`.  A False result
+    a candidate pointer targets a string at all: the data-flow evaluator's
+    argument probe (:mod:`proto.dictrep_flow`).  A False result
     therefore means "this candidate isn't a string", never "decode it a different
     way".
     """
@@ -149,60 +136,6 @@ def _read_enum_string(ctx: BinaryContext, ptr: int) -> Optional[str]:
     return s if _is_valid_enum_string(s) else None
 
 
-# _SUB_W_IMM_MASK / _SUB_W_IMM_PATTERN are imported from macho.arm64decode (the
-# single home for the `sub wRd,wRn,#imm12` word shape; the bias scanners below
-# match the field bits directly rather than calling _decode_sub_imm).
-
-# Jump-table / isolated-value range ceiling shared by the sparse-enum harvesters
-# below.  This is NOT a tuned/domain magic number (#59): it is the **unshifted
-# 12-bit ``cmp`` immediate ceiling** (2^12).  The contiguous-range jump-table path
-# consumes a ``cmp wN, #imm12 ; b.hi/hs`` gate, whose immediate is at most 0xFFF
-# (4095) when unshifted — so a real contiguous enum range is ≤ 4096 (range = imm+1).
-# A larger range/value can only come from a SHIFTED (``#imm,lsl#12``) or register
-# compare; those are deliberately routed to the materialized-value path instead
-# (``_decode_cmp_reg`` / ``_materialized_value``, bounded by the proto int32 range —
-# that is how values like MotionActivityType=90603 are recovered).  So the bound is
-# structural (the instruction encoding), and value-independent in meaning.  Verified
-# against the artifacts: the largest contiguous (non-materialized) enum value is 4025
-# — i.e. real data sits right under the 12-bit ceiling, exactly as the encoding
-# predicts; raising the ceiling recovers nothing, lowering it drops real enums.
-_SPARSE_MAX_RANGE  = 1 << 12       # 2^12 — the unshifted 12-bit cmp-immediate ceiling
-# _COND_EQ/NE/LO/LS/HI/HS are imported from macho.arm64decode (canonical set).
-
-
-def _find_index_bias(ctx: BinaryContext, func_va: int) -> int:
-    """
-    Scan the function body for a ``sub wRd, wRn, #N`` instruction that
-    appears **before** the first CMP gate.  Returns ``N`` (the bias) or 0.
-
-    Apple's ``xAsString:`` methods for 1-based enums (e.g.
-    ``mapRegionSourceTypeAsString:`` with values 1-13) often start with::
-
-        sub  w8, w2, #1      ; adjust 1-based enum value to 0-based table index
-        cmp  w8, #13
-        b.hs default_label
-        adrp x9, page
-        add  x9, x9, #offset
-        ldr  x0, [x9, x8, lsl #3]
-
-    Detecting the SUB lets us shift extracted pair values back by +bias so
-    they match the proto enum numbering.
-    """
-    MAX_SCAN = 24
-    va = func_va
-    for _ in range(MAX_SCAN):
-        word = _read_raw_word(ctx, va)
-        if word is None:
-            break
-        if _decode_cmp_imm(word) is not None:
-            break                          # reached the CMP — stop scanning
-        sub = _decode_sub_imm(word)        # (rd, rn, imm); imm already shift-applied
-        if sub is not None and 0 < sub[2] < 256:   # shifted imm is ≥4096 → excluded
-            return sub[2]
-        va += 4
-    return 0
-
-
 # Mnemonics that legitimately end a method body (mirrors macho.disasm._STOP_MNEMONICS,
 # at which `disasm` stops early).  A bounded disassembly that returns its full
 # instruction cap WITHOUT ending on one of these was cut off mid-method.
@@ -230,818 +163,6 @@ def _disasm_truncated(insns: List[Insn], cap: int) -> bool:
 # _extract_jumptable_enum_values (output-identical) so each LLVM lowering of a
 # sparse xAsString: method is a self-contained, separately-testable unit.
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-def _sub_imm_bias(insns, words, lo: int, hi: int, *,
-                  dest_reg: Optional[int] = None, first: bool = False) -> int:
-    """Immediate of a ``sub wRd, wRn, #imm12`` (shift 0) in ``insns[lo:hi]``, else 0.
-
-    A SUB before a value test re-bases the enum (the compare runs on
-    ``value - imm``), so ``imm`` is added back to recover the wire value.  b12 is
-    a 12-bit immediate with shift 0 → already ≤ 0xFFF, so no range ceiling is
-    needed (the encoding bounds it; #59).
-
-    ``dest_reg`` — when ``None`` (the xAsString:/jump-table path) ANY ``sub #imm12``
-    counts; this is deliberately UN-gated (gating it regressed #53).  When given
-    (the dictRep path, #54) only a SUB whose DESTINATION is that register counts:
-    the dictRep harvester scans a ~20-insn window that overlaps the neighbouring
-    field's dispatch, so the dest==index-reg guard rejects a neighbour's ``sub``
-    bleeding in (the ``GEOPD…SpellCorrection.spellerRankerModelType`` false
-    positive — its window holds ``resultStatus``'s ``sub #1`` on another register).
-
-    ``first`` — return the FIRST match (isolated-compare / cbz tight pre-window)
-    vs the LAST (jump-table arm: the SUB nearest the CMP gate wins).
-
-    Sibling of :func:`_leading_materialized_bias`, which models the larger-bias
-    ``mov+add`` / ``movz+sub`` forms a 12-bit ``sub #imm`` cannot hold."""
-    bias = 0
-    for k in range(lo, hi):
-        wk = words.get(insns[k].addr, 0)
-        if (wk & _SUB_W_IMM_MASK) != _SUB_W_IMM_PATTERN:
-            continue
-        if (wk >> 22) & 0x3 != 0:            # shift != 0 → not a small (≤0xFFF) bias
-            continue
-        imm = (wk >> 10) & 0xFFF
-        if imm <= 0:
-            continue
-        if dest_reg is not None and (wk & 0x1F) != dest_reg:
-            continue
-        bias = imm
-        if first:
-            break
-    return bias
-
-
-_MATERIALIZED_BIAS_MAX = 1 << 24   # sanity ceiling for a recovered large bias
-
-
-def _regnum(tok: str):
-    """Register number of a ``wN``/``xN`` token, or None (zr / non-reg)."""
-    tok = tok.strip()
-    return int(tok[1:]) if len(tok) > 1 and tok[0] in 'wx' and tok[1:].isdigit() else None
-
-
-def _leading_materialized_bias(insns, lo: int, hi: int, value_reg: int) -> int:
-    """Large index bias materialised in a register, then add/sub-ed INTO
-    ``value_reg`` (the register the segment's ``cmp`` then tests), in
-    ``insns[lo:hi]``; else 0.  The >4095 analytics/log enums (TODO #53) encode a
-    sub-range bias this way because a 12-bit ``sub #imm`` cannot hold it:
-
-      • ``mov/movn wRm, #-K ; add value_reg, wRn, wRm`` — NEGATIVE-ADD
-        (``value + (-K)``); e.g. ``LogMessageType`` bias 50000 via
-        ``mov w8,#-0xc350; add w8,w2,w8``.
-      • ``movz/movk wRm, #K ; sub value_reg, wRn, wRm`` — materialised positive
-        constant subtracted (same family; defensive).
-
-    The result must land in ``value_reg`` (the gate's compared register), so a
-    neighbouring segment's materialise+add — which targets a DIFFERENT register —
-    cannot be mis-read as this segment's bias (that bug shifted low values like 9
-    in the LogMsg* enums).  LAST match wins (nearest the gate).  Used ONLY by the
-    jump-table segment path; the isolated-compare / cbz arms never bias their
-    directly-materialised value."""
-    bias = 0
-    regvals: dict = {}   # reg token -> immediate from a recent mov/movz/movn
-    for k in range(lo, hi):
-        ins = insns[k]
-        mn = ins.mnemonic
-        ops = [o.strip() for o in ins.op_str.split(',')]
-        if mn in ('mov', 'movz', 'movn') and len(ops) == 2 and ops[1].startswith('#'):
-            try:
-                regvals[ops[0]] = int(ops[1][1:], 0)
-            except ValueError:
-                pass
-        elif mn in ('add', 'adds', 'sub', 'subs') and len(ops) == 3 \
-                and not ops[2].startswith('#') and _regnum(ops[0]) == value_reg:
-            rn, rm = ops[1], ops[2]
-            cand = None
-            if mn in ('add', 'adds'):          # value + (negative const) == value - K
-                for r in (rm, rn):
-                    v = regvals.get(r)
-                    if v is not None and v < 0:
-                        cand = -v
-                        break
-            else:                              # sub: value - (positive const)
-                v = regvals.get(rm)
-                if v is not None and v > 0:
-                    cand = v
-            if cand is not None and 0 < cand < _MATERIALIZED_BIAS_MAX:
-                bias = cand
-    return bias
-
-
-# Unconditional terminals that END a jump-table case block — used to truncate the
-# case-block disassembly so it never spills into the adjacent block in memory.
-_CASE_TERMINALS = frozenset(('b', 'br', 'ret', 'retaa', 'retab', 'eret'))
-
-
-def _iter_table_loads(window, words):
-    """Yield ``(entry_width, base_reg, index_reg)`` for every register-offset table
-    load (``ldrb/ldrh/ldr Wt,[Xbase,Widx]``) in *window*, decoded from the real load
-    via :func:`_decode_ldr_reg_off`.  The two jump-table harvesters share this decode
-    but collect it differently (a width-sorted list vs a base-keyed dict), so the
-    iteration is factored out and the collection is left to each caller."""
-    for ins in window:
-        d = _decode_ldr_reg_off(words.get(ins.addr, 0))
-        if d is not None:
-            esz, rn, rm, _rt = d
-            yield esz, rn, rm
-
-
-def _read_case_string(ctx, case_target, *, max_insns: int = 6):
-    """Disassemble a jump-table case block at *case_target*; return ``(name, insns)``.
-
-    The block is TRUNCATED at its first unconditional terminal so a bare
-    ``b tail_call`` case does not let ``disasm`` run linearly into the next case
-    block in memory and mis-read THAT block's string — e.g. in
-    ``-[GEOPDPlaceResponse statusAsString:]`` case 0 is a bare ``b`` (its value,
-    STATUS_SUCCESS, is pre-loaded into x0), and without truncation disasm would
-    read case 2's STATUS_INCOMPLETE and map it to value 0.  *name* is the first
-    ``adrp+add x0`` cfstring in the truncated block, or ``None``; *insns* is
-    returned so the caller can spot a bare-terminal block that should inherit a
-    pre-loaded default string instead."""
-    case_insns = []
-    for ci in disasm(ctx, case_target, max_insns=max_insns):
-        case_insns.append(ci)
-        if ci.mnemonic in _CASE_TERMINALS:
-            break
-    # x0 first, callee-saved fallback (see _isolated_value_target's docstring
-    # for why: real ARC codegen doesn't always land the return value in x0
-    # directly).
-    t = _isolated_value_target(case_insns)
-    name = _read_enum_string(ctx, t) if t else None
-    return name, case_insns
-
-
-def _harvest_jumptable_segments(ctx, insns, words, add) -> bool:
-    """Harvest pairs from dense sub-range JUMP-TABLE segments.
-
-    Returns ``True`` when a confirmed ``adr+br`` segment (one that passed the
-    range and table-base checks) contributed ZERO new values — the signature of a
-    gate we could not attribute (e.g. a large negative-add bias the decoder does
-    not yet model).  The caller surfaces it as ``values_truncated`` so the enum
-    is flagged "may be INCOMPLETE" rather than silently short.
-
-
-    Each segment is anchored by an ``adr Xb, #cases`` paired with a ``br Xb`` a
-    few instructions later.  The table base (``ldrb``/``ldrh`` register-offset
-    load → adrp+add) sits just before it; each table entry is followed to its
-    case block to read the returned string.
-
-    The ``cmp wN, #range`` gate (with optional ``sub #bias``) is attributed two
-    ways.  **Idiom A** (linear fall-through) — ``cmp; b.hi/b.hs default; <table>``
-    — is found by scanning backward from the ``adr``.  **Idiom B** (comparison
-    tree) — a sparse method splits its value space with a binary search whose
-    leaves are reached by ``cmp wN,#K; b.ls/b.lo <segment>``; here the gate is at
-    the routing BRANCH, not immediately before the table.  Without idiom B the
-    backward scan grabs the neighbouring fall-through gate and mis-biases the
-    segment, so its values collide with another segment's and dedup-drop (e.g.
-    GEOLogMsgState stateTypeAsString: silently lost stateType 401-407)."""
-    seen_case_bases: Set[int] = set()
-
-    # Idiom-B pre-scan: comparison-tree gates that route in-range values to a
-    # segment via a forward conditional branch.  `cmp wN,#K; b.ls tgt` covers K+1
-    # values (≤K); `b.lo/b.cc tgt` covers K (<K).  Map branch target → (range, bias).
-    branch_gates: Dict[int, Tuple[int, int]] = {}
-    for idx in range(len(insns) - 1):
-        cmp = _decode_cmp_imm(words.get(insns[idx].addr, 0))
-        if cmp is None:
-            continue
-        cmp_rn, imm = cmp
-        if imm == 0 or imm > _SPARSE_MAX_RANGE:
-            continue
-        cond = _decode_bcond(words.get(insns[idx + 1].addr, 0))
-        if cond == _COND_LS:
-            rng = imm + 1
-        elif cond == _COND_LO:
-            rng = imm
-        else:
-            continue
-        tgt = _bcond_branch_target(words.get(insns[idx + 1].addr, 0), insns[idx + 1].addr)
-        if tgt is None:
-            continue
-        # Bias the same way Idiom A does (line ~573): a literal `sub #imm12`, or —
-        # when the bias is too large for a 12-bit immediate — a value materialised
-        # into the compared register via `mov #-K; add` / `movz; sub`.  Without the
-        # materialised fallback a comparison-tree-routed high-value segment (e.g.
-        # GEOTelemetricEntity.eventKeyAsString: values 60500+/52020+) gets bias 0,
-        # collides with the low segments, and dedup-drops → seg_incomplete.  Safe by
-        # the same value_reg-dest gate that protects Idiom A: a neighbour's add into
-        # a different register cannot be mis-read as this segment's bias.
-        branch_gates[tgt] = (rng, _sub_imm_bias(insns, words, max(0, idx - 4), idx,
-                                                    first=False)
-                             or _leading_materialized_bias(insns, max(0, idx - 4), idx,
-                                                           cmp_rn))
-
-    incomplete = False   # a confirmed segment we could not attribute → flag enum
-    for i, ins in enumerate(insns):
-        w = words.get(ins.addr, 0)
-        adr_result = _decode_adr(w, ins.addr)
-        if adr_result is None:
-            continue
-        _, case_base = adr_result
-        if case_base in seen_case_bases:
-            continue
-
-        # Confirm: `br` within the next 5 instructions
-        if not any(
-            _is_br_insn(words.get(insns[j].addr, 0))
-            for j in range(i, min(i + 6, len(insns)))
-        ):
-            continue
-        seen_case_bases.add(case_base)
-
-        bias = 0
-        range_val = 0
-        cmp_idx: int = -1   # instruction index that bounds the table-search window
-        # Idiom B: this segment's setup (the few insns before the adr) is the
-        # target of a routing branch — prefer its gate over the linear scan.
-        gateB = next((branch_gates[ins.addr - off]
-                      for off in (0, 4, 8, 12, 16)
-                      if (ins.addr - off) in branch_gates), None)
-        if gateB is not None:
-            range_val, bias = gateB
-            cmp_idx = i - 6          # table base sits just before the adr
-        else:
-            # Idiom A: scan backward for the fall-through CMP gate + SUB bias.
-            for j in range(i - 1, max(i - 24, -1), -1):
-                wj = words.get(insns[j].addr, 0)
-                cmp = _decode_cmp_imm(wj)
-                if cmp is None:
-                    continue
-                cmp_rn, imm = cmp
-                if imm == 0 or imm > _SPARSE_MAX_RANGE:
-                    break
-                if j + 1 < len(insns):
-                    wn = words.get(insns[j + 1].addr, 0)
-                    range_val = range_from_unsigned_gate(_decode_bcond(wn), imm)
-                # SUB nearest the CMP gives the index bias (last-in-window wins);
-                # fall back to a register-materialised large bias (mov #-K; add /
-                # movz; sub) landing in the compared register, for the >4095
-                # analytics/log sub-ranges (TODO #53).
-                bias = _sub_imm_bias(insns, words, max(0, j - 4), j, first=False) \
-                    or _leading_materialized_bias(insns, max(0, j - 4), j, cmp_rn)
-                cmp_idx = j
-                break
-        if range_val < 2 or range_val > _SPARSE_MAX_RANGE:
-            continue
-
-        # Find the jump-table byte array (ADRP+ADD in the window between the
-        # CMP and the ADR — a wider window risks a previous segment's table).
-        seg_start = max(0, cmp_idx)
-        seg_insns = insns[seg_start: i + 2]
-        # Principled table base (TODO #47): the register that is the BASE of
-        # the scaled-index table read (`ldrb/ldrh Wt, [Xbase, Widx]`), decoded
-        # from the actual load — NOT a register-priority guess.  Mirrors the
-        # dictrep path (_decode_ldr_reg_off → adrp+add on that base); prefer the
-        # narrowest read (byte table before halfword).  This REPLACES the former
-        # x8..x14 priority scan: measured to resolve 100% of jump-table segments
-        # across GeoServices/CLP/locationd (276/276), so the guess is removed
-        # entirely.  A segment whose table read doesn't decode is skipped (no
-        # silent wrong table), consistent with the function's other bail-outs.
-        table_va: Optional[int] = None
-        entry_sz = 1     # jump-table entry width in bytes (ldrb=1, ldrh=2)
-        load_bases = [(esz, rn) for esz, rn, _ in _iter_table_loads(seg_insns, words)]
-        for _esz, base_rn in sorted(load_bases):
-            t = find_adrp_add_target(seg_insns, f"x{base_rn}")
-            if t is not None:
-                table_va = t
-                entry_sz = _esz   # honour the ACTUAL width of the chosen table
-                break
-        if table_va is None:
-            continue
-
-        # Pre-loaded default: some jump-table methods set x0 to a default return
-        # value BEFORE the dispatch, then let "fall-through" cases branch to the
-        # tail call without overwriting x0 (statusAsString: case 0 = STATUS_SUCCESS
-        # is a bare "b").  Detect that adrp+add x0 in seg_insns; a bare-terminal
-        # case block with no string of its own inherits this pre-loaded string.
-        pre_loaded_str: Optional[str] = None
-        pre_loaded_target = find_adrp_add_target(seg_insns, 'x0')
-        if pre_loaded_target is not None:
-            pre_loaded_str = _read_enum_string(ctx, pre_loaded_target)
-
-        seg_added = 0
-        for k in range(range_val):
-            try:
-                # Read one entry at the table's ACTUAL width (ldrb→1, ldrh→2, ldrsw→4).
-                # A halfword table read as bytes mis-strides every entry and
-                # corrupts the whole enum (e.g. GEOTileSet styleAsString:, whose
-                # 100-case block region exceeds 1 KB so offsets need 2 bytes).
-                arm = jumptable_arm_target(
-                    case_base, entry_sz, ctx.read_bytes(table_va + k * entry_sz, entry_sz))
-                name, case_insns = _read_case_string(ctx, arm)
-                if name:
-                    seg_added += add(bias + k, name)
-                elif (pre_loaded_str and len(case_insns) == 1
-                      and case_insns[0].mnemonic in _CASE_TERMINALS):
-                    seg_added += add(bias + k, pre_loaded_str)
-            except (ValueError, IndexError):
-                pass
-        # A real jump-table segment always encodes ≥1 value.  Contributing none
-        # means we mis-attributed its gate (wrong bias/range) → the enum may be
-        # missing this segment's values.
-        if seg_added == 0:
-            incomplete = True
-
-    return incomplete
-
-
-def _isolated_value_target(ci) -> Optional[int]:
-    """Resolve the ``adrp+add`` value address in a tiny (<=6-insn) isolated-case
-    block, used by :func:`_harvest_isolated_compares`, :func:`_harvest_cbz_value0`,
-    and :func:`_read_case_string` (the jump-table segment harvester's own
-    per-case-block string reader) — the same register-uncertainty affects all
-    three, since all three read a "compute this value and return/branch to
-    shared exit" case block.
-
-    Tries ``x0`` first (unchanged from before this helper existed — the value
-    sits there directly for both the hand-written fixtures and the real
-    ``locationd`` binary's ``ALSNearbyRequestTechnology``/``WifiGranularity``
-    enums this harvester is verified against). Only if that fails does it
-    fall back to the callee-saved range (``x19``-``x28``): real ARC-compiled
-    code doesn't necessarily return the string straight into x0 — a plain
-    ``return @"X";`` computes the value into a callee-saved register first so
-    it survives the subsequent ``objc_autoreleaseReturnValue`` call, only
-    moving it into x0 at the function's very end (confirmed via a genuinely
-    Xcode-8/11-compiled isolated-compares probe this session: the value
-    landed in x19, and `find_adrp_add_target(ci, 'x0')` alone found nothing).
-    x0 is tried first and short-circuits, so every previously-matched case
-    (including the real locationd binary) resolves identically to before —
-    this is a pure widening, never a narrowing, of what can match."""
-    t = find_adrp_add_target(ci, 'x0')
-    if t is not None:
-        return t
-    for reg in sorted(_CALLEE_SAVED):   # deterministic order (frozenset is not)
-        t = find_adrp_add_target(ci, reg)
-        if t is not None:
-            return t
-    return None
-
-
-def _harvest_isolated_compares(ctx, insns, words, add) -> None:
-    """Harvest isolated single-value enum cases (``cmp + b.eq`` / ``cmp + b.ne``).
-
-    Two compare forms feed this arm:
-      • immediate  ``cmp wN, #imm12``  — values ≤ 4095 (12-bit immediate).
-      • register   ``cmp wN, wReg``    — values > 4095: too large for the 12-bit
-          immediate, so the compiler materialises the constant with
-          ``movz wReg, #lo16``[``; movk wReg, #hi16, lsl #16``] and compares
-          register-to-register.  Without this every enum value above 4095 (e.g.
-          HKWorkout-derived motion-activity types) is dropped."""
-    for i in range(len(insns) - 1):
-        w0 = words.get(insns[i].addr, 0)
-        w1 = words.get(insns[i + 1].addr, 0)
-        cmp = _decode_cmp_imm(w0)
-        if cmp is not None:
-            _, imm = cmp
-            if imm == 0 or imm > _SPARSE_MAX_RANGE:
-                continue
-        else:
-            reg = _decode_cmp_reg(w0)
-            if reg is None:
-                continue
-            _, rm = reg
-            # Bound by the proto int32 range, NOT _SPARSE_MAX_RANGE — large
-            # values are the entire reason this register arm exists.
-            mval = _materialized_value(insns, words, i, rm)
-            if mval is None or not (0 < mval < (1 << 31)):
-                continue
-            imm = mval
-        cond = _decode_bcond(w1)
-        if cond not in (_COND_EQ, _COND_NE):
-            continue
-
-        if cond == _COND_EQ:
-            # String is at the b.eq branch target.
-            string_va = _bcond_branch_target(w1, insns[i + 1].addr)
-        else:
-            # b.ne: string is at the fall-through (insns[i+2]).
-            if i + 2 >= len(insns):
-                continue
-            string_va = insns[i + 2].addr
-
-        try:
-            ci = disasm(ctx, string_va, max_insns=6)
-            t  = _isolated_value_target(ci)
-            if t:
-                s = _read_enum_string(ctx, t)
-                if s:
-                    # First preceding SUB gives the index bias.
-                    bias = _sub_imm_bias(insns, words, max(0, i - 4), i,
-                                             first=True)
-                    add(bias + imm, s)
-        except Exception:
-            pass
-
-
-def _harvest_cbz_value0(ctx, insns, words, add) -> None:
-    """Harvest the value-0 case from a ``cbz``/``cbnz`` dispatch.
-
-    The smallest enums compile to a compare-and-branch-zero for value 0 rather
-    than ``cmp+b.eq``::
-
-        cbz  w2, L0        ; value 0 → case block at L0
-        cmp  w2, #1        ; value 1 handled by _harvest_isolated_compares
-        b.ne default
-        ...                ; value-1 string (fall-through)
-      L0: adrp x0, ...     ; value-0 string
-
-    ``cbz wN, L`` puts the value-0 case at L; ``cbnz wN, L`` makes value 0 the
-    fall-through.  Without this the value-0 arm (commonly UNKNOWN) is missed,
-    leaving a 2-value enum with <2 pairs → dropped entirely."""
-    for i, ins in enumerate(insns):
-        if ins.mnemonic not in ('cbz', 'cbnz'):
-            continue
-        target = _parse_imm(ins.op_str)
-        if target is None:
-            continue
-        if ins.mnemonic == 'cbz':
-            string_va = target
-        elif i + 1 < len(insns):
-            string_va = insns[i + 1].addr   # cbnz: value 0 falls through
-        else:
-            continue
-        # A preceding SUB means the register tested for zero is biased, so
-        # the original enum value is the bias (e.g. sub w8,w2,#1; cbz w8 → 1).
-        bias = _sub_imm_bias(insns, words, max(0, i - 4), i, first=True)
-        try:
-            ci = disasm(ctx, string_va, max_insns=6)
-            t  = _isolated_value_target(ci)
-            if t:
-                s = _read_enum_string(ctx, t)
-                if s:
-                    add(bias, s)
-        except Exception:
-            pass
-
-
-def _detect_unreached_branch_gate(insns, words) -> bool:
-    """True if the disassembled window stopped on a ``ret`` (not the budget
-    cap) while a ``cmp+b.ls``/``b.lo`` gate inside it still points PAST the
-    window's end — i.e. this method's own dispatch logic routes to a
-    segment that was never actually disassembled, so
-    :func:`_harvest_jumptable_segments` could not have seen it.
-
-    This is the layout :func:`_extract_jumptable_enum_values`'s initial
-    ``disasm(..., stop_at_ret=True)`` call is vulnerable to when a switch
-    lowers to multiple jump-table segments and the compiler tail-duplicates
-    each segment's own ``ret`` instead of funnelling every case to one
-    shared epilogue. Confirmed to be a synthetic-toolchain-only artifact of
-    this repo's installed Xcode (15.4 / clang 15.0.0), not something real
-    binaries do: checked against the actual multi-cluster example named in
-    :func:`_harvest_jumptable_segments`'s own docstring
-    (`GEOTelemetricEntity.eventKeyAsString:`, 191 values/10+ clusters, via
-    the real dyld shared cache in `iphone8_data/`) — every real segment
-    ends in a plain `b <shared-epilogue>`, never its own early `ret`, and
-    the 191/191 real values extract with an exact match against
-    `tests/golden/GeoServices.json` (see
-    tests/synthetic_fixtures/README.md). So this is forward-looking
-    detection for a binary this repo hasn't seen yet, not a live gap in the
-    current corpus. Detection only: does not attempt to disassemble the
-    unreached segment."""
-    if not insns or insns[-1].mnemonic not in _TERMINAL_MNEMONICS:
-        return False
-    window_end = insns[-1].addr
-    for idx in range(len(insns) - 1):
-        cmp = _decode_cmp_imm(words.get(insns[idx].addr, 0))
-        if cmp is None:
-            continue
-        _, imm = cmp
-        if imm == 0 or imm > _SPARSE_MAX_RANGE:
-            continue
-        cond = _decode_bcond(words.get(insns[idx + 1].addr, 0))
-        if cond not in (_COND_LO, _COND_LS):
-            continue
-        tgt = _bcond_branch_target(words.get(insns[idx + 1].addr, 0), insns[idx + 1].addr)
-        if tgt is not None and tgt > window_end:
-            return True
-    return False
-
-
-def _detect_unrecovered_csel_chain(insns, words) -> bool:
-    """True if the disassembly holds a ``cmp <value>; csel`` CHAIN (2 or more
-    links) that none of the three harvesters above can decode.
-
-    LLVM sometimes if-converts a small sparse-enum ``xAsString:`` into a
-    branchless select DAG instead of the ``cmp+b.eq``/``cbz`` idiom
-    :func:`_harvest_isolated_compares`/:func:`_harvest_cbz_value0` scan for::
-
-        adrp x8,pageA; add x8,x8,#offA   ; candidate string A
-        cmp w2,#imm1
-        csel x8,x8,xzr,eq                ; first link
-        adrp x9,pageB; add x9,x9,#offB   ; candidate string B
-        cmp w2,#imm2
-        csel x0,x9,x8,eq                 ; second link, chains onto x8
-
-    This shape is REAL — confirmed via a real ``locationd`` binary's
-    ``ALSNearbyRequestTechnology``/``WifiGranularity`` enums compiling to
-    genuine branches on one Apple-internal toolchain, but this repo's
-    installed Xcode (15.4 / clang 15.0.0) reliably csel-folds the same
-    source instead (see tests/synthetic_fixtures/README.md's "isolated-
-    compares" finding) — so a binary built with whichever toolchain does
-    fold will hit exactly this gap. No decoder for the chain exists yet
-    (see the README); this is DETECTION only, so a caller with pairs
-    already recovered from elsewhere can flag the enum as possibly
-    incomplete rather than reporting a short list as if it were complete.
-
-    Requires >=2 links (an actual CHAIN) rather than firing on any lone
-    ``cmp+csel`` pair, which is common in unrelated ARC/bounds-check code
-    with nothing to do with an enum's value table — keeps this conservative
-    against false positives in ordinary compare-then-select logic."""
-    links = 0
-    for i in range(len(insns) - 1):
-        if insns[i + 1].mnemonic != 'csel':
-            continue
-        w = words.get(insns[i].addr, 0)
-        cmp = _decode_cmp_imm(w)
-        if cmp is None:
-            cmp = _decode_cmp_reg(w)
-        if cmp is None:
-            continue
-        _, val = cmp
-        if val == 0 or val > _SPARSE_MAX_RANGE:
-            continue
-        links += 1
-        if links >= 2:
-            return True
-    return False
-
-
-def _branches_to_pointer_table_load(insns: List[Insn], branch: Insn) -> bool:
-    """True if *branch*'s target is in *insns* and leads, within a few instructions and
-    without a call or another branch, to a pointer-table load (``ldr xN,[xB, wI, ... #3]``)."""
-    ops = split_ops(branch.op_str)
-    target = _parse_imm(ops[-1]) if ops else None
-    start = next((j for j, x in enumerate(insns) if x.addr == target), None)
-    if start is None:
-        return False
-    for x in insns[start:start + 4]:
-        if x.mnemonic == 'ldr':
-            m = mem_operand(x.op_str)
-            if m is not None and m[2] is not None and m[4] == 3:
-                return True
-        elif x.mnemonic in ('b', 'bl', 'blr', 'br', 'ret') or x.mnemonic.startswith('b.') \
-                or x.mnemonic in ('cbz', 'cbnz', 'tbz', 'tbnz'):
-            return False
-    return False
-
-
-def _valid_value_bitmask(insns: List[Insn], *, allow_tbnz: bool = False) -> Optional[int]:
-    """The validity bitmask of a sparse-enum pointer table, or None.
-
-    The newer toolchain gates a pointer table that has HOLES (values the enum does not
-    declare) with a constant bitmask instead of a dense range::
-
-        cmp  w2,#0x1c ; b.hi default
-        mov  w8,#0x7fff ; movk w8,#0x1fff,lsl #16     ; mask = 0x1fff7fff
-        lsr  w8,w8,w2 ; tbz w8,#0,default             ; bit v clear -> not a value
-        ldr  x0,[x8,w2,uxtw #3]
-
-    A struct member's dictionary representation gates the same way round the other side:
-    ``tbnz`` TO the table load.  That form is read only with ``allow_tbnz=True`` and only when
-    the ``tbnz`` target is that table load (:func:`_branches_to_pointer_table_load`).  The
-    xAsString path leaves it off: there an ``lsr ; tbnz`` onto a pointer-table load does NOT
-    mean "bit set = declared" (``GEOPDModule``'s ``ModuleType`` has one, and applying it as a
-    validity mask drops its values 0-15 -- unexplained, so not read).
-
-    The holes' table slots are empty, so reading the table until the first empty slot (as
-    for a dense table) stopped at the first hole.  Returns the mask (bit v set = value v
-    is declared) when the ``lsr`` + ``tbz #0`` (or opted-in ``tbnz #0``) gate is present."""
-    consts: Dict[int, int] = {}                # register number -> constant built so far
-    for i, ins in enumerate(insns):
-        ops = split_ops(ins.op_str)
-        if ins.mnemonic in ('mov', 'movz') and len(ops) == 2 and ops[1].startswith('#'):
-            r, v = _regnum(ops[0]), _parse_imm(ops[1])
-            if r is not None and v is not None:
-                consts[r] = v
-        elif ins.mnemonic == 'movk' and len(ops) == 3 and ops[2].startswith('lsl'):
-            r, v, sh = _regnum(ops[0]), _parse_imm(ops[1]), _parse_imm(ops[2].split()[-1])
-            if r is not None and v is not None and sh is not None and r in consts:
-                consts[r] = (consts[r] & ~(0xFFFF << sh)) | (v << sh)
-        elif ins.mnemonic == 'lsr' and len(ops) == 3 and i + 1 < len(insns):
-            src, dst = _regnum(ops[1]), _regnum(ops[0])
-            nxt = insns[i + 1]
-            nops = split_ops(nxt.op_str)
-            if (src in consts and nxt.mnemonic in ('tbz', 'tbnz') and len(nops) == 3
-                    and _regnum(nops[0]) == dst and _parse_imm(nops[1]) == 0
-                    and (nxt.mnemonic == 'tbz'
-                         or (allow_tbnz and _branches_to_pointer_table_load(insns, nxt)))):
-                return consts[src]
-    return None
-
-
-def _try_pointer_table_in(
-    ctx: BinaryContext,
-    imp: int,
-    insns: List[Insn],
-    words: Dict[int, int],
-) -> Tuple[List[Tuple[int, str]], bool]:
-    """Read a scaled-index POINTER TABLE (``ldr xT,[xB,wI,sxtw #3]``) directly
-    out of an ALREADY-DISASSEMBLED instruction list, rather than a fresh short
-    probe from *imp*.
-
-    This is :func:`_extract_enum_values`' primary-branch decode (same
-    ``_decode_ldr_reg_off``-based technique :func:`_harvest_dictrep_enums`'
-    pointer-table idiom already uses), reused here for one specific case:
-    :func:`_extract_jumptable_enum_values`' TODO #58 extent-recompute
-    fallback can hand back a body whose real dispatch is a POINTER TABLE, not
-    a jump-table/segment shape — e.g. a long ``xAsString:`` body (found via
-    f21_enum_long_body_extent) whose padding pushes the table past BOTH
-    :func:`_extract_enum_values`' cheap 80-insn window and
-    :func:`_find_field_count`'s 256-raw-word cmp-gate scan when anchored at
-    *imp*.  Re-anchoring both scans near the LOCATED load (instead of *imp*)
-    fixes that without duplicating the read logic.
-
-    Returns ``(pairs, confirmed)``.  Mirrors :func:`_extract_enum_values`'
-    own primary-path return exactly: *confirmed* is True only when every
-    entry up to the gate's own count (``max_val``, from the re-anchored
-    :func:`_find_field_count`) was read cleanly — the same
-    ``len(pairs) == max_val`` cross-check, just computed against the
-    re-anchored count instead of one taken at *imp*.  ``([], False)`` when no
-    such load is present, or the table read comes back empty (never raises —
-    mirrors the primary branch's own failure handling).
-    """
-    for ins in insns:
-        d = _decode_ldr_reg_off(words.get(ins.addr, 0))
-        if d is None or d[0] != 8:        # need a 64-bit (pointer) scaled load
-            continue
-        table_va = find_adrp_add_target(insns, f"x{d[1]}")
-        if table_va is None:
-            continue
-        # Re-anchor both raw-word scans near the LOCATED load rather than
-        # *imp* — the function start is potentially thousands of instructions
-        # away (that's exactly why this path is reached at all).  24 words
-        # covers the `sub(bias)/cmp/b.hi/adrp/add/ldr` idiom with margin;
-        # any padding in between is harmless (neither cmp nor sub matches it).
-        gate_scan_start = ins.addr - 24 * 4
-        max_val = _find_field_count(ctx, gate_scan_start)
-        if max_val <= 0 or max_val > _SPARSE_MAX_RANGE:
-            continue
-        bias = _find_index_bias(ctx, gate_scan_start)
-        pairs: List[Tuple[int, str]] = []
-        for i in range(max_val):
-            try:
-                ptr = ctx.read_ptr(table_va + i * 8)
-                name = _read_enum_string(ctx, ptr)
-            except (ValueError, UnicodeDecodeError):
-                break
-            if name is None:
-                break
-            pairs.append((i + bias, name))
-        if pairs:
-            return pairs, (len(pairs) == max_val)
-    return [], False
-
-
-def _extract_jumptable_enum_values(
-    ctx: BinaryContext,
-    imp: int,
-    st: StringTable,
-) -> Tuple[List[Tuple[int, str]], bool, bool]:
-    """
-    Extract ``(int_value, string_name)`` pairs from a **jump-table** implementation
-    of an ``xAsString:`` method.
-
-    LLVM compiles sparse enums (few defined values spread over a larger range)
-    into dense sub-range jump tables — a single method may hold multiple such
-    segments (one per contiguous block of valid values) plus isolated
-    ``cmp+b.eq``/``cmp+b.ne`` checks and a ``cbz`` special case for value 0.
-    Each concern is harvested independently against the same disassembly; see
-    :func:`_harvest_jumptable_segments`, :func:`_harvest_isolated_compares`, and
-    :func:`_harvest_cbz_value0` for the exact idioms each recognises.
-
-    Returns ``(pairs, confirmed, truncated)``.  *confirmed* is always False
-    (gap entries — undefined enum values — are silently skipped).  *truncated*
-    is True when the method body overran the disassembly budget, so *pairs* may
-    be missing high values (surfaced as an "may be INCOMPLETE" comment rather
-    than a silent short enum).
-    """
-    if imp == 0:
-        return [], False, False
-
-    # [cap:WARNING-ONLY — re-measured 2026-06-13] The jump-table enum-value harvest
-    # budget.  EARLIER PREMISE ("past insn 1000 the enum ends up SHORT; raise it to
-    # recover values") is FALSE and was MEASURED to be false — do NOT re-attempt the
-    # bump:
-    #   • Swept 1000 → 4000 → 30000 over GeoServices (752 enums, 14900 values).
-    #     Recovered enum values were IDENTICAL at every cap (0 enums gained a single
-    #     value).  All harvestable (value,name) pairs live in the first ~1000 insns;
-    #     the rest of each xAsString: body is dispatch/default/formatting code with
-    #     no further pairs.
-    #   • What the cap DOES change is only the WARNING count, not the data: of the 17
-    #     "may be INCOMPLETE" flags at 1000, 16 are `_disasm_truncated` FALSE ALARMS
-    #     (the LogMsg-family methods are ~11.9k insns, so they just hadn't reached
-    #     `ret` by 1000 — every value was already captured).  Raising to 30000 lets
-    #     them close on `ret`, dropping the count to 10; the 10 residual flags are all
-    #     `seg_incomplete` DECODER GAPS (a confirmed segment that contributed 0 values,
-    #     see _harvest_jumptable_segments) which NO budget can fix.
-    #   • Cost of 30000 vs 1000: +7% wall (101.6s→108.9s), RSS flat — mild, not "a lot".
-    # So this cap does NOT affect the recovered descriptor's values, only whether a
-    # (mostly false-alarm) warning fires.  TODO #58 (DONE, below): keep the cheap 1000
-    # probe but, when it doesn't close on `ret`, recompute the body by its FUNCTION
-    # EXTENT (_function_body_extent) so _disasm_truncated fires only on a genuine
-    # overrun — killing the 16 false alarms with 0 value change.  Real missing values
-    # (if any) are the `seg_incomplete` cases, a decoder problem (closed for the negadd
-    # idiom by #53).
-    _SPARSE_MAX_INSNS = 1000   # cheap probe; all harvestable pairs land well within it
-
-    try:
-        insns = disasm(ctx, imp, max_insns=_SPARSE_MAX_INSNS)
-        if not insns:
-            return [], False, False
-        truncated = _disasm_truncated(insns, _SPARSE_MAX_INSNS)
-
-        # [TODO #58] The probe ran out of budget before the method's `ret` — but a long
-        # method is not necessarily an INCOMPLETE one (the LogMsg-family xAsString:
-        # bodies are ~12k insns yet hold every value in the first ~1000).  Recompute the
-        # body by its true function extent so the truncation signal reflects the method's
-        # real boundary, not a magic count.  SOUND here: xAsString: jump-table methods are
-        # CONTIGUOUS (verified byte-identical output across all 752 GeoServices enums), so
-        # the extent sweep never over-reads into foreign code — UNLIKE the outlined
-        # writeTo: family, for which _function_body_extent must NOT be used.  Done only on
-        # a truncated probe, so the 736 methods that close by 1000 pay nothing.
-        if truncated:
-            body = _function_body_extent(ctx, imp, _SPARSE_HARD_CAP)
-            if body:
-                insns = body
-                truncated = _disasm_truncated(insns, _SPARSE_HARD_CAP)
-
-        # Pre-cache raw words for every instruction address
-        words: Dict[int, int] = {}
-        for ins in insns:
-            w = _read_raw_word(ctx, ins.addr)
-            if w is not None:
-                words[ins.addr] = w
-
-        all_pairs: List[Tuple[int, str]] = []
-        seen_values: Set[int] = set()
-
-        def _add(val: int, name: str) -> bool:
-            if val not in seen_values and _is_valid_enum_string(name):
-                seen_values.add(val)
-                all_pairs.append((val, name))
-                return True
-            return False
-
-        # Three independent sparse-enum passes over the same disassembly, each
-        # adding (value, name) via the shared `_add` callback.  The segment pass
-        # reports whether a confirmed segment was left unattributed (contributed
-        # no values) → flag the enum INCOMPLETE so the user is warned.
-        seg_incomplete = _harvest_jumptable_segments(ctx, insns, words, _add)
-        _harvest_isolated_compares(ctx, insns, words, _add)
-        _harvest_cbz_value0(ctx, insns, words, _add)
-
-        # A method-internal gate routes to a segment past where the window
-        # stopped (on `ret`, not the budget cap) — that segment's values,
-        # if any, were never seen by any harvester above, regardless of how
-        # many pairs the REACHED segments already contributed (see
-        # _detect_unreached_branch_gate's docstring: this is the one real
-        # shape that can make a partial recovery look complete).
-        unreached_gate = _detect_unreached_branch_gate(insns, words)
-        if unreached_gate:
-            log.debug(
-                "Enum extraction at 0x%x: a branch gate targets an address "
-                "past the disassembled window (stopped on ret) — a "
-                "jump-table segment may have been missed", imp)
-        truncated = truncated or seg_incomplete or unreached_gate
-
-        if len(all_pairs) < 2:
-            # Nothing recovered by any branch/jump-table harvester — before
-            # reporting a clean empty enum, try reading this AS a POINTER
-            # TABLE (see _try_pointer_table_in's docstring: TODO #58's
-            # extent-recompute can hand back a body whose real dispatch is
-            # _extract_enum_values' primary-branch shape, which none of the
-            # three harvesters above understand). `ptr_confirmed` is the same
-            # len(pairs)==max_val cross-check _extract_enum_values' own
-            # primary path returns — a direct memory read, so trustworthy on
-            # the same terms, not weaker just because it took this path.
-            ptr_pairs, ptr_confirmed = _try_pointer_table_in(ctx, imp, insns, words)
-            if ptr_pairs:
-                ptr_pairs.sort(key=lambda p: p[0])
-                return ptr_pairs, ptr_confirmed, False
-            # Still nothing — check for the one real shape none of the above
-            # can decode: a branchless csel-chain (see
-            # _detect_unrecovered_csel_chain's docstring). Only affects
-            # methods that would otherwise return an unflagged empty enum —
-            # cannot change output for any method that already recovers >=2
-            # pairs, so this is a pure incompleteness-visibility addition.
-            if _detect_unrecovered_csel_chain(insns, words):
-                log.debug(
-                    "Enum extraction at 0x%x: found a csel-chain shape "
-                    "(cmp+csel, >=2 links) with no decodable pairs — "
-                    "values likely exist but are not recoverable by the "
-                    "current branch-based harvesters", imp)
-                return [], False, True
-            return [], False, truncated
-
-        all_pairs.sort(key=lambda x: x[0])
-        return all_pairs, False, truncated
-
-    except (NameError, ImportError):
-        raise   # wiring/refactor bug — surface, don't mask as "extraction failed"
-    except Exception as exc:
-        log.debug("Jump-table enum extraction failed at 0x%x: %s", imp, exc)
-        return [], False, False
 
 
 # [cap:COSMETIC — verified 2026-06-11, TODO #40] Fast-path probe length only; its value
@@ -1116,51 +237,6 @@ def _function_body_extent(
     return insns
 
 
-def _block_adrp_add_target_in(
-    ctx: BinaryContext, insns: list, segname: str, sectname: str
-) -> Optional[int]:
-    """Return the adrp+add target that lands inside the given section, scanning
-    in INSTRUCTION order (earliest pair wins), or None.
-
-    Instruction order matters: a fall-through value case block loads its value
-    string first (``adrp/add x22, <value>``) and then runs into the merge block
-    which loads the dictionary KEY (``adrp/add x3, <key>``).  A register-ordered
-    scan would return the lower-numbered key register; the instruction-ordered
-    scan correctly returns the value loaded first."""
-    if not ctx.has_section(segname, sectname):
-        return None
-    sec = ctx.section(segname, sectname)
-    lo, hi = sec.vmaddr, sec.vmaddr + sec.vmsize
-    pending: Dict[str, int] = {}
-    for ins in insns:
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None:
-                pending[pa[0]] = pa[1]
-        elif ins.mnemonic == 'add':
-            ap = split_ops(ins.op_str)
-            if len(ap) >= 3:
-                r = _norm_reg(ap[0])
-                if r is not None and r == _norm_reg(ap[1]) and r in pending:
-                    off = _parse_imm(ap[2])
-                    if off is not None and lo <= pending[r] + off < hi:
-                        return pending[r] + off
-    return None
-
-
-def _longest_common_prefix(strs: List[str]) -> str:
-    """Return the longest common character prefix of *strs* (``""`` if none)."""
-    if not strs:
-        return ""
-    pre = strs[0]
-    for s in strs[1:]:
-        while not s.startswith(pre):
-            pre = pre[:-1]
-            if not pre:
-                return ""
-    return pre
-
-
 def _read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
     """Raw text of the string constant at *va* (up to 128 characters, the same bound as
     :func:`_read_enum_string` / :func:`_is_valid_enum_string`): a CFString (32-byte struct: isa, flags,
@@ -1184,56 +260,6 @@ def _read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
         return ctx.read_cstring(va, max_len=128)
     except (ValueError, UnicodeDecodeError, KeyError):
         return None
-
-
-def _read_dictrep_pointer_pairs(
-    ctx: BinaryContext, table_va: int, range_val: int,
-) -> List[Tuple[int, str]]:
-    """Read a dictRep *pointer* table and return ``(value, name)`` pairs.
-
-    Unlike the jump-table form, some enum fields are serialised as a direct
-    pointer table::
-
-        cmp  wN, #range ; b.hs default          ; out-of-range → "(unknown: %i)"
-        adrp xT, page ; add xT, #off             ; table base
-        ldr  xR, [xT, wN, lsl #3]                ; table[value] = CFStringRef*
-
-    Each 8-byte entry is a (chained-fixup) pointer straight to the value's
-    CFStringRef, so every in-range value is named — there are no gaps or a
-    pre-loaded default to reconcile."""
-    pairs: List[Tuple[int, str]] = []
-    seen: Set[int] = set()
-    for v in range(range_val):
-        try:
-            ptr = ctx.read_ptr(table_va + v * 8)
-        except (ValueError, KeyError):
-            break
-        if not ptr:
-            continue
-        name = _read_enum_string(ctx, ptr)
-        if name and v not in seen:
-            seen.add(v)
-            pairs.append((v, name))
-    pairs.sort(key=lambda p: p[0])
-    return pairs
-
-
-def _dictrep_cmp_range(
-    insns: list, words: Dict[int, int], dispatch_idx: int,
-) -> int:
-    """Scan back from *dispatch_idx* for the ``cmp wN, #K`` + ``b.hi``/``b.hs``
-    gate and return the entry count (``K+1`` for HI, ``K`` for HS), or 0."""
-    for j in range(dispatch_idx - 1, max(dispatch_idx - 16, -1), -1):
-        cmp = _decode_cmp_imm(words.get(insns[j].addr, 0))
-        if cmp is None:
-            continue
-        _, imm = cmp
-        if imm <= 0 or imm > _SPARSE_MAX_RANGE:
-            return 0
-        nb = (_decode_bcond(words.get(insns[j + 1].addr, 0))
-              if j + 1 < len(insns) else None)
-        return range_from_unsigned_gate(nb, imm)
-    return 0
 
 
 def _find_dictrep_c_func(ctx: BinaryContext, cls: ObjcClass) -> Optional[int]:
@@ -1288,17 +314,33 @@ def _harvest_dictrep_enums(
     Returns ``{ivar_offset: [(value, name), …]}`` for each enum field whose
     int→name map is recovered.  Empty when the method is absent or has no
     recoverable switches.  *wanted* (ivar offsets) only limits the work to those
-    fields; it never changes a result."""
+    fields; it never changes a result.  (:func:`_harvest_dictrep` also reports what
+    could not be settled.)"""
+    return _harvest_dictrep(ctx, cls, st, wanted)[0]
+
+
+def _harvest_dictrep(
+    ctx: BinaryContext, cls: ObjcClass, st: Optional[StringTable],
+    wanted: Optional[Set[int]] = None,
+) -> Tuple[Dict[int, List[Tuple[int, str]]], Dict[int, str], Dict[int, str]]:
+    """``(enums, incomplete, unevaluated)``, each keyed by ivar offset.
+
+    *enums* is :func:`_harvest_dictrep_enums`'s result.  *incomplete* maps a RECOVERED enum
+    to why some of its values may be missing (a value that could not be evaluated, a table
+    gate too wide to enumerate).  *unevaluated* maps an enum-like switch that yielded
+    nothing to why: that field may be an enum and stays an untyped int."""
     result: Dict[int, List[Tuple[int, str]]] = {}
     imp = _find_dictrep_c_func(ctx, cls)
     if imp is None:
-        return result
+        return result, {}, {}
     try:
         insns = disasm(ctx, imp, max_insns=_DICTREP_PROBE_INSNS)
-    except Exception:
-        return result
+    except Exception as exc:
+        log.warning("-[%s _dictionaryRepresentation:] could not be disassembled (%s); "
+                    "enum recovery from it is skipped", cls.name, exc)
+        return result, {}, {}
     if not insns:
-        return result
+        return result, {}, {}
 
     # If the cheap probe didn't reach the method's end, recompute the body by its TRUE
     # function extent.  -[cls _dictionaryRepresentation:] is a CONTIGUOUS serializer
@@ -1330,7 +372,8 @@ def _harvest_dictrep_enums(
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.  This replaces the
     # earlier look-back-window passes (jump table / pointer table / compare chain).
     flow = Flow(ctx, insns, _jump_table_arm_addrs(ctx, insns))
-    return flow.enum_maps({iv.offset for iv in cls.ivars}, wanted)
+    enums = flow.enum_maps({iv.offset for iv in cls.ivars}, wanted)
+    return enums, flow.incomplete, flow.unevaluated
 
 
 def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
@@ -1434,106 +477,80 @@ _ASSTRING_INT_TYPES: frozenset = frozenset({
 })
 
 
+@dataclass
+class XasResult:
+    """The enum recovered from one ``xAsString:`` method."""
+    pairs: List[Tuple[int, str]]
+    confirmed: bool            # every value evaluated cleanly and the body closed
+    truncated: bool            # some value may be missing (see *reason*)
+    reason: Optional[str] = None
+
+
+# [cap:COSMETIC] cheap first probe of an xAsString: body; a longer body is re-read by its
+# function extent (see _function_body_extent), so this chooses only fast-path-vs-extent.
+_XAS_PROBE_INSNS = 1000
+
+
+def _branches_past_end(insns: List[Insn]) -> bool:
+    """True if a CONDITIONAL branch in *insns* targets an address beyond the last decoded
+    instruction: the body continues past the ``ret`` the decode stopped at (an out-of-line
+    default / case block).  Unconditional ``b`` is excluded: a tail call into
+    ``objc_retainAutoreleaseReturnValue`` is a ``b`` to another function."""
+    end = insns[-1].addr
+    return any(i.mnemonic != 'b' and (t := _direct_branch_target(i)) is not None and t > end
+               for i in insns)
+
+
+def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
+    """Recover ``(value, name)`` pairs from ``-[C xAsString:]`` at *imp*.
+
+    The method IS the function from the enum value (``w2``) to its name: the value is driven
+    through its code with every constant it is compared or indexed against (plus one outside
+    them) and the string reaching the call / return is read -- see
+    :class:`proto.dictrep_flow.Flow`.  Whatever the compiler made of the switch (pointer
+    table, byte/halfword jump-table segments with biases, compare chains, bitmask-gated
+    tables, ``cbz`` for value 0) needs no separate decoder, and a value the evaluation could
+    not settle is reported rather than dropped."""
+    if imp == 0:
+        return XasResult([], False, False)
+    try:
+        insns = disasm(ctx, imp, max_insns=_XAS_PROBE_INSNS)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        log.warning("xAsString: at 0x%x could not be disassembled (%s); its enum values "
+                    "are not recovered", imp, exc)
+        return XasResult([], False, True, f"the method could not be disassembled ({exc})")
+    if not insns:
+        return XasResult([], False, False)
+    truncated = _disasm_truncated(insns, _XAS_PROBE_INSNS)
+    if truncated or _branches_past_end(insns):
+        # the probe stopped at the budget, or at a `ret` that a branch jumps over (out-of-line
+        # default / case blocks): re-read the method by its true extent (SOUND for xAsString:
+        # bodies, which are contiguous)
+        body = _function_body_extent(ctx, imp, _SPARSE_HARD_CAP)
+        if body:
+            insns = body
+            truncated = _disasm_truncated(insns, _SPARSE_HARD_CAP)
+    flow = Flow(ctx, insns, _jump_table_arm_addrs(ctx, insns))
+    res = flow.analyse_root(-1, 'x2', 4, frozenset(), direct=True)
+    problems = list(res.problems)
+    if truncated:
+        problems.append("the method body exceeded the disassembly budget")
+    pairs = sorted(res.pairs.items())
+    return XasResult(pairs, bool(pairs) and not problems, bool(problems),
+                     "; ".join(problems[:3]) if problems else None)
+
+
 def _extract_enum_values(
     ctx: BinaryContext,
     imp: int,
-    st: StringTable,
+    st: Optional[StringTable] = None,
 ) -> Tuple[List[Tuple[int, str]], bool, bool]:
-    """
-    Try to extract (int_value, string_name) pairs from an ``xAsString:`` method.
-
-    Returns (pairs, confirmed, truncated).  confirmed=True means every expected
-    value was cleanly extracted from a pointer table.  truncated=True (only from
-    the jump-table fallback) means the method body overran the disassembly budget
-    so high values may be missing — the pointer-table path itself reads entries
-    directly from memory and is never budget-truncated, so it returns False.
-
-    Supports two pointer-table encodings:
-    - Direct ``char *`` entries (standalone binaries)
-    - ``NSString *`` / ``CFStringRef`` entries (shared-cache dylibs)
-
-    Also detects a ``sub wRd, wRn, #bias`` instruction before the CMP gate,
-    which indicates a 1-based enum whose table is 0-indexed.  The bias is
-    added back to each pair's value number so the output matches the proto
-    wire encoding (e.g. GEOMapRegionSourceType values 1–13).
-
-    When the pointer-table pattern is not found, falls back to
-    ``_extract_jumptable_enum_values`` for sparse/LLVM jump-table implementations.
-    """
-    if imp == 0:
-        return [], False, False
-
-    try:
-        max_val = _find_field_count(ctx, imp)
-        if max_val == 0 or max_val > _SPARSE_MAX_RANGE:
-            # Beyond the 12-bit cmp-immediate ceiling (#59): a contiguous count
-            # this large cannot come from the `cmp #imm12` gate a pointer table
-            # uses, so route straight to the jump-table path.  Routing is by
-            # STRUCTURE below (the scaled-index pointer load); this count gate is
-            # only a fast pre-filter, bounded by the encoding rather than a tuned
-            # 512.  A real >512-entry pointer-table enum is now read in full, and
-            # a jump-table enum still falls through (no scaled load found).
-            return _extract_jumptable_enum_values(ctx, imp, st)
-
-        bias = _find_index_bias(ctx, imp)
-
-        insns = disasm(ctx, imp, max_insns=_ENUM_MAX_INSNS)
-        if not insns:
-            return [], False, False
-
-        table_va: Optional[int] = None
-
-        # Principled: the table base is the base register of the scaled-index
-        # load that reads table[idx], e.g. `ldr x0, [x8, w2, sxtw #3]` → x8.
-        # This reads the dispatch the method actually performs rather than
-        # guessing which register holds the table.  Needs a decoder that resolves
-        # register-offset loads — capstone does; the native mini-decoder emits
-        # `unk`, so base_reg is None there and pointer-table enum recovery falls
-        # through to the jump-table path (the native decoder is a degraded mode and
-        # not a correctness target — see the venv/capstone requirement).
-        #
-        # A register-priority GUESS fallback (try x8/x9/x10/x7/x11/x12/x13, accept
-        # the first whose first entry reads as a valid enum string) was removed
-        # 2026-06-14: a census found it fired 0× under capstone (587/587 pointer-
-        # table enums across GeoServices/CLP/locationd resolve via the scaled-index
-        # decode), exactly as the identical guess was removed from the jump-table
-        # path by #47.  Output byte-identical.
-        base_reg = find_indexed_load_base(insns, scale=3)
-        if base_reg is not None:
-            table_va = find_adrp_add_target(insns, base_reg)
-
-        if table_va is None:
-            # Pointer-table not found; try the jump-table (sparse enum) path.
-            return _extract_jumptable_enum_values(ctx, imp, st)
-
-        # A bitmask-gated (sparse) table declares which indices are values; the others are
-        # holes, skipped.  A dense table has no mask and stops at its first empty slot.
-        mask = _valid_value_bitmask(insns)
-        pairs: List[Tuple[int, str]] = []
-        n_declared = 0
-        for i in range(max_val):          # max_val is the COUNT of valid entries
-            if mask is not None and not (mask >> i) & 1:
-                continue
-            n_declared += 1
-            try:
-                ptr  = ctx.read_ptr(table_va + i * 8)
-                name = _read_enum_string(ctx, ptr)
-                if name is None:
-                    break
-                pairs.append((i + bias, name))
-            except (ValueError, UnicodeDecodeError):
-                break
-
-        if not pairs:
-            return [], False, False
-
-        return pairs, (len(pairs) == (n_declared if mask is not None else max_val)), False
-
-    except (NameError, ImportError):
-        raise   # wiring/refactor bug — surface, don't mask as "extraction failed"
-    except Exception as exc:
-        log.debug("Enum extraction failed at 0x%x: %s", imp, exc)
-        return [], False, False
+    """``(pairs, confirmed, truncated)`` of the ``xAsString:`` method at *imp*
+    (:func:`_extract_xasstring` without the reason)."""
+    r = _extract_xasstring(ctx, imp)
+    return r.pairs, r.confirmed, r.truncated
 
 
 def _qualify_enum_name(cls_proto: str, base_enum: str) -> str:
@@ -1592,6 +609,25 @@ _ENUM_UNRESOLVED_COMMENT = (
     "emitted as int32 (wire-compatible) — this is an unresolved enum, not a plain "
     "integer; do not rely on the int32 type"
 )
+
+
+def _enum_values_from_pairs(enum_name: str, pairs: Sequence[Tuple[int, str]]
+                            ) -> List[ProtoEnumValue]:
+    """The :class:`ProtoEnumValue` list for recovered ``(number, raw name)`` *pairs*: names
+    normalised to ``<ENUM_PREFIX>_<NAME>``.  When the binary gives two values the SAME name
+    (``ARTWORK_USE_UNKNOWN`` for 0, 2 and 8) the later ones get ``_<number>`` appended and a
+    comment saying so -- a name that is not the binary's must never look like it is."""
+    values: List[ProtoEnumValue] = []
+    seen: Set[str] = set()
+    for val, raw_name in pairs:
+        name = _normalize_enum_value_name(enum_name, raw_name)
+        comment = None
+        if name in seen:
+            name = f"{name}_{val}"
+            comment = f"the binary names this value identically to an earlier one; suffixed _{val}"
+        seen.add(name)
+        values.append(ProtoEnumValue(name=name, number=val, comment=comment))
+    return values
 
 
 def _collect_enum_definitions(
@@ -1663,6 +699,7 @@ def _collect_enum_definitions(
     # name-refinement / value-normalisation as the xAsString: path, keeping
     # naming uniform (e.g. the COMPONENT_TYPE_* prefix collapses to ``ComponentType``).
     dictrep_pairs: Dict[str, List[Tuple[int, str]]] = {}
+    dictrep_incomplete: Dict[str, str] = {}  # recovered, but some value could not be evaluated
     if any(f.type_name in ("int32", "uint32") and f.type_class is None
            for f in fields):
         ivar_off_by_pname = {
@@ -1672,7 +709,8 @@ def _collect_enum_definitions(
         untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
                            if f.type_name in ("int32", "uint32") and f.type_class is None
                            and f.name in ivar_off_by_pname}
-        dr_enums = _harvest_dictrep_enums(ctx, cls, st, wanted=untyped_offsets)
+        dr_enums, dr_incomplete, dr_unevaluated = _harvest_dictrep(
+            ctx, cls, st, wanted=untyped_offsets)
         if dr_enums:
             cls_prefix = _class_to_proto_name(cls.name, _pfx)
             for fld in fields:
@@ -1689,6 +727,20 @@ def _collect_enum_definitions(
                 fld.type_name  = qualified
                 fld.type_class = f"ENUM:{qualified}"
                 dictrep_pairs[fld.name] = pairs
+                if off in dr_incomplete:
+                    dictrep_incomplete[fld.name] = dr_incomplete[off]
+        # An enum-like switch that could not be evaluated leaves its field an untyped int:
+        # say so on the field and in the run summary instead of staying quiet.
+        for fld in fields:
+            off = ivar_off_by_pname.get(fld.name)
+            if (off in dr_unevaluated and fld.type_name in ("int32", "uint32")
+                    and fld.type_class is None and fld.name in ivar_off_by_pname):
+                reason = dr_unevaluated[off]
+                if not fld.type_inference_note:
+                    fld.type_inference_note = (
+                        "may be an enum: a switch over this field's value in "
+                        "_dictionaryRepresentation: could not be evaluated (" + reason + ")")
+                get_diagnostics(ctx).unevaluated_switches.append((cls.name, fld.name, reason))
 
     for fld in fields:
         if not (fld.type_class and fld.type_class.startswith("ENUM:")):
@@ -1707,16 +759,21 @@ def _collect_enum_definitions(
         pairs: List[Tuple[int, str]] = []
         confirmed   = False
         truncated   = False   # True when the value-string scan hit its disasm cap
+        incomplete_reason: Optional[str] = None
         method_exists: bool = as_method is not None
 
         if as_method is not None and as_method.imp != 0:
-            pairs, confirmed, truncated = _extract_enum_values(ctx, as_method.imp, st)
+            xr = _extract_xasstring(ctx, as_method.imp)
+            pairs, confirmed, truncated = xr.pairs, xr.confirmed, xr.truncated
+            incomplete_reason = xr.reason if xr.truncated else None
         elif fld.name in dictrep_pairs:
             # Enum recovered from -[Class _dictionaryRepresentation:] switch table
             # (no xAsString: companion selector exists for this field).
             pairs = dictrep_pairs[fld.name]
             confirmed = False
             method_exists = True
+            truncated = fld.name in dictrep_incomplete   # some value could not be evaluated
+            incomplete_reason = dictrep_incomplete.get(fld.name)
 
         if not method_exists:
             # No xAsString: enum method resolved for this field → revert it to
@@ -1756,21 +813,14 @@ def _collect_enum_definitions(
                 seen_enum_names.add(derived_name)
                 enum_name = derived_name
 
-        enum_values: List[ProtoEnumValue] = []
-        if pairs:
-            seen_names: Set[str] = set()
-            for val, raw_name in pairs:
-                name = _normalize_enum_value_name(enum_name, raw_name)
-                if name in seen_names:
-                    name = f"{name}_{val}"
-                seen_names.add(name)
-                enum_values.append(ProtoEnumValue(name=name, number=val))
+        enum_values = _enum_values_from_pairs(enum_name, pairs) if pairs else []
 
         enums.append(ProtoEnum(
             name=enum_name,
             values=enum_values,
             values_confirmed=confirmed,
             values_truncated=truncated,
+            incomplete_reason=incomplete_reason,
         ))
 
     return enums

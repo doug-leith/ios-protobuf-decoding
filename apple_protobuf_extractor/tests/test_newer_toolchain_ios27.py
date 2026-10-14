@@ -184,6 +184,11 @@ class TestJumpTableArmTarget(unittest.TestCase):
                          0x1000 - 0x40)
 
 
+def _insns(*lines):
+    return [Insn(addr=0x1000 + 4 * i, mnemonic=mn, op_str=op, size=4, raw=b'\0\0\0\0')
+            for i, (mn, op) in enumerate(lines)]
+
+
 # ── offline: does the engine use the table it is handed? ──────────────────────
 
 class TestCoreReadsTableArg(unittest.TestCase):
@@ -210,39 +215,6 @@ class TestCoreReadsTableArg(unittest.TestCase):
     def test_overwritten_copy_is_no_longer_the_table(self):
         self.assertFalse(self._reads(('mov', 'x21, x2'), ('mov', 'x21, x8'),
                                      ('ldr', 'w12, [x21, x8, lsl #2]')))
-
-
-# ── offline: sparse-enum validity bitmask ─────────────────────────────────────
-
-def _insns(*lines):
-    return [Insn(addr=0x1000 + 4 * i, mnemonic=mn, op_str=op, size=4, raw=b'\0\0\0\0')
-            for i, (mn, op) in enumerate(lines)]
-
-
-class TestValidValueBitmask(unittest.TestCase):
-    def test_mask_built_by_mov_movk_and_gated_by_lsr_tbz(self):
-        # -[GEOLogMsgEventNetwork networkServiceAsString:] on iOS 27: 29 values 0..28,
-        # value 15 undeclared -> mask 0x1fff7fff (bit 15 clear).
-        from proto.enums import _valid_value_bitmask
-        ins = _insns(('cmp', 'w2, #0x1c'), ('b.hi', '#0x2000'),
-                     ('mov', 'w8, #0x7fff'), ('movk', 'w8, #0x1fff, lsl #16'),
-                     ('lsr', 'w8, w8, w2'), ('tbz', 'w8, #0, #0x2000'),
-                     ('adrp', 'x8, #0x1e0aa4000'))
-        mask = _valid_value_bitmask(ins)
-        self.assertEqual(mask, 0x1FFF7FFF)
-        self.assertEqual([v for v in range(29) if not (mask >> v) & 1], [15])
-
-    def test_dense_table_has_no_mask(self):
-        from proto.enums import _valid_value_bitmask
-        ins = _insns(('cmp', 'w2, #0x5'), ('b.hi', '#0x2000'),
-                     ('adrp', 'x8, #0x1e0aa4000'), ('add', 'x8, x8, #0xc90'),
-                     ('ldr', 'x0, [x8, w2, uxtw #3]'))
-        self.assertIsNone(_valid_value_bitmask(ins))
-
-    def test_lsr_of_a_non_constant_is_not_a_mask(self):
-        from proto.enums import _valid_value_bitmask
-        ins = _insns(('lsr', 'w8, w9, w2'), ('tbz', 'w8, #0, #0x2000'))
-        self.assertIsNone(_valid_value_bitmask(ins))
 
 
 # ── live: the real iOS 27 cache ───────────────────────────────────────────────

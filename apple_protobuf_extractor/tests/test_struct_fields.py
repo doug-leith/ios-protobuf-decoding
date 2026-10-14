@@ -17,10 +17,10 @@ import unittest
 import proto.extractor as E
 import proto.structfields as SF
 import proto.writeto as W
-from proto.enums import _valid_value_bitmask as valid_value_bitmask
 import live_artifacts as V
 from proto.models import FieldLabel
-from macho.disasm import Insn
+from macho.disasm import Insn, disasm
+from tests._a64asm import assemble, FlowCtx
 
 
 # ── fake instruction memory (same idiom as test_map_fields) ───────────────────
@@ -219,7 +219,17 @@ _WIFI_TIMERANGE_DICTREP_3 = (0x18cb8ce4c, [
 ])
 
 
-class _CfCtx:
+class _NoStringsMixin:
+    """What the data-flow analysis may ask of ANY ctx: no named sections, no raw C strings."""
+
+    def has_section(self, segname, sectname):
+        return False
+
+    def read_cstring(self, va, max_len=4096):
+        raise ValueError(f"no string at {va:#x}")
+
+
+class _CfCtx(_NoStringsMixin):
     """A ctx exposing two CFString constants (``from``/``to``) the way the cache does."""
     TEXT = {0x1d5fdaae0: (0x2000, b'from'), 0x1d5fdab00: (0x2010, b'to')}
 
@@ -496,7 +506,7 @@ class TestLiveInlineStructRecovery(unittest.TestCase):
 # ── enum members (the struct's dictionary representation) ──────────────────────
 
 
-class _TextCtx:
+class _TextCtx(_NoStringsMixin):
     """A ctx exposing the CFStrings in *texts* (``{cfstring VA: text}``) the way the cache does:
     the constant's character pointer is ``0x100000 + its VA``."""
 
@@ -518,14 +528,59 @@ class TestEnumMemberEvidence(_Patched):
         order, _ = asm((0x1000, list(lines)))
         return order
 
-    def test_the_unknown_format_string_marks_an_enum_member(self):
-        ctx = _TextCtx({0x1d5fa03e0: '(unknown: %i)', 0x1d5fda000: 'type'})
-        enum_span = self._insns(('ldr', 'w8, [x20, #0x10]'), ('adrp', 'x2, #0x1d5fa0000'),
-                                ('add', 'x2, x2, #0x3e0'), ('bl', '#0x3000'))
-        plain_span = self._insns(('ldr', 'w2, [x20]'), ('adrp', 'x3, #0x1d5fda000'),
-                                 ('add', 'x3, x3, #0'), ('bl', '#0x3000'))
-        self.assertTrue(SF._references_unknown_format(ctx, enum_span))
-        self.assertFalse(SF._references_unknown_format(ctx, plain_span))
+    # ---- a struct member's name switch, read by proto.dictrep_flow ----------------------
+
+    class _MemberCtx(FlowCtx):
+        """Assembled code plus a CFString key constant, as the cache lays them out."""
+        def read_u64(self, va):
+            return self.read_ptr(va)
+
+    KEY_VA, KEY_CHARS = 0x9000, 0x9100
+
+    def _member_run(self, switch, strings, *, member_off=0x10):
+        code = ['ldr w8, [x20, #0x10]'] + switch + [
+            'merge:', 'adrp x3, #0x9000', 'add x3, x3, #0', 'mov x0, x19', 'bl helper',
+            'end:', 'ret', 'helper:', 'ret']
+        words, _ = assemble(0x1000, code)
+        ctx = self._MemberCtx(0x1000, words)
+        ctx.put_ptr(self.KEY_VA + 16, self.KEY_CHARS)
+        ctx.put_bytes(self.KEY_CHARS, b'kind')
+        ctx._m[self.KEY_VA + 24] = 4
+        ctx._m[self.KEY_VA + 28] = 0
+        ctx._strings = strings
+        order = disasm(ctx, 0x1000, max_insns=100, stop_at_ret=False)
+        members, unpaired = SF._pair_members(
+            ctx, order, lambda k: member_off if k == 0 else None)
+        return members, unpaired
+
+    COMPARE_CHAIN = ['cbz w8, zero', 'cmp w8, #1', 'b.ne unk',
+                     'adrp x2, #0x6000', 'add x2, x2, #0x80', 'b merge',
+                     'zero:', 'adrp x2, #0x6000', 'add x2, x2, #0x40', 'b merge',
+                     'unk:', 'adrp x2, #0x8000', 'add x2, x2, #0x20', 'bl helper', 'b merge']
+    NAMES = {0x6040: 'KIND_ZERO', 0x6080: 'KIND_ONE', 0x8020: '(unknown: %i)'}
+
+    def test_a_member_whose_string_varies_with_its_value_is_an_enum(self):
+        members, unpaired = self._member_run(self.COMPARE_CHAIN, self.NAMES)
+        self.assertEqual(unpaired, 0)
+        self.assertEqual(members, {0x10: SF.MemberDict('kind', ((0, 'KIND_ZERO'), (1, 'KIND_ONE')))})
+
+    def test_an_older_compiler_with_no_unknown_fallback_is_still_an_enum(self):
+        chain = [c for c in self.COMPARE_CHAIN if not c.startswith(('adrp x2, #0x8000', 'add x2, x2, #0x20'))]
+        chain = [c.replace('b.ne unk', 'b.ne end') for c in chain if c not in ('bl helper',)]
+        members, _ = self._member_run(chain, self.NAMES)
+        self.assertEqual(members[0x10].enum, ((0, 'KIND_ZERO'), (1, 'KIND_ONE')))
+
+    def test_a_plain_number_member_is_not_an_enum(self):
+        members, _ = self._member_run(['bl helper'], {})
+        self.assertEqual(members, {0x10: SF.MemberDict('kind', None)})
+
+    def test_an_enum_like_switch_that_cannot_be_evaluated_is_reported_as_unread(self):
+        # every path branches on a register the analysis does not track: still an enum
+        # (the compare constants show it) but with no values, never silently a number
+        chain = ['cbz x5, merge', 'cbz w8, merge', 'cmp w8, #1', 'b.eq merge',
+                 'cmp w8, #2', 'b.eq merge', 'cmp w8, #3', 'b.eq merge', 'bl helper']
+        members, _ = self._member_run(chain, self.NAMES)
+        self.assertEqual(members, {0x10: SF.MemberDict('kind', ())})
 
     def test_a_key_chosen_between_two_spellings_that_differ_only_in_case(self):
         # real GEONavigationAudioFeedback dictrep: ``isJSON ? @"BTHFPRoutesAvailable" :
@@ -547,46 +602,6 @@ class TestEnumMemberEvidence(_Patched):
                             ('add', 'x3, x3, #0xe0'), ('bl', '#0x3000'))
         members, _ = SF._pair_members(ctx, order, lambda k: 0 if k == 0 else None)
         self.assertEqual(members, {0: SF.MemberDict('time', None)})
-
-
-class TestValidValueBitmaskPolarity(unittest.TestCase):
-    """``proto.enums._valid_value_bitmask`` on a struct member's name switch (real
-    GEOProblemDetail.problemType: values 6 and 7, after the 1-based bias, are holes)."""
-
-    HEAD = [('ldr', 'w8, [x20]'), ('sub', 'w9, w8, #1'), ('cmp', 'w9, #0x12'),
-            ('b.hs', '#0x1100'), ('mov', 'w10, #0xff9f'), ('movk', 'w10, #3, lsl #16'),
-            ('lsr', 'w10, w10, w9')]
-
-    def _mask(self, *tail, allow_tbnz=True):
-        order, _ = asm((0x1000, self.HEAD + list(tail)))
-        return valid_value_bitmask(order, allow_tbnz=allow_tbnz)
-
-    def test_tbz_gate_to_the_unknown_branch(self):
-        self.assertEqual(self._mask(('tbz', 'w10, #0, #0x1100'), ('adrp', 'x8, #0x1d5f8e000'),
-                                    ('ldr', 'x21, [x8, w9, sxtw #3]')), 0x3ff9f)
-
-    def test_tbnz_gate_to_the_table_load(self):
-        # the target (0x1028) is the table's ``add``, two instructions before the pointer load
-        self.assertEqual(self._mask(('tbnz', 'w10, #0, #0x1028'), ('adrp', 'x9, #0x1dcfa5000'),
-                                    ('adrp', 'x8, #0x1d5f8e000'), ('add', 'x8, x8, #0x648'),
-                                    ('ldr', 'x21, [x8, w9, sxtw #3]')), 0x3ff9f)
-
-    def test_tbnz_is_not_read_unless_asked_for(self):
-        # the xAsString path does not opt in: there ``lsr ; tbnz`` is not known to be a
-        # validity gate (GEOPDModule.ModuleType), so its output must not change
-        self.assertIsNone(self._mask(('tbnz', 'w10, #0, #0x1028'), ('adrp', 'x9, #0x1dcfa5000'),
-                                     ('adrp', 'x8, #0x1d5f8e000'), ('add', 'x8, x8, #0x648'),
-                                     ('ldr', 'x21, [x8, w9, sxtw #3]'), allow_tbnz=False))
-
-    def test_tbnz_to_anything_else_is_not_a_validity_gate(self):
-        # a bare ``lsr ; tbnz`` testing an unrelated bit (GEOPDModule.ModuleType has one)
-        self.assertIsNone(self._mask(('tbnz', 'w10, #0, #0x1024'), ('adrp', 'x9, #0x1dcfa5000'),
-                                     ('bl', '#0x3000'), ('ldr', 'x21, [x8, w9, sxtw #3]')))
-
-    def test_no_mask_in_a_dense_table(self):
-        order, _ = asm((0x1000, [('ldrsw', 'x8, [x20, #4]'), ('cmp', 'w8, #3'),
-                                 ('b.hs', '#0x1100'), ('ldr', 'x21, [x9, x8, lsl #3]')]))
-        self.assertIsNone(valid_value_bitmask(order))
 
 
 class TestMergeEnums(unittest.TestCase):

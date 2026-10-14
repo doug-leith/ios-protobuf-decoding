@@ -24,8 +24,7 @@ jump-table segments sharing ONE epilogue — the real shape confirmed on
 GEOTelemetricEntity.eventKeyAsString: via the real dyld cache, not the
 disjoint-per-segment-ret artifact this repo's normal (Xcode 15) clang
 produces from the same source. All 8 values recover
-(values_confirmed=False, as always for this fallback path;
-values_truncated=False).
+(every value evaluated cleanly, so values_confirmed=True).
 """
 
 _STATUS_VALUES = [
@@ -49,7 +48,7 @@ EXPECTED = {
         "enums": {
             "TestMultiseg": {
                 "values": _STATUS_VALUES,
-                "values_confirmed": False,
+                "values_confirmed": True,
                 "values_truncated": False,
             },
         },

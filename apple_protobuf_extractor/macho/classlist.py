@@ -45,6 +45,8 @@ ivar_t (32 bytes):
 
 from __future__ import annotations
 
+import logging
+
 from typing import Dict, Iterator, List, Optional, Set
 
 from .memory import BinaryContext
@@ -69,6 +71,8 @@ _CLASSLIST_SECTIONS = (
 
 _MIN_IVAR_ENTSIZE   = 32
 _MAX_METHODS        = 10_000
+log = logging.getLogger(__name__)
+
 _MAX_IVARS          = 1_000
 _MAX_CLASSES        = 100_000
 
@@ -217,6 +221,9 @@ def build_class_list(
         return ClassList([])
 
     count = sect.vmsize // 8
+    if count > _MAX_CLASSES:
+        log.warning("__objc_classlist holds %d classes; only the first %d are read "
+                    "(_MAX_CLASSES) -- the rest are MISSING from the output", count, _MAX_CLASSES)
     count = min(count, _MAX_CLASSES)
 
     # Resolve the cache-wide relative-method-selector base BEFORE parsing
@@ -581,6 +588,9 @@ def _parse_ivars(
     if entsize == 0:
         return []
 
+    if count > _MAX_IVARS:
+        log.warning("an ivar list declares %d ivars; only the first %d are read "
+                    "(_MAX_IVARS) -- the rest are MISSING from the output", count, _MAX_IVARS)
     count    = min(count, _MAX_IVARS)
     ivars: List[ObjcIvar] = []
     entry_va = list_va + 8

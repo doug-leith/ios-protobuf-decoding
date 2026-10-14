@@ -257,6 +257,14 @@ class BinaryContext:
                 f"have {len(data)}"
             )
 
+        if cputype != CPU_TYPE_ARM64:
+            # Every decoder here is arm64/arm64e (instruction decode, ObjC ABI, pointer
+            # authentication): an x86_64 or arm32 image would "load" and then silently
+            # yield no messages, which looks like a clean extraction.
+            raise ValueError(
+                f"unsupported CPU type {cputype:#x}: this tool decodes arm64/arm64e "
+                f"Mach-O images only (for a fat binary pass the arm64 slice, or let the "
+                f"loader pick it)")
         self._cache_reader: 'Optional[object]' = None  # set only by from_cache()
         self._cpu_type    = cputype
         self._cpu_subtype = cpusubtype
@@ -266,6 +274,12 @@ class BinaryContext:
         candidates = [s.vmaddr for s in self._segments
                       if s.name != '__PAGEZERO' and s.vmaddr > 0]
         self._image_base = min(candidates) if candidates else 0
+        for seg in self._segments:
+            if seg.filesize and seg.fileoff + seg.filesize > len(data):
+                raise ValueError(
+                    f"Binary truncated: segment {seg.name} needs file bytes "
+                    f"{seg.fileoff:#x}..{seg.fileoff + seg.filesize:#x}, "
+                    f"the file has {len(data):#x}")
 
 
     # ── Cache-mode factory ───────────────────────────────────────────────────

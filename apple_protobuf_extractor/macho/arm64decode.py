@@ -86,14 +86,6 @@ def jumptable_arm_target(base: int, width: int, raw: bytes) -> int:
     return base + entry * (1 if signed else 4)
 
 
-def _bcond_branch_target(word: int, va: int) -> int:
-    """Branch target VA of a ``B.cond`` at *va* (signed 19-bit imm, ×4)."""
-    off19 = (word >> 5) & 0x7FFFF
-    if off19 & 0x40000:
-        off19 -= 0x80000
-    return va + off19 * 4
-
-
 _CMP_MASK    = 0xFF00001F
 
 

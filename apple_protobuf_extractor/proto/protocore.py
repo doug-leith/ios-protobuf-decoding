@@ -20,7 +20,7 @@ import re
 from typing import Dict, Optional, Set, Tuple
 
 from proto.models import FieldLabel
-from macho.classlist import ObjcClass, ObjcIvar
+from macho.classlist import ObjcIvar
 
 #: Instance methods that every Apple ObjC proto message class must have.
 #: Note ``mergeFrom:`` is deliberately NOT in this core set: oneof classes
