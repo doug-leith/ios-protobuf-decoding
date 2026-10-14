@@ -15,7 +15,7 @@ Related repositories:
 
 ## Quick start
 
-Clone this repository and install into a virtual environment (Python 3.12 or later). The [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler must be on your `PATH`, for example `brew install protobuf` on macOS.
+Clone this repository and install into a virtual environment (Python 3.12 or later). The [`protoc`](https://github.com/protocolbuffers/protobuf/releases) compiler, version 27 or later, must be on your `PATH`, for example `brew install protobuf` on macOS.
 
 ```sh
 python3 -m venv venv
@@ -93,7 +93,7 @@ The dyld cache and binaries are Apple's software and are not in this repository.
 
 ## Recovered schemas
 
-`ios_decoder/protos/` holds the extractor's output, one folder per framework. Each file starts with a header naming the tool, the serializer (`Apple PBCodable (ObjC)` or `C++ libprotobuf (google::protobuf)`) and the source framework. In `geo.proto`, `als.proto` and `clp.proto` the Objective-C class prefix is dropped (`GEOPDPlaceRequest` is `geo.PDPlaceRequest`).
+`ios_decoder/protos/` holds the extractor's output, one folder per framework. Each file starts with a header naming the tool, the serializer (`Apple PBCodable (ObjC)` or `C++ libprotobuf (google::protobuf)`) and the source framework. In `geo.proto`, `als.proto` and `clp.proto` the Objective-C class prefix is dropped (`GEOPDPlaceRequest` is `geo.PDPlaceRequest`). The files are Protobuf Edition 2023 (`edition = "2023";`): proto3 syntax with explicit field presence. Apple's `PBCodable` classes keep a has-bit for each field and send a set field even when its value is 0, `false` or `""`, so the schemas must keep such values when decoding, which proto3 does not. Editions need `protoc` 27 or later.
 
 | Framework | `.proto` files | Messages | What is in it |
 |---|---|---|---|
