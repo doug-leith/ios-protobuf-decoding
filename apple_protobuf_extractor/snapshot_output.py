@@ -31,6 +31,10 @@ def _snap_messages(msgs):
             # Recovered map<K, V> (proto.mapfields).  Recorded only for map fields so the
             # golden diff stays a clean list of exactly the affected fields; the key
             # type + value type/class are what a map regression would silently change.
+            # Wire encoding of a repeated scalar C-list (packed / expanded / unseen);
+            # recorded only for those fields, like the map entry below.
+            if getattr(f, "repeated_encoding", None):
+                out[f"{m.class_name}.{f.name}.<encoding>"] = f.repeated_encoding
             if getattr(f, "map_key_type", None):
                 out[f"{m.class_name}.{f.name}.<map>"] = [
                     f.map_key_type, f.map_value_type, f.map_value_class]

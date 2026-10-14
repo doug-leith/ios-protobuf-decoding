@@ -262,11 +262,11 @@ message AWDProactiveAppPredictionActionTimeEstimateContainer {
   string actionKey = 1;
   AWDProactiveAppPredictionActionTimeEstimateContainerActionType actionType = 2;
   repeated string parameters = 3;
-  repeated int32 timeEstimates = 4;
-  repeated int32 sessionLengths = 5;
-  repeated int32 sessionIndexs = 6;
+  repeated int32 timeEstimates = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated int32 sessionLengths = 5 [features.repeated_field_encoding = EXPANDED];
+  repeated int32 sessionIndexs = 6 [features.repeated_field_encoding = EXPANDED];
   int32 noMatchCount = 7;
-  repeated AWDProactiveAppPredictionActionTimeEstimateContainerLaunchReasons launchReasons = 8;
+  repeated AWDProactiveAppPredictionActionTimeEstimateContainerLaunchReasons launchReasons = 8 [features.repeated_field_encoding = EXPANDED];
 }
 
 message AWDProactiveAppPredictionAppActionSequence {
@@ -287,7 +287,7 @@ message AWDProactiveAppPredictionIntentPredictionSession {
   AWDProactiveAppPredictionIntentPredictionSessionConsumerSubType consumerSubType = 5;
   AWDProactiveAppPredictionIntentPredictionSessionCurrentLOIType currentLOIType = 6;
   int32 dayOfWeek = 7;
-  repeated int32 engagedActionCacheIndices = 8;
+  repeated int32 engagedActionCacheIndices = 8 [features.repeated_field_encoding = EXPANDED];
   AWDProactiveAppPredictionIntentPredictionSessionEngagementType engagementType = 9;
   bool inAirplaneMode = 10;
   int32 intentDonationDelay = 11;

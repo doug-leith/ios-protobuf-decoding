@@ -243,9 +243,9 @@ message ADSegmentUpdateRequest {
   string osVersionAndBuild = 39;
   string localeIdentifier = 40;
   bytes dPID = 41;
-  repeated ADSegmentUpdateRequestDeviceModes deviceModes = 42;
-  repeated ADSegmentUpdateRequestAccountTypes accountTypes = 43;
-  repeated ADSegmentUpdateRequestAccountStates accountStates = 44;
+  repeated ADSegmentUpdateRequestDeviceModes deviceModes = 42 [features.repeated_field_encoding = EXPANDED];
+  repeated ADSegmentUpdateRequestAccountTypes accountTypes = 43 [features.repeated_field_encoding = EXPANDED];
+  repeated ADSegmentUpdateRequestAccountStates accountStates = 44 [features.repeated_field_encoding = EXPANDED];
 }
 
 message ADSegmentUpdateResponse {
@@ -290,8 +290,8 @@ message ADUserTargetingProperties {
   string localeIdentifier = 9;
   repeated string userKeyboards = 10;
   int32 appsRank = 11;
-  repeated ADUserTargetingPropertiesDeviceModes deviceModes = 12;
-  repeated ADUserTargetingPropertiesAccountTypes accountTypes = 13;
+  repeated ADUserTargetingPropertiesDeviceModes deviceModes = 12 [features.repeated_field_encoding = EXPANDED];
+  repeated ADUserTargetingPropertiesAccountTypes accountTypes = 13 [features.repeated_field_encoding = EXPANDED];
   float latitude = 14;
   float longitude = 15;
   float horizontalAccuracy = 16;
@@ -315,7 +315,7 @@ message ADUserTargetingProperties {
   bool isOnInternationalDataRoaming = 36;
   ADUserTargetingPropertiesConnectionType connectionType = 37;
   string storeFrontLanguageLocaleIdentifier = 38;
-  repeated ADUserTargetingPropertiesAccountStates accountStates = 39;
+  repeated ADUserTargetingPropertiesAccountStates accountStates = 39 [features.repeated_field_encoding = EXPANDED];
   ADUserTargetingPropertiesOverrideType overrideType = 40;
 }
 

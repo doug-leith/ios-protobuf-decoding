@@ -21880,7 +21880,7 @@ message ACResult {
 
 message APPlaceCardModule {
   ModuleType type = 1;
-  repeated ButtonType contents = 2;
+  repeated ButtonType contents = 2 [features.repeated_field_encoding = EXPANDED];
   string metadata = 3;
 }
 
@@ -21939,7 +21939,7 @@ message ActionButtonDetail {
 
 message ActionComponentMapEntry {
   ActionComponent actionComponent = 1;
-  repeated int32 placeDataComponents = 2;
+  repeated int32 placeDataComponents = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message ActiveResourceFilter {
@@ -22002,8 +22002,8 @@ message ActiveTileGroup {
   repeated Resource activeResources = 69;
   repeated RegionalResourceSet regionalResources = 70;
   uint32 modelVersion = 71;
-  repeated ResourceFilterScale activeScales = 72;
-  repeated ResourceFilterScenario activeScenarios = 73;
+  repeated ResourceFilterScale activeScales = 72 [features.repeated_field_encoding = EXPANDED];
+  repeated ResourceFilterScenario activeScenarios = 73 [features.repeated_field_encoding = EXPANDED];
   repeated StaleResource staleResources = 74;
   DataSetDescription dataSet = 75;
   string realtimeTrafficProbeURLLegacy = 78;
@@ -22140,7 +22140,7 @@ message AdvisoryItem {
 
 message AdvisoryNotice {
   FormattedString noticeText = 1;
-  repeated uint32 incidentIndexs = 2;
+  repeated uint32 incidentIndexs = 2 [features.repeated_field_encoding = EXPANDED];
   repeated AdvisoryCard advisoryCards = 3;
   bool shouldAlwaysShowAdvisoryCard = 4;
   repeated AdvisoryItem advisoryItems = 5;
@@ -22247,8 +22247,8 @@ message AnalyticsPipelineStateData {
   bool lookAroundIsLabelingShown = 41;
   bool deviceInDarkMode = 42;
   bool venueExperienceShown = 43;
-  repeated int32 placeCardPossibleActions = 44;
-  repeated int32 placeCardUnactionableUiElements = 45;
+  repeated int32 placeCardPossibleActions = 44 [features.repeated_field_encoding = EXPANDED];
+  repeated int32 placeCardUnactionableUiElements = 45 [features.repeated_field_encoding = EXPANDED];
   string placeCardPlaceCardCategory = 46;
   AnalyticsPipelineStateDataPlaceCardPlaceCardType placeCardPlaceCardType = 47;
   string placeCardPlaceActionDetailsActionUrl = 48;
@@ -22437,7 +22437,7 @@ message BatchPlaceResult {
 
 message BatchRevGeocodeRequest {
   repeated Location locations = 2;
-  repeated BatchRevGeocodeRequestAdditionalPlaceTypes additionalPlaceTypes = 3;
+  repeated BatchRevGeocodeRequestAdditionalPlaceTypes additionalPlaceTypes = 3 [features.repeated_field_encoding = EXPANDED];
   string deviceCountryCode = 4;
   string displayRegion = 5;
   string deviceSku = 6;
@@ -22578,12 +22578,12 @@ message CarInfo {
   DeviceConnection deviceConnection = 5;
   bool destinationSharingEnabled = 6;
   CarInfoNavAidedDrivingStatus navAidedDrivingStatus = 7;
-  repeated CarEngineType engineTypes = 8;
+  repeated CarEngineType engineTypes = 8 [features.repeated_field_encoding = EXPANDED];
   string carName = 9;
   ScreenDimension screenDimension = 10;
   int32 colorRange = 11;
   int32 brightness = 12;
-  repeated CarInfoInputMethods inputMethods = 13;
+  repeated CarInfoInputMethods inputMethods = 13 [features.repeated_field_encoding = EXPANDED];
   bool isInstrumentClusterEnabled = 14;
   bool isInstructionCardEnabled = 15;
   bool isMapviewEnabled = 16;
@@ -22694,7 +22694,7 @@ message ChargerPlugsInfo {
 
 message ClickableAdvisory {
   FormattedString advisoryMessage = 1;
-  repeated uint32 incidentIndexs = 2;
+  repeated uint32 incidentIndexs = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message ClientACSuggestionEntry {
@@ -22757,7 +22757,7 @@ message ClientCapabilities {
   AbAssignInfo abAssignInfo = 24;
   LocalTime requestTime = 25;
   uint32 maxZilchMessageVersionSupported = 26;
-  repeated ClientCapabilitiesSupportedTransitFeatures supportedTransitFeatures = 27;
+  repeated ClientCapabilitiesSupportedTransitFeatures supportedTransitFeatures = 27 [features.repeated_field_encoding = EXPANDED];
   bool supportsArrivalMapRegion = 28;
   bool supportsNaturalGuidance = 29;
   bool supportsJunctionView = 30;
@@ -22782,7 +22782,7 @@ message ClientCapabilities {
   bool supportsGuidanceEventImportanceInfo = 49;
   bool isAdvancedMap = 50;
   bool isGlobeProjection = 51;
-  repeated ClientCapabilitiesSupportsMultipointRoutings supportsMultipointRoutings = 52;
+  repeated ClientCapabilitiesSupportsMultipointRoutings supportsMultipointRoutings = 52 [features.repeated_field_encoding = EXPANDED];
   bool supportsDefaultToNewRouteFlag = 53;
   WalkingSupportedFeatures walkingSupportedFeatures = 54;
   TransitFareSupport maxSupportedTransitFareVersion = 55;
@@ -22829,7 +22829,7 @@ message ClientNetworkTransactionMetrics {
 
 message Cluster {
   PlaceResult container = 1;
-  repeated int32 indexs = 2;
+  repeated int32 indexs = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message CoarseLocationLatLng {
@@ -22861,7 +22861,7 @@ message CoarseLocationTerritoryInfo {
   CoarseLocationTerritoryInfoTerritoryType territoryType = 1;
   uint32 regionName = 2;
   uint32 countryName = 3;
-  repeated uint32 coordinates = 4;
+  repeated uint32 coordinates = 4 [features.repeated_field_encoding = EXPANDED];
   bool precise = 5;
   uint64 featureId = 6;
   CoarseLocationLatLng representativePoint = 7;
@@ -22881,7 +22881,7 @@ message CoarseLocationTileData {
 }
 
 message CollectionDetails {
-  repeated uint64 collectionIds = 1;
+  repeated uint64 collectionIds = 1 [features.repeated_field_encoding = EXPANDED];
   string collectionCategory = 2;
   uint64 targetId = 3;
   bool currentlySaved = 5;
@@ -22965,8 +22965,8 @@ message CompanionRouteDetails {
   uint32 originalDuration = 4;
   bytes routeID = 5;
   MapItemStorage destination = 6;
-  repeated uint32 trafficColors = 7;
-  repeated uint32 trafficColorOffsets = 8;
+  repeated uint32 trafficColors = 7 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 trafficColorOffsets = 8 [features.repeated_field_encoding = EXPANDED];
   uint32 historicalDuration = 9;
   MapItemStorage origin = 11;
   bool canNavigate = 12;
@@ -23004,7 +23004,7 @@ message CompanionRouteStatus {
   LatLng routeMatchCoordinate = 12;
   bytes routeID = 13;
   bool guidancePromptsEnabled = 14;
-  repeated uint32 selectedRideIndexs = 15;
+  repeated uint32 selectedRideIndexs = 15 [features.repeated_field_encoding = EXPANDED];
   bool lowGuidanceNavigation = 16;
   CompanionRouteStatusHapticsType hapticsType = 17;
   bool isConnectedToCarplay = 18;
@@ -23068,7 +23068,7 @@ message CompanionWaypoint {
 
 message ComponentAction {
   ActionComponent component = 1;
-  repeated ComponentActionActions actions = 2;
+  repeated ComponentActionActions actions = 2 [features.repeated_field_encoding = EXPANDED];
   bool handleLocally = 3;
 }
 
@@ -23102,9 +23102,9 @@ message ConditionalFormattedString {
 }
 
 message CountdownData {
-  repeated uint32 timestampValues = 1;
+  repeated uint32 timestampValues = 1 [features.repeated_field_encoding = EXPANDED];
   repeated string alternateFormatStrings = 2;
-  repeated CountdownDataAlternateCountdownTypes alternateCountdownTypes = 4;
+  repeated CountdownDataAlternateCountdownTypes alternateCountdownTypes = 4 [features.repeated_field_encoding = EXPANDED];
   string separator = 5;
   string timezone = 6;
 }
@@ -23274,7 +23274,7 @@ message DirectionsResponse {
   repeated RouteIncident incidentsOnRoutes = 9;
   repeated RouteIncident incidentsOffRoutes = 10;
   repeated ProblemDetail problemDetails = 11;
-  repeated DirectionsResponseSupportedTransportTypes supportedTransportTypes = 13;
+  repeated DirectionsResponseSupportedTransportTypes supportedTransportTypes = 13 [features.repeated_field_encoding = EXPANDED];
   repeated TransitServiceGap serviceGaps = 14;
   uint32 selectedRouteIndex = 15;
   PBTransitRoutingIncidentMessage transitIncidentMessage = 16;
@@ -23666,7 +23666,7 @@ message FormatArgument {
   FormatArgumentFormat format = 2;
   uint32 valInt1 = 3;
   uint32 valInt2 = 4;
-  repeated uint32 valInt3s = 5;
+  repeated uint32 valInt3s = 5 [features.repeated_field_encoding = EXPANDED];
   string valString = 6;
   Price price = 8;
   PBTransitArtwork artwork = 9;
@@ -23739,7 +23739,7 @@ message GeoServiceTag {
 
 message GloriaTessellationOptions {
   GloriaTessellationOptionsType type = 1;
-  repeated uint32 zoomLevels = 2;
+  repeated uint32 zoomLevels = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message GuidanceEvent {
@@ -23783,7 +23783,7 @@ message GuidanceEventFeedback {
 }
 
 message GuidanceImportanceMode {
-  repeated GuidanceImportanceModeGuidancePreferenceTypes guidancePreferenceTypes = 1;
+  repeated GuidanceImportanceModeGuidancePreferenceTypes guidancePreferenceTypes = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message Highlight {
@@ -23794,7 +23794,7 @@ message Highlight {
 }
 
 message Hours {
-  repeated HoursDays days = 1;
+  repeated HoursDays days = 1 [features.repeated_field_encoding = EXPANDED];
   repeated TimeRange timeRanges = 2;
 }
 
@@ -23918,7 +23918,7 @@ message LPRLPRConvertRule {
 }
 
 message LPRLPRFillRule {
-  repeated uint32 plateTypeIndexes = 1;
+  repeated uint32 plateTypeIndexes = 1 [features.repeated_field_encoding = EXPANDED];
   LPRTargetChar fromChar = 2;
   LPRTargetChar toChar = 3;
   LPRLPRFillRuleFillType fillType = 4;
@@ -23926,14 +23926,14 @@ message LPRLPRFillRule {
 }
 
 message LPRLPRMapRule {
-  repeated uint32 plateTypeIndexes = 1;
+  repeated uint32 plateTypeIndexes = 1 [features.repeated_field_encoding = EXPANDED];
   repeated LPRTargetChar targetChars = 2;
   repeated LPRValueMapping valueMappings = 3;
   LPRLicensePlateStructure mrLicensePlateStructure = 200;
 }
 
 message LPRLPRPickupRule {
-  repeated uint32 plateTypeIndexes = 1;
+  repeated uint32 plateTypeIndexes = 1 [features.repeated_field_encoding = EXPANDED];
   repeated LPRTargetChar pickupChars = 2;
   LPRLicensePlateStructure prLicensePlateStructure = 200;
 }
@@ -23996,7 +23996,7 @@ message LPRRegion {
 }
 
 message LPRRegionInfo {
-  repeated LPRRegionInfoRoutingRequiredFields routingRequiredFields = 2;
+  repeated LPRRegionInfoRoutingRequiredFields routingRequiredFields = 2 [features.repeated_field_encoding = EXPANDED];
   repeated string validPowerTypeKeys = 3;
   repeated string validVehicleTypeKeys = 4;
   string licensePlateTemplate = 5;
@@ -24023,8 +24023,8 @@ message LPRTargetChar {
 }
 
 message LPRTimeCondition {
-  repeated LPRTimeConditionDayOfWeeks dayOfWeeks = 1;
-  repeated uint32 dayOfMonths = 2;
+  repeated LPRTimeConditionDayOfWeeks dayOfWeeks = 1 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 dayOfMonths = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LPRUser {
@@ -24140,7 +24140,7 @@ message LocalTime {
 }
 
 message LocalizationCapabilities {
-  repeated LocalizationCapabilitiesSupportedPhoneticTypes supportedPhoneticTypes = 1;
+  repeated LocalizationCapabilitiesSupportedPhoneticTypes supportedPhoneticTypes = 1 [features.repeated_field_encoding = EXPANDED];
   bool supportsLocalizedTrafficControlIcons = 2;
 }
 
@@ -24345,7 +24345,7 @@ message LogMsgEventCommuteWindow {
 }
 
 message LogMsgEventCuratedCollectionStats {
-  repeated uint64 savedCollectionMuids = 1;
+  repeated uint64 savedCollectionMuids = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LogMsgEventCuratedCollectionUsage {
@@ -24453,7 +24453,7 @@ message LogMsgEventGridDurationEndStateErrorInfo {
 }
 
 message LogMsgEventHardStop {
-  repeated uint32 digits = 1;
+  repeated uint32 digits = 1 [features.repeated_field_encoding = EXPANDED];
   repeated string cities = 2;
   double score = 3;
 }
@@ -24736,7 +24736,7 @@ message LogMsgEventTelemetric {
 
 message LogMsgEventThermalPressure {
   uint32 thermalPressure = 1;
-  repeated MapFeature disableMapFeatures = 2;
+  repeated MapFeature disableMapFeatures = 2 [features.repeated_field_encoding = EXPANDED];
   NavMapType navMapType = 3;
   LogMsgEventThermalPressureCollectionTrigger collectionTrigger = 4;
   ChargingState chargingState = 5;
@@ -24914,7 +24914,7 @@ message LogMsgStateARPRatingSubmission {
 
 message LogMsgStateAccount {
   bool signedIntoIcloud = 1;
-  repeated LogMsgStateAccountPossibleActions possibleActions = 2;
+  repeated LogMsgStateAccountPossibleActions possibleActions = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LogMsgStateActionButtonDetails {
@@ -24938,8 +24938,8 @@ message LogMsgStateCuratedCollection {
   PublisherDetails publisherDetails = 1;
   CollectionDetails collectionDetails = 2;
   LogMsgStateCuratedCollectionPlacecardType placecardType = 3;
-  repeated LogMsgStateCuratedCollectionPossibleActions possibleActions = 4;
-  repeated LogMsgStateCuratedCollectionImpossibleActions impossibleActions = 5;
+  repeated LogMsgStateCuratedCollectionPossibleActions possibleActions = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated LogMsgStateCuratedCollectionImpossibleActions impossibleActions = 5 [features.repeated_field_encoding = EXPANDED];
   uint32 verticalIndex = 6;
   uint32 horizontalIndex = 7;
   int32 localSearchProviderID = 8;
@@ -25171,12 +25171,12 @@ message LogMsgStatePairedDevice {
 
 message LogMsgStatePlaceCard {
   PlaceActionDetails placeActionDetails = 1;
-  repeated LogMsgStatePlaceCardPossibleActions possibleActions = 2;
-  repeated LogMsgStatePlaceCardUnactionableUiElements unactionableUiElements = 3;
+  repeated LogMsgStatePlaceCardPossibleActions possibleActions = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated LogMsgStatePlaceCardUnactionableUiElements unactionableUiElements = 3 [features.repeated_field_encoding = EXPANDED];
   string placecardCategory = 4;
   LogMsgStatePlaceCardPlacecardType placecardType = 5;
   bool transitAdvisoryBanner = 6;
-  repeated uint64 containedChildrenPois = 7;
+  repeated uint64 containedChildrenPois = 7 [features.repeated_field_encoding = EXPANDED];
   repeated PlaceCardModule modules = 8;
   repeated RevealedPlaceCardModule revealedModules = 9;
   repeated string commingledRichProviderIds = 10;
@@ -25188,7 +25188,7 @@ message LogMsgStatePlaceRequest {
 }
 
 message LogMsgStatePlaceSummaryLayout {
-  repeated uint64 muids = 1;
+  repeated uint64 muids = 1 [features.repeated_field_encoding = EXPANDED];
   repeated TrailingEntityActionDetails trailingEntityActionDetails = 2;
   repeated DynamicContextHyperlinkDetails dynamicContextHyperlinkDetails = 3;
 }
@@ -25260,7 +25260,7 @@ message LogMsgStateTransitStep {
 }
 
 message LogMsgStateUGCPhoto {
-  repeated LogMsgStateUGCPhotoSources photoSources = 1;
+  repeated LogMsgStateUGCPhotoSources photoSources = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LogMsgStateUser {
@@ -25462,7 +25462,7 @@ message MapServiceTraits {
   string appMajorVersion = 4;
   string appMinorVersion = 5;
   Location deviceLocation = 6;
-  repeated MapServiceTraitsTransportTypes transportTypes = 7;
+  repeated MapServiceTraitsTransportTypes transportTypes = 7 [features.repeated_field_encoding = EXPANDED];
   MapRegion mapRegion = 8;
   repeated string deviceDisplayLanguages = 9;
   string deviceKeyboardLocale = 10;
@@ -25493,9 +25493,9 @@ message MapServiceTraits {
   AutomobileOptions automobileOptions = 39;
   TransitOptions transitOptions = 40;
   WalkingOptions walkingOptions = 41;
-  repeated CarEngineType engineTypes = 42;
+  repeated CarEngineType engineTypes = 42 [features.repeated_field_encoding = EXPANDED];
   bool supportDirectionIntentSearch = 44;
-  repeated ResolvedItemType knownClientResolvedTypes = 45;
+  repeated ResolvedItemType knownClientResolvedTypes = 45 [features.repeated_field_encoding = EXPANDED];
   bool wantsBrandIcon = 46;
   PDVenueIdentifier venueIdentifier = 47;
   bool supportDymSuggestion = 48;
@@ -25510,26 +25510,26 @@ message MapServiceTraits {
   bool appDarkMode = 57;
   bool supportsBrandFallback = 58;
   MapServiceTraitsRequestPurpose requestPurpose = 59;
-  repeated MapServiceTraitsSupportedAutocompleteListTypes supportedAutocompleteListTypes = 60;
+  repeated MapServiceTraitsSupportedAutocompleteListTypes supportedAutocompleteListTypes = 60 [features.repeated_field_encoding = EXPANDED];
   bool isSettlement = 61;
   TraitsTransitScheduleFilter transitTripStopTimeFilter = 62;
   bool supportClientRankingFeatureMetadata = 63;
-  repeated MapServiceTraitsSupportedChildActions supportedChildActions = 64;
+  repeated MapServiceTraitsSupportedChildActions supportedChildActions = 64 [features.repeated_field_encoding = EXPANDED];
   bool supportChildItems = 65;
   bool isRefund = 66;
   bool autocompleteRequestSupportsSectionHeader = 67;
-  repeated MapServiceTraitsSupportedAutocompleteResultCellTypes supportedAutocompleteResultCellTypes = 68;
+  repeated MapServiceTraitsSupportedAutocompleteResultCellTypes supportedAutocompleteResultCellTypes = 68 [features.repeated_field_encoding = EXPANDED];
   bool supportAutocompleteRapAffordance = 69;
   MapServiceTraitsNavigationTransportType navigationTransportType = 70;
   CyclingOptions cyclingOptions = 71;
   uint32 ratingsCount = 72;
   repeated PDEvChargingPort evChargingPorts = 73;
   bool isWidgetRequest = 74;
-  repeated MapServiceTraitsSupportedSearchTierTypes supportedSearchTierTypes = 75;
+  repeated MapServiceTraitsSupportedSearchTierTypes supportedSearchTierTypes = 75 [features.repeated_field_encoding = EXPANDED];
   uint32 auxiliaryTierNumResults = 76;
   uint32 placeSummaryRevision = 77;
   double isTourist = 78;
-  repeated MapServiceTraitsKnownRefinementTypes knownRefinementTypes = 79;
+  repeated MapServiceTraitsKnownRefinementTypes knownRefinementTypes = 79 [features.repeated_field_encoding = EXPANDED];
   bool supportAutocompletePublisherResults = 80;
   bool supportAutocompleteGuideResults = 81;
   PDViewportInfo previousSearchViewport = 82;
@@ -25538,7 +25538,7 @@ message MapServiceTraits {
   uint32 relatedPlaceItemCount = 85;
   MapServiceTraitsSearchRequestType searchRequestType = 86;
   string currentLocaleCurrencySymbol = 87;
-  repeated MapServiceTraitsSupportedPlaceSummaryFormatTypes supportedPlaceSummaryFormatTypes = 88;
+  repeated MapServiceTraitsSupportedPlaceSummaryFormatTypes supportedPlaceSummaryFormatTypes = 88 [features.repeated_field_encoding = EXPANDED];
   MapServiceTraitsAutocompleteOriginationType autocompleteOriginationType = 89;
   LatLng autocompleteOriginationPreviousLatlng = 90;
   MapServiceTraitsSearchOriginationType searchOriginationType = 91;
@@ -25596,7 +25596,7 @@ message MarcoLiteUsageState {
 message MatchedToken {
   string matchedToken = 1;
   int32 geoType = 2;
-  repeated uint64 geoIds = 3;
+  repeated uint64 geoIds = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message MeasurementData {
@@ -25895,7 +25895,7 @@ message PBTransitIncidentEntity {
 }
 
 message PBTransitIncidentEntityFilter {
-  repeated uint64 nextStopMuids = 1;
+  repeated uint64 nextStopMuids = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PBTransitLine {
@@ -25930,7 +25930,7 @@ message PBTransitPaymentMethod {
 }
 
 message PBTransitPaymentMethodSuggestion {
-  repeated uint32 paymentMethodIndexs = 1;
+  repeated uint32 paymentMethodIndexs = 1 [features.repeated_field_encoding = EXPANDED];
   PBTransitPaymentMethodSuggestionDetails paymentMethodSuggestionDetails = 2;
   PaymentMethodPurpose purpose = 3;
   PaymentSuggestionType type = 4;
@@ -25947,7 +25947,7 @@ message PBTransitPaymentMethodSuggestionDetails {
 
 message PBTransitRoutingIncidentMessage {
   string routingMessage = 1;
-  repeated uint32 transitIncidentIndexs = 2;
+  repeated uint32 transitIncidentIndexs = 2 [features.repeated_field_encoding = EXPANDED];
   uint32 routingIncidentMessageIndex = 2047;
 }
 
@@ -26050,7 +26050,7 @@ message PDActionData {
 }
 
 message PDActionDataFilter {
-  repeated PDActionDataFilterLinkType linkTypes = 1;
+  repeated PDActionDataFilterLinkType linkTypes = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDActionLink {
@@ -26160,7 +26160,7 @@ message PDAmenitiesFilter {
 }
 
 message PDAmenityRibbonItem {
-  repeated uint32 amenityItemIndexs = 1;
+  repeated uint32 amenityItemIndexs = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDAmenityValue {
@@ -26323,9 +26323,9 @@ message PDAutocompleteEntryQuery {
 }
 
 message PDAutocompleteFilter {
-  repeated PDAutocompleteFilterRequestedEntryTypes requestedEntryTypes = 1;
+  repeated PDAutocompleteFilterRequestedEntryTypes requestedEntryTypes = 1 [features.repeated_field_encoding = EXPANDED];
   PDPoiIconCategoryFilter poiIconCategoryFilter = 2;
-  repeated PDAutocompleteFilterPlaceTypeFilters placeTypeFilters = 3;
+  repeated PDAutocompleteFilterPlaceTypeFilters placeTypeFilters = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDAutocompleteOriginationInfo {
@@ -26355,7 +26355,7 @@ message PDAutocompleteParameters {
   bool supportAutocompleteSessionData = 14;
   PDAutocompleteSessionData autocompleteSessionData = 15;
   PDAutocompleteParametersCollectionOnly collectionOnly = 16;
-  repeated ResolvedItemType supportedClientResolvedTypeWithSetupPrompts = 17;
+  repeated ResolvedItemType supportedClientResolvedTypeWithSetupPrompts = 17 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDAutocompleteParametersAddressOnly {
@@ -26384,18 +26384,18 @@ message PDAutocompleteParametersAllEntriesWithBrowse {
   bool supportDirectionIntentSuggestions = 10;
   PDRetainedSearchMetadata retainedSearch = 11;
   bool supportUnresolvedDirectionIntent = 12;
-  repeated PDAutocompleteParametersAllEntriesWithBrowseSupportedListTypes supportedListTypes = 13;
+  repeated PDAutocompleteParametersAllEntriesWithBrowseSupportedListTypes supportedListTypes = 13 [features.repeated_field_encoding = EXPANDED];
   PDAutocompleteEntry querySuggestionEntry = 14;
   bool supportClientRankingFeatureMetadata = 15;
   int32 maxQueryBuilderSuggestions = 16;
   bool supportSectionHeader = 17;
-  repeated AutocompleteResultCellType supportedAutocompleteResultCellTypes = 18;
+  repeated AutocompleteResultCellType supportedAutocompleteResultCellTypes = 18 [features.repeated_field_encoding = EXPANDED];
   bool supportRapAffordance = 19;
-  repeated ResultRefinement knownRefinementTypes = 20;
+  repeated ResultRefinement knownRefinementTypes = 20 [features.repeated_field_encoding = EXPANDED];
   PDAutocompleteParametersAllEntriesWithBrowsePlaceSummaryRevision placeSummaryRevision = 21;
-  repeated PlaceSummaryFormatType supportedPlaceSummaryFormatTypes = 22;
+  repeated PlaceSummaryFormatType supportedPlaceSummaryFormatTypes = 22 [features.repeated_field_encoding = EXPANDED];
   PDSSearchEvChargingParameters evChargingParameters = 23;
-  repeated AutocompleteResultHighlightType supportedHighlightTypes = 24;
+  repeated AutocompleteResultHighlightType supportedHighlightTypes = 24 [features.repeated_field_encoding = EXPANDED];
   PDAutocompleteOriginationInfo autocompleteOriginationInfo = 25;
   bool supportClientRankingCompositeFeatures = 26;
   bool supportStructuredRapAffordance = 27;
@@ -26460,7 +26460,7 @@ message PDAutocompletePlaceContextMetadata {
   string matchedDisplayName = 1;
   bool isDefaultName = 2;
   bool isProminentResult = 3;
-  repeated ClientizationFeature clientizationFeatures = 4;
+  repeated ClientizationFeature clientizationFeatures = 4 [features.repeated_field_encoding = EXPANDED];
   string matchedDisplayNameLanguageCode = 5;
   bool shouldSuppressDirectionsAction = 6;
   bool isLookAroundActionAllowed = 7;
@@ -26555,7 +26555,7 @@ message PDBatchReverseGeocodeResult {
 
 message PDBatchReverseGeocodingParameters {
   repeated Location assetLocations = 1;
-  repeated PDBatchReverseGeocodingParametersAdditionalPlaceTypes additionalPlaceTypes = 2;
+  repeated PDBatchReverseGeocodingParametersAdditionalPlaceTypes additionalPlaceTypes = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDBatchReverseGeocodingResult {
@@ -26655,7 +26655,7 @@ message PDBusinessHoursFilter {
 }
 
 message PDBusinessInfosModuleConfiguration {
-  repeated uint32 factoidItemIndexs = 1;
+  repeated uint32 factoidItemIndexs = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDButtonItem {
@@ -26683,7 +26683,7 @@ message PDCameraMetadata {
   int32 imageHeight = 3;
   PDLensProjection lensProjection = 4;
   PDOrientedPosition position = 5;
-  repeated uint32 textureIds = 6;
+  repeated uint32 textureIds = 6 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDCameraPathFrame {
@@ -26791,16 +26791,16 @@ message PDCategorySearchParameters {
   PDRecentRouteInfo recentRouteInfo = 8;
   bool supportCategorySearchResultSection = 9;
   PDSSearchEvChargingParameters evChargingParameters = 10;
-  repeated RelatedEntitySectionType supportedRelatedEntitySectionTypes = 21;
+  repeated RelatedEntitySectionType supportedRelatedEntitySectionTypes = 21 [features.repeated_field_encoding = EXPANDED];
   PDETAFilter etaFilter = 22;
-  repeated SearchTierMetadata supportedSearchTierTypes = 23;
+  repeated SearchTierMetadata supportedSearchTierTypes = 23 [features.repeated_field_encoding = EXPANDED];
   uint32 auxiliaryTierNumResults = 24;
   PDResultRefinementQuery resultRefinementQuery = 25;
-  repeated ResultRefinement knownRefinementTypes = 26;
+  repeated ResultRefinement knownRefinementTypes = 26 [features.repeated_field_encoding = EXPANDED];
   PDCategorySearchParametersPlaceSummaryRevision placeSummaryRevision = 27;
   PDViewportInfo previousSearchViewport = 28;
-  repeated PlaceSummaryFormatType supportedPlaceSummaryFormatTypes = 29;
-  repeated SearchSectionType supportedSearchSectionTypes = 30;
+  repeated PlaceSummaryFormatType supportedPlaceSummaryFormatTypes = 29 [features.repeated_field_encoding = EXPANDED];
+  repeated SearchSectionType supportedSearchSectionTypes = 30 [features.repeated_field_encoding = EXPANDED];
   bool supportSearchEnrichment = 31;
   bool supportStructuredRapAffordance = 32;
   PDSearchOriginationInfo searchOriginationInfo = 33;
@@ -26886,15 +26886,15 @@ message PDClientMetadata {
   repeated Location deviceHistoricalLocations = 15;
   PDClientMetadataRequiredVersion requiredVersion = 16;
   string debugApiKey = 17;
-  repeated ResolvedItemType knownClientResolvedTypeDeprecateds = 18;
+  repeated ResolvedItemType knownClientResolvedTypeDeprecateds = 18 [features.repeated_field_encoding = EXPANDED];
   bool enablePreflightVenues = 19;
-  repeated ResolvedItemType knownClientResolvedTypes = 20;
+  repeated ResolvedItemType knownClientResolvedTypes = 20 [features.repeated_field_encoding = EXPANDED];
   repeated string businessChatPreflightIdentifiers = 21;
   ClientRevision clientRevision = 22;
   LocalizationCapabilities localizationCapabilities = 23;
   string deviceSku = 24;
   bool siriUserConsentsForAnalysis = 25;
-  repeated MapsResultType supportedMapsResultTypes = 26;
+  repeated MapsResultType supportedMapsResultTypes = 26 [features.repeated_field_encoding = EXPANDED];
   PDMapsSuggestionsTouristInfo mapsSuggestionsTouristInfo = 27;
   repeated ClientRevision clientRevisions = 28;
   string preferredDisplayCurrencySymbol = 29;
@@ -27240,7 +27240,7 @@ message PDDepartureSequence {
   repeated PDTimeRange operatingHours = 11;
   string directionNameString = 12;
   string headsignString = 13;
-  repeated uint64 nextStopIds = 14;
+  repeated uint64 nextStopIds = 14 [features.repeated_field_encoding = EXPANDED];
   PBTransitArtwork artwork = 15;
   uint64 transitId = 16;
   string displayName = 17;
@@ -27248,7 +27248,7 @@ message PDDepartureSequence {
 }
 
 message PDDepartureSequenceContainer {
-  repeated uint64 departureSequenceIndexs = 1;
+  repeated uint64 departureSequenceIndexs = 1 [features.repeated_field_encoding = EXPANDED];
   repeated PDTransitLabel labels = 2;
   bool isSignificant = 3;
   string displayName = 4;
@@ -27284,7 +27284,7 @@ message PDETA {
 }
 
 message PDETAFilter {
-  repeated PDETAFilterTransportTypes transportTypes = 1;
+  repeated PDETAFilterTransportTypes transportTypes = 1 [features.repeated_field_encoding = EXPANDED];
   bool includeHistoricTravelTime = 2;
   AutomobileOptions automobileOptions = 3;
   TransitOptions transitOptions = 4;
@@ -27296,7 +27296,7 @@ message PDETAFilter {
 }
 
 message PDEnhancedPlacement {
-  repeated uint64 buildingIds = 1;
+  repeated uint64 buildingIds = 1 [features.repeated_field_encoding = EXPANDED];
   double elevation = 2;
   float buildingHeight = 3;
   float buildingFaceAzimuth = 4;
@@ -27354,7 +27354,7 @@ message PDEntity {
   PDEntityPlaceDisplayType placeDisplayType = 19;
   uint64 brandMuid = 20;
   int32 capacity = 21;
-  repeated SpatialPlaceLookupCategory placeLookupCategorys = 22;
+  repeated SpatialPlaceLookupCategory placeLookupCategorys = 22 [features.repeated_field_encoding = EXPANDED];
   LocalizedString secondaryName = 23;
   LocalizedString secondarySpokenName = 24;
   StyleAttributes styleAttributes = 25;
@@ -27396,7 +27396,7 @@ message PDExtendedGeoLookupParameters {
   Address preserveFields = 1;
   uint64 primaryFeatureGeoId = 2;
   LatLng primaryFeatureLocation = 3;
-  repeated uint64 intersectingFeatureGeoIds = 4;
+  repeated uint64 intersectingFeatureGeoIds = 4 [features.repeated_field_encoding = EXPANDED];
   bool isLatlngRequest = 5;
   uint64 streetSubPostalGeoId = 6;
   string dataSourceId = 7;
@@ -27413,7 +27413,7 @@ message PDExtendedGeoLookupResult {
 message PDExtensionParams {
   string vendorId = 1;
   string externalItemId = 2;
-  repeated ExtensionType extensionTypes = 3;
+  repeated ExtensionType extensionTypes = 3 [features.repeated_field_encoding = EXPANDED];
   string appAdamId = 4;
 }
 
@@ -27430,7 +27430,7 @@ message PDExternalActionDetail {
 }
 
 message PDExternalActionFilter {
-  repeated ComponentType componentTypes = 1;
+  repeated ComponentType componentTypes = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDExternalTransitLookupParameters {
@@ -27487,7 +27487,7 @@ message PDFeatureIdGeocodingParameters {
   uint64 featureId = 1;
   LatLng location = 2;
   PDFeatureIdGeocodingParametersFormattedAddressType formattedAddressType = 3;
-  repeated uint64 encryptedFeatureIds = 4;
+  repeated uint64 encryptedFeatureIds = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDFeatureIdGeocodingResult {
@@ -27547,9 +27547,9 @@ message PDGroundDataBuild {
   uint32 dataFormatVersion = 5;
   PDGroundDataBuildType type = 6;
   float heightAboveGroundM = 7;
-  repeated PDGroundDataBuildCapabilitys capabilitys = 8;
+  repeated PDGroundDataBuildCapabilitys capabilitys = 8 [features.repeated_field_encoding = EXPANDED];
   uint32 bucketId = 9;
-  repeated uint32 lodWithTextures = 10;
+  repeated uint32 lodWithTextures = 10 [features.repeated_field_encoding = EXPANDED];
   uint32 metricsVersion = 11;
   uint32 dataOutputVersion = 12;
 }
@@ -27625,8 +27625,8 @@ message PDGuidesHomeFixedSection {
 }
 
 message PDGuidesHomeParameters {
-  repeated GuidesHomeFixedSectionType supportedFixedSectionTypes = 1;
-  repeated GuidesHomeRepeatableSectionType supportedRepeatableSectionTypes = 2;
+  repeated GuidesHomeFixedSectionType supportedFixedSectionTypes = 1 [features.repeated_field_encoding = EXPANDED];
+  repeated GuidesHomeRepeatableSectionType supportedRepeatableSectionTypes = 2 [features.repeated_field_encoding = EXPANDED];
   PDViewportInfo viewportInfo = 3;
   PDGuidesLocationEntry guidesLocationEntry = 4;
   PDGuidesHomeResultFilter resultFilter = 5;
@@ -27666,7 +27666,7 @@ message PDGuidesLocationEntry {
   PDGuidesLocationEntryTypeWorldWide worldwide = 4;
   MapRegion mapRegion = 5;
   LatLng center = 6;
-  repeated uint64 geoIdCandidates = 7;
+  repeated uint64 geoIdCandidates = 7 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDGuidesLocationEntryTypeWorldWide {
@@ -27690,7 +27690,7 @@ message PDHeaderButtonsConfiguration {
 }
 
 message PDHours {
-  repeated PDHoursDays days = 1;
+  repeated PDHoursDays days = 1 [features.repeated_field_encoding = EXPANDED];
   repeated PDLocalTimeRange timeRanges = 2;
   PDHoursThreshold hoursThreshold = 3;
 }
@@ -27926,7 +27926,7 @@ message PDMapsResult {
 }
 
 message PDMapsSearchHomeParameters {
-  repeated PDMapsSearchHomeParametersSupportedSectionTypes supportedSectionTypes = 1;
+  repeated PDMapsSearchHomeParametersSupportedSectionTypes supportedSectionTypes = 1 [features.repeated_field_encoding = EXPANDED];
   PDSearchBrowseCategorySuggestionParameters searchBrowseCategorySuggestionParameters = 2;
   PDCollectionSuggestionParameters collectionSuggestionParameters = 3;
   PDPublisherSuggestionParameters publisherSuggestionParameters = 4;
@@ -27971,11 +27971,11 @@ message PDMerchantBrandLookupResponse {
   uint64 muid = 1;
   string scope = 2;
   repeated string geoHashs = 3;
-  repeated uint64 childBrandMuids = 4;
-  repeated uint64 variantBrandMuids = 5;
+  repeated uint64 childBrandMuids = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated uint64 variantBrandMuids = 5 [features.repeated_field_encoding = EXPANDED];
   bool isPrimaryVariant = 6;
   uint64 relatedGlobalBrandMuid = 7;
-  repeated uint64 abstractOfBrandMuids = 8;
+  repeated uint64 abstractOfBrandMuids = 8 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDMerchantInformation {
@@ -28214,7 +28214,7 @@ message PDPhotoPosition {
   PDGeographicCoordinate positionGeo = 6;
   uint32 buildTableIndex = 7;
   PDGroundDataBuild build = 8;
-  repeated uint32 cameraMetadataIndexs = 9;
+  repeated uint32 cameraMetadataIndexs = 9 [features.repeated_field_encoding = EXPANDED];
   PDOrientedTilePosition tilePosition = 10;
   TileCoordinate parentTile = 11;
   PDRigMetrics rigMetrics = 12;
@@ -28402,7 +28402,7 @@ message PDPlaceInfosModuleConfiguration {
 
 message PDPlaceLookupParameters {
   int32 resultProviderId = 1;
-  repeated uint64 muids = 2;
+  repeated uint64 muids = 2 [features.repeated_field_encoding = EXPANDED];
   bool enablePartialClientization = 4;
   repeated PlaceIdentifier identifiers = 200;
 }
@@ -28587,7 +28587,7 @@ message PDPlaceSummaryLayoutTemplateEntry {
   PlatformType platformType = 1;
   repeated PDPlaceSummaryLayoutLine lines = 2;
   PlaceSummaryLayoutTrailingEntityType trailingEntityType = 3;
-  repeated PlaceSummaryLayoutTrailingEntityType trailingEntityTypeOrders = 4;
+  repeated PlaceSummaryLayoutTrailingEntityType trailingEntityTypeOrders = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDPlaceSummaryLayoutUnit {
@@ -28662,7 +28662,7 @@ message PDPlaceSummaryLayoutUnitHighlightMain {
 
 message PDPlaceSummaryLayoutUnitHours {
   PDPlaceSummaryLayoutUnitHoursType type = 1;
-  repeated PDPlaceSummaryLayoutUnitHoursAllowedHoursStates allowedHoursStates = 2;
+  repeated PDPlaceSummaryLayoutUnitHoursAllowedHoursStates allowedHoursStates = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDPlaceSummaryLayoutUnitName {
@@ -28727,7 +28727,7 @@ message PDPlaceSummaryLayoutUnitUserGeneratedGuides {
 message PDPlaceSummaryResultLayoutTemplatePair {
   repeated PDMapsIdentifier mapsIds = 1;
   PDPlaceSummaryLayoutTemplate layoutTemplate = 2;
-  repeated PDPlaceSummaryResultLayoutTemplatePairPlaceTypes placeTypes = 3;
+  repeated PDPlaceSummaryResultLayoutTemplatePairPlaceTypes placeTypes = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDPlacecardEnrichmentParameters {
@@ -28785,8 +28785,8 @@ message PDPoiEventFilter {
 }
 
 message PDPoiIconCategoryFilter {
-  repeated uint32 includeCategoryFilters = 1;
-  repeated uint32 excludeCategoryFilters = 2;
+  repeated uint32 includeCategoryFilters = 1 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 excludeCategoryFilters = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDPopularNearbyResult {
@@ -28994,7 +28994,7 @@ message PDRelatedEntitySection {
 message PDRelatedPlace {
   repeated PDMapsIdentifier mapsIds = 1;
   RelatedPlace type = 2;
-  repeated uint32 areaHighlightIndexs = 3;
+  repeated uint32 areaHighlightIndexs = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDRelatedPlaceFilter {
@@ -29193,7 +29193,7 @@ message PDResultSnippetFilter {
   int32 maxChildPlaces = 1;
   bool supportChildItems = 2;
   int32 maxChildItems = 3;
-  repeated ChildActionType supportedChildActions = 4;
+  repeated ChildActionType supportedChildActions = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDRetainedSearchMetadata {
@@ -29231,7 +29231,7 @@ message PDRibbonItem {
 }
 
 message PDRigMetrics {
-  repeated uint32 occlusionScores = 1;
+  repeated uint32 occlusionScores = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDRoadAccessInfo {
@@ -29422,7 +29422,7 @@ message PDSearchBrowseCategorySuggestionParameters {
   int32 minimumNumberOfCategories = 3;
   bool isCarplayRequest = 4;
   SearchBrowseCategorySuggestionType suggestionType = 5;
-  repeated CarEngineType engineTypes = 6;
+  repeated CarEngineType engineTypes = 6 [features.repeated_field_encoding = EXPANDED];
   PDVenueIdentifier venueFilter = 7;
   bool isFromNoQueryState = 8;
   bool isFlatCategoryListRequest = 9;
@@ -29459,7 +29459,7 @@ message PDSearchCategoryIntent {
 
 message PDSearchChainInfo {
   uint64 muid = 1;
-  repeated PDSearchChainInfoRelationshipTypes relationshipTypes = 2;
+  repeated PDSearchChainInfoRelationshipTypes relationshipTypes = 2 [features.repeated_field_encoding = EXPANDED];
   string brandDisplayName = 3;
   PDSearchBrandDensity brandDensity = 4;
 }
@@ -29475,7 +29475,7 @@ message PDSearchChainIntent {
   bool isFromBrandProfile = 8;
   repeated string categoryIds = 9;
   repeated PDSearchKeyValueDoublePair featureMaps = 10;
-  repeated uint64 brandMuids = 11;
+  repeated uint64 brandMuids = 11 [features.repeated_field_encoding = EXPANDED];
   repeated PDSearchBrandRelationship relatedBrands = 12;
   repeated PDSearchChainInfo brandRelationshipInfos = 13;
   repeated string prefCategoryIds = 14;
@@ -29784,17 +29784,17 @@ message PDSearchParameters {
   bool supportSearchResultSection = 18;
   SortDirection sortDirection = 19;
   PDSInferredSignals inferredSignals = 20;
-  repeated RelatedEntitySectionType supportedRelatedEntitySectionTypes = 21;
+  repeated RelatedEntitySectionType supportedRelatedEntitySectionTypes = 21 [features.repeated_field_encoding = EXPANDED];
   PDSSearchEvChargingParameters evChargingParameters = 22;
   PDETAFilter etaFilter = 23;
-  repeated SearchTierMetadata supportedSearchTierTypes = 24;
+  repeated SearchTierMetadata supportedSearchTierTypes = 24 [features.repeated_field_encoding = EXPANDED];
   uint32 auxiliaryTierNumResults = 25;
   PDResultRefinementQuery resultRefinementQuery = 26;
-  repeated ResultRefinement knownRefinementTypes = 27;
+  repeated ResultRefinement knownRefinementTypes = 27 [features.repeated_field_encoding = EXPANDED];
   PDSearchParametersPlaceSummaryRevision placeSummaryRevision = 28;
   PDViewportInfo previousSearchViewport = 29;
-  repeated PlaceSummaryFormatType supportedPlaceSummaryFormatTypes = 30;
-  repeated SearchSectionType supportedSearchSectionTypes = 31;
+  repeated PlaceSummaryFormatType supportedPlaceSummaryFormatTypes = 30 [features.repeated_field_encoding = EXPANDED];
+  repeated SearchSectionType supportedSearchSectionTypes = 31 [features.repeated_field_encoding = EXPANDED];
   bool supportSearchEnrichment = 32;
   PDSearchOriginationInfo searchOriginationInfo = 33;
   bool supportStructuredRapAffordance = 34;
@@ -29838,11 +29838,11 @@ message PDSearchQueryCompletionMetadata {
   string completion = 1;
   float score = 2;
   int64 popularity = 3;
-  repeated int32 tags = 4;
+  repeated int32 tags = 4 [features.repeated_field_encoding = EXPANDED];
   float tagConfidence = 5;
   bool isCompletematch = 6;
   repeated string tokens = 7;
-  repeated CompletionSourceType completionSourceTypes = 8;
+  repeated CompletionSourceType completionSourceTypes = 8 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchQueryDirectionsIntentMetadata {
@@ -29863,7 +29863,7 @@ message PDSearchQueryDymMetadata {
 
 message PDSearchQueryEmbeddingMetadata {
   string embeddingId = 1;
-  repeated float embeddings = 2;
+  repeated float embeddings = 2 [features.repeated_field_encoding = EXPANDED];
   repeated PDSearchStringStringPair modelVersions = 3;
 }
 
@@ -29871,8 +29871,8 @@ message PDSearchQueryFuzzyMatchV2Metadata {
   repeated string rewrittenQueries = 1;
   bool useFuzzyV1 = 2;
   bool pruneFuzzyV2Results = 3;
-  repeated double fuzzyV2Scores = 4;
-  repeated PDSearchQueryFuzzyMatchV2MetadataRewriteTypes rewriteTypes = 5;
+  repeated double fuzzyV2Scores = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated PDSearchQueryFuzzyMatchV2MetadataRewriteTypes rewriteTypes = 5 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchQueryGeoMetadata {
@@ -29885,14 +29885,14 @@ message PDSearchQueryGeoNormalizerMetadata {
   string poPox = 3;
   string mailStop = 4;
   string unitTypeId = 5;
-  repeated PDSearchQueryGeoNormalizerMetadataNormalizers normalizers = 6;
+  repeated PDSearchQueryGeoNormalizerMetadataNormalizers normalizers = 6 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchQueryGeoTagMetadata {
-  repeated PDSearchQueryGeoTagMetadataTagSources tagSources = 1;
+  repeated PDSearchQueryGeoTagMetadataTagSources tagSources = 1 [features.repeated_field_encoding = EXPANDED];
   PDSearchGeoParsingResult geoParsingResult = 2;
   repeated PDSearchStringGeoTypesPair geoTypeMaps = 3;
-  repeated PDSearchQueryGeoTagMetadataGeoRewriteTypes geoRewriteTypes = 4;
+  repeated PDSearchQueryGeoTagMetadataGeoRewriteTypes geoRewriteTypes = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchQueryIntent {
@@ -29916,7 +29916,7 @@ message PDSearchQueryIntentMetadata {
   PDSearchQuerySpellCorrectionMetadata querySpellCorrectionMetadata = 9;
   bool isFromDefinitiveQu = 10;
   PDSearchQueryGeoMetadata queryGeoMetadata = 11;
-  repeated PDSearchQueryIntentMetadataIntentSources intentSources = 12;
+  repeated PDSearchQueryIntentMetadataIntentSources intentSources = 12 [features.repeated_field_encoding = EXPANDED];
   PDSearchQuerySynonymMetadata querySynonymMetadata = 13;
   PDSearchQueryDymMetadata queryDymMetadata = 14;
   PDSearchQueryCompletionMetadata queryCompletionMetadata = 15;
@@ -29927,7 +29927,7 @@ message PDSearchQueryIntentMetadata {
   PDSearchQueryTokenizerMetadata queryTokenizerMetadata = 20;
   PDSearchQueryTransliteratorMetadata queryTransliterMetadata = 21;
   PDSearchQueryFuzzyMatchV2Metadata queryFuzzyMatchV2Metadata = 22;
-  repeated PDSearchQueryIntentMetadataRewrittenQueryTypes rewrittenQueryTypes = 23;
+  repeated PDSearchQueryIntentMetadataRewrittenQueryTypes rewrittenQueryTypes = 23 [features.repeated_field_encoding = EXPANDED];
   PDSearchQueryPoiMetadata queryPoiMetadata = 24;
   PDSearchACHintMetadata acHintMetadata = 25;
   PDSearchQueryGeoTagMetadata queryGeoTagMetadata = 26;
@@ -30049,7 +30049,7 @@ message PDSearchResult {
 
 message PDSearchResultsForCategoryEntry {
   PDBrowseCategory category = 1;
-  repeated uint32 placeIndexs = 2;
+  repeated uint32 placeIndexs = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchRewrittenQueryNonPayloadField {
@@ -30144,7 +30144,7 @@ message PDSearchSpellerResponse {
 
 message PDSearchStringGeoTypesPair {
   string key = 1;
-  repeated int32 geoTypeIds = 2;
+  repeated int32 geoTypeIds = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchStringStringPair {
@@ -30229,7 +30229,7 @@ message PDSearchTriggerFeature {
   double lng = 9;
   string displayName = 10;
   int64 localPopularity = 11;
-  repeated CompletionSourceType completionSourceTypes = 12;
+  repeated CompletionSourceType completionSourceTypes = 12 [features.repeated_field_encoding = EXPANDED];
   bool isUseShowOnMapHighlightExtra = 13;
   double similarityScore = 14;
   double w2vSimilarityScore = 15;
@@ -30260,7 +30260,7 @@ message PDSearchZeroKeywordCategorySuggestionResult {
 message PDSearchZeroKeywordEntry {
   uint32 dayOfWeek = 1;
   uint32 hourOfDay = 2;
-  repeated uint32 categoryIndexs = 3;
+  repeated uint32 categoryIndexs = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSearchZeroKeywordWithSearchResultsSuggestionParameters {
@@ -30329,14 +30329,14 @@ message PDSpatialEventLookupParameters {
   LatLng center = 1;
   int32 radius = 2;
   int32 count = 3;
-  repeated SpatialEventLookupCategory categoryFilters = 4;
+  repeated SpatialEventLookupCategory categoryFilters = 4 [features.repeated_field_encoding = EXPANDED];
   PDTimeRange timeRange = 5;
 }
 
 message PDSpatialEventLookupResponse {
   PDMapsIdentifier eventId = 1;
   LatLng center = 2;
-  repeated SpatialEventLookupCategory categorys = 3;
+  repeated SpatialEventLookupCategory categorys = 3 [features.repeated_field_encoding = EXPANDED];
   repeated PDDateTimeRange eventDateTimes = 4;
   Timezone timezone = 5;
   PDMapsIdentifier poiId = 6;
@@ -30355,16 +30355,16 @@ message PDSpatialLookupFilter {
 message PDSpatialLookupResult {
   LatLng center = 1;
   PDBounds bounds = 2;
-  repeated SpatialLookupCategory mappedCategorys = 3;
+  repeated SpatialLookupCategory mappedCategorys = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDSpatialPlaceLookupParameters {
   LatLng center = 1;
   int32 radius = 2;
   int32 count = 3;
-  repeated SpatialPlaceLookupCategory categoryFilters = 4;
-  repeated uint32 includeIconCategoryFilters = 5;
-  repeated uint32 excludeIconCategoryFilters = 6;
+  repeated SpatialPlaceLookupCategory categoryFilters = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 includeIconCategoryFilters = 5 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 excludeIconCategoryFilters = 6 [features.repeated_field_encoding = EXPANDED];
   MapRegion mapRegion = 7;
   PDPoiIconCategoryFilter poiIconCategoryFilter = 8;
   SpatialPlaceLookupRequestVersion spatialPlaceLookupRequestVersion = 9;
@@ -30373,7 +30373,7 @@ message PDSpatialPlaceLookupParameters {
 message PDSpatialPlaceLookupResponse {
   PDMapsIdentifier placeId = 1;
   LatLng center = 2;
-  repeated SpatialPlaceLookupCategory categorys = 3;
+  repeated SpatialPlaceLookupCategory categorys = 3 [features.repeated_field_encoding = EXPANDED];
   PDBounds bounds = 4;
 }
 
@@ -30645,7 +30645,7 @@ message PDTransitSchedule {
 
 message PDTransitScheduleCategory {
   string displayName = 1;
-  repeated uint32 groupIndexs = 2;
+  repeated uint32 groupIndexs = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDTransitScheduleFilter {
@@ -30661,9 +30661,9 @@ message PDTransitScheduleGroup {
   uint32 maxWalkingDistance = 3;
   uint32 minWalkingTime = 4;
   uint32 maxWalkingTime = 5;
-  repeated uint32 departureSequenceIndexs = 6;
-  repeated uint32 departureSequenceContainerIndexs = 7;
-  repeated uint64 incidentIds = 8;
+  repeated uint32 departureSequenceIndexs = 6 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 departureSequenceContainerIndexs = 7 [features.repeated_field_encoding = EXPANDED];
+  repeated uint64 incidentIds = 8 [features.repeated_field_encoding = EXPANDED];
   string pinnedDisplayName = 9;
   PDTransitScheduleGroupType groupType = 10;
 }
@@ -30674,7 +30674,7 @@ message PDTransitScheduleLookupResult {
 
 message PDTransitTripGeometry {
   repeated PDTripLink tripLinks = 1;
-  repeated uint32 tripStepIndexs = 2;
+  repeated uint32 tripStepIndexs = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDTransitTripGeometryFilter {
@@ -30701,7 +30701,7 @@ message PDTransitTripStopTimeFilter {
 }
 
 message PDTransitVehiclePositionParameters {
-  repeated uint64 tripIds = 1;
+  repeated uint64 tripIds = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDTripLink {
@@ -30734,7 +30734,7 @@ message PDVendorAmenitiesFilter {
 message PDVendorIDLink {
   string vendorId = 1;
   string externalItemId = 2;
-  repeated RestaurantReservationType reservationTypes = 3;
+  repeated RestaurantReservationType reservationTypes = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDVendorSpecificPlaceRefinementParameters {
@@ -30757,15 +30757,15 @@ message PDVendorSpecificPlaceRefinementResult {
 
 message PDVenueBuilding {
   uint64 buildingId = 1;
-  repeated uint64 levelIds = 2;
+  repeated uint64 levelIds = 2 [features.repeated_field_encoding = EXPANDED];
   PDVenueLabel label = 3;
   uint64 muid = 4;
-  repeated uint64 directoryGroupingIds = 5;
+  repeated uint64 directoryGroupingIds = 5 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PDVenueContainer {
   uint64 venueId = 1;
-  repeated uint64 buildingIds = 2;
+  repeated uint64 buildingIds = 2 [features.repeated_field_encoding = EXPANDED];
   PDVenueLabel label = 3;
   CategoryBrowseType browseType = 4;
   uint64 muid = 5;
@@ -30787,12 +30787,12 @@ message PDVenueIdentifier {
   uint64 venueId = 1;
   uint64 buildingId = 2;
   uint64 levelId = 3;
-  repeated uint64 sectionIds = 4;
+  repeated uint64 sectionIds = 4 [features.repeated_field_encoding = EXPANDED];
   uint64 unitId = 5;
   uint64 fixtureId = 6;
   int32 levelOrdinal = 7;
   uint64 featureId = 9;
-  repeated uint64 containedBys = 10;
+  repeated uint64 containedBys = 10 [features.repeated_field_encoding = EXPANDED];
   uint64 geminiId = 11;
   uint64 venueGeminiId = 12;
 }
@@ -30916,7 +30916,7 @@ message PhotoInfo {
 message PhotoOptions {
   int32 maxPhotos = 1;
   PhotoOptionsPhotoType photoType = 2;
-  repeated PhotoOptionsPhotoSizes photoSizes = 3;
+  repeated PhotoOptionsPhotoSizes photoSizes = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message PixelPoint {
@@ -30970,7 +30970,7 @@ message PlaceActionDetails {
 
 message PlaceCardModule {
   ModuleType type = 1;
-  repeated ButtonType contents = 2;
+  repeated ButtonType contents = 2 [features.repeated_field_encoding = EXPANDED];
   string metadata = 3;
 }
 
@@ -31045,12 +31045,12 @@ message PlaceSearchFeedbackResponse {
 }
 
 message PlaceSearchRequest {
-  repeated uint64 businessIDs = 2;
+  repeated uint64 businessIDs = 2 [features.repeated_field_encoding = EXPANDED];
   Address address = 3;
   Location location = 4;
   string search = 5;
   MapRegion mapRegion = 6;
-  repeated PlaceSearchRequestAdditionalPlaceTypes additionalPlaceTypes = 7;
+  repeated PlaceSearchRequestAdditionalPlaceTypes additionalPlaceTypes = 7 [features.repeated_field_encoding = EXPANDED];
   bool includePhonetics = 8;
   int32 maxResults = 9;
   SessionID sessionGUID = 12;
@@ -31107,7 +31107,7 @@ message PlaceSearchRequest {
   PlaceSearchRequestKnownAccuracy knownAccuracy = 115;
   bool includeMatchedToken = 117;
   PlaceSearchRequestSearchSource searchSource = 118;
-  repeated PlaceSearchRequestOptionalSuppressionReasons optionalSuppressionReasons = 119;
+  repeated PlaceSearchRequestOptionalSuppressionReasons optionalSuppressionReasons = 119 [features.repeated_field_encoding = EXPANDED];
   LatLng searchLocation = 120;
   bool includeNameForForwardGeocodingResults = 121;
   AdditionalEnabledMarkets additionalEnabledMarkets = 122;
@@ -31141,7 +31141,7 @@ message PolyLocationShiftRequest {
 
 message PolyLocationShiftResponse {
   PolyLocationShiftResponseStatus status = 1;
-  repeated double parameters = 2;
+  repeated double parameters = 2 [features.repeated_field_encoding = EXPANDED];
   double radius = 3;
 }
 
@@ -31204,7 +31204,7 @@ message PublisherAttributionSource {
 }
 
 message PublisherDetails {
-  repeated uint64 publisherIds = 1;
+  repeated uint64 publisherIds = 1 [features.repeated_field_encoding = EXPANDED];
   bool currentlyFollowing = 2;
 }
 
@@ -31241,8 +31241,8 @@ message RPAddressFeedback {
 }
 
 message RPAmenityCorrections {
-  repeated RPAmenityCorrectionsAddedAmenities addedAmenities = 3;
-  repeated RPAmenityCorrectionsRemovedAmenities removedAmenities = 4;
+  repeated RPAmenityCorrectionsAddedAmenities addedAmenities = 3 [features.repeated_field_encoding = EXPANDED];
+  repeated RPAmenityCorrectionsRemovedAmenities removedAmenities = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message RPAppAttestInfo {
@@ -31285,9 +31285,9 @@ message RPClientCapabilities {
 }
 
 message RPContainmentCorrection {
-  repeated uint64 addedMuids = 1;
-  repeated uint64 removedMuids = 2;
-  repeated uint64 originalMuids = 3;
+  repeated uint64 addedMuids = 1 [features.repeated_field_encoding = EXPANDED];
+  repeated uint64 removedMuids = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated uint64 originalMuids = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message RPCorrectedCoordinate {
@@ -31336,7 +31336,7 @@ message RPCorrectedString {
 
 message RPCuratedCollectionContext {
   uint64 curatedCollectionMuid = 1;
-  repeated uint64 placeEntityMuids = 2;
+  repeated uint64 placeEntityMuids = 2 [features.repeated_field_encoding = EXPANDED];
   string originalName = 3;
   string originalUrl = 4;
   string originalDescription = 5;
@@ -31493,7 +31493,7 @@ message RPFeedbackCommonContext {
   RPFeedbackCommonContextPinType pinType = 1;
   RPMapLocation mapLocation = 2;
   repeated RPVisibleTileSet visibleTileSets = 3;
-  repeated RPFeedbackCommonContextUserPaths userPaths = 4;
+  repeated RPFeedbackCommonContextUserPaths userPaths = 4 [features.repeated_field_encoding = EXPANDED];
   double clientCreatedAt = 5;
   repeated RPAuxiliaryControl auxiliaryControls = 6;
   uint64 originatingAuxiliaryControlIndex = 7;
@@ -31651,7 +31651,7 @@ message RPFeedbackFormFieldAnnotations {
 
 message RPFeedbackIdLookupParameters {
   repeated string feedbackIds = 1;
-  repeated FeedbackComponentType feedbackComponentTypes = 2;
+  repeated FeedbackComponentType feedbackComponentTypes = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message RPFeedbackIdLookupResult {
@@ -31765,7 +31765,7 @@ message RPFeedbackPhotoMetadata {
 }
 
 message RPFeedbackQueryParameters {
-  repeated FeedbackComponentType feedbackComponentTypes = 3;
+  repeated FeedbackComponentType feedbackComponentTypes = 3 [features.repeated_field_encoding = EXPANDED];
   RPFilter filter = 4;
   RPFeedbackComponentQueryParameters componentQueryParameters = 5;
 }
@@ -31896,9 +31896,9 @@ message RPFeedbackULongField {
 }
 
 message RPFeedbackULongListField {
-  repeated uint64 addeds = 1;
-  repeated uint64 removeds = 2;
-  repeated uint64 originals = 3;
+  repeated uint64 addeds = 1 [features.repeated_field_encoding = EXPANDED];
+  repeated uint64 removeds = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated uint64 originals = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message RPFeedbackUserInfo {
@@ -31930,7 +31930,7 @@ message RPGroundViewFeedbackContext {
   PDMuninViewState viewState = 2;
   uint32 metadataTileBuildId = 4;
   repeated RPGroundViewImageResource onscreenImageResources = 5;
-  repeated uint64 visiblePlaceMuids = 6;
+  repeated uint64 visiblePlaceMuids = 6 [features.repeated_field_encoding = EXPANDED];
   uint64 imdataId = 7;
   string imageId = 8;
   repeated RPFeatureHandle visibleFeatureHandles = 10;
@@ -31977,7 +31977,7 @@ message RPIncidentLocation {
 }
 
 message RPIncidentUserPath {
-  repeated UserPath userPaths = 1;
+  repeated UserPath userPaths = 1 [features.repeated_field_encoding = EXPANDED];
   bool reportedFromCarplay = 2;
   bool navigationActive = 3;
   RPIncidentUserPathTransportType transportType = 4;
@@ -32094,7 +32094,7 @@ message RPPhotoAttributionPreferencesUpdate {
 }
 
 message RPPhotoAttributionPreferencesUpdateResult {
-  repeated PhotoAttributionPreferencesUpdateError errors = 1;
+  repeated PhotoAttributionPreferencesUpdateError errors = 1 [features.repeated_field_encoding = EXPANDED];
   RPPhotoAttributionPreferences preferences = 2;
 }
 
@@ -32142,7 +32142,7 @@ message RPPlaceRequestResponse {
 
 message RPPoiActivityFeedback {
   PDMapsIdentifier mapsId = 1;
-  repeated uint32 representativeHours = 2;
+  repeated uint32 representativeHours = 2 [features.repeated_field_encoding = EXPANDED];
   bool isDataUseful = 3;
   bool isDataCorrect = 4;
   bool isVisualRepresentationValid = 5;
@@ -32229,7 +32229,7 @@ message RPPostedBy {
 
 message RPProblem {
   uint32 protocolVersion = 1;
-  repeated RPProblemUserPaths userPaths = 2;
+  repeated RPProblemUserPaths userPaths = 2 [features.repeated_field_encoding = EXPANDED];
   RPProblemType problemType = 3;
   RPProblemCorrections problemCorrections = 4;
   RPProblemContext problemContext = 5;
@@ -32459,7 +32459,7 @@ message RPStreetFeedback {
 message RPSuggestedRouteIndex {
   uint32 directionsResponseIndex = 2;
   uint32 directionsResponseSuggestedRoutesIndex = 3;
-  repeated uint32 clusteredRouteRideSelections = 5;
+  repeated uint32 clusteredRouteRideSelections = 5 [features.repeated_field_encoding = EXPANDED];
 }
 
 message RPSuggestionEntry {
@@ -32515,7 +32515,7 @@ message RPThirdPartyPhotoSharingPreferenceUpdate {
 }
 
 message RPThirdPartyPhotoSharingPreferenceUpdateResult {
-  repeated ThirdPartyPhotoSharingPreferenceUpdateError errors = 1;
+  repeated ThirdPartyPhotoSharingPreferenceUpdateError errors = 1 [features.repeated_field_encoding = EXPANDED];
   RPThirdPartyPhotoSharingPreference preference = 2;
 }
 
@@ -32581,7 +32581,7 @@ message RPUserLocationDetails {
 }
 
 message RPUserPath {
-  repeated RPUserPathNativePaths nativePaths = 1;
+  repeated RPUserPathNativePaths nativePaths = 1 [features.repeated_field_encoding = EXPANDED];
   repeated string webPaths = 2;
 }
 
@@ -32641,7 +32641,7 @@ message RecentLocationHistory {
   repeated LatLngE7 relativeLocations = 3;
   uint32 timeResolution = 4;
   uint32 baseDistanceToDestination = 5;
-  repeated int32 relativeDistanceToDestinations = 6;
+  repeated int32 relativeDistanceToDestinations = 6 [features.repeated_field_encoding = EXPANDED];
   uint32 latlngCount = 7;
   bytes encodedLats = 8;
   bytes encodedLngs = 9;
@@ -32718,8 +32718,8 @@ message Resource {
 }
 
 message ResourceFilter {
-  repeated ResourceFilterScale scales = 1;
-  repeated ResourceFilterScenario scenarios = 2;
+  repeated ResourceFilterScale scales = 1 [features.repeated_field_encoding = EXPANDED];
+  repeated ResourceFilterScenario scenarios = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message ResourceManifestDownload {
@@ -32849,7 +32849,7 @@ message RevealedPlaceCardModuleTypeShowcase {
 }
 
 message RevealedPlaceCardModuleTypeTitle {
-  repeated RevealedPlaceCardModuleTypeTitleElements titleElements = 1;
+  repeated RevealedPlaceCardModuleTypeTitleElements titleElements = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message RevealedPlaceCardModuleTypeUnifiedActionRow {
@@ -32981,11 +32981,11 @@ message RouteAttributes {
   bool includeHistoricTravelTime = 12;
   bool includeTrafficIncidents = 14;
   uint32 walkingLimitMeters = 15;
-  repeated RouteAttributesAdditionalTransportTypes additionalTransportTypes = 16;
+  repeated RouteAttributesAdditionalTransportTypes additionalTransportTypes = 16 [features.repeated_field_encoding = EXPANDED];
   AutomobileOptions automobileOptions = 17;
   TransitOptions transitOptions = 18;
   WalkingOptions walkingOptions = 19;
-  repeated RouteAttributesUiContexts uiContexts = 20;
+  repeated RouteAttributesUiContexts uiContexts = 20 [features.repeated_field_encoding = EXPANDED];
   bool useMetricThreshold = 21;
   WaypointNameProperties destinationInfo = 30;
   RouteAttributesDestinationType destinationType = 31;
@@ -32995,7 +32995,7 @@ message RouteAttributes {
   bool includeLaneWidths = 35;
   CyclingOptions cyclingOptions = 36;
   bool includeRoutingPathLeg = 37;
-  repeated RouteAttributesInitialPromptTypes initialPromptTypes = 38;
+  repeated RouteAttributesInitialPromptTypes initialPromptTypes = 38 [features.repeated_field_encoding = EXPANDED];
   bool includeCellularCoverage = 39;
 }
 
@@ -33011,7 +33011,7 @@ message RouteDetails {
 message RouteDisplayHints {
   bool showTransitSchedules = 1;
   repeated TransitPrioritize availablePrioritizations = 2;
-  repeated PaymentType availablePaymentTypes = 5;
+  repeated PaymentType availablePaymentTypes = 5 [features.repeated_field_encoding = EXPANDED];
   RequestOptions transitSurchargeOptions = 6;
 }
 
@@ -33148,13 +33148,13 @@ message SearchAttributionSource {
   string sourceIdentifier = 1;
   uint32 sourceVersion = 2;
   repeated LocalizedAttribution localizedAttributions = 3;
-  repeated SearchAttributionSourceAttributionRequirements attributionRequirements = 5;
+  repeated SearchAttributionSourceAttributionRequirements attributionRequirements = 5 [features.repeated_field_encoding = EXPANDED];
   repeated AttributionApp attributionApps = 6;
   string webBaseActionURL = 7;
   repeated ComponentAction supportedComponentActions = 8;
   bool enforceAppStore = 9;
   string appAdamID = 10;
-  repeated ActionComponent suppressAttributionLogos = 11;
+  repeated ActionComponent suppressAttributionLogos = 11 [features.repeated_field_encoding = EXPANDED];
   bool requiresAttributionInPhotoViewerHeader = 12;
 }
 
@@ -33231,8 +33231,8 @@ message SharedNavLocationInfo {
 
 message SharedNavRouteInfo {
   repeated double coordinates = 1;
-  repeated uint32 trafficColors = 2;
-  repeated uint32 trafficColorOffsets = 3;
+  repeated uint32 trafficColors = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 trafficColorOffsets = 3 [features.repeated_field_encoding = EXPANDED];
   repeated SharedNavChargingStationInfo chargingStations = 4;
   repeated bytes routingPathLegs = 5;
 }
@@ -33347,7 +33347,7 @@ message SpatialLookupRequest {
   LatLng center = 1;
   int32 radius = 2;
   int32 maxResults = 3;
-  repeated SpatialLookupCategory categorys = 4;
+  repeated SpatialLookupCategory categorys = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message SpatialLookupResponse {
@@ -33449,7 +33449,7 @@ message StepFeedback {
 
 message StepGroup {
   FormattedString groupInstruction = 1;
-  repeated uint32 stepIds = 2;
+  repeated uint32 stepIds = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message StopAddedDetails {
@@ -33519,7 +33519,7 @@ message StructuredAddress {
   string premise = 18;
   repeated SubPremise subPremises = 19;
   string postCodeFull = 20;
-  repeated int64 geoIds = 100;
+  repeated int64 geoIds = 100 [features.repeated_field_encoding = EXPANDED];
 }
 
 message StyleAttribute {
@@ -33541,7 +33541,7 @@ message SubactionMetaData {
   int32 selectedSubactionIndex = 1;
   SubactionMetaDataSubactionType subactionType = 2;
   string displayedString = 3;
-  repeated SubactionMetaDataSubactions subactions = 4;
+  repeated SubactionMetaDataSubactions subactions = 4 [features.repeated_field_encoding = EXPANDED];
   repeated string displayedTexts = 5;
 }
 
@@ -33607,7 +33607,7 @@ message TFCompactRoadSpeeds {
 
 message TFIncident {
   TFIncidentType type = 1;
-  repeated int64 geoids = 2;
+  repeated int64 geoids = 2 [features.repeated_field_encoding = EXPANDED];
   repeated TFInfo infos = 3;
   string incidentId = 4;
   double latitude = 5;
@@ -33661,7 +33661,7 @@ message TFRoadSpeed {
   float confidence = 11;
   repeated float latitudeCoordinates = 12;
   repeated float longitudeCoordinates = 13;
-  repeated sint64 geoIds = 14;
+  repeated sint64 geoIds = 14 [features.repeated_field_encoding = EXPANDED];
   bytes openlr = 15;
 }
 
@@ -33699,7 +33699,7 @@ message TerritoryDataRing {
 }
 
 message TerritoryDataTerritoryInfo {
-  repeated TerritoryDataTerritoryInfoTerritoryTypes territoryTypes = 1;
+  repeated TerritoryDataTerritoryInfoTerritoryTypes territoryTypes = 1 [features.repeated_field_encoding = EXPANDED];
   uint32 nameId = 2;
   string name = 3;
   uint64 featureId = 4;
@@ -33726,15 +33726,15 @@ message TileCoordinate {
 message TileGroup {
   uint32 identifier = 1;
   repeated VersionedTileSet tileSets = 2;
-  repeated uint32 styleSheetIndexs = 3;
-  repeated uint32 textureIndexs = 4;
-  repeated uint32 fontIndexs = 5;
-  repeated uint32 iconIndexs = 6;
+  repeated uint32 styleSheetIndexs = 3 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 textureIndexs = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 fontIndexs = 5 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 iconIndexs = 6 [features.repeated_field_encoding = EXPANDED];
   repeated RegionalResourceIndex regionalResourceIndexs = 7;
-  repeated uint32 xmlIndexs = 8;
-  repeated uint32 attributionIndexs = 10;
+  repeated uint32 xmlIndexs = 8 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 attributionIndexs = 10 [features.repeated_field_encoding = EXPANDED];
   repeated TileSetRegion hybridUnavailableRegions = 11;
-  repeated uint32 resourceIndexs = 12;
+  repeated uint32 resourceIndexs = 12 [features.repeated_field_encoding = EXPANDED];
   uint32 muninVersionIndex = 14;
 }
 
@@ -33975,7 +33975,7 @@ message TransitBaseFare {
   uint32 numberOfLegs = 3;
   repeated PBTransitPaymentMethod supportedPaymentMethods = 4;
   bool cashOnly = 5;
-  repeated uint32 supportedPaymentMethodIndexs = 6;
+  repeated uint32 supportedPaymentMethodIndexs = 6 [features.repeated_field_encoding = EXPANDED];
 }
 
 message TransitBoardingInfo {
@@ -34003,7 +34003,7 @@ message TransitClusterArtworkItem {
 }
 
 message TransitClusterArtworkSet {
-  repeated uint32 artworkIndexs = 1;
+  repeated uint32 artworkIndexs = 1 [features.repeated_field_encoding = EXPANDED];
   repeated TransitClusterArtworkItem artworkItems = 2;
 }
 
@@ -34056,7 +34056,7 @@ message TransitEntry {
 
 message TransitExitPlanInfo {
   uint32 numberOfCars = 1;
-  repeated uint32 selectedCarIndexs = 2;
+  repeated uint32 selectedCarIndexs = 2 [features.repeated_field_encoding = EXPANDED];
   FormattedString label = 3;
 }
 
@@ -34067,7 +34067,7 @@ message TransitIncidentItem {
 
 message TransitLeg {
   int32 sectionOptionIndex = 1;
-  repeated int32 restrictedToSectionIndexs = 2;
+  repeated int32 restrictedToSectionIndexs = 2 [features.repeated_field_encoding = EXPANDED];
 }
 
 message TransitListInstruction {
@@ -34090,7 +34090,7 @@ message TransitOccupancyInfo {
 }
 
 message TransitOptions {
-  repeated TransitOptionsAvoidedModes avoidedModes = 6;
+  repeated TransitOptionsAvoidedModes avoidedModes = 6 [features.repeated_field_encoding = EXPANDED];
   TransitPrioritize prioritization = 8;
   FareOptions fareOptions = 10;
   TransitOptionsRoutingBehavior routingBehavior = 11;
@@ -34196,7 +34196,7 @@ message TransitSectionOption {
 }
 
 message TransitSegmentArtworkSet {
-  repeated uint32 artworkIndexs = 1;
+  repeated uint32 artworkIndexs = 1 [features.repeated_field_encoding = EXPANDED];
   repeated TransitClusterArtworkSet clusters = 2;
 }
 
@@ -34230,8 +34230,8 @@ message TransitStep {
   InstructionSet instructions = 17;
   uint32 zilchIndex = 19;
   uint32 distanceInMeters = 20;
-  repeated uint32 routeDetailsPrimaryArtworkIndexs = 22;
-  repeated uint32 steppingArtworkIndexs = 23;
+  repeated uint32 routeDetailsPrimaryArtworkIndexs = 22 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 steppingArtworkIndexs = 23 [features.repeated_field_encoding = EXPANDED];
   uint32 routeDetailsSecondaryArtworkIndex = 24;
   uint32 accessPointZilchIndex = 25;
   uint32 defaultVehicleInfoIndex = 26;
@@ -34271,7 +34271,7 @@ message TransitSuggestedRoute {
   PBTransitRoutingIncidentMessage transitIncidentMessage = 11;
   repeated TransitSegmentArtworkSet routePlanningArtworks = 13;
   TransitRouteDisplayStrings displayStrings = 14;
-  repeated RouteBadge routeBadges = 15;
+  repeated RouteBadge routeBadges = 15 [features.repeated_field_encoding = EXPANDED];
   repeated TransitSectionOption sectionOptions = 18;
   repeated TransitSection sections = 19;
   uint32 travelTimeAggressiveEstimate = 20;
@@ -34486,9 +34486,9 @@ message VLBuild {
 
 message VLDataTile {
   TileCoordinate coord = 1;
-  repeated uint32 buildIndexs = 2;
-  repeated uint32 precisionIndexs = 3;
-  repeated VlPurpose purposeDenylists = 4;
+  repeated uint32 buildIndexs = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 precisionIndexs = 3 [features.repeated_field_encoding = EXPANDED];
+  repeated VlPurpose purposeDenylists = 4 [features.repeated_field_encoding = EXPANDED];
 }
 
 message VLFARFailureTypes {
@@ -34523,8 +34523,8 @@ message VLFFailureDetails {
 
 message VLFFrameDetails {
   uint32 vioStatus = 1;
-  repeated float vioPoses = 2;
-  repeated float calibrationMatrixs = 3;
+  repeated float vioPoses = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated float calibrationMatrixs = 3 [features.repeated_field_encoding = EXPANDED];
   float radialDistortion1 = 4;
   float radialDistortion2 = 5;
 }
@@ -34550,8 +34550,8 @@ message VLFLocalizationAlgorithmDetails {
   uint32 numberOfKeypoints = 1;
   uint32 numberOfMatches = 2;
   uint32 numberOfInliers = 3;
-  repeated double solverConfidences = 4;
-  repeated double fusedConfidences = 5;
+  repeated double solverConfidences = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated double fusedConfidences = 5 [features.repeated_field_encoding = EXPANDED];
   uint32 tKptsMs = 6;
   uint32 tMatchMs = 7;
   uint32 tPoseMs = 8;
@@ -34602,15 +34602,15 @@ message VLFPositionContextClassification {
 
 message VLFSLAMTrack {
   VLFPoint3D position = 1;
-  repeated uint32 descriptors = 2;
-  repeated uint32 observationImageIndices = 3;
+  repeated uint32 descriptors = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated uint32 observationImageIndices = 3 [features.repeated_field_encoding = EXPANDED];
   repeated VLFImagePosition imagePositions = 4;
 }
 
 message VLFSuccessDetails {
   VLFCorrection correction = 1;
   double poseConfidence = 2;
-  repeated uint32 inlierSuccessIndices = 3;
+  repeated uint32 inlierSuccessIndices = 3 [features.repeated_field_encoding = EXPANDED];
 }
 
 message VLFTileDetails {
@@ -34630,11 +34630,11 @@ message VLMetadataTile {
   repeated VLBuild builds = 2;
   repeated VLPrecision precisions = 3;
   repeated VLDataTile tiles = 4;
-  repeated VlPurpose purposeDenylists = 5;
+  repeated VlPurpose purposeDenylists = 5 [features.repeated_field_encoding = EXPANDED];
 }
 
 message VLPrecision {
-  repeated uint32 precisions = 1;
+  repeated uint32 precisions = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message VectorTileRequest {
@@ -34680,7 +34680,7 @@ message VisualLaneGuidance {
 
 message WalkingOptions {
   double preferredSpeed = 1;
-  repeated WalkingOptionsAvoidedModes avoidedModes = 2;
+  repeated WalkingOptionsAvoidedModes avoidedModes = 2 [features.repeated_field_encoding = EXPANDED];
   WalkingUserPreferences walkingUserPreferences = 3;
 }
 
@@ -34768,7 +34768,7 @@ message WaypointRoute {
   RestrictionZoneInfo restrictionZoneInfo = 15;
   OutOfMapsAlertsInfo outOfMapsAlertsInfo = 16;
   TrafficBannerText rerouteBannerText = 17;
-  repeated WaypointRouteInitialPromptTypes initialPromptTypes = 18;
+  repeated WaypointRouteInitialPromptTypes initialPromptTypes = 18 [features.repeated_field_encoding = EXPANDED];
   TraversalTimes tripTimes = 19;
 }
 
@@ -34805,7 +34805,7 @@ message WiFiAP {
 message WiFiBSS {
   string identifier = 1;
   LatLng location = 2;
-  repeated WiFiBSSAttributes attributes = 3;
+  repeated WiFiBSSAttributes attributes = 3 [features.repeated_field_encoding = EXPANDED];
   repeated WiFiQualityProfile qualities = 4;
   int64 uniqueIdentifier = 5;
   LatLngE7 latLngE7 = 6;
@@ -34862,10 +34862,10 @@ message WiFiConnectionQuality {
   Location location = 45;
   uint32 wasCaptiveFlag = 46;
   WiFiConnectionQualityNetworkType networkType = 47;
-  repeated WiFiConnectionQualityTraits traits = 48;
+  repeated WiFiConnectionQualityTraits traits = 48 [features.repeated_field_encoding = EXPANDED];
   WiFiConnectionQualityCaptiveDetermination captiveDetermination = 49;
   WiFiConnectionQualityAssociationLength associationLength = 50;
-  repeated WiFiConnectionQualityAuthTraits authTraits = 51;
+  repeated WiFiConnectionQualityAuthTraits authTraits = 51 [features.repeated_field_encoding = EXPANDED];
   WiFiConnectionQualityNetworkOrigin networkOrigin = 52;
   float topDLRate = 53;
   bool lowInternetUL = 54;
@@ -34888,7 +34888,7 @@ message WiFiConnectionQuality {
   WiFiHarvestLabel label = 71;
   WiFiPasspointInfo passpointInfo = 72;
   repeated string hotspotHelperProviders = 73;
-  repeated WiFiConnectionQualityNameAttributes nameAttributes = 74;
+  repeated WiFiConnectionQualityNameAttributes nameAttributes = 74 [features.repeated_field_encoding = EXPANDED];
   WiFiConnectionQualityDohAvailability dohAvailability = 75;
   WiFiBeaconInfo beaconInfo = 76;
   double responsivenessScore = 77;
@@ -34908,9 +34908,9 @@ message WiFiESS {
   string identifier = 1;
   repeated WiFiBSS bss = 2;
   string name = 3;
-  repeated WiFiESSAuthTraits authTraits = 4;
+  repeated WiFiESSAuthTraits authTraits = 4 [features.repeated_field_encoding = EXPANDED];
   repeated WiFiQualityProfile qualities = 5;
-  repeated WiFiESSAttributes attributes = 6;
+  repeated WiFiESSAttributes attributes = 6 [features.repeated_field_encoding = EXPANDED];
   int64 uniqueIdentifier = 7;
   repeated string ownerIdentifiers = 8;
   WiFiESSNetworkType networkType = 9;
@@ -34945,7 +34945,7 @@ message WiFiQualityFeedback {
 }
 
 message WiFiQualityHours {
-  repeated WiFiQualityHoursDays days = 1;
+  repeated WiFiQualityHoursDays days = 1 [features.repeated_field_encoding = EXPANDED];
   repeated WiFiQualityTimeRange timeRanges = 2;
 }
 

@@ -4205,6 +4205,7 @@ true,
 false,
 false
 ],
+"ALSLocationRequest.surroundingWifiBands.<encoding>": "EXPANDED",
 "ALSLocationRequest.wifiAltitudeScale": [
 "ALSLocationRequestWifiAltitudeScale",
 "ENUM:ALSLocationRequestWifiAltitudeScale",
@@ -4527,6 +4528,7 @@ true,
 false,
 false
 ],
+"ALSNearbyRequest.wifiBands.<encoding>": "EXPANDED",
 "ALSNearbyRequest.wifiGranularity": [
 "ALSNearbyRequestWifiGranularity",
 "ENUM:ALSNearbyRequestWifiGranularity",
@@ -5709,6 +5711,7 @@ true,
 false,
 false
 ],
+"TRANSITPbLocationFingerprint.macs.<encoding>": "EXPANDED",
 "TRANSITPbLocationFingerprint.modes": [
 "double",
 null,
@@ -5718,6 +5721,7 @@ true,
 false,
 false
 ],
+"TRANSITPbLocationFingerprint.modes.<encoding>": "EXPANDED",
 "TRANSITPbLocationFingerprintV1.latitude": [
 "double",
 null,

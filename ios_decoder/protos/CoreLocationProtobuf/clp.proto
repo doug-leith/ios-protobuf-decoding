@@ -353,7 +353,7 @@ message CdmaCellTowerLocation {
   string operatorName = 20;
   int32 ltmOffset = 21;
   int32 dayLightSavings = 22;
-  repeated int32 derivedMccs = 23;
+  repeated int32 derivedMccs = 23 [features.repeated_field_encoding = EXPANDED];
   sint32 ecn0 = 25;
   sint32 rscp = 26;
   repeated CdmaCellNeighbor neighbors = 30;
@@ -568,7 +568,7 @@ message LOGENTRYVISIONLSLMapRoadSegment {
 }
 
 message LOGENTRYVISIONSimdDoubleM {
-  repeated double values = 1;
+  repeated double values = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LOGENTRYVISIONSimdDoubleMxN {
@@ -576,7 +576,7 @@ message LOGENTRYVISIONSimdDoubleMxN {
 }
 
 message LOGENTRYVISIONSimdFloatM {
-  repeated float values = 1;
+  repeated float values = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LOGENTRYVISIONSimdFloatMxN {
@@ -638,24 +638,24 @@ message LOGENTRYVISIONVLLocalizationDebugInfo {
 
 message LOGENTRYVISIONVLLocalizationMaps488Details {
   uint64 numInliers = 1;
-  repeated float points2ds = 2;
-  repeated double points3ds = 3;
-  repeated int32 inlierIndices = 4;
-  repeated double slamOrigins = 5;
+  repeated float points2ds = 2 [features.repeated_field_encoding = EXPANDED];
+  repeated double points3ds = 3 [features.repeated_field_encoding = EXPANDED];
+  repeated int32 inlierIndices = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated double slamOrigins = 5 [features.repeated_field_encoding = EXPANDED];
   uint64 numSlamTracks = 6;
-  repeated float slamTracks = 7;
+  repeated float slamTracks = 7 [features.repeated_field_encoding = EXPANDED];
   uint64 descriptorDimension = 8;
   bytes slamTrackDescriptors = 9;
-  repeated int32 slamTrackObservations = 10;
-  repeated float slamTracks2ds = 11;
-  repeated int32 slamTrackImageIndices = 12;
+  repeated int32 slamTrackObservations = 10 [features.repeated_field_encoding = EXPANDED];
+  repeated float slamTracks2ds = 11 [features.repeated_field_encoding = EXPANDED];
+  repeated int32 slamTrackImageIndices = 12 [features.repeated_field_encoding = EXPANDED];
   uint64 numFrames = 13;
-  repeated int32 perFrameVioStatusCodes = 14;
-  repeated float perFrameVioPoses = 15;
-  repeated float perFrameCalibrationMatrices = 16;
-  repeated float perFrameDistortions = 17;
-  repeated double resultPoseRotations = 18;
-  repeated double resultPoseTranslations = 19;
+  repeated int32 perFrameVioStatusCodes = 14 [features.repeated_field_encoding = EXPANDED];
+  repeated float perFrameVioPoses = 15 [features.repeated_field_encoding = EXPANDED];
+  repeated float perFrameCalibrationMatrices = 16 [features.repeated_field_encoding = EXPANDED];
+  repeated float perFrameDistortions = 17 [features.repeated_field_encoding = EXPANDED];
+  repeated double resultPoseRotations = 18 [features.repeated_field_encoding = EXPANDED];
+  repeated double resultPoseTranslations = 19 [features.repeated_field_encoding = EXPANDED];
 }
 
 message LOGENTRYVISIONVLLocalizationResult {
@@ -677,7 +677,7 @@ message LOGENTRYVISIONVLMatrixfMxN {
 }
 
 message LOGENTRYVISIONVLVectorfM {
-  repeated float values = 1;
+  repeated float values = 1 [features.repeated_field_encoding = EXPANDED];
 }
 
 message Location {

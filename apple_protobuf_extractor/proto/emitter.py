@@ -317,6 +317,25 @@ def _best_in_compat_group(
     )
 
 
+# Scalar types that protobuf can encode packed (and an enum): the only ones a
+# ``repeated_field_encoding`` feature may be set on.
+_PACKABLE_SCALARS = frozenset((
+    "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
+    "sfixed32", "sfixed64", "float", "double", "bool"))
+
+# A repeated scalar C-list whose writeTo: write the walk did not see: its wire encoding
+# is unknown, and the file's edition default (PACKED) is only a default.
+_REPEATED_ENCODING_UNSEEN_NOTE = (
+    "packed/expanded not read from writeTo: (declared PACKED by the edition default)")
+
+
+def _is_packable(fld: ProtoField, type_str: str) -> bool:
+    """True for a field whose (resolved) type protobuf can pack: a numeric/bool scalar or
+    an enum."""
+    return (type_str in _PACKABLE_SCALARS
+            or bool(fld.type_class and fld.type_class.startswith("ENUM:")))
+
+
 # ── ProtoFile data model ───────────────────────────────────────────────────────
 
 @dataclass
@@ -528,9 +547,15 @@ class ProtoFile:
             parts.append(f"unresolved: {fld.unresolved_type_class}")
         if fld.type_inference_note:
             parts.append(fld.type_inference_note)
+        options = ""
+        if fld.label is FieldLabel.REPEATED and _is_packable(fld, type_str):
+            if fld.repeated_encoding == "EXPANDED":
+                options = " [features.repeated_field_encoding = EXPANDED]"
+            elif fld.repeated_encoding == "UNSEEN":
+                parts.append(_REPEATED_ENCODING_UNSEEN_NOTE)
         comment = f"  // {'; '.join(parts)}" if parts else ""
 
-        return f"{label_prefix}{type_str} {fld.name} = {fld.number};{comment}"
+        return f"{label_prefix}{type_str} {fld.name} = {fld.number}{options};{comment}"
 
     def _resolve_field_type(
         self,

@@ -625,7 +625,8 @@ def _writeto_self_load_offset(ctx: BinaryContext, insns) -> Optional[int]:
 # field-typing concern is a named, separately-testable unit; the loop reads as a
 # short pipeline.  All are behaviour-preserving (byte-identical emitted output).
 
-def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_writes=None):
+def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_writes=None,
+                          owner=""):
     """TODO #38/#44: refine the canonical int default to its true wire form.
 
     The ivar @encode only records storage width, so int32/uint32/sint32/[s]fixed32
@@ -654,11 +655,27 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_wri
     w = (walk_writes or {}).get(ivar.name) or {}
     if not w.get('bracket'):
         return _refine_scalar_by_family(
-            type_name, _classify_write_helper(ctx, wt_helpers.get(ivar.name)))
+            type_name, _classify_write_helper(ctx, wt_helpers.get(ivar.name)),
+            f"{owner}.{ivar.name}")
     fams = {_classify_write_helper(ctx, va) for va in w.get('elem_helper_vas', ())}
     if len(fams) == 1:
-        return _refine_scalar_by_family(type_name, fams.pop())
+        return _refine_scalar_by_family(type_name, fams.pop(), f"{owner}.{ivar.name}")
     return type_name
+
+
+def _repeated_encoding(ivar, walk_writes):
+    """How ``writeTo:`` writes a repeated scalar/enum C-list ivar (``{?="list"^<elem>…}``):
+    ``"PACKED"`` when the walk saw one length-delimited begin/recall bracket around no-tag
+    element writes (``walk_writes[ivar]['bracket']``), ``"EXPANDED"`` when it saw the
+    element writer called with the field's own number (one tag per element), ``"UNSEEN"``
+    when the walk saw no write of the ivar, None when the ivar is not a C-list.  The
+    emitter declares the encoding from this, instead of edition 2023's PACKED default."""
+    if not _is_packed_list_enc(ivar.type_enc):
+        return None
+    w = (walk_writes or {}).get(ivar.name)
+    if not w:
+        return "UNSEEN"
+    return "PACKED" if w.get('bracket') else "EXPANDED"
 
 
 def _qualify_field_enum(type_name, type_class, cls, pfx):
@@ -909,7 +926,7 @@ def extract_proto_message(
         # TODO #38/#44: refine the canonical int default to its true wire form
         # (sint*/[s]fixed*) from the field's writeTo: helper VA.
         type_name = _refine_int_wire_form(ctx, type_name, type_class, ivar, _wt_helpers,
-                                          _walk_writes)
+                                          _walk_writes, owner=cls.name)
 
         # ── Mode A enum-fallback debug ────────────────────────────────────────
         # Fires when: (a) --cache path (instance_method_names non-empty), (b)
@@ -1008,6 +1025,7 @@ def extract_proto_message(
             type_class=type_class,
             number_confirmed=confirmed,
             type_inference_note=_type_note,
+            repeated_encoding=_repeated_encoding(ivar, _walk_writes),
         ))
 
     # Drop manual-array backing-store ivars (``_xCount``/``_xSpace``) that ObjC

@@ -300,8 +300,13 @@ class TestSintRecoveryLive(unittest.TestCase):
         # Ground-truthed stub VAs (GeoServices → ProtocolBuffer.framework).
         self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdac00), 'sint32')
         self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdac0c), 'sint64')
-        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdabd0), 'plain')
-        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdac30), 'plain')
+        # plain varints of a 32-bit value: int32 sign-extends (sxtw), uint32 zero-extends
+        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdabd0), 'int32')
+        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdac30), 'uint32')
+        # 64-bit varints (int64/uint64 share code) and bool stay plain
+        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdac3c), 'plain')
+        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdabdc), 'plain')
+        self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdaba0), 'plain')
         # TODO #44: fixed32 (wire 5) / fixed64 (wire 1) tag-builder helpers.
         self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdabe8), 'fixed32')
         self.assertEqual(WH._classify_write_helper(self.ctx, 0x18dbdabf4), 'fixed64')

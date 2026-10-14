@@ -192,6 +192,13 @@ class ProtoField:
     # emitter (falls back to value type 'bytes' + unresolved_type_class, as for any
     # message field whose class was not extracted).
 
+    repeated_encoding: Optional[str] = None
+    # For a repeated scalar/enum stored as a C-list: how writeTo: writes it on the wire,
+    # "PACKED" (one length-delimited run) or "EXPANDED" (one tag per element), read off the
+    # writeTo: walk (proto.extractor._repeated_encoding); "UNSEEN" when the walk saw no write
+    # of it; None when not a C-list.  The emitter declares EXPANDED explicitly (edition 2023
+    # defaults to PACKED) and notes an UNSEEN one.
+
     def __repr__(self) -> str:
         conf = "✓" if self.number_confirmed else "~"
         return (f"ProtoField({self.number}{conf} {self.label.value} "

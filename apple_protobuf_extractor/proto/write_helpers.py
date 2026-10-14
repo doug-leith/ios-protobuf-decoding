@@ -270,6 +270,42 @@ def _resolve_stub_island(ctx: BinaryContext, helper_va: int) -> Optional[int]:
         return None
 
 
+# Mnemonics whose first operand is not a destination register.
+_NO_DEST_MNEMONICS = frozenset(('str', 'strb', 'strh', 'stur', 'stp', 'cmp', 'cmn', 'tst', 'ccmp',
+                                'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz', 'b', 'bl', 'br', 'blr',
+                                'ret', 'retaa', 'retab', 'nop'))
+
+
+def _varint32_value_extension(insns) -> Optional[str]:
+    """``"int32"`` / ``"uint32"`` for a plain-varint write helper whose FIRST read of its
+    value argument (``x1``, usually copied to a callee-saved register in the prologue)
+    widens it to the 64-bit varint value: ``sxtw xD, wV`` (sign-extend: an ``int32``, whose
+    negative values take 10 bytes) or ``mov wD, wV`` (a 32-bit move zero-extends: a
+    ``uint32``).  None for any other first read -- a 64-bit varint uses the register as is
+    (``cmp xV, #0x80``), a bool stores its byte (``strb wV``) -- or when there is none.
+    PB ``0x1a47ae8cc`` (int32/enum) does ``mov x20,x1 ; ... ; sxtw x8,w20``,
+    ``0x1a47af658`` (uint32) ``mov x20,x1 ; ... ; mov w8,w20``."""
+    vals = {1}                                   # GPR indices holding the value argument
+    for ins in insns:
+        mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        if mn == "mov" and len(ops) == 2 and _reg_num(ops[1]) in vals:
+            if ops[0].startswith("x") and ops[1].startswith("x"):
+                vals.add(_reg_num(ops[0]))       # 64-bit copy: still the value
+                continue
+            if ops[0].startswith("w") and ops[1].startswith("w"):
+                return "uint32"                  # 32-bit move: zero-extends
+        if mn == "sxtw" and len(ops) == 2 and _reg_num(ops[1]) in vals:
+            return "int32"
+        srcs = ops if mn in _NO_DEST_MNEMONICS else ops[1:]
+        if any(_reg_num(o.strip("[]! ")) in vals for o in srcs):
+            return None                          # first read is not a 32-bit widening
+        if mn not in _NO_DEST_MNEMONICS and ops:
+            vals.discard(_reg_num(ops[0]))       # overwritten (e.g. `csel x1, …`)
+        if mn in ('ret', 'retaa', 'retab', 'b', 'br'):
+            return None
+    return None
+
+
 def _helper_real_target(ctx: BinaryContext, helper_va: int) -> int:
     """The real function behind a ``writeTo:`` field-write helper: follow a 3-insn
     PLT-style ``adrp/add/br x16`` stub once, else a newer per-callsite stub-island
@@ -291,8 +327,10 @@ def _helper_real_target(ctx: BinaryContext, helper_va: int) -> int:
 
 def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     """Classify a ``writeTo:`` field-write helper by the proto *wire-type family* it
-    encodes: ``"sint32"``, ``"sint64"``, ``"fixed32"``, ``"fixed64"``, or ``"plain"``
-    (plain varint / length-delim / unrecognised — no refinement).
+    encodes: ``"sint32"``, ``"sint64"``, ``"fixed32"``, ``"fixed64"``, ``"int32"`` /
+    ``"uint32"`` (a plain varint of a 32-bit value, by how it is widened -- see
+    :func:`_varint32_value_extension`), or ``"plain"`` (64-bit varint / bool /
+    length-delim / unrecognised — no refinement).
 
     Why this exists (TODO #38/#44): ivar ``@encode`` only records storage width, so
     ``int32``/``uint32``/``sint32``/``[s]fixed32`` all collapse to the canonical
@@ -325,8 +363,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
       so fixed32/fixed64 here always means an integer field — sfixed vs. fixed
       is then picked from the ivar sign, exactly like int32↔uint32.
 
-    Returns ``"plain"`` for anything unrecognised (safe no-op), including a
-    genuine int32/uint32 tie.  Cache-native only: in standalone ``--binary``
+    Returns ``"plain"`` for anything unrecognised (safe no-op).  Cache-native only: in standalone ``--binary``
     mode the stub's cross-image target can't be followed, so the field keeps
     its canonical int default (unrefined, never wrong).  Memoised on ``ctx``."""
     if not helper_va:
@@ -346,7 +383,8 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
         movs: Dict[str, int] = {}          # most-recent `mov Rd,#imm` (fixed wire-type const)
         field_regs = {2}                   # GPR indices currently holding the field# arg
         tag_shift_seen = False             # saw `lsl <field#>,#3` (see below)
-        for ins in disasm(ctx, target, max_insns=_HELPER_FAMILY_MAX_INSNS, stop_at_ret=True):
+        insns = disasm(ctx, target, max_insns=_HELPER_FAMILY_MAX_INSNS, stop_at_ret=True)
+        for ins in insns:
             mn = ins.mnemonic
             ops = split_ops(ins.op_str)
             # lsl <Rd>, <value-arg>, #1  — zigzag shift of the value argument (sint).
@@ -405,6 +443,10 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
                 if wt == 1:
                     fam = "fixed64"
                     break
+        if fam == "plain":
+            # A plain varint helper: the signedness of a 32-bit value is in how it is
+            # widened to the 64-bit varint (sxtw = int32, 32-bit mov = uint32).
+            fam = _varint32_value_extension(insns) or "plain"
     except (NameError, ImportError):
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
@@ -416,15 +458,27 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     return fam
 
 
-def _refine_scalar_by_family(type_name: str, fam: str) -> str:
+def _refine_scalar_by_family(type_name: str, fam: str, where: str = "") -> str:
     """Refine a canonical int type (``int32``/``int64``/``uint32``/``uint64``) by the
     wire-type family its write helper encodes (:func:`_classify_write_helper`): zigzag
-    ``sint32``/``sint64``, or ``[s]fixed32``/``[s]fixed64`` — the SIGN half (fixed vs
-    sfixed) coming from the storage type, exactly like int32↔uint32.  Unchanged for
-    ``plain`` or any non-int type."""
+    ``sint32``/``sint64``; ``[s]fixed32``/``[s]fixed64``, the SIGN half (fixed vs sfixed)
+    coming from the storage type; and ``int32``/``uint32`` for a 32-bit plain varint, which
+    the writer decides (it IS the encoding: the int32 writer sign-extends a negative value
+    to 10 bytes).  A writer that disagrees with the storage type's sign is logged
+    (*where* names the field).  Unchanged for ``plain`` or any non-int type."""
     if type_name in ("int32", "int64", "uint32", "uint64"):
         if fam in ("sint32", "sint64"):
             return fam
+        if fam in ("int32", "uint32"):
+            if type_name in ("int32", "uint32"):
+                if fam != type_name:
+                    log.warning("%s: the writeTo: writer encodes %s but the storage type is "
+                                "%s; emitting the writer's %s", where or "a field", fam,
+                                type_name, fam)
+                return fam
+            log.warning("%s: a 32-bit %s writer for %s storage; type left as %s",
+                        where or "a field", fam, type_name, type_name)
+            return type_name
         if fam == "fixed32":
             return "sfixed32" if type_name == "int32" else "fixed32"
         if fam == "fixed64":

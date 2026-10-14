@@ -918,6 +918,7 @@ true,
 false,
 false
 ],
+"GEOAPPlaceCardModule.contents.<encoding>": "EXPANDED",
 "GEOAPPlaceCardModule.metadata": [
 "string",
 null,
@@ -1351,6 +1352,7 @@ true,
 false,
 false
 ],
+"GEOActionComponentMapEntry.placeDataComponents.<encoding>": "EXPANDED",
 "GEOActiveResourceFilter.<enum:ResourceFilterScale>": [
 [
 [
@@ -1510,6 +1512,7 @@ true,
 false,
 false
 ],
+"GEOActiveTileGroup.activeScales.<encoding>": "EXPANDED",
 "GEOActiveTileGroup.activeScenarios": [
 "ResourceFilterScenario",
 "ENUM:ResourceFilterScenario",
@@ -1519,6 +1522,7 @@ true,
 false,
 false
 ],
+"GEOActiveTileGroup.activeScenarios.<encoding>": "EXPANDED",
 "GEOActiveTileGroup.addressCorrectionInitURLLegacy": [
 "string",
 null,
@@ -3240,6 +3244,7 @@ true,
 false,
 false
 ],
+"GEOAdvisoryNotice.incidentIndexs.<encoding>": "EXPANDED",
 "GEOAdvisoryNotice.noticeArtwork": [
 "GEOPBTransitArtwork",
 "GEOPBTransitArtwork",
@@ -6955,6 +6960,7 @@ true,
 false,
 false
 ],
+"GEOAnalyticsPipelineStateData.placeCardPossibleActions.<encoding>": "EXPANDED",
 "GEOAnalyticsPipelineStateData.placeCardRevealedPlaceCardModules": [
 "GEORevealedPlaceCardModule",
 "GEORevealedPlaceCardModule",
@@ -6991,6 +6997,7 @@ true,
 false,
 false
 ],
+"GEOAnalyticsPipelineStateData.placeCardUnactionableUiElements.<encoding>": "EXPANDED",
 "GEOAnalyticsPipelineStateData.predExTrainingData": [
 "GEOLogMsgEventPredExTrainingData",
 "GEOLogMsgEventPredExTrainingData",
@@ -8076,6 +8083,7 @@ true,
 false,
 false
 ],
+"GEOBatchRevGeocodeRequest.additionalPlaceTypes.<encoding>": "EXPANDED",
 "GEOBatchRevGeocodeRequest.deviceCountryCode": [
 "string",
 null,
@@ -8655,6 +8663,7 @@ true,
 false,
 false
 ],
+"GEOBusynessPoiLookupTile.latitudeE7s.<encoding>": "PACKED",
 "GEOBusynessPoiLookupTile.longitudeE7s": [
 "sfixed32",
 null,
@@ -8664,6 +8673,7 @@ true,
 false,
 false
 ],
+"GEOBusynessPoiLookupTile.longitudeE7s.<encoding>": "PACKED",
 "GEOBusynessPoiLookupTile.offsetId": [
 "uint32",
 null,
@@ -9187,6 +9197,7 @@ true,
 false,
 false
 ],
+"GEOCarInfo.engineTypes.<encoding>": "EXPANDED",
 "GEOCarInfo.inputMethods": [
 "CarInfoInputMethods",
 "ENUM:CarInfoInputMethods",
@@ -9196,6 +9207,7 @@ true,
 false,
 false
 ],
+"GEOCarInfo.inputMethods.<encoding>": "EXPANDED",
 "GEOCarInfo.isInstructionCardEnabled": [
 "bool",
 null,
@@ -10262,6 +10274,7 @@ true,
 false,
 false
 ],
+"GEOClickableAdvisory.incidentIndexs.<encoding>": "EXPANDED",
 "GEOClientACSuggestionEntry.<enum:AcType>": [
 [
 [
@@ -11306,6 +11319,7 @@ true,
 false,
 false
 ],
+"GEOClientCapabilities.supportedTransitFeatures.<encoding>": "EXPANDED",
 "GEOClientCapabilities.supportsAdvancedMap": [
 "bool",
 null,
@@ -11441,6 +11455,7 @@ true,
 false,
 false
 ],
+"GEOClientCapabilities.supportsMultipointRoutings.<encoding>": "EXPANDED",
 "GEOClientCapabilities.supportsNaturalGuidance": [
 "bool",
 null,
@@ -11919,6 +11934,7 @@ true,
 false,
 false
 ],
+"GEOCluster.indexs.<encoding>": "EXPANDED",
 "GEOCoarseLocationLatLng.lat": [
 "double",
 null,
@@ -12104,6 +12120,7 @@ true,
 false,
 false
 ],
+"GEOCoarseLocationTerritoryInfo.coordinates.<encoding>": "EXPANDED",
 "GEOCoarseLocationTerritoryInfo.countryName": [
 "uint32",
 null,
@@ -12248,6 +12265,7 @@ true,
 false,
 false
 ],
+"GEOCollectionDetails.collectionIds.<encoding>": "EXPANDED",
 "GEOCollectionDetails.currentlySaved": [
 "bool",
 null,
@@ -13904,6 +13922,7 @@ true,
 false,
 false
 ],
+"GEOCompanionRouteDetails.coordinates.<encoding>": "PACKED",
 "GEOCompanionRouteDetails.decoderData": [
 "GEOTransitDecoderData",
 "GEOTransitDecoderData",
@@ -14111,6 +14130,7 @@ true,
 false,
 false
 ],
+"GEOCompanionRouteDetails.trafficColorOffsets.<encoding>": "EXPANDED",
 "GEOCompanionRouteDetails.trafficColors": [
 "uint32",
 null,
@@ -14120,6 +14140,7 @@ true,
 false,
 false
 ],
+"GEOCompanionRouteDetails.trafficColors.<encoding>": "EXPANDED",
 "GEOCompanionRouteDetails.trafficDescription": [
 "string",
 null,
@@ -14591,6 +14612,7 @@ true,
 false,
 false
 ],
+"GEOCompanionRouteStatus.selectedRideIndexs.<encoding>": "EXPANDED",
 "GEOCompanionRouteStatus.stepID": [
 "uint32",
 null,
@@ -15304,6 +15326,7 @@ true,
 false,
 false
 ],
+"GEOComponentAction.actions.<encoding>": "EXPANDED",
 "GEOComponentAction.component": [
 "ActionComponent",
 "ENUM:ActionComponent",
@@ -15528,6 +15551,7 @@ true,
 false,
 false
 ],
+"GEOCountdownData.alternateCountdownTypes.<encoding>": "EXPANDED",
 "GEOCountdownData.alternateFormatStrings": [
 "string",
 null,
@@ -15555,6 +15579,7 @@ true,
 false,
 false
 ],
+"GEOCountdownData.timestampValues.<encoding>": "EXPANDED",
 "GEOCountdownData.timezone": [
 "string",
 null,
@@ -17818,6 +17843,7 @@ true,
 false,
 false
 ],
+"GEODirectionsResponse.supportedTransportTypes.<encoding>": "EXPANDED",
 "GEODirectionsResponse.timepointUsed": [
 "GEOTimepoint",
 "GEOTimepoint",
@@ -19119,6 +19145,7 @@ true,
 false,
 false
 ],
+"GEOETARoute.incidentEndOffsetsInETARoutes.<encoding>": "PACKED",
 "GEOETARoute.incidentIndexs": [
 "uint32",
 null,
@@ -19128,6 +19155,7 @@ true,
 false,
 false
 ],
+"GEOETARoute.incidentIndexs.<encoding>": "PACKED",
 "GEOETARoute.incidentOnRouteInfos": [
 "GEOIncidentOnRouteInfo",
 "GEOIncidentOnRouteInfo",
@@ -19290,6 +19318,7 @@ true,
 false,
 false
 ],
+"GEOETARoute.trafficColorOffsets.<encoding>": "PACKED",
 "GEOETARoute.trafficColors": [
 "uint32",
 null,
@@ -19299,6 +19328,7 @@ true,
 false,
 false
 ],
+"GEOETARoute.trafficColors.<encoding>": "PACKED",
 "GEOETARoute.travelTimeAggressiveEstimate": [
 "uint32",
 null,
@@ -20949,6 +20979,7 @@ true,
 false,
 false
 ],
+"GEOFormatArgument.valInt3s.<encoding>": "EXPANDED",
 "GEOFormatArgument.valString": [
 "string",
 null,
@@ -21540,6 +21571,7 @@ true,
 false,
 false
 ],
+"GEOGloriaTessellationOptions.zoomLevels.<encoding>": "EXPANDED",
 "GEOGuidanceEvent.<enum:GuidanceEventType>": [
 [
 [
@@ -21961,6 +21993,7 @@ true,
 false,
 false
 ],
+"GEOGuidanceImportanceMode.guidancePreferenceTypes.<encoding>": "EXPANDED",
 "GEOHighlight.length": [
 "uint32",
 null,
@@ -22035,6 +22068,7 @@ true,
 false,
 false
 ],
+"GEOHours.days.<encoding>": "EXPANDED",
 "GEOHours.timeRanges": [
 "GEOTimeRange",
 "GEOTimeRange",
@@ -23073,6 +23107,7 @@ true,
 false,
 false
 ],
+"GEOLPRLPRFillRule.plateTypeIndexes.<encoding>": "EXPANDED",
 "GEOLPRLPRFillRule.toChar": [
 "GEOLPRTargetChar",
 "GEOLPRTargetChar",
@@ -23100,6 +23135,7 @@ true,
 false,
 false
 ],
+"GEOLPRLPRMapRule.plateTypeIndexes.<encoding>": "EXPANDED",
 "GEOLPRLPRMapRule.targetChars": [
 "GEOLPRTargetChar",
 "GEOLPRTargetChar",
@@ -23136,6 +23172,7 @@ true,
 false,
 false
 ],
+"GEOLPRLPRPickupRule.plateTypeIndexes.<encoding>": "EXPANDED",
 "GEOLPRLPRPickupRule.prLicensePlateStructure": [
 "GEOLPRLicensePlateStructure",
 "GEOLPRLicensePlateStructure",
@@ -23460,6 +23497,7 @@ true,
 false,
 false
 ],
+"GEOLPRRegionInfo.routingRequiredFields.<encoding>": "EXPANDED",
 "GEOLPRRegionInfo.validPowerTypeKeys": [
 "string",
 null,
@@ -23639,6 +23677,7 @@ true,
 false,
 false
 ],
+"GEOLPRTimeCondition.dayOfMonths.<encoding>": "EXPANDED",
 "GEOLPRTimeCondition.dayOfWeeks": [
 "LPRTimeConditionDayOfWeeks",
 "ENUM:LPRTimeConditionDayOfWeeks",
@@ -23648,6 +23687,7 @@ true,
 false,
 false
 ],
+"GEOLPRTimeCondition.dayOfWeeks.<encoding>": "EXPANDED",
 "GEOLPRUser.vehicles": [
 "NSMutableDictionary",
 "NSMutableDictionary",
@@ -24270,6 +24310,7 @@ true,
 false,
 false
 ],
+"GEOLocalizationCapabilities.supportedPhoneticTypes.<encoding>": "EXPANDED",
 "GEOLocalizationCapabilities.supportsLocalizedTrafficControlIcons": [
 "bool",
 null,
@@ -26225,6 +26266,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgEventCuratedCollectionStats.savedCollectionMuids.<encoding>": "EXPANDED",
 "GEOLogMsgEventCuratedCollectionUsage.collectionFirstViewedDate": [
 "double",
 null,
@@ -31838,6 +31880,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgEventHardStop.digits.<encoding>": "EXPANDED",
 "GEOLogMsgEventHardStop.score": [
 "double",
 null,
@@ -34717,6 +34760,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgEventThermalPressure.disableMapFeatures.<encoding>": "EXPANDED",
 "GEOLogMsgEventThermalPressure.navMapType": [
 "NavMapType",
 "ENUM:NavMapType",
@@ -47821,6 +47865,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStateAccount.possibleActions.<encoding>": "EXPANDED",
 "GEOLogMsgStateAccount.signedIntoIcloud": [
 "bool",
 null,
@@ -57383,6 +57428,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStateCuratedCollection.impossibleActions.<encoding>": "EXPANDED",
 "GEOLogMsgStateCuratedCollection.localSearchProviderID": [
 "int32",
 null,
@@ -57410,6 +57456,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStateCuratedCollection.possibleActions.<encoding>": "EXPANDED",
 "GEOLogMsgStateCuratedCollection.publisherDetails": [
 "GEOPublisherDetails",
 "GEOPublisherDetails",
@@ -70957,6 +71004,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStatePlaceCard.containedChildrenPois.<encoding>": "EXPANDED",
 "GEOLogMsgStatePlaceCard.modules": [
 "GEOPlaceCardModule",
 "GEOPlaceCardModule",
@@ -71002,6 +71050,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStatePlaceCard.possibleActions.<encoding>": "EXPANDED",
 "GEOLogMsgStatePlaceCard.revealedModules": [
 "GEORevealedPlaceCardModule",
 "GEORevealedPlaceCardModule",
@@ -71029,6 +71078,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStatePlaceCard.unactionableUiElements.<encoding>": "EXPANDED",
 "GEOLogMsgStatePlaceRequest.<enum:RequestType>": [
 [
 [
@@ -71307,6 +71357,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStatePlaceSummaryLayout.muids.<encoding>": "EXPANDED",
 "GEOLogMsgStatePlaceSummaryLayout.trailingEntityActionDetails": [
 "GEOTrailingEntityActionDetails",
 "GEOTrailingEntityActionDetails",
@@ -73528,6 +73579,7 @@ true,
 false,
 false
 ],
+"GEOLogMsgStateUGCPhoto.photoSources.<encoding>": "EXPANDED",
 "GEOLogMsgStateUser.homeCountryCode": [
 "string",
 null,
@@ -76089,6 +76141,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.engineTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.evChargingPorts": [
 "GEOPDEvChargingPort",
 "GEOPDEvChargingPort",
@@ -76179,6 +76232,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.knownClientResolvedTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.knownRefinementTypes": [
 "MapServiceTraitsKnownRefinementTypes",
 "ENUM:MapServiceTraitsKnownRefinementTypes",
@@ -76188,6 +76242,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.knownRefinementTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.mapRegion": [
 "GEOMapRegion",
 "GEOMapRegion",
@@ -76539,6 +76594,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.supportedAutocompleteListTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.supportedAutocompleteResultCellTypes": [
 "MapServiceTraitsSupportedAutocompleteResultCellTypes",
 "ENUM:MapServiceTraitsSupportedAutocompleteResultCellTypes",
@@ -76548,6 +76604,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.supportedAutocompleteResultCellTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.supportedChildActions": [
 "MapServiceTraitsSupportedChildActions",
 "ENUM:MapServiceTraitsSupportedChildActions",
@@ -76557,6 +76614,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.supportedChildActions.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.supportedPlaceSummaryFormatTypes": [
 "MapServiceTraitsSupportedPlaceSummaryFormatTypes",
 "ENUM:MapServiceTraitsSupportedPlaceSummaryFormatTypes",
@@ -76566,6 +76624,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.supportedPlaceSummaryFormatTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.supportedSearchTierTypes": [
 "MapServiceTraitsSupportedSearchTierTypes",
 "ENUM:MapServiceTraitsSupportedSearchTierTypes",
@@ -76575,6 +76634,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.supportedSearchTierTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.supportsBrandFallback": [
 "bool",
 null,
@@ -76638,6 +76698,7 @@ true,
 false,
 false
 ],
+"GEOMapServiceTraits.transportTypes.<encoding>": "EXPANDED",
 "GEOMapServiceTraits.useBackgroundUrl": [
 "bool",
 null,
@@ -77119,6 +77180,7 @@ true,
 false,
 false
 ],
+"GEOMatchedToken.geoIds.<encoding>": "EXPANDED",
 "GEOMatchedToken.geoType": [
 "int32",
 null,
@@ -79507,6 +79569,7 @@ true,
 false,
 false
 ],
+"GEOPBTransitIncidentEntityFilter.nextStopMuids.<encoding>": "EXPANDED",
 "GEOPBTransitLine.<enum:GuidanceSnappingType>": [
 [
 [
@@ -79868,6 +79931,7 @@ true,
 false,
 false
 ],
+"GEOPBTransitPaymentMethodSuggestion.paymentMethodIndexs.<encoding>": "EXPANDED",
 "GEOPBTransitPaymentMethodSuggestion.paymentMethodSuggestionDetails": [
 "GEOPBTransitPaymentMethodSuggestionDetails",
 "GEOPBTransitPaymentMethodSuggestionDetails",
@@ -79976,6 +80040,7 @@ true,
 false,
 false
 ],
+"GEOPBTransitRoutingIncidentMessage.transitIncidentIndexs.<encoding>": "EXPANDED",
 "GEOPBTransitScheduleLookupParameters.includeAllDirectionNames": [
 "bool",
 null,
@@ -80587,6 +80652,7 @@ true,
 false,
 false
 ],
+"GEOPDActionDataFilter.linkTypes.<encoding>": "EXPANDED",
 "GEOPDActionLink.appAdamId": [
 "string",
 null,
@@ -81033,6 +81099,7 @@ true,
 false,
 false
 ],
+"GEOPDAmenityRibbonItem.amenityItemIndexs.<encoding>": "EXPANDED",
 "GEOPDAmenityValue.<enum:PDAmenityValueAmenityType>": [
 [
 [
@@ -82626,6 +82693,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteFilter.placeTypeFilters.<encoding>": "EXPANDED",
 "GEOPDAutocompleteFilter.poiIconCategoryFilter": [
 "GEOPDPoiIconCategoryFilter",
 "GEOPDPoiIconCategoryFilter",
@@ -82644,6 +82712,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteFilter.requestedEntryTypes.<encoding>": "EXPANDED",
 "GEOPDAutocompleteOriginationInfo.<enum:AutocompleteOriginationType>": [
 [
 [
@@ -82930,6 +82999,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteParameters.supportedClientResolvedTypeWithSetupPrompts.<encoding>": "EXPANDED",
 "GEOPDAutocompleteParameters.venueSearch": [
 "GEOPDAutocompleteParametersVenueSearch",
 "GEOPDAutocompleteParametersVenueSearch",
@@ -83298,6 +83368,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteParametersAllEntriesWithBrowse.knownRefinementTypes.<encoding>": "EXPANDED",
 "GEOPDAutocompleteParametersAllEntriesWithBrowse.maxQueryBuilderSuggestions": [
 "int32",
 null,
@@ -83424,6 +83495,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedAutocompleteResultCellTypes.<encoding>": "EXPANDED",
 "GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedHighlightTypes": [
 "AutocompleteResultHighlightType",
 "ENUM:AutocompleteResultHighlightType",
@@ -83433,6 +83505,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedHighlightTypes.<encoding>": "EXPANDED",
 "GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedListTypes": [
 "PDAutocompleteParametersAllEntriesWithBrowseSupportedListTypes",
 "ENUM:PDAutocompleteParametersAllEntriesWithBrowseSupportedListTypes",
@@ -83442,6 +83515,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedListTypes.<encoding>": "EXPANDED",
 "GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedPlaceSummaryFormatTypes": [
 "PlaceSummaryFormatType",
 "ENUM:PlaceSummaryFormatType",
@@ -83451,6 +83525,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompleteParametersAllEntriesWithBrowse.supportedPlaceSummaryFormatTypes.<encoding>": "EXPANDED",
 "GEOPDAutocompleteParametersAllEntriesWithBrowse.venueIdentifier": [
 "GEOPDVenueIdentifier",
 "GEOPDVenueIdentifier",
@@ -83841,6 +83916,7 @@ true,
 false,
 false
 ],
+"GEOPDAutocompletePlaceContextMetadata.clientizationFeatures.<encoding>": "EXPANDED",
 "GEOPDAutocompletePlaceContextMetadata.distanceDisplayThreshold": [
 "uint32",
 null,
@@ -84824,6 +84900,7 @@ true,
 false,
 false
 ],
+"GEOPDBatchReverseGeocodingParameters.additionalPlaceTypes.<encoding>": "EXPANDED",
 "GEOPDBatchReverseGeocodingParameters.assetLocations": [
 "GEOLocation",
 "GEOLocation",
@@ -85321,6 +85398,7 @@ true,
 false,
 false
 ],
+"GEOPDBusinessInfosModuleConfiguration.factoidItemIndexs.<encoding>": "EXPANDED",
 "GEOPDButtonItem.<enum:ButtonType>": [
 [
 [
@@ -85515,6 +85593,7 @@ true,
 false,
 false
 ],
+"GEOPDCameraMetadata.textureIds.<encoding>": "EXPANDED",
 "GEOPDCameraPathFrame.easeIn": [
 "float",
 null,
@@ -86333,6 +86412,7 @@ true,
 false,
 false
 ],
+"GEOPDCategorySearchParameters.knownRefinementTypes.<encoding>": "EXPANDED",
 "GEOPDCategorySearchParameters.maxResults": [
 "uint32",
 null,
@@ -86441,6 +86521,7 @@ true,
 false,
 false
 ],
+"GEOPDCategorySearchParameters.supportedPlaceSummaryFormatTypes.<encoding>": "EXPANDED",
 "GEOPDCategorySearchParameters.supportedRelatedEntitySectionTypes": [
 "RelatedEntitySectionType",
 "ENUM:RelatedEntitySectionType",
@@ -86450,6 +86531,7 @@ true,
 false,
 false
 ],
+"GEOPDCategorySearchParameters.supportedRelatedEntitySectionTypes.<encoding>": "EXPANDED",
 "GEOPDCategorySearchParameters.supportedSearchSectionTypes": [
 "SearchSectionType",
 "ENUM:SearchSectionType",
@@ -86459,6 +86541,7 @@ true,
 false,
 false
 ],
+"GEOPDCategorySearchParameters.supportedSearchSectionTypes.<encoding>": "EXPANDED",
 "GEOPDCategorySearchParameters.supportedSearchTierTypes": [
 "SearchTierMetadata",
 "ENUM:SearchTierMetadata",
@@ -86468,6 +86551,7 @@ true,
 false,
 false
 ],
+"GEOPDCategorySearchParameters.supportedSearchTierTypes.<encoding>": "EXPANDED",
 "GEOPDCategorySearchParameters.viewportInfo": [
 "GEOPDViewportInfo",
 "GEOPDViewportInfo",
@@ -87054,6 +87138,7 @@ true,
 false,
 false
 ],
+"GEOPDClientMetadata.clientRevisions.<encoding>": "PACKED",
 "GEOPDClientMetadata.dayOfWeek": [
 "uint32",
 null,
@@ -87171,6 +87256,7 @@ true,
 false,
 false
 ],
+"GEOPDClientMetadata.knownClientResolvedTypeDeprecateds.<encoding>": "EXPANDED",
 "GEOPDClientMetadata.knownClientResolvedTypes": [
 "ResolvedItemType",
 "ENUM:ResolvedItemType",
@@ -87180,6 +87266,7 @@ true,
 false,
 false
 ],
+"GEOPDClientMetadata.knownClientResolvedTypes.<encoding>": "EXPANDED",
 "GEOPDClientMetadata.localizationCapabilities": [
 "GEOLocalizationCapabilities",
 "GEOLocalizationCapabilities",
@@ -87252,6 +87339,7 @@ true,
 false,
 false
 ],
+"GEOPDClientMetadata.supportedMapsResultTypes.<encoding>": "EXPANDED",
 "GEOPDClientMetadata.timeSinceMapEnteredForeground": [
 "uint32",
 null,
@@ -90745,6 +90833,7 @@ true,
 false,
 false
 ],
+"GEOPDDepartureSequence.nextStopIds.<encoding>": "EXPANDED",
 "GEOPDDepartureSequence.operatingHours": [
 "GEOPDTimeRange",
 "GEOPDTimeRange",
@@ -90790,6 +90879,7 @@ true,
 false,
 false
 ],
+"GEOPDDepartureSequenceContainer.departureSequenceIndexs.<encoding>": "EXPANDED",
 "GEOPDDepartureSequenceContainer.displayName": [
 "string",
 null,
@@ -91200,6 +91290,7 @@ true,
 false,
 false
 ],
+"GEOPDETAFilter.transportTypes.<encoding>": "EXPANDED",
 "GEOPDETAFilter.walkingOptions": [
 "GEOWalkingOptions",
 "GEOWalkingOptions",
@@ -91236,6 +91327,7 @@ true,
 false,
 false
 ],
+"GEOPDEnhancedPlacement.buildingIds.<encoding>": "EXPANDED",
 "GEOPDEnhancedPlacement.elevation": [
 "double",
 null,
@@ -91835,6 +91927,7 @@ true,
 false,
 false
 ],
+"GEOPDEntity.placeLookupCategorys.<encoding>": "EXPANDED",
 "GEOPDEntity.searchSection": [
 "PlaceSearchSection",
 "ENUM:PlaceSearchSection",
@@ -92169,6 +92262,7 @@ true,
 false,
 false
 ],
+"GEOPDExtendedGeoLookupParameters.intersectingFeatureGeoIds.<encoding>": "EXPANDED",
 "GEOPDExtendedGeoLookupParameters.isLatlngRequest": [
 "bool",
 null,
@@ -92295,6 +92389,7 @@ true,
 false,
 false
 ],
+"GEOPDExtensionParams.extensionTypes.<encoding>": "EXPANDED",
 "GEOPDExtensionParams.externalItemId": [
 "string",
 null,
@@ -93100,6 +93195,7 @@ true,
 false,
 false
 ],
+"GEOPDExternalActionFilter.componentTypes.<encoding>": "EXPANDED",
 "GEOPDExternalTransitLookupParameters.externalTransitStationCodes": [
 "bytes",
 null,
@@ -93408,6 +93504,7 @@ true,
 false,
 false
 ],
+"GEOPDFeatureIdGeocodingParameters.encryptedFeatureIds.<encoding>": "EXPANDED",
 "GEOPDFeatureIdGeocodingParameters.featureId": [
 "uint64",
 null,
@@ -93694,6 +93791,7 @@ true,
 false,
 false
 ],
+"GEOPDGroundDataBuild.capabilitys.<encoding>": "EXPANDED",
 "GEOPDGroundDataBuild.dataFormatVersion": [
 "uint32",
 null,
@@ -93739,6 +93837,7 @@ true,
 false,
 false
 ],
+"GEOPDGroundDataBuild.lodWithTextures.<encoding>": "EXPANDED",
 "GEOPDGroundDataBuild.metricsVersion": [
 "uint32",
 null,
@@ -94177,6 +94276,7 @@ true,
 false,
 false
 ],
+"GEOPDGuidesHomeParameters.supportedFixedSectionTypes.<encoding>": "EXPANDED",
 "GEOPDGuidesHomeParameters.supportedRepeatableSectionTypes": [
 "GuidesHomeRepeatableSectionType",
 "ENUM:GuidesHomeRepeatableSectionType",
@@ -94186,6 +94286,7 @@ true,
 false,
 false
 ],
+"GEOPDGuidesHomeParameters.supportedRepeatableSectionTypes.<encoding>": "EXPANDED",
 "GEOPDGuidesHomeParameters.viewportInfo": [
 "GEOPDViewportInfo",
 "GEOPDViewportInfo",
@@ -94415,6 +94516,7 @@ true,
 false,
 false
 ],
+"GEOPDGuidesLocationEntry.geoIdCandidates.<encoding>": "EXPANDED",
 "GEOPDGuidesLocationEntry.mapRegion": [
 "GEOMapRegion",
 "GEOMapRegion",
@@ -94579,6 +94681,7 @@ true,
 false,
 false
 ],
+"GEOPDHours.days.<encoding>": "EXPANDED",
 "GEOPDHours.hoursThreshold": [
 "GEOPDHoursThreshold",
 "GEOPDHoursThreshold",
@@ -95837,6 +95940,7 @@ true,
 false,
 false
 ],
+"GEOPDMapsSearchHomeParameters.supportedSectionTypes.<encoding>": "EXPANDED",
 "GEOPDMapsSearchHomeResult.mapsSearchHomeSections": [
 "GEOPDMapsSearchHomeSection",
 "GEOPDMapsSearchHomeSection",
@@ -96163,6 +96267,7 @@ true,
 false,
 false
 ],
+"GEOPDMerchantBrandLookupResponse.abstractOfBrandMuids.<encoding>": "EXPANDED",
 "GEOPDMerchantBrandLookupResponse.childBrandMuids": [
 "uint64",
 null,
@@ -96172,6 +96277,7 @@ true,
 false,
 false
 ],
+"GEOPDMerchantBrandLookupResponse.childBrandMuids.<encoding>": "EXPANDED",
 "GEOPDMerchantBrandLookupResponse.geoHashs": [
 "string",
 null,
@@ -96226,6 +96332,7 @@ true,
 false,
 false
 ],
+"GEOPDMerchantBrandLookupResponse.variantBrandMuids.<encoding>": "EXPANDED",
 "GEOPDMerchantInformation.merchantAdditionalData": [
 "string",
 null,
@@ -97848,6 +97955,7 @@ true,
 false,
 false
 ],
+"GEOPDPhotoPosition.cameraMetadataIndexs.<encoding>": "EXPANDED",
 "GEOPDPhotoPosition.cameraMetadatas": [
 "GEOPDCameraMetadata",
 "GEOPDCameraMetadata",
@@ -99289,6 +99397,7 @@ true,
 false,
 false
 ],
+"GEOPDPlaceLookupParameters.muids.<encoding>": "EXPANDED",
 "GEOPDPlaceLookupParameters.resultProviderId": [
 "int32",
 null,
@@ -101216,6 +101325,7 @@ true,
 false,
 false
 ],
+"GEOPDPlaceSummaryLayoutTemplateEntry.trailingEntityTypeOrders.<encoding>": "EXPANDED",
 "GEOPDPlaceSummaryLayoutUnit.<enum:PDPlaceSummaryLayoutUnitType>": [
 [
 [
@@ -101727,6 +101837,7 @@ true,
 false,
 false
 ],
+"GEOPDPlaceSummaryLayoutUnitHours.allowedHoursStates.<encoding>": "EXPANDED",
 "GEOPDPlaceSummaryLayoutUnitHours.type": [
 "PDPlaceSummaryLayoutUnitHoursType",
 "ENUM:PDPlaceSummaryLayoutUnitHoursType",
@@ -101947,6 +102058,7 @@ true,
 false,
 false
 ],
+"GEOPDPlaceSummaryResultLayoutTemplatePair.placeTypes.<encoding>": "EXPANDED",
 "GEOPDPlacecardEnrichmentParameters.enrichmentInfos": [
 "GEOPDEnrichmentInfo",
 "GEOPDEnrichmentInfo",
@@ -102113,6 +102225,7 @@ true,
 false,
 false
 ],
+"GEOPDPoiIconCategoryFilter.excludeCategoryFilters.<encoding>": "EXPANDED",
 "GEOPDPoiIconCategoryFilter.includeCategoryFilters": [
 "uint32",
 null,
@@ -102122,6 +102235,7 @@ true,
 false,
 false
 ],
+"GEOPDPoiIconCategoryFilter.includeCategoryFilters.<encoding>": "EXPANDED",
 "GEOPDPopularNearbyResult.litePlaceResults": [
 "GEOPDLitePlaceResult",
 "GEOPDLitePlaceResult",
@@ -103208,6 +103322,7 @@ true,
 false,
 false
 ],
+"GEOPDRelatedPlace.areaHighlightIndexs.<encoding>": "EXPANDED",
 "GEOPDRelatedPlace.mapsIds": [
 "GEOPDMapsIdentifier",
 "GEOPDMapsIdentifier",
@@ -104611,6 +104726,7 @@ true,
 false,
 false
 ],
+"GEOPDResultSnippetFilter.supportedChildActions.<encoding>": "EXPANDED",
 "GEOPDRetainedSearchMetadata.query": [
 "string",
 null,
@@ -104892,6 +105008,7 @@ true,
 false,
 false
 ],
+"GEOPDRigMetrics.occlusionScores.<encoding>": "EXPANDED",
 "GEOPDRoadAccessInfo.roadAccessPoints": [
 "GEORoadAccessPoint",
 "GEORoadAccessPoint",
@@ -106156,6 +106273,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchBrowseCategorySuggestionParameters.engineTypes.<encoding>": "EXPANDED",
 "GEOPDSearchBrowseCategorySuggestionParameters.evChargingParameters": [
 "GEOPDSSearchEvChargingParameters",
 "GEOPDSSearchEvChargingParameters",
@@ -106477,6 +106595,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchChainInfo.relationshipTypes.<encoding>": "EXPANDED",
 "GEOPDSearchChainIntent.brandMuid": [
 "uint64",
 null,
@@ -106495,6 +106614,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchChainIntent.brandMuids.<encoding>": "EXPANDED",
 "GEOPDSearchChainIntent.brandRelationshipInfos": [
 "GEOPDSearchChainInfo",
 "GEOPDSearchChainInfo",
@@ -108533,6 +108653,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchParameters.knownRefinementTypes.<encoding>": "EXPANDED",
 "GEOPDSearchParameters.maxResults": [
 "uint32",
 null,
@@ -108749,6 +108870,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchParameters.supportedPlaceSummaryFormatTypes.<encoding>": "EXPANDED",
 "GEOPDSearchParameters.supportedRelatedEntitySectionTypes": [
 "RelatedEntitySectionType",
 "ENUM:RelatedEntitySectionType",
@@ -108758,6 +108880,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchParameters.supportedRelatedEntitySectionTypes.<encoding>": "EXPANDED",
 "GEOPDSearchParameters.supportedSearchSectionTypes": [
 "SearchSectionType",
 "ENUM:SearchSectionType",
@@ -108767,6 +108890,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchParameters.supportedSearchSectionTypes.<encoding>": "EXPANDED",
 "GEOPDSearchParameters.supportedSearchTierTypes": [
 "SearchTierMetadata",
 "ENUM:SearchTierMetadata",
@@ -108776,6 +108900,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchParameters.supportedSearchTierTypes.<encoding>": "EXPANDED",
 "GEOPDSearchParameters.viewportInfo": [
 "GEOPDViewportInfo",
 "GEOPDViewportInfo",
@@ -109027,6 +109152,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryCompletionMetadata.completionSourceTypes.<encoding>": "EXPANDED",
 "GEOPDSearchQueryCompletionMetadata.isCompletematch": [
 "bool",
 null,
@@ -109072,6 +109198,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryCompletionMetadata.tags.<encoding>": "EXPANDED",
 "GEOPDSearchQueryCompletionMetadata.tokens": [
 "string",
 null,
@@ -109311,6 +109438,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryEmbeddingMetadata.embeddings.<encoding>": "EXPANDED",
 "GEOPDSearchQueryEmbeddingMetadata.modelVersions": [
 "GEOPDSearchStringStringPair",
 "GEOPDSearchStringStringPair",
@@ -109347,6 +109475,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryFuzzyMatchV2Metadata.fuzzyV2Scores.<encoding>": "EXPANDED",
 "GEOPDSearchQueryFuzzyMatchV2Metadata.pruneFuzzyV2Results": [
 "bool",
 null,
@@ -109365,6 +109494,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryFuzzyMatchV2Metadata.rewriteTypes.<encoding>": "EXPANDED",
 "GEOPDSearchQueryFuzzyMatchV2Metadata.rewrittenQueries": [
 "string",
 null,
@@ -109445,6 +109575,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryGeoNormalizerMetadata.normalizers.<encoding>": "EXPANDED",
 "GEOPDSearchQueryGeoNormalizerMetadata.poPox": [
 "string",
 null,
@@ -109634,6 +109765,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryGeoTagMetadata.geoRewriteTypes.<encoding>": "EXPANDED",
 "GEOPDSearchQueryGeoTagMetadata.geoTypeMaps": [
 "GEOPDSearchStringGeoTypesPair",
 "GEOPDSearchStringGeoTypesPair",
@@ -109652,6 +109784,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryGeoTagMetadata.tagSources.<encoding>": "EXPANDED",
 "GEOPDSearchQueryIntent.globalFeatureMaps": [
 "GEOPDSearchPair",
 "GEOPDSearchPair",
@@ -109861,6 +109994,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryIntentMetadata.intentSources.<encoding>": "EXPANDED",
 "GEOPDSearchQueryIntentMetadata.isFromDefinitiveQu": [
 "bool",
 null,
@@ -110104,6 +110238,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchQueryIntentMetadata.rewrittenQueryTypes.<encoding>": "EXPANDED",
 "GEOPDSearchQueryIntentMetadata.richBrandMetadata": [
 "GEOPDSearchRichBrandMetadata",
 "GEOPDSearchRichBrandMetadata",
@@ -111030,6 +111165,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchResultsForCategoryEntry.placeIndexs.<encoding>": "EXPANDED",
 "GEOPDSearchRewrittenQueryNonPayloadField.<enum:PDSearchRewrittenQueryNonPayloadFieldPipelineType>": [
 [
 [
@@ -111753,6 +111889,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchStringGeoTypesPair.geoTypeIds.<encoding>": "EXPANDED",
 "GEOPDSearchStringGeoTypesPair.key": [
 "string",
 null,
@@ -112232,6 +112369,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchTriggerFeature.completionSourceTypes.<encoding>": "EXPANDED",
 "GEOPDSearchTriggerFeature.displayName": [
 "string",
 null,
@@ -112531,6 +112669,7 @@ true,
 false,
 false
 ],
+"GEOPDSearchZeroKeywordEntry.categoryIndexs.<encoding>": "EXPANDED",
 "GEOPDSearchZeroKeywordEntry.dayOfWeek": [
 "uint32",
 null,
@@ -112952,6 +113091,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialEventLookupParameters.categoryFilters.<encoding>": "EXPANDED",
 "GEOPDSpatialEventLookupParameters.center": [
 "GEOLatLng",
 "GEOLatLng",
@@ -113059,6 +113199,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialEventLookupResponse.categorys.<encoding>": "EXPANDED",
 "GEOPDSpatialEventLookupResponse.center": [
 "GEOLatLng",
 "GEOLatLng",
@@ -113299,6 +113440,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialLookupResult.mappedCategorys.<encoding>": "EXPANDED",
 "GEOPDSpatialPlaceLookupParameters.<enum:SpatialPlaceLookupCategory>": [
 [
 [
@@ -113428,6 +113570,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialPlaceLookupParameters.categoryFilters.<encoding>": "EXPANDED",
 "GEOPDSpatialPlaceLookupParameters.center": [
 "GEOLatLng",
 "GEOLatLng",
@@ -113455,6 +113598,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialPlaceLookupParameters.excludeIconCategoryFilters.<encoding>": "EXPANDED",
 "GEOPDSpatialPlaceLookupParameters.includeIconCategoryFilters": [
 "uint32",
 null,
@@ -113464,6 +113608,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialPlaceLookupParameters.includeIconCategoryFilters.<encoding>": "EXPANDED",
 "GEOPDSpatialPlaceLookupParameters.mapRegion": [
 "GEOMapRegion",
 "GEOMapRegion",
@@ -113620,6 +113765,7 @@ true,
 false,
 false
 ],
+"GEOPDSpatialPlaceLookupResponse.categorys.<encoding>": "EXPANDED",
 "GEOPDSpatialPlaceLookupResponse.center": [
 "GEOLatLng",
 "GEOLatLng",
@@ -114757,6 +114903,7 @@ true,
 false,
 false
 ],
+"GEOPDTransitScheduleCategory.groupIndexs.<encoding>": "EXPANDED",
 "GEOPDTransitScheduleFilter.departurePredicateCountdown": [
 "GEOPDDeparturePredicate",
 "GEOPDDeparturePredicate",
@@ -114828,6 +114975,7 @@ true,
 false,
 false
 ],
+"GEOPDTransitScheduleGroup.departureSequenceContainerIndexs.<encoding>": "EXPANDED",
 "GEOPDTransitScheduleGroup.departureSequenceIndexs": [
 "uint32",
 null,
@@ -114837,6 +114985,7 @@ true,
 false,
 false
 ],
+"GEOPDTransitScheduleGroup.departureSequenceIndexs.<encoding>": "EXPANDED",
 "GEOPDTransitScheduleGroup.displayName": [
 "string",
 null,
@@ -114864,6 +115013,7 @@ true,
 false,
 false
 ],
+"GEOPDTransitScheduleGroup.incidentIds.<encoding>": "EXPANDED",
 "GEOPDTransitScheduleGroup.maxWalkingDistance": [
 "uint32",
 null,
@@ -114928,6 +115078,7 @@ true,
 false,
 false
 ],
+"GEOPDTransitTripGeometry.tripStepIndexs.<encoding>": "EXPANDED",
 "GEOPDTransitTripGeometryFilter.<opaque_passthrough>": true,
 "GEOPDTransitTripStop.stopInfos": [
 "GEOPDTransitInfoSnippet",
@@ -114993,6 +115144,7 @@ true,
 false,
 false
 ],
+"GEOPDTransitVehiclePositionParameters.tripIds.<encoding>": "EXPANDED",
 "GEOPDTripLink.linkGeometry": [
 "bytes",
 null,
@@ -115094,6 +115246,7 @@ true,
 false,
 false
 ],
+"GEOPDVendorIDLink.reservationTypes.<encoding>": "EXPANDED",
 "GEOPDVendorIDLink.vendorId": [
 "string",
 null,
@@ -115345,6 +115498,7 @@ true,
 false,
 false
 ],
+"GEOPDVenueBuilding.directoryGroupingIds.<encoding>": "EXPANDED",
 "GEOPDVenueBuilding.label": [
 "GEOPDVenueLabel",
 "GEOPDVenueLabel",
@@ -115363,6 +115517,7 @@ true,
 false,
 false
 ],
+"GEOPDVenueBuilding.levelIds.<encoding>": "EXPANDED",
 "GEOPDVenueBuilding.muid": [
 "uint64",
 null,
@@ -115408,6 +115563,7 @@ true,
 false,
 false
 ],
+"GEOPDVenueContainer.buildingIds.<encoding>": "EXPANDED",
 "GEOPDVenueContainer.label": [
 "GEOPDVenueLabel",
 "GEOPDVenueLabel",
@@ -115507,6 +115663,7 @@ true,
 false,
 false
 ],
+"GEOPDVenueIdentifier.containedBys.<encoding>": "EXPANDED",
 "GEOPDVenueIdentifier.featureId": [
 "uint64",
 null,
@@ -115561,6 +115718,7 @@ true,
 false,
 false
 ],
+"GEOPDVenueIdentifier.sectionIds.<encoding>": "EXPANDED",
 "GEOPDVenueIdentifier.unitId": [
 "uint64",
 null,
@@ -116326,6 +116484,7 @@ true,
 false,
 false
 ],
+"GEOPhotoOptions.photoSizes.<encoding>": "EXPANDED",
 "GEOPhotoOptions.photoType": [
 "PhotoOptionsPhotoType",
 "ENUM:PhotoOptionsPhotoType",
@@ -117093,6 +117252,7 @@ true,
 false,
 false
 ],
+"GEOPlaceCardModule.contents.<encoding>": "EXPANDED",
 "GEOPlaceCardModule.metadata": [
 "string",
 null,
@@ -118010,6 +118170,7 @@ true,
 false,
 false
 ],
+"GEOPlaceSearchRequest.additionalPlaceTypes.<encoding>": "EXPANDED",
 "GEOPlaceSearchRequest.address": [
 "GEOAddress",
 "GEOAddress",
@@ -118028,6 +118189,7 @@ true,
 false,
 false
 ],
+"GEOPlaceSearchRequest.businessIDs.<encoding>": "EXPANDED",
 "GEOPlaceSearchRequest.businessOptions": [
 "GEOBusinessOptions",
 "GEOBusinessOptions",
@@ -118424,6 +118586,7 @@ true,
 false,
 false
 ],
+"GEOPlaceSearchRequest.optionalSuppressionReasons.<encoding>": "EXPANDED",
 "GEOPlaceSearchRequest.phoneticLocaleIdentifier": [
 "string",
 null,
@@ -118830,6 +118993,7 @@ true,
 false,
 false
 ],
+"GEOPolyLocationShiftResponse.parameters.<encoding>": "EXPANDED",
 "GEOPolyLocationShiftResponse.radius": [
 "double",
 null,
@@ -119313,6 +119477,7 @@ true,
 false,
 false
 ],
+"GEOPublisherDetails.publisherIds.<encoding>": "EXPANDED",
 "GEORPAccessPointCorrections.addeds": [
 "GEORoadAccessPoint",
 "GEORoadAccessPoint",
@@ -120001,6 +120166,7 @@ true,
 false,
 false
 ],
+"GEORPAmenityCorrections.addedAmenities.<encoding>": "EXPANDED",
 "GEORPAmenityCorrections.removedAmenities": [
 "RPAmenityCorrectionsRemovedAmenities",
 "ENUM:RPAmenityCorrectionsRemovedAmenities",
@@ -120010,6 +120176,7 @@ true,
 false,
 false
 ],
+"GEORPAmenityCorrections.removedAmenities.<encoding>": "EXPANDED",
 "GEORPAppAttestInfo.anonymousUserId": [
 "string",
 null,
@@ -120213,6 +120380,7 @@ true,
 false,
 false
 ],
+"GEORPContainmentCorrection.addedMuids.<encoding>": "EXPANDED",
 "GEORPContainmentCorrection.originalMuids": [
 "uint64",
 null,
@@ -120222,6 +120390,7 @@ true,
 false,
 false
 ],
+"GEORPContainmentCorrection.originalMuids.<encoding>": "EXPANDED",
 "GEORPContainmentCorrection.removedMuids": [
 "uint64",
 null,
@@ -120231,6 +120400,7 @@ true,
 false,
 false
 ],
+"GEORPContainmentCorrection.removedMuids.<encoding>": "EXPANDED",
 "GEORPCorrectedCoordinate.correctedCoordinate": [
 "GEOLatLng",
 "GEOLatLng",
@@ -120587,6 +120757,7 @@ true,
 false,
 false
 ],
+"GEORPCuratedCollectionContext.placeEntityMuids.<encoding>": "EXPANDED",
 "GEORPCuratedCollectionCorrections.<enum:CuratedCollectionCorrectionType>": [
 [
 [
@@ -122699,6 +122870,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackCommonContext.userPaths.<encoding>": "EXPANDED",
 "GEORPFeedbackCommonContext.visibleTileSets": [
 "GEORPVisibleTileSet",
 "GEORPVisibleTileSet",
@@ -124420,6 +124592,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackIdLookupParameters.feedbackComponentTypes.<encoding>": "EXPANDED",
 "GEORPFeedbackIdLookupParameters.feedbackIds": [
 "string",
 null,
@@ -125562,6 +125735,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackQueryParameters.feedbackComponentTypes.<encoding>": "EXPANDED",
 "GEORPFeedbackQueryParameters.filter": [
 "GEORPFilter",
 "GEORPFilter",
@@ -125713,6 +125887,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackRequest.feedbackClientCapabilities.<encoding>": "PACKED",
 "GEORPFeedbackRequest.feedbackRequestParameters": [
 "GEORPFeedbackRequestParameters",
 "GEORPFeedbackRequestParameters",
@@ -126437,6 +126612,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackULongListField.addeds.<encoding>": "EXPANDED",
 "GEORPFeedbackULongListField.originals": [
 "uint64",
 null,
@@ -126446,6 +126622,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackULongListField.originals.<encoding>": "EXPANDED",
 "GEORPFeedbackULongListField.removeds": [
 "uint64",
 null,
@@ -126455,6 +126632,7 @@ true,
 false,
 false
 ],
+"GEORPFeedbackULongListField.removeds.<encoding>": "EXPANDED",
 "GEORPFeedbackUserInfo.anonUserInfo": [
 "GEORPAppAttestInfo",
 "GEORPAppAttestInfo",
@@ -126669,6 +126847,7 @@ true,
 false,
 false
 ],
+"GEORPGroundViewFeedbackContext.visiblePlaceMuids.<encoding>": "EXPANDED",
 "GEORPGroundViewImageResource.<enum:ImageLoadStatus>": [
 [
 [
@@ -127207,6 +127386,7 @@ true,
 false,
 false
 ],
+"GEORPIncidentUserPath.userPaths.<encoding>": "EXPANDED",
 "GEORPInstructionCorrection.comments": [
 "string",
 null,
@@ -128131,6 +128311,7 @@ true,
 false,
 false
 ],
+"GEORPPhotoAttributionPreferencesUpdateResult.errors.<encoding>": "EXPANDED",
 "GEORPPhotoAttributionPreferencesUpdateResult.preferences": [
 "GEORPPhotoAttributionPreferences",
 "GEORPPhotoAttributionPreferences",
@@ -128419,6 +128600,7 @@ true,
 false,
 false
 ],
+"GEORPPoiActivityFeedback.representativeHours.<encoding>": "EXPANDED",
 "GEORPPoiCorrections.address": [
 "GEORPAddressCorrections",
 "GEORPAddressCorrections",
@@ -129497,6 +129679,7 @@ true,
 false,
 false
 ],
+"GEORPProblem.userPaths.<encoding>": "EXPANDED",
 "GEORPProblemCollectionRequest.countryCode": [
 "string",
 null,
@@ -131059,6 +131242,7 @@ true,
 false,
 false
 ],
+"GEORPSuggestedRouteIndex.clusteredRouteRideSelections.<encoding>": "EXPANDED",
 "GEORPSuggestedRouteIndex.directionsResponseIndex": [
 "uint32",
 null,
@@ -131394,6 +131578,7 @@ true,
 false,
 false
 ],
+"GEORPThirdPartyPhotoSharingPreferenceUpdateResult.errors.<encoding>": "EXPANDED",
 "GEORPThirdPartyPhotoSharingPreferenceUpdateResult.preference": [
 "GEORPThirdPartyPhotoSharingPreference",
 "GEORPThirdPartyPhotoSharingPreference",
@@ -133522,6 +133707,7 @@ true,
 false,
 false
 ],
+"GEORPUserPath.nativePaths.<encoding>": "EXPANDED",
 "GEORPUserPath.webPaths": [
 "string",
 null,
@@ -134414,6 +134600,7 @@ true,
 false,
 false
 ],
+"GEORecentLocationHistory.relativeDistanceToDestinations.<encoding>": "EXPANDED",
 "GEORecentLocationHistory.relativeLocations": [
 "GEOLatLngE7",
 "GEOLatLngE7",
@@ -134946,6 +135133,7 @@ true,
 false,
 false
 ],
+"GEOResourceFilter.scales.<encoding>": "EXPANDED",
 "GEOResourceFilter.scenarios": [
 "ResourceFilterScenario",
 "ENUM:ResourceFilterScenario",
@@ -134955,6 +135143,7 @@ true,
 false,
 false
 ],
+"GEOResourceFilter.scenarios.<encoding>": "EXPANDED",
 "GEOResourceManifestDownload.metadata": [
 "GEODownloadMetadata",
 "GEODownloadMetadata",
@@ -136126,6 +136315,7 @@ true,
 false,
 false
 ],
+"GEORevealedPlaceCardModuleTypeTitle.titleElements.<encoding>": "EXPANDED",
 "GEORevealedPlaceCardModuleTypeUnifiedActionRow.buttons": [
 "GEORevealedPlaceCardModuleButton",
 "GEORevealedPlaceCardModuleButton",
@@ -136821,6 +137011,7 @@ true,
 false,
 false
 ],
+"GEORoute.cellularCoverageOffsets.<encoding>": "PACKED",
 "GEORoute.cellularCoverages": [
 "CellularCoverage",
 "ENUM:CellularCoverage",
@@ -136830,6 +137021,7 @@ true,
 false,
 false
 ],
+"GEORoute.cellularCoverages.<encoding>": "PACKED",
 "GEORoute.clickableAdvisory": [
 "GEOClickableAdvisory",
 "GEOClickableAdvisory",
@@ -136965,6 +137157,7 @@ true,
 false,
 false
 ],
+"GEORoute.incidentEndOffsetsInRoutes.<encoding>": "PACKED",
 "GEORoute.incidentIndices": [
 "uint32",
 null,
@@ -136974,6 +137167,7 @@ true,
 false,
 false
 ],
+"GEORoute.incidentIndices.<encoding>": "PACKED",
 "GEORoute.incidentOnRouteInfos": [
 "GEOIncidentOnRouteInfo",
 "GEOIncidentOnRouteInfo",
@@ -137217,6 +137411,7 @@ true,
 false,
 false
 ],
+"GEORoute.trafficColorOffsets.<encoding>": "PACKED",
 "GEORoute.trafficColors": [
 "uint32",
 null,
@@ -137226,6 +137421,7 @@ true,
 false,
 false
 ],
+"GEORoute.trafficColors.<encoding>": "PACKED",
 "GEORoute.trafficDescription": [
 "string",
 null,
@@ -137537,6 +137733,7 @@ true,
 false,
 false
 ],
+"GEORouteAttributes.additionalTransportTypes.<encoding>": "EXPANDED",
 "GEORouteAttributes.automobileOptions": [
 "GEOAutomobileOptions",
 "GEOAutomobileOptions",
@@ -137717,6 +137914,7 @@ true,
 false,
 false
 ],
+"GEORouteAttributes.initialPromptTypes.<encoding>": "EXPANDED",
 "GEORouteAttributes.mainTransportType": [
 "RouteAttributesMainTransportType",
 "ENUM:RouteAttributesMainTransportType",
@@ -137771,6 +137969,7 @@ true,
 false,
 false
 ],
+"GEORouteAttributes.uiContexts.<encoding>": "EXPANDED",
 "GEORouteAttributes.useMetricThreshold": [
 "bool",
 null,
@@ -137897,6 +138096,7 @@ true,
 false,
 false
 ],
+"GEORouteDisplayHints.availablePaymentTypes.<encoding>": "EXPANDED",
 "GEORouteDisplayHints.availablePrioritizations": [
 "TransitPrioritize",
 "ENUM:TransitPrioritize",
@@ -137906,6 +138106,7 @@ true,
 false,
 false
 ],
+"GEORouteDisplayHints.availablePrioritizations.<encoding>": "PACKED",
 "GEORouteDisplayHints.showTransitSchedules": [
 "bool",
 null,
@@ -138904,6 +139105,7 @@ true,
 false,
 false
 ],
+"GEOSearchAttributionSource.attributionRequirements.<encoding>": "EXPANDED",
 "GEOSearchAttributionSource.enforceAppStore": [
 "bool",
 null,
@@ -138967,6 +139169,7 @@ true,
 false,
 false
 ],
+"GEOSearchAttributionSource.suppressAttributionLogos.<encoding>": "EXPANDED",
 "GEOSearchAttributionSource.webBaseActionURL": [
 "string",
 null,
@@ -139328,6 +139531,7 @@ true,
 false,
 false
 ],
+"GEOSharedNavRouteInfo.coordinates.<encoding>": "PACKED",
 "GEOSharedNavRouteInfo.routingPathLegs": [
 "bytes",
 null,
@@ -139346,6 +139550,7 @@ true,
 false,
 false
 ],
+"GEOSharedNavRouteInfo.trafficColorOffsets.<encoding>": "EXPANDED",
 "GEOSharedNavRouteInfo.trafficColors": [
 "uint32",
 null,
@@ -139355,6 +139560,7 @@ true,
 false,
 false
 ],
+"GEOSharedNavRouteInfo.trafficColors.<encoding>": "EXPANDED",
 "GEOSharedNavSenderInfo.fromDisplayName": [
 "string",
 null,
@@ -140348,6 +140554,7 @@ true,
 false,
 false
 ],
+"GEOSpatialLookupRequest.categorys.<encoding>": "EXPANDED",
 "GEOSpatialLookupRequest.center": [
 "GEOLatLng",
 "GEOLatLng",
@@ -141925,6 +142132,7 @@ true,
 false,
 false
 ],
+"GEOStepGroup.stepIds.<encoding>": "EXPANDED",
 "GEOStopAddedDetails.<enum:StopAddedDetailsStopAddedAction>": [
 [
 [
@@ -142300,6 +142508,7 @@ true,
 false,
 false
 ],
+"GEOStructuredAddress.geoIds.<encoding>": "EXPANDED",
 "GEOStructuredAddress.inlandWater": [
 "string",
 null,
@@ -142582,6 +142791,7 @@ true,
 false,
 false
 ],
+"GEOSubactionMetaData.subactions.<encoding>": "EXPANDED",
 "GEOSuggestionEntry.calloutTitle": [
 "string",
 null,
@@ -142952,6 +143162,7 @@ true,
 false,
 false
 ],
+"GEOTFCompactRoadSpeeds.geoIds.<encoding>": "PACKED",
 "GEOTFCompactRoadSpeeds.hidden": [
 "bool",
 null,
@@ -143252,6 +143463,7 @@ true,
 false,
 false
 ],
+"GEOTFIncident.geoids.<encoding>": "EXPANDED",
 "GEOTFIncident.hardBlocked": [
 "bool",
 null,
@@ -143548,6 +143760,7 @@ true,
 false,
 false
 ],
+"GEOTFRoadSpeed.geoIds.<encoding>": "EXPANDED",
 "GEOTFRoadSpeed.geoid": [
 "sint64",
 null,
@@ -143575,6 +143788,7 @@ true,
 false,
 false
 ],
+"GEOTFRoadSpeed.latitudeCoordinates.<encoding>": "PACKED",
 "GEOTFRoadSpeed.longitudeCoordinates": [
 "float",
 null,
@@ -143584,6 +143798,7 @@ true,
 false,
 false
 ],
+"GEOTFRoadSpeed.longitudeCoordinates.<encoding>": "PACKED",
 "GEOTFRoadSpeed.openlr": [
 "bytes",
 null,
@@ -146354,6 +146569,7 @@ true,
 false,
 false
 ],
+"GEOTerritoryDataPolygon.shells.<encoding>": "PACKED",
 "GEOTerritoryDataRing.points": [
 "uint32",
 null,
@@ -146363,6 +146579,7 @@ true,
 false,
 false
 ],
+"GEOTerritoryDataRing.points.<encoding>": "PACKED",
 "GEOTerritoryDataTerritoryInfo.<enum:TerritoryDataTerritoryInfoTerritoryTypes>": [
 [
 [
@@ -146412,6 +146629,7 @@ true,
 false,
 false
 ],
+"GEOTerritoryDataTerritoryInfo.interestedPartys.<encoding>": "PACKED",
 "GEOTerritoryDataTerritoryInfo.name": [
 "string",
 null,
@@ -146448,6 +146666,7 @@ true,
 false,
 false
 ],
+"GEOTerritoryDataTerritoryInfo.territoryTypes.<encoding>": "EXPANDED",
 "GEOTerritoryDataTileData.territorys": [
 "GEOTerritoryDataTerritoryInfo",
 "GEOTerritoryDataTerritoryInfo",
@@ -146511,6 +146730,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.attributionIndexs.<encoding>": "EXPANDED",
 "GEOTileGroup.fontIndexs": [
 "uint32",
 null,
@@ -146520,6 +146740,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.fontIndexs.<encoding>": "EXPANDED",
 "GEOTileGroup.hybridUnavailableRegions": [
 "GEOTileSetRegion",
 "GEOTileSetRegion",
@@ -146538,6 +146759,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.iconIndexs.<encoding>": "EXPANDED",
 "GEOTileGroup.identifier": [
 "uint32",
 null,
@@ -146574,6 +146796,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.resourceIndexs.<encoding>": "EXPANDED",
 "GEOTileGroup.styleSheetIndexs": [
 "uint32",
 null,
@@ -146583,6 +146806,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.styleSheetIndexs.<encoding>": "EXPANDED",
 "GEOTileGroup.textureIndexs": [
 "uint32",
 null,
@@ -146592,6 +146816,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.textureIndexs.<encoding>": "EXPANDED",
 "GEOTileGroup.tileSets": [
 "GEOVersionedTileSet",
 "GEOVersionedTileSet",
@@ -146610,6 +146835,7 @@ true,
 false,
 false
 ],
+"GEOTileGroup.xmlIndexs.<encoding>": "EXPANDED",
 "GEOTileSet.<enum:ChecksumType>": [
 [
 [
@@ -148170,6 +148396,7 @@ true,
 false,
 false
 ],
+"GEOTimeCheckpoints.distToNextCheckpoints.<encoding>": "PACKED",
 "GEOTimeCheckpoints.timeToNextCheckpoints": [
 "uint32",
 null,
@@ -148179,6 +148406,7 @@ true,
 false,
 false
 ],
+"GEOTimeCheckpoints.timeToNextCheckpoints.<encoding>": "PACKED",
 "GEOTimeGap.ifChained": [
 "bool",
 null,
@@ -149373,6 +149601,7 @@ true,
 false,
 false
 ],
+"GEOTransitBaseFare.supportedPaymentMethodIndexs.<encoding>": "EXPANDED",
 "GEOTransitBaseFare.supportedPaymentMethods": [
 "GEOPBTransitPaymentMethod",
 "GEOPBTransitPaymentMethod",
@@ -149526,6 +149755,7 @@ true,
 false,
 false
 ],
+"GEOTransitClusterArtworkSet.artworkIndexs.<encoding>": "EXPANDED",
 "GEOTransitClusterArtworkSet.artworkItems": [
 "GEOTransitClusterArtworkItem",
 "GEOTransitClusterArtworkItem",
@@ -149823,6 +150053,7 @@ true,
 false,
 false
 ],
+"GEOTransitExitPlanInfo.selectedCarIndexs.<encoding>": "EXPANDED",
 "GEOTransitIncidentItem.transitIncidentTitle": [
 "string",
 null,
@@ -149850,6 +150081,7 @@ true,
 false,
 false
 ],
+"GEOTransitLeg.restrictedToSectionIndexs.<encoding>": "EXPANDED",
 "GEOTransitLeg.sectionOptionIndex": [
 "int32",
 null,
@@ -150054,6 +150286,7 @@ true,
 false,
 false
 ],
+"GEOTransitOptions.avoidedModes.<encoding>": "EXPANDED",
 "GEOTransitOptions.enableIncidents": [
 "bool",
 null,
@@ -150624,6 +150857,7 @@ true,
 false,
 false
 ],
+"GEOTransitSection.actionSheetArtworkIndexs.<encoding>": "PACKED",
 "GEOTransitSection.actionSheetName": [
 "string",
 null,
@@ -150660,6 +150894,7 @@ true,
 false,
 false
 ],
+"GEOTransitSection.routeDetailsArtworkIndexs.<encoding>": "PACKED",
 "GEOTransitSection.stepIndexs": [
 "uint32",
 null,
@@ -150669,6 +150904,7 @@ true,
 false,
 false
 ],
+"GEOTransitSection.stepIndexs.<encoding>": "PACKED",
 "GEOTransitSection.ticketingSegments": [
 "GEOTransitTicketingSegment",
 "GEOTransitTicketingSegment",
@@ -150696,6 +150932,7 @@ true,
 false,
 false
 ],
+"GEOTransitSectionOption.sections.<encoding>": "PACKED",
 "GEOTransitSegmentArtworkSet.artworkIndexs": [
 "uint32",
 null,
@@ -150705,6 +150942,7 @@ true,
 false,
 false
 ],
+"GEOTransitSegmentArtworkSet.artworkIndexs.<encoding>": "EXPANDED",
 "GEOTransitSegmentArtworkSet.clusters": [
 "GEOTransitClusterArtworkSet",
 "GEOTransitClusterArtworkSet",
@@ -151028,6 +151266,7 @@ true,
 false,
 false
 ],
+"GEOTransitStep.routeDetailsPrimaryArtworkIndexs.<encoding>": "EXPANDED",
 "GEOTransitStep.routeDetailsSecondaryArtworkIndex": [
 "uint32",
 null,
@@ -151082,6 +151321,7 @@ true,
 false,
 false
 ],
+"GEOTransitStep.steppingArtworkIndexs.<encoding>": "EXPANDED",
 "GEOTransitStep.steppingTransitIncidentMessageIndex": [
 "uint32",
 null,
@@ -151306,6 +151546,7 @@ true,
 false,
 false
 ],
+"GEOTransitSuggestedRoute.routeBadges.<encoding>": "EXPANDED",
 "GEOTransitSuggestedRoute.routeHandle": [
 "bytes",
 null,
@@ -151526,6 +151767,7 @@ true,
 false,
 false
 ],
+"GEOTransitVehicleInfo.clusteredRouteLineArtworkIndexs.<encoding>": "PACKED",
 "GEOTransitVehicleInfo.departureFrequencyMax": [
 "uint32",
 null,
@@ -152729,6 +152971,7 @@ true,
 false,
 false
 ],
+"GEOVLDataTile.buildIndexs.<encoding>": "EXPANDED",
 "GEOVLDataTile.coord": [
 "GEOTileCoordinate",
 "GEOTileCoordinate",
@@ -152747,6 +152990,7 @@ true,
 false,
 false
 ],
+"GEOVLDataTile.precisionIndexs.<encoding>": "EXPANDED",
 "GEOVLDataTile.purposeDenylists": [
 "VlPurpose",
 "ENUM:VlPurpose",
@@ -152756,6 +153000,7 @@ true,
 false,
 false
 ],
+"GEOVLDataTile.purposeDenylists.<encoding>": "EXPANDED",
 "GEOVLFARFailureTypes.arWalkingNoLabels": [
 "bool",
 null,
@@ -153075,6 +153320,7 @@ true,
 false,
 false
 ],
+"GEOVLFFrameDetails.calibrationMatrixs.<encoding>": "EXPANDED",
 "GEOVLFFrameDetails.radialDistortion1": [
 "float",
 null,
@@ -153102,6 +153348,7 @@ true,
 false,
 false
 ],
+"GEOVLFFrameDetails.vioPoses.<encoding>": "EXPANDED",
 "GEOVLFFrameDetails.vioStatus": [
 "uint32",
 null,
@@ -153192,6 +153439,7 @@ true,
 false,
 false
 ],
+"GEOVLFLocalizationAlgorithmDetails.fusedConfidences.<encoding>": "EXPANDED",
 "GEOVLFLocalizationAlgorithmDetails.numberOfInliers": [
 "uint32",
 null,
@@ -153228,6 +153476,7 @@ true,
 false,
 false
 ],
+"GEOVLFLocalizationAlgorithmDetails.solverConfidences.<encoding>": "EXPANDED",
 "GEOVLFLocalizationAlgorithmDetails.tKptsMs": [
 "uint32",
 null,
@@ -153573,6 +153822,7 @@ true,
 false,
 false
 ],
+"GEOVLFSLAMTrack.descriptors.<encoding>": "EXPANDED",
 "GEOVLFSLAMTrack.imagePositions": [
 "GEOVLFImagePosition",
 "GEOVLFImagePosition",
@@ -153591,6 +153841,7 @@ true,
 false,
 false
 ],
+"GEOVLFSLAMTrack.observationImageIndices.<encoding>": "EXPANDED",
 "GEOVLFSLAMTrack.position": [
 "GEOVLFPoint3D",
 "GEOVLFPoint3D",
@@ -153618,6 +153869,7 @@ true,
 false,
 false
 ],
+"GEOVLFSuccessDetails.inlierSuccessIndices.<encoding>": "EXPANDED",
 "GEOVLFSuccessDetails.poseConfidence": [
 "double",
 null,
@@ -153739,6 +153991,7 @@ true,
 false,
 false
 ],
+"GEOVLMetadataTile.purposeDenylists.<encoding>": "EXPANDED",
 "GEOVLMetadataTile.tiles": [
 "GEOVLDataTile",
 "GEOVLDataTile",
@@ -153757,6 +154010,7 @@ true,
 false,
 false
 ],
+"GEOVLPrecision.precisions.<encoding>": "EXPANDED",
 "GEOVectorTileRequest.accessKey": [
 "string",
 null,
@@ -154019,6 +154273,7 @@ true,
 false,
 false
 ],
+"GEOWalkingOptions.avoidedModes.<encoding>": "EXPANDED",
 "GEOWalkingOptions.preferredSpeed": [
 "double",
 null,
@@ -154658,6 +154913,7 @@ true,
 false,
 false
 ],
+"GEOWaypointRoute.initialPromptTypes.<encoding>": "EXPANDED",
 "GEOWaypointRoute.names": [
 "GEONameInfo",
 "GEONameInfo",
@@ -155017,6 +155273,7 @@ true,
 false,
 false
 ],
+"GEOWiFiBSS.attributes.<encoding>": "EXPANDED",
 "GEOWiFiBSS.identifier": [
 "string",
 null,
@@ -155642,6 +155899,7 @@ true,
 false,
 false
 ],
+"GEOWiFiConnectionQuality.authTraits.<encoding>": "EXPANDED",
 "GEOWiFiConnectionQuality.band": [
 "uint32",
 null,
@@ -155921,6 +156179,7 @@ true,
 false,
 false
 ],
+"GEOWiFiConnectionQuality.nameAttributes.<encoding>": "EXPANDED",
 "GEOWiFiConnectionQuality.nearbyBSSs": [
 "GEOWiFiAP",
 "GEOWiFiAP",
@@ -156182,6 +156441,7 @@ true,
 false,
 false
 ],
+"GEOWiFiConnectionQuality.traits.<encoding>": "EXPANDED",
 "GEOWiFiConnectionQuality.type": [
 "WiFiConnectionQualityType",
 "ENUM:WiFiConnectionQualityType",
@@ -156438,6 +156698,7 @@ true,
 false,
 false
 ],
+"GEOWiFiESS.attributes.<encoding>": "EXPANDED",
 "GEOWiFiESS.authTraits": [
 "WiFiESSAuthTraits",
 "ENUM:WiFiESSAuthTraits",
@@ -156447,6 +156708,7 @@ true,
 false,
 false
 ],
+"GEOWiFiESS.authTraits.<encoding>": "EXPANDED",
 "GEOWiFiESS.bss": [
 "GEOWiFiBSS",
 "GEOWiFiBSS",
@@ -156953,6 +157215,7 @@ true,
 false,
 false
 ],
+"GEOWiFiQualityHours.days.<encoding>": "EXPANDED",
 "GEOWiFiQualityHours.timeRanges": [
 "GEOWiFiQualityTimeRange",
 "GEOWiFiQualityTimeRange",

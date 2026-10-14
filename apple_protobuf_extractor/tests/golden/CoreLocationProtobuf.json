@@ -715,6 +715,7 @@ true,
 false,
 false
 ],
+"CLPCdmaCellTowerLocation.derivedMccs.<encoding>": "EXPANDED",
 "CLPCdmaCellTowerLocation.ecn0": [
 "sint32",
 null,
@@ -2279,6 +2280,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONSimdDoubleM.values.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONSimdDoubleMxN.columns": [
 "CLPLOGENTRYVISIONSimdDoubleM",
 "CLPLOGENTRYVISIONSimdDoubleM",
@@ -2297,6 +2299,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONSimdFloatM.values.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONSimdFloatMxN.columns": [
 "CLPLOGENTRYVISIONSimdFloatM",
 "CLPLOGENTRYVISIONSimdFloatM",
@@ -2696,6 +2699,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.inlierIndices.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.numFrames": [
 "uint64",
 null,
@@ -2732,6 +2736,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameCalibrationMatrices.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameDistortions": [
 "float",
 null,
@@ -2741,6 +2746,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameDistortions.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameVioPoses": [
 "float",
 null,
@@ -2750,6 +2756,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameVioPoses.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameVioStatusCodes": [
 "int32",
 null,
@@ -2759,6 +2766,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.perFrameVioStatusCodes.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.points2ds": [
 "float",
 null,
@@ -2768,6 +2776,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.points2ds.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.points3ds": [
 "double",
 null,
@@ -2777,6 +2786,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.points3ds.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.resultPoseRotations": [
 "double",
 null,
@@ -2786,6 +2796,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.resultPoseRotations.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.resultPoseTranslations": [
 "double",
 null,
@@ -2795,6 +2806,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.resultPoseTranslations.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamOrigins": [
 "double",
 null,
@@ -2804,6 +2816,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamOrigins.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackDescriptors": [
 "bytes",
 null,
@@ -2822,6 +2835,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackImageIndices.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackObservations": [
 "int32",
 null,
@@ -2831,6 +2845,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTrackObservations.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTracks": [
 "float",
 null,
@@ -2840,6 +2855,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTracks.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTracks2ds": [
 "float",
 null,
@@ -2849,6 +2865,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLLocalizationMaps488Details.slamTracks2ds.<encoding>": "EXPANDED",
 "CLPLOGENTRYVISIONVLLocalizationResult.confidence": [
 "float",
 null,
@@ -2939,6 +2956,7 @@ true,
 false,
 false
 ],
+"CLPLOGENTRYVISIONVLVectorfM.values.<encoding>": "EXPANDED",
 "CLPLocation.<enum:LocationModeIndicator>": [
 [
 [
@@ -4559,6 +4577,7 @@ true,
 false,
 false
 ],
+"CLPPipelineDiagnosticReport.prbOnFloorEstimates.<encoding>": "PACKED",
 "CLPPipelineDiagnosticReport.prbOnFloorsEstimate": [
 "double",
 null,
@@ -5138,6 +5157,7 @@ true,
 false,
 false
 ],
+"CLPSatelliteInfo.azimuths.<encoding>": "PACKED",
 "CLPSatelliteInfo.cnos": [
 "sint32",
 null,
@@ -5147,6 +5167,7 @@ true,
 false,
 false
 ],
+"CLPSatelliteInfo.cnos.<encoding>": "PACKED",
 "CLPSatelliteInfo.elevations": [
 "sint32",
 null,
@@ -5156,6 +5177,7 @@ true,
 false,
 false
 ],
+"CLPSatelliteInfo.elevations.<encoding>": "PACKED",
 "CLPSatelliteInfo.isUsedInFixes": [
 "bool",
 null,
@@ -5165,6 +5187,7 @@ true,
 false,
 false
 ],
+"CLPSatelliteInfo.isUsedInFixes.<encoding>": "PACKED",
 "CLPSatelliteInfo.satIds": [
 "int32",
 null,
@@ -5174,6 +5197,7 @@ true,
 false,
 false
 ],
+"CLPSatelliteInfo.satIds.<encoding>": "PACKED",
 "CLPSatelliteReport.galileo": [
 "CLPSatelliteInfo",
 "CLPSatelliteInfo",

@@ -12,8 +12,8 @@ message TRANSITPbLocationFingerprint {
   uint64 locationId = 1;
   double latitude = 2;
   double longitude = 3;
-  repeated uint64 macs = 4;
-  repeated double modes = 5;
+  repeated uint64 macs = 4 [features.repeated_field_encoding = EXPANDED];
+  repeated double modes = 5 [features.repeated_field_encoding = EXPANDED];
 }
 
 message TRANSITPbLocationFingerprintV1 {

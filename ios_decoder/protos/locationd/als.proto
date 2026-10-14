@@ -126,7 +126,7 @@ message ALSLocationRequest {
   int32 numberOfSurroundingScdmaCells = 28;
   repeated ALSNr5GCellTower nr5GCellTowers = 29;
   int32 numberOfSurroundingNr5GCells = 30;
-  repeated ALSLocationRequestSurroundingWifiBands surroundingWifiBands = 31;
+  repeated ALSLocationRequestSurroundingWifiBands surroundingWifiBands = 31 [features.repeated_field_encoding = EXPANDED];
   ALSLocationRequestWifiAltitudeScale wifiAltitudeScale = 32;
   ALSMeta meta = 33;
 }
@@ -163,7 +163,7 @@ message ALSNearbyRequest {
   ALSNearbyRequestTechnology technology = 21;
   ALSNearbyRequestWifiGranularity wifiGranularity = 31;
   int32 radius = 32;
-  repeated ALSNearbyRequestWifiBands wifiBands = 33;
+  repeated ALSNearbyRequestWifiBands wifiBands = 33 [features.repeated_field_encoding = EXPANDED];
   ALSNearbyRequestWifiAltitudeScale wifiAltitudeScale = 34;
   ALSMeta meta = 35;
 }
