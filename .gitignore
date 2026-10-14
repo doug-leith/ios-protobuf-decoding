@@ -1,11 +1,12 @@
 # ── Large binary inputs (not source) ──
 # Apple artifacts the extractor reads: dyld shared cache (many GB), the locationd
-# binary, etc.  Point at them with MACHO_DATA_DIR, or symlink them in as ./iphone8_data.
-/iphone8_data/
-/iphone12_data/
-/ios27_data/
-/macos27_data/
-/dylib/
+# binary, etc.  Point at them with MACHO_DATA_DIR, or symlink them in as ./iphone8_data
+# (no trailing slash below, so a symlink is ignored as well as a directory).
+/iphone8_data
+/iphone12_data
+/ios27_data
+/macos27_data
+/dylib
 /locationd
 /geod
 /GeoServices
