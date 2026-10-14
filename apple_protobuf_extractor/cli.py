@@ -82,9 +82,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="apple_protobuf_extractor",
         description=(
-            "Extract proto3 schemas from protobuf classes in arm64 Mach-O "
-            "binaries and dyld caches: Apple PBCodable, C++ libprotobuf and "
-            "swift-protobuf."
+            "Extract .proto schemas (edition 2023: proto3 syntax with explicit field "
+            "presence) from protobuf classes in arm64 Mach-O binaries and dyld caches: "
+            "Apple PBCodable, C++ libprotobuf and swift-protobuf."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
@@ -164,7 +164,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="NAME",
         default=None,
         help=(
-            "proto3 package name override.  Used with --single-file; "
+            "Package name override.  Used with --single-file; "
             "defaults to a sanitised version of the binary/framework name."
         ),
     )
