@@ -287,8 +287,12 @@ def test_batch_reverse_geocode_request_decodes_by_name(tmp_path):
                                                            function_id=60,
                                                            payload=req.SerializeToString()),
                               default_table(), ctx)
+    # additionalPlaceTypes is an enum (value names recovered from the binary's inlined
+    # converter): values 1 and 2 print as COUNTRY and ADMINISTRATIVE_AREA
+    _pfx = "PD_BATCH_REVERSE_GEOCODING_PARAMETERS_ADDITIONAL_PLACE_TYPES_"
     for named in ('appIdentifier: "com.apple.photoanalysisd"', "batchReverseGeocodingParameters",
-                  "assetLocations", "lat: 10", "lng: 20", "additionalPlaceTypes: 1",
+                  "assetLocations", "lat: 10", "lng: 20",
+                  f"additionalPlaceTypes: {_pfx}COUNTRY", f"additionalPlaceTypes: {_pfx}ADMINISTRATIVE_AREA",
                   "requestType: REQUEST_TYPE_BATCH_REVERSE_GEOCODING"):
         assert named in out, named
     assert "// note:" not in out and "WARNING" not in out
