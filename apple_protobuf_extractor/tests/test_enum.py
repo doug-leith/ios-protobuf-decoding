@@ -156,6 +156,30 @@ class TestNormalizeEnumValueName(unittest.TestCase):
         self.assertEqual(result, "ROUTE_TYPE_DIRECT")
         self.assertNotIn("__", result)
 
+    def test_screaming_snake_raw_keeps_digit_letter_words(self):
+        # GeoServices value strings: case is not a word boundary in an all-caps string
+        self.assertEqual(self._n("UseEventType", "PUNCH_IN_3RD_PARTY"),
+                         "USE_EVENT_TYPE_PUNCH_IN_3RD_PARTY")
+        self.assertEqual(self._n("Action", "MAP_3D_OFF"), "ACTION_MAP_3D_OFF")
+        self.assertEqual(self._n("Hypothesis", "EARLIER_THAN_7M"),
+                         "HYPOTHESIS_EARLIER_THAN_7M")
+        self.assertEqual(self._n("ResourceFilterScale", "RESOURCE_FILTER_SCALE_1X"),
+                         "RESOURCE_FILTER_SCALE_1X")
+
+    def test_camel_case_raw_with_digits_still_splits(self):
+        self.assertEqual(self._n("Status", "notFound2Times"), "STATUS_NOT_FOUND2_TIMES")
+
+    def test_convention_is_decided_per_table(self):
+        # CoreLocationProtobuf magnetic calibration: "_3D" sits in a camelCase table
+        from proto.enums import _enum_values_from_pairs
+        names = [v.name for v in _enum_values_from_pairs(
+            "Calibration", [(3, "_3DWeak"), (4, "_3D"), (5, "_3DStrong")])]
+        self.assertEqual(names, ["CALIBRATION_3_D_WEAK", "CALIBRATION_3_D",
+                                 "CALIBRATION_3_D_STRONG"])
+        names = [v.name for v in _enum_values_from_pairs(
+            "Action", [(17048, "MAP_3D_OFF"), (17049, "MAP_3D_ON")])]
+        self.assertEqual(names, ["ACTION_MAP_3D_OFF", "ACTION_MAP_3D_ON"])
+
 
 # ── TestIsValidEnumString ─────────────────────────────────────────────────────
 

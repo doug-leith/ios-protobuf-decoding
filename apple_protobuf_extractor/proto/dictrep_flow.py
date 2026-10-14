@@ -390,10 +390,12 @@ class Flow:
         gate and not by an unrelated compare of the same value met on another path."""
         ins = self.insns[k]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        if mn == 'cmp' and len(ops) in (2, 3):
+        if mn in ('cmp', 'cmn') and len(ops) in (2, 3):
             r = _norm_reg(ops[0])
             if r in st:
                 c = _imm_operand(ops, 1) if ops[1].startswith('#') else self._const_reg(k, ops[1])
+                if c is not None and mn == 'cmn':     # `cmn w2, #1` compares with -1
+                    c = -c
                 if c is not None:
                     nxt = self.insns[k + 1].mnemonic if k + 1 < len(self.insns) else ''
                     cond = nxt[2:] if nxt.startswith('b.') else ''
@@ -543,9 +545,11 @@ class Flow:
                     nxt = self._skip_trap_branch(k, _parse_imm(ops[2]), mn, ins)
                 elif (((v >> (_parse_imm(ops[1]) or 0)) & 1) == 0) == (mn == 'tbz'):
                     nxt = jump(_parse_imm(ops[2]))
-            elif mn == 'cmp' and len(ops) in (2, 3):        # 3: ``cmp w2, #4, lsl #12``
+            elif mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12``
                 a = get(ops[0])
                 b = _imm_operand(ops, 1) if ops[1].startswith('#') else get(ops[1])
+                if b is not None and mn == 'cmn':       # flags of a + b, as `adds` below
+                    b = -b
                 flags[0] = (a, b, 32 if ops[0].startswith('w') else 64) \
                     if a is not None and b is not None else None
             elif mn in ('mov', 'movz') and len(ops) == 2:
@@ -707,7 +711,15 @@ class Flow:
                 problems.append(f"value {v}: {exc}")
         best: Dict[int, str] = {}
         for reg in sorted({r for obs in seen.values() for r in obs}):   # sorted: ties must not depend on hash order
-            texts = {obs[reg] for obs in seen.values() if reg in obs}
+            # A converter (k == _ENTRY: the value arrives as its argument) has no constant
+            # string argument of its own: a run either returns the name (x0 at the tail call)
+            # or stops at the formatter with the "(unknown: %i)" format in another register.
+            # So a register holding a string in some runs and none in others varies with the
+            # value too -- the only variation a converter with ONE named value shows
+            # (`cbz w2, name ; <format>`).  Not so in a _dictionaryRepresentation:, whose key
+            # register is loaded for the named runs only.
+            texts = {obs.get(reg) for obs in seen.values()} if k == _ENTRY \
+                else {obs[reg] for obs in seen.values() if reg in obs}
             if len(texts) < 2:
                 continue                              # same string for every value
             names = {v: obs[reg] for v, obs in seen.items()

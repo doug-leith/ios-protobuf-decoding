@@ -804,10 +804,13 @@ class ProtoFile:
                     f"{_enum_prefix(enum.name)}_UNSPECIFIED", taken
                 )
                 taken.add(zero_name)
+                lowest = min(v.number for v in enum.values)
                 new_values.append(ProtoEnumValue(
                     name=zero_name, number=0,
                     comment="synthesized zero value: an open enum requires a 0 value but this "
-                            "PBCodable enum starts at 1; 0 never appears on the wire",
+                            + ("PBCodable enum starts at 1; 0 never appears on the wire"
+                               if lowest == 1 else
+                               f"PBCodable enum names no value 0 (lowest value {lowest})"),
                 ))
 
             # (2) De-collide every real value name against the package scope.

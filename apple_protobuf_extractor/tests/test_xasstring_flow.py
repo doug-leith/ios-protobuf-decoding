@@ -112,6 +112,56 @@ class TestCompareChains(unittest.TestCase):
         self.assertTrue(r.confirmed)
 
 
+UNK_FMT = 0x9400                # the "(unknown: %i)" CFString of the converters below
+# The fallback path of a real converter: +[NSString stringWithFormat:] with the format in x2,
+# then a tail call out of the method (iPhone 8 GeoServices, e.g. 0x18cb09d54).
+FALLBACK = ['adrp x2, #0x9000', 'add x2, x2, #0x400', 'bl #0x40000', 'b #0x40100']
+
+
+class TestOneNamedValue(unittest.TestCase):
+    """A converter with ONE named value returns that name in x0, while every other value
+    stops at the formatter with the format in x2: no register ever holds two different
+    strings, so the variation is "a string in x0" against "none".  -[GEOWalkingOptions
+    avoidedModesAsString:] (`cbz w2` -> AVOID_FERRY = 0), -[GEOPlaceSearchRequest
+    optionalSuppressionReasonsAsString:] (`cmp w2,#1; b.ne` -> OBSCURE = 1)."""
+
+    def _xas(self, code):
+        ctx, _ = _enum_ctx(code, strings={**NAMES, UNK_FMT: '(unknown: %i)'})
+        return _extract_xasstring(ctx, 0x1000)
+
+    def test_cbz_value_zero(self):
+        r = self._xas(['cbz w2, name'] + FALLBACK +
+                      ['name:', 'adrp x0, #0x9000', 'add x0, x0, #0x00', 'b #0x40100'])
+        self.assertEqual(r.pairs, [(0, 'K_0')])
+        self.assertTrue(r.confirmed)
+
+    def test_compare_with_one_constant(self):
+        r = self._xas(['cmp w2, #1', 'b.ne dflt', 'adrp x0, #0x9000', 'add x0, x0, #0x20',
+                       'b #0x40100', 'dflt:'] + FALLBACK)
+        self.assertEqual(r.pairs, [(1, 'K_1')])
+        self.assertTrue(r.confirmed)
+
+    def test_a_constant_string_for_every_value_is_not_an_enum(self):
+        r = self._xas(['adrp x0, #0x9000', 'add x0, x0, #0x20', 'b #0x40100'])
+        self.assertEqual(r.pairs, [])
+
+
+class TestCompareNegative(unittest.TestCase):
+    """``cmn w2, #1`` compares the value with -1 (flags of w2 + 1).
+    -[GEOOriginalRoute originalRoutePurposeAsString:]: -1 = PURPOSE_UNKNOWN,
+    2 = RETRIEVE_ROUTE_SET."""
+
+    def test_cmn_value_minus_one(self):
+        ctx, _ = _enum_ctx(['cmn w2, #1', 'b.eq minus1', 'cmp w2, #2', 'b.ne dflt',
+                            'adrp x0, #0x9000', 'add x0, x0, #0x20', 'b #0x40100',
+                            'minus1:', 'adrp x0, #0x9000', 'add x0, x0, #0x00', 'b #0x40100',
+                            'dflt:'] + FALLBACK,
+                           strings={**NAMES, UNK_FMT: '(unknown: %i)'})
+        r = _extract_xasstring(ctx, 0x1000)
+        self.assertEqual(r.pairs, [(-1, 'K_0'), (2, 'K_1')])
+        self.assertTrue(r.confirmed)
+
+
 class TestDisclosure(unittest.TestCase):
 
     def test_a_value_that_cannot_be_evaluated_is_reported_not_dropped_quietly(self):

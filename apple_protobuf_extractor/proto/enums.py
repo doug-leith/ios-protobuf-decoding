@@ -51,7 +51,7 @@ def _is_valid_enum_string(s: str) -> bool:
                 and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', s))
 
 
-def _normalize_enum_value_name(enum_name: str, raw: str) -> str:
+def _normalize_enum_value_name(enum_name: str, raw: str, camel: Optional[bool] = None) -> str:
     """
     Build a proto enum value name (SCREAMING_SNAKE_CASE) from *raw*.
 
@@ -75,8 +75,14 @@ def _normalize_enum_value_name(enum_name: str, raw: str) -> str:
     """
     prefix = _enum_prefix(enum_name)
 
-    s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', raw)
-    s = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s)
+    # Word boundaries are inferred from case only in a camelCase table.  A table with no
+    # lower-case letter is already SCREAMING_SNAKE: splitting it would break "3RD" / "7M" /
+    # "1X" / "3D" into "3_RD" / "7_M" / "1_X" / "3_D".  *camel* is decided per table by the
+    # caller (:func:`_enum_values_from_pairs`); None: by this string alone.
+    s = raw
+    if camel if camel is not None else any(ch.islower() for ch in raw):
+        s = re.sub(r'([A-Z]+)([A-Z][a-z])', r'\1_\2', s)
+        s = re.sub(r'([a-z\d])([A-Z])', r'\1_\2', s)
     s = re.sub(r'[^A-Z0-9a-z]+', '_', s)
     s = re.sub(r'_+', '_', s).strip('_').upper()
 
@@ -619,8 +625,11 @@ def _enum_values_from_pairs(enum_name: str, pairs: Sequence[Tuple[int, str]]
     comment saying so -- a name that is not the binary's must never look like it is."""
     values: List[ProtoEnumValue] = []
     seen: Set[str] = set()
+    # The naming convention belongs to the table, not to one string: in a camelCase table
+    # (``_2DWeak``, ``_3D``, ``_3DStrong``) an all-caps member is split like its siblings.
+    camel = any(ch.islower() for _, raw_name in pairs for ch in raw_name)
     for val, raw_name in pairs:
-        name = _normalize_enum_value_name(enum_name, raw_name)
+        name = _normalize_enum_value_name(enum_name, raw_name, camel)
         comment = None
         if name in seen:
             name = f"{name}_{val}"

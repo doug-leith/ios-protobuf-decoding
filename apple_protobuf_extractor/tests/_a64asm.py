@@ -119,6 +119,8 @@ def assemble(base, lines):
                 | (_reg(ops[1]) << 16) | (_reg(ops[0]) << 5)
         elif mn == 'cmp' and ops[1].startswith('#'):
             w = 0x7100001F | (_imm(ops[1]) << 10) | (_reg(ops[0]) << 5)
+        elif mn == 'cmn' and ops[1].startswith('#'):                   # adds wzr, wn, #imm
+            w = 0x3100001F | (_imm(ops[1]) << 10) | (_reg(ops[0]) << 5)
         elif mn.startswith('b.'):
             w = 0x54000000 | (rel(ops[0], 19) << 5) | _COND[mn[2:]]
         elif mn == 'cbz':
