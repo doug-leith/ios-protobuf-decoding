@@ -204,6 +204,85 @@ class TestWriteToWalk(unittest.TestCase):
         self.assertEqual(len([w for w in writes if w['n'] == 4]), 1)
 
 
+class TestPackedElementWriter(unittest.TestCase):
+    """A packed repeated scalar is written as begin-mark(field#) .. element writer with
+    the no-tag field# -1 per element .. recall-mark.  The walk records the begin-mark as
+    the field write (``bracket``) and the no-tag call inside it as ``elem_helper_vas``
+    — the writer whose wire family types the elements (CLPSatelliteInfo.cnos: sint32)."""
+
+    BEGIN, END, SINT32, INT32 = 0x9000, 0x9100, 0x9200, 0x9300
+
+    def _packed(self, elem_writer, after_end=()):
+        # Shape of -[CLPSatelliteInfo writeTo:]: the element loop is its own block (the
+        # b.lo back-edge target), so the bracket must be threaded across the block edge.
+        return asm((0x1000, [
+            ('str',  'xzr, [sp, #8]'),
+            ('add',  'x1, sp, #8'),          # stack scratch -> begin-mark
+            ('mov',  'x0, x19'),
+            ('mov',  'w2, #2'),
+            ('bl',   f'#{self.BEGIN:#x}'),   # BEGIN field #2
+            ('mov',  'x22, #0'),
+            # loop @0x1018
+            ('ldr',  'w1, [x8, x22, lsl #2]'),
+            ('mov',  'x0, x19'),
+            ('mov',  'w2, #-1'),             # no tag: packed element
+            ('bl',   f'#{elem_writer:#x}'),
+            ('add',  'x22, x22, #1'),
+            ('cmp',  'x22, x8'),
+            ('b.lo', '#0x1018'),
+            ('add',  'x1, sp, #8'),
+            ('mov',  'x0, x19'),
+            ('bl',   f'#{self.END:#x}'),     # recall-mark (END)
+            *after_end,
+            ('ret',  ''),
+        ]))[1]
+
+    def test_element_writer_in_separate_loop_block(self):
+        _, writes = walk(self._packed(self.SINT32), 0x1000)
+        w = [w for w in writes if w['n'] == 2][0]
+        self.assertTrue(w['bracket'])
+        self.assertEqual(w['helper_va'], self.BEGIN)
+        self.assertEqual(w['elem_helper_vas'], [self.SINT32])
+
+    def test_no_tag_write_after_recall_mark_not_attributed(self):
+        # a no-tag call after the bracket closed belongs to no field
+        _, writes = walk(self._packed(self.SINT32, after_end=(
+            ('mov', 'w2, #-1'), ('bl', f'#{self.INT32:#x}'))), 0x1000)
+        w = [w for w in writes if w['n'] == 2][0]
+        self.assertEqual(w['elem_helper_vas'], [self.SINT32])
+
+    def test_unpacked_list_is_not_a_bracket(self):
+        # unpacked repeated: the element writer is called per element WITH the field#,
+        # so it is the field's own helper and there is no bracket
+        _, fd = asm((0x1000, [
+            ('ldr', 'w1, [x8, x22, lsl #2]'),
+            ('mov', 'w2, #0x17'),
+            ('bl',  f'#{self.INT32:#x}'),
+            ('ret', ''),
+        ]))
+        _, writes = walk(fd, 0x1000)
+        w = writes[0]
+        self.assertFalse(w['bracket'])
+        self.assertEqual(w['helper_va'], self.INT32)
+        self.assertEqual(w['elem_helper_vas'], [])
+
+    def test_packed_list_nested_in_inline_submessage_not_attributed_to_outer(self):
+        # inline sub-message field #3 containing a packed list (nested bracket, not
+        # recorded as a top-level field): its no-tag elements must not type field #3
+        _, fd = asm((0x1000, [
+            ('add', 'x1, sp, #8'), ('mov', 'w2, #3'), ('bl', f'#{self.BEGIN:#x}'),
+            ('add', 'x1, sp, #16'), ('mov', 'w2, #1'), ('bl', f'#{self.BEGIN:#x}'),
+            ('mov', 'w2, #-1'), ('bl', f'#{self.SINT32:#x}'),
+            ('add', 'x1, sp, #16'), ('bl', f'#{self.END:#x}'),
+            ('add', 'x1, sp, #8'), ('bl', f'#{self.END:#x}'),
+            ('ret', ''),
+        ]))
+        _, writes = walk(fd, 0x1000)
+        w3 = [w for w in writes if w['n'] == 3][0]
+        self.assertTrue(w3['bracket'])
+        self.assertEqual(w3['elem_helper_vas'], [])
+
+
 def ins_list(*pairs, base=0x2000):
     """Build a list of Insn from (mnemonic, op_str) pairs at sequential addresses."""
     return [Insn(addr=base + 4 * i, mnemonic=mn, op_str=op, size=4,

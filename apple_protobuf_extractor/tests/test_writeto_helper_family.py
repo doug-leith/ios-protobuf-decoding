@@ -336,6 +336,54 @@ class TestSintRecoveryLive(unittest.TestCase):
         self.assertNotIn('sint',
                          self._field('GEOMapServiceTraits', 'sequenceNumber').type_name)
 
+    def test_clist_element_writer_flips(self):
+        # Repeated C-list ({?="list"^…}) fields: typed by the ELEMENT writer — the no-tag
+        # writer inside the packed begin/recall bracket, or the per-element tagged writer
+        # of an unpacked list — not by the begin-mark.
+        self.assertEqual(self._field('GEOBusynessPoiLookupTile', 'latitudeE7s').type_name,
+                         'sfixed32')                                   # packed, fixed32
+        self.assertEqual(self._field('GEOTFCompactRoadSpeeds', 'geoIds').type_name,
+                         'sint64')                                     # packed, zigzag
+        self.assertEqual(self._field('GEOTFRoadSpeed', 'geoIds').type_name,
+                         'sint64')                                     # unpacked, zigzag
+        # negative control: unpacked list written by the plain int32 writer stays int32
+        self.assertEqual(self._field('GEOPDSearchParameters',
+                                     'supportedSearchTierTypes').label.name, 'REPEATED')
+        self.assertNotIn('sint', self._field('GEOPDSearchParameters',
+                                             'supportedSearchTierTypes').type_name)
+
+
+try:
+    _HAVE_CLP = _V.load_cache('CoreLocationProtobuf') is not None
+except Exception:
+    _HAVE_CLP = False
+
+
+@unittest.skipUnless(_HAVE_CLP, 'CoreLocationProtobuf cache not available')
+class TestPackedElementFamilyLiveCLP(unittest.TestCase):
+    """CLPSatelliteInfo writes satIds with the plain int32 writer but cnos/azimuths/
+    elevations with the sint32 (zigzag) writer, all packed (begin-mark field#, element
+    writer with no-tag field# -1, recall-mark).  Real iPhone 8 satReport traffic only
+    decodes to plausible C/N0 / azimuth / elevation values as sint32."""
+
+    @classmethod
+    def setUpClass(cls):
+        import live_artifacts as V
+        ctx, st, cl = V.load_cache('CoreLocationProtobuf')
+        cls.msgs = {m.class_name: m for m in E.extract_all(ctx, st, cl)}
+
+    def _type(self, fn):
+        m = self.msgs['CLPSatelliteInfo']
+        return next(f for f in m.fields if f.name == fn).type_name
+
+    def test_sint32_elements(self):
+        for fn in ('cnos', 'azimuths', 'elevations'):
+            self.assertEqual(self._type(fn), 'sint32', fn)
+
+    def test_plain_int32_elements_unchanged(self):
+        self.assertEqual(self._type('satIds'), 'int32')
+        self.assertEqual(self._type('isUsedInFixes'), 'bool')
+
 
 if __name__ == '__main__':
     unittest.main()

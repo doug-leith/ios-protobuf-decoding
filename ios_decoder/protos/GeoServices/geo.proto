@@ -22512,8 +22512,8 @@ message BusinessResolutionResponse {
 
 message BusynessPoiLookupTile {
   uint32 offsetId = 1;
-  repeated int32 latitudeE7s = 2;
-  repeated int32 longitudeE7s = 3;
+  repeated sfixed32 latitudeE7s = 2;
+  repeated sfixed32 longitudeE7s = 3;
 }
 
 message BusynessPoiLookupTileMetaData {
@@ -33592,7 +33592,7 @@ message TFCompactPredictedSpeed {
 }
 
 message TFCompactRoadSpeeds {
-  repeated int64 geoIds = 1;
+  repeated sint64 geoIds = 1;
   float startOffset = 2;
   float endOffset = 3;
   bool hidden = 4;
@@ -33660,7 +33660,7 @@ message TFRoadSpeed {
   float confidence = 11;
   repeated float latitudeCoordinates = 12;
   repeated float longitudeCoordinates = 13;
-  repeated int64 geoIds = 14;
+  repeated sint64 geoIds = 14;
   bytes openlr = 15;
 }
 

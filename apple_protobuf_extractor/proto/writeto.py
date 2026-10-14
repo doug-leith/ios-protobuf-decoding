@@ -179,6 +179,15 @@ _VALUE_REGS = frozenset(('w1', 'x1', 'd0', 's0'))   # write-helper value arg (ra
 _LOAD_MNEMONICS = ('ldr', 'ldrb', 'ldrh', 'ldrsw', 'ldrsb', 'ldrsh')
 
 
+# The field# a ProtocolBuffer write helper takes to mean "write the bare value, NO
+# tag": every PB element writer opens with ``cmn w<field>,#1 ; b.eq <skip-tag>``.
+# writeTo: passes it for each element of a PACKED repeated field, which it writes
+# between a length-delimited begin-mark (``PBDataWriterPlaceMark``, carrying the real
+# field#, wire type 2) and its recall-mark — so that no-tag call is the field's
+# element writer, the one whose wire family (sint/fixed/plain) types the elements.
+_NO_TAG_FIELD_NUMBER = -1
+
+
 def _is_field_number(n) -> bool:
     return n is not None and 1 <= n <= _MAX_PROTO_FIELD_NUMBER
 
@@ -324,10 +333,17 @@ def classify_b_target(blk, k, target, foreign_imps, indeg, imp, text_range=None)
 def _make_write(n, addr, block, guard, cont_off, pre, srcblk, srck, base_regs, helper_va):
     """Build one write-event record.  Single constructor shared by the ``bl`` and
     tail-call ``b`` field-write paths in :func:`writeto_walk` so the record shape
-    is defined in exactly one place.  ``base_regs`` is snapshotted (copied) here."""
+    is defined in exactly one place.  ``base_regs`` is snapshotted (copied) here.
+
+    ``bracket`` marks a begin-mark write (a length-delimited bracket opened with a
+    stack-scratch mark: a packed repeated field or an inline sub-message), whose
+    ``helper_va`` is the begin-mark, not a value writer.  ``elem_helper_vas`` is filled
+    only for a bracket: the distinct no-tag element-writer VAs called directly inside
+    it — the element writer of a packed repeated field (see
+    :data:`_NO_TAG_FIELD_NUMBER`)."""
     return dict(n=n, write_addr=addr, block=block, guard=guard, cont_off=cont_off,
                 pre=pre, srcblk=srcblk, srck=srck, base_regs=dict(base_regs),
-                helper_va=helper_va)
+                helper_va=helper_va, bracket=False, elem_helper_vas=[])
 
 
 def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
@@ -349,7 +365,7 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
     walker = LazyWalk(
         ctx, imp,
         lambda c, a: disasm(c, a, max_insns=blk_cap, stop_at_ret=False),
-        initial_state=(imp, None, dict(base_regs)),   # (guard, cont_off, base)
+        initial_state=(imp, None, dict(base_regs), ()),   # (guard, cont_off, base, brackets)
         max_blocks=max_blocks,
     )
     text_range = _image_text_range(ctx)
@@ -360,10 +376,15 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
         popped = walker.next_block()
         if popped is None:
             break
-        blk, start, (guard, cont_off, in_base) = popped
+        blk, start, (guard, cont_off, in_base, brackets) = popped
         cur_guard = guard               # controlling has-bit test for fall-through
         cur_off = cont_off              # container ivar-offset addr threaded along edge
         cur_base = dict(in_base)        # live ivar-offset-table bases, threaded per edge
+        # Open length-delimited brackets (begin-mark .. recall-mark), innermost last,
+        # threaded along CFG edges: a packed field's element loop is its own block (the
+        # loop back-edge target), so the bracket must survive the block boundary.  Each
+        # entry is the begin-mark's write record, or None for a bracket not recorded as
+        # a field (nested / already seen).  Immutable tuple: per-edge snapshots are free.
         adrp_pg = {}                    # pending `adrp` page per reg, for re-load detect
         submsg_depth = 0                # inside inline-expanded submessage(s)?
         last_bl = -1                    # index of most recent bl (bounds value-load ctx)
@@ -373,7 +394,7 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                 break
             if walker.is_leader_handoff(a, start):
                 # fall-through into a known block boundary: hand off our context
-                walker.push_front(a, (cur_guard, cur_off, dict(cur_base)))
+                walker.push_front(a, (cur_guard, cur_off, dict(cur_base), brackets))
                 break
             walker.mark_visited(a)
             mn = ins.mnemonic
@@ -443,6 +464,16 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                 scratch = _value_is_stack_scratch(blk, k)
                 if scratch and fn is None:
                     submsg_depth = max(0, submsg_depth - 1)   # END-submessage
+                    brackets = brackets[:-1]
+                    continue
+                if fn == _NO_TAG_FIELD_NUMBER and not scratch:
+                    # a bare (untagged) value written directly inside the innermost
+                    # bracket: that bracket is a packed field and this is its element
+                    # writer.  Recorded only on a bracket recorded as a field.
+                    if brackets and brackets[-1] is not None:
+                        ev = _parse_imm(ins.op_str)
+                        if ev is not None and ev not in brackets[-1]['elem_helper_vas']:
+                            brackets[-1]['elem_helper_vas'].append(ev)
                     continue
                 if not _is_field_number(fn):
                     # field# 0 is illegal in proto but Apple emits deliberate
@@ -467,16 +498,21 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                     continue                                   # element sub-field — skip
                 else:
                     record = True
+                rec = None
                 if record and fn not in seen_writes:
                     seen_writes.add(fn)
-                    writes.append(_make_write(fn, a, start, cur_guard, write_off, pre,
-                                              blk, k, cur_base, _parse_imm(ins.op_str)))
+                    rec = _make_write(fn, a, start, cur_guard, write_off, pre,
+                                      blk, k, cur_base, _parse_imm(ins.op_str))
+                    rec['bracket'] = scratch
+                    writes.append(rec)
+                if scratch:
+                    brackets = brackets + (rec,)
                 continue
             if _is_cond(mn):
                 t = _cond_target(ins)
                 if (t is not None and t not in foreign_imps and t != imp
                         and (text_range is None or text_range[0] <= t < text_range[1])):
-                    walker.push(t, (a, cur_off, dict(cur_base)))   # thread guard+cont+base
+                    walker.push(t, (a, cur_off, dict(cur_base), brackets))   # thread guard+cont+base
                 cur_guard = a               # controls subsequent fall-through writes
                 continue                    # fall through too
             if mn == 'b':
@@ -491,12 +527,13 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                                                   blk, k, cur_base, t))
                     break                   # tail-call ends this path
                 if kind == 'follow':
-                    walker.push(t, (cur_guard, cur_off, dict(cur_base)))
+                    walker.push(t, (cur_guard, cur_off, dict(cur_base), brackets))
                 break                       # unconditional: no fall-through
             # any other insn: keep decoding this block
         else:
             # ran to blk_cap with no terminal/branch -> continue linearly
-            walker.push_continue(blk[-1].addr + 4, (cur_guard, cur_off, dict(cur_base)))
+            walker.push_continue(blk[-1].addr + 4, (cur_guard, cur_off, dict(cur_base),
+                                                 brackets))
     return writes, dict(truncated=walker.truncated, blocks=walker.blocks_seen,
                         zero_writes=zero_writes)
 

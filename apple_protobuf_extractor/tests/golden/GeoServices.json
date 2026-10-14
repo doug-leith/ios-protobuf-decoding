@@ -8647,7 +8647,7 @@ false,
 false
 ],
 "GEOBusynessPoiLookupTile.latitudeE7s": [
-"int32",
+"sfixed32",
 null,
 2,
 "repeated",
@@ -8656,7 +8656,7 @@ false,
 false
 ],
 "GEOBusynessPoiLookupTile.longitudeE7s": [
-"int32",
+"sfixed32",
 null,
 3,
 "repeated",
@@ -142925,7 +142925,7 @@ false,
 false
 ],
 "GEOTFCompactRoadSpeeds.geoIds": [
-"int64",
+"sint64",
 null,
 1,
 "repeated",
@@ -143521,7 +143521,7 @@ false,
 false
 ],
 "GEOTFRoadSpeed.geoIds": [
-"int64",
+"sint64",
 null,
 14,
 "repeated",

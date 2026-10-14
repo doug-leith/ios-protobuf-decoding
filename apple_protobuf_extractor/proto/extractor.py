@@ -625,23 +625,39 @@ def _writeto_self_load_offset(ctx: BinaryContext, insns) -> Optional[int]:
 # field-typing concern is a named, separately-testable unit; the loop reads as a
 # short pipeline.  All are behaviour-preserving (byte-identical emitted output).
 
-def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers):
+def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_writes=None):
     """TODO #38/#44: refine the canonical int default to its true wire form.
 
     The ivar @encode only records storage width, so int32/uint32/sint32/[s]fixed32
     collapse to int32; the field's writeTo: helper VA selects the wire form.  Refine
-    ONLY singular scalar ints (``type_class is None`` excludes enum ENUM:/message; the
-    packed guard excludes packed-repeated lists, whose encoder is a separate,
-    not-yet-ground-truthed packed encoder).  int32<->uint32 stays a genuine tie.
-    The helper gives the wire WIDTH (fixed32 vs fixed64); the SIGN half (fixed vs
-    sfixed) comes from the ivar exactly like int32↔uint32 — signed ivar (type_name
-    int32/int64) → sfixed*, unsigned → fixed*.  See :func:`_classify_write_helper`.
-    Returns the (possibly refined) ``type_name``; unchanged for non-int/packed."""
-    if (type_class is None
-            and type_name in ("int32", "int64", "uint32", "uint64")
-            and not _is_packed_list_enc(ivar.type_enc)):
+    ONLY scalar ints (``type_class is None`` excludes enum ENUM:/message).
+    int32<->uint32 stays a genuine tie.  The helper gives the wire WIDTH (fixed32 vs
+    fixed64); the SIGN half (fixed vs sfixed) comes from the ivar exactly like
+    int32↔uint32 — signed ivar (type_name int32/int64) → sfixed*, unsigned → fixed*.
+    See :func:`_classify_write_helper`.
+
+    Which helper carries the wire form depends on how writeTo: writes the field:
+
+    * one tagged value per call — a singular field, or a C-list
+      (``{?="list"^<elem>…}``) written UNPACKED (the element writer called per element
+      with the real field#): the field-write helper itself (``wt_helpers``);
+    * a C-list written PACKED — the walk's write is a length-delimited begin-mark
+      (``walk_writes[ivar]['bracket']``, wire type 2, no element family); the wire
+      form is that of the no-tag ELEMENT writer called inside the begin/recall bracket
+      (``elem_helper_vas``, see :data:`proto.writeto._NO_TAG_FIELD_NUMBER`).  Refined
+      only when every element writer in the bracket agrees on one family; none found
+      → unchanged.
+
+    Returns the (possibly refined) ``type_name``; unchanged for non-int types."""
+    if type_class is not None or type_name not in ("int32", "int64", "uint32", "uint64"):
+        return type_name
+    w = (walk_writes or {}).get(ivar.name) or {}
+    if not w.get('bracket'):
         return _refine_scalar_by_family(
             type_name, _classify_write_helper(ctx, wt_helpers.get(ivar.name)))
+    fams = {_classify_write_helper(ctx, va) for va in w.get('elem_helper_vas', ())}
+    if len(fams) == 1:
+        return _refine_scalar_by_family(type_name, fams.pop())
     return type_name
 
 
@@ -892,7 +908,8 @@ def extract_proto_message(
 
         # TODO #38/#44: refine the canonical int default to its true wire form
         # (sint*/[s]fixed*) from the field's writeTo: helper VA.
-        type_name = _refine_int_wire_form(ctx, type_name, type_class, ivar, _wt_helpers)
+        type_name = _refine_int_wire_form(ctx, type_name, type_class, ivar, _wt_helpers,
+                                          _walk_writes)
 
         # ── Mode A enum-fallback debug ────────────────────────────────────────
         # Fires when: (a) --cache path (instance_method_names non-empty), (b)
