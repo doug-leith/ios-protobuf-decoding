@@ -12,6 +12,7 @@ Related repositories:
 
 - [android-protobuf-decoding](https://github.com/doug-leith/android-protobuf-decoding) is the Android counterpart, for Google Play Services protobufs.
 - [poor-privacy-practices-of-the-apple-app-store](https://github.com/doug-leith/poor-privacy-practices-of-the-apple-app-store) has the measurement data and software for the Apple App Store study. It includes `addon_ios/ios_decoding_helpers.py`, the live mitmdump addon that `ios_decoder` was rewritten from, and the tweak used to bypass SSL certificate checks when capturing traffic.
+- [Between the Commits: Process, Error, and Claim Reliability in a Wholly AI-Authored Codebase](https://arxiv.org/abs/2609.29744) analyses the development of `apple_protobuf_extractor`, which was written by AI: the development process, the errors made during it and the reliability of the AI's claims about its own work.
 
 ## Quick start
 
