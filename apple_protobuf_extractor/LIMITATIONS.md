@@ -503,72 +503,58 @@ limit is documented in the module docstring.
 
 # Newest-toolchain limitation (arm64e)
 
-## 11. Newest arm64e builds (iPhone17,3, macOS 27, iOS 27): some repeated-message elements degrade
+## 11. Newest arm64e builds (iPhone17,3, macOS 27, iOS 27): readFrom: dispatch  — RESOLVED 2026-10-15 (residuals below)
 
-**Status 2026-10-04 (iOS 27, macOS 27 re-run; see `notes/descriptor_comparison_2026-10-04/REPORT.md`).**
-Of the classes listed below, the six with a compare-chain engine and a single data table at the call
-site (`GEOBatchRevGeocodeResponse`, `GEOLPRWorld`, `GEOPDGroundMetadataTile`,
-`GEOPDSearchBrandTriggerInfo`, `GEOSearchAttributionManifest`, `GEOURLPresent`) now resolve: ownership
-is accepted from a `__TEXT,__const` table argument (`_call_site_passes_const_table`) together with an
-engine that independently dispatches and loads the class's own ivar slots. On macOS 27 the two jump-table
-classes and `GEOTFIncident` still degrade (`GEOTFCompactRoadSpeeds`, `GEOTFRoadSpeed`, `GEOTFIncident`), as does
-`PDRawAttributeFilter.keys` (`repeated string` emitted as `bytes`); on iOS 27 none of the 1060-message closure of
-the decoded geo roots differs from iOS 16 in a field number or an element type except where the later OS is
-better. The same session fixed four newer-toolchain shapes that were not element-type problems: a
-`writeTo:` tail call into another image made the walk raise and the class fall back to "number estimated"
-(594 -> 32 estimates on iOS 27); `lsl field,#3` ahead of the `bfi` hid sfixed32 helpers (`LatLngE7`); enum
-`switch` tables with signed `ldrsw` byte-delta entries and bitmask-gated pointer tables left enums as `int32` or partial;
-and `mov w1,#0x10000` (`os_unfair_lock` option) was read as a double field number 65536. Tests:
-`tests/test_newer_toolchain_ios27.py`. These runs remain outside the golden snapshots.
+**Status 2026-10-15.** The readFrom: field dispatch is decoded by evaluation
+(`proto/dispatch_eval.py`), not by matching its shape.  Starting from `-readFrom:` with
+`self` and the reader as opaque tokens, the core is the function handed this object; each
+candidate field number is set where the field number is extracted (`lsr`/`ubfx Rn,#3`)
+and run through calls to its handler; the handler's element class, adder and ivar are read
+off the call arguments.  Measured over every PBCodable class of three builds against the
+iPhone 8 golden schema: no binding lost and none wrong; iPhone 8 and all seven
+`ios_decoder/protos` frameworks byte-identical; on macOS 27 the 19 dispatch-caused
+`repeated bytes` fields (TFCompactRoadSpeeds / TFRoadSpeed / TFIncident,
+PDSearchQueryIntentMetadata x2, PDSearchKey*PairList.pairs x12, PDTileList.tiles,
+SupportedTileSets.tileSets) now carry the golden element class, plus 4 newer fields; on
+iOS 27 one more map value class.
 
-**Symptom.** On these builds, 13 message-typed GeoServices fields in 10 classes
-(iPhone17,3) and 11 in 9 classes (macOS 27), out of ~3,700 compared against the
-iPhone8 golden schema, come back as `repeated bytes`, flagged as in (2). A further ~25
-(iPhone17,3) / ~20 (macOS 27) fields bind to a wrong class; these have not been
-examined.
+**What it was.** Not the jump tables, which decoded: the macOS 27 accessors are
+`objc_direct` (no method-list IMP), and elements are allocated through a direct `class_t`
+address, so every ownership/adder signal keyed on own-method IMPs or classref loads failed
+(e.g. GEOTFCompactRoadSpeeds' engine 0x198746638 decoded 10 arms with field 5 ->
+TFCompactPredictedSpeed, yet its ownership gate rejected it: no arm calls an own IMP; the
+adder is the C function 0x19874757c).
 
-**Why.** A class's `readFrom:` is a thin wrapper that calls a per-class dispatch
-*engine*, choosing one of two data tables with a `csel` at the call site. The engine
-dispatches with a compare tree on the field number and has no `cmp Wn,#N; b.hi` range
-guard. The extractor accepts such an engine as the class's own only when three things
-hold: the call site is that dual-table `csel` (`_call_site_selects_data_table`); the
-engine independently dispatches for real (`_core_resolves_compare_chain`); and it loads
-one of the class's own ivar-offset variables (`_core_loads_own_ivar_slot` — by slot
-address, so an engine belonging to another class is not accepted; it fails closed when
-the class's slots are unknown). The classes still degraded fall short of that:
+**Residuals.**
+- ~60 message-typed fields on these builds are inline C-struct ivars (`{GEOTimepoint=...}`,
+  `^{GEOTileSetRegion=...}`): item 2's struct recovery, not dispatch.
+- The evaluator's assumptions: a callee handed a frame address writes only at or above it and
+  does not keep it; `-init...` and the ARC retain/handshake functions return their argument
+  (named only where a standalone binary binds them); an unknown field number behaves as one
+  past every compared value.  The CFG is still seeded with the decoded jump tables
+  (`proto.dispatch._jump_table_arm_addrs`) plus `and`-masked tables evaluated per index: a
+  control `br` ahead of the field-number extraction has an index the propagation cannot know.
+- An element core is recognised only through the readFrom core index, which still maps a
+  runtime stub to `GEOFlyoverRegionVersions` for inline readers (`_find_readfrom_c_func` takes
+  the first branch target) and is empty for CoreParsec (its classes fail
+  `_is_proto_class`); the element class still comes from the allocation then, but the
+  repeated-field resolvers skip a class when the index is empty.
 
-- 6 classes resolve as a compare chain but their call site has no `csel` of two data
-  tables, so ownership cannot be confirmed and is deliberately not assumed:
-  `GEOBatchRevGeocodeResponse`, `GEOLPRWorld`, `GEOPDGroundMetadataTile`,
-  `GEOPDSearchBrandTriggerInfo`, `GEOSearchAttributionManifest`, `GEOURLPresent`;
-- 2 classes have a jump-table cluster that is not resolved
-  (`GEOTFCompactRoadSpeeds`, `GEOTFRoadSpeed`);
-- 1 class has an engine shape that is not understood (`GEOTFIncident`);
-- on iPhone17,3 only, `GEOETAResult`, for a reason not identified.
-
-**Pointer authentication is not the cause.** Pointer *encodings* are decoded: in cache
+**Pointer authentication is not a cause.** Pointer *encodings* are decoded: in cache
 mode by the cache reader, and in binary mode for chained-fixup formats 1, 2, 6, 9 and
 12 (12 is `DYLD_CHAINED_PTR_ARM64E_USERLAND24`, what a current toolchain emits for every
 arm64e dylib and executable). The signature, key and diversifier of an authenticated
 pointer are ignored — only the target is needed. Not decoded: the other chained-fixup
 formats (32-bit, e.g. arm64_32; kernel-cache; firmware). PAC-authenticated indirect
 *branches* (`braa`/`blraa`) occur in these images only in the runtime's call-stub
-islands, which the `writeTo:` helper resolver handles (`proto/write_helpers.py`); none
-was found inside a `readFrom:` dispatch function. Whether PAC-authenticated indirect
-dispatch exists in some other class has not been measured.
+islands, which the `writeTo:` helper resolver handles (`proto/write_helpers.py`).
 
-**Implementation note.** `_func_end` (used for arm-range validation and the compare-chain
-dominance walk) is CFG-reachability based and counts an in-window tail-call
-`b <stub>` as an intra-function edge, so on plain arm64 a function ending in a tail call
-is credited with the stub island and every function between. The ownership check does
-not use it (it uses the tight extent `_core_insns`); the other users do.
-
-**Source sites.** `proto/dispatch.py` (`_find_dispatch_core_via_wrapper`,
-`_core_loads_own_ivar_slot`, `_core_insns`); `proto/arm64cfg.py` (`ivar_slot_loads`);
-`macho/classlist.py` / `macho/objc_model.py` (`ObjcIvar.offset_slot`);
-`macho/memory.py` (chained-fixup decoders). Ground-truth fixtures:
-`tests/synthetic_fixtures/f27_compare_tree_engine_no_guard`, `f25_newer_dispatch_engine`,
-`f26_arm64e_fixups`.
+**Source sites.** `proto/dispatch_eval.py`; `proto/dictrep_flow.py` (`Flow.run_from`,
+`Flow.propagate`, `_Machine`'s opaque values / object-escape rule); `proto/dispatch.py`
+(`_build_readfrom_core_index`, `_jump_table_arm_addrs`); `proto/repeated.py` and
+`proto/mapfields.py` (its consumers).  Tests: `tests/test_dispatch_eval.py`,
+`tests/test_newer_toolchain_fixtures.py`; fixtures `f25_newer_dispatch_engine`,
+`f26_arm64e_fixups`, `f27_compare_tree_engine_no_guard`.
 
 ---
 

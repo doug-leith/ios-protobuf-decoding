@@ -189,34 +189,6 @@ def _insns(*lines):
             for i, (mn, op) in enumerate(lines)]
 
 
-# ── offline: does the engine use the table it is handed? ──────────────────────
-
-class TestCoreReadsTableArg(unittest.TestCase):
-    def _reads(self, *lines):
-        import proto.dispatch as D
-        orig = D._core_insns
-        D._core_insns = lambda ctx, va: _insns(*lines)
-        try:
-            return D._core_reads_table_arg(None, 0x1000)
-        finally:
-            D._core_insns = orig
-
-    def test_engine_indexing_its_table_through_a_copy_of_x2(self):
-        # GEOLPRWorld's engine: `mov x21,x2 ; … ; ldr w12,[x21,x8,lsl #2]`
-        self.assertTrue(self._reads(('mov', 'x21, x2'), ('ldr', 'w12, [x21, x8, lsl #2]')))
-
-    def test_direct_load_from_x2(self):
-        self.assertTrue(self._reads(('ldrb', 'w8, [x2, x9]')))
-
-    def test_table_only_forwarded_is_not_the_engine(self):
-        # f27 TestGrPlainEngine: the constant is handed on to another call, never read.
-        self.assertFalse(self._reads(('mov', 'x21, x2'), ('mov', 'x0, x21'), ('bl', '#0x2000')))
-
-    def test_overwritten_copy_is_no_longer_the_table(self):
-        self.assertFalse(self._reads(('mov', 'x21, x2'), ('mov', 'x21, x8'),
-                                     ('ldr', 'w12, [x21, x8, lsl #2]')))
-
-
 # ── live: the real iOS 27 cache ───────────────────────────────────────────────
 
 def _ios27_cache_dir():

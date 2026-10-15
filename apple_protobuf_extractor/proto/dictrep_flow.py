@@ -174,33 +174,65 @@ class _Machine:
     *slots* maps a stack address to ``(size, value)``.  *escaped* records that a stack address
     has been put in a register other than sp / x29: from then on a callee, or a store through
     a pointer the evaluation does not know, may write any slot, so either clears them all.
-    Until then the frame is the function's own and a call leaves its slots alone."""
+    Until then the frame is the function's own and a call leaves its slots alone.
 
-    def __init__(self, regs: Dict[str, int], fallback=None):
+    *opaque*, when given, marks values that stand for an object the analysis cannot see into
+    (``self``, a call's result): a register copy carries one, every other use of it (arithmetic,
+    an address, a compare or test) sees an unknown value.
+
+    *field_value(object, offset)*, when given, is the value a 64-bit load from an opaque object
+    at a known offset produces (e.g. a token for ``self->ivar``); otherwise such a load is unknown.
+
+    *object_escape* narrows what an escaped stack address exposes: a callee (or a store through
+    an unknown pointer) is handed a pointer to an object and may write from it upward, never
+    below it, so only the slots at or above the LOWEST escaped address are cleared
+    (*escape_lo*).  Off by default: then every slot is cleared, as before."""
+
+    def __init__(self, regs: Dict[str, int], fallback=None, opaque=None,
+                 object_escape: bool = False, field_value=None):
         self.regs: Dict[str, int] = dict(regs)
         self.top: Set[str] = set()
         self.fallback = fallback
+        self.opaque = opaque
+        self.object_escape = object_escape
+        self.field_value = field_value
         self.slots: Dict[int, Tuple[int, int]] = {}
         self.escaped = False
+        self.escape_lo: Optional[int] = None
         self.flags: Optional[Tuple[int, int, int]] = None
 
     def copy(self) -> "_Machine":
-        m = _Machine(self.regs, self.fallback)
+        m = _Machine(self.regs, self.fallback, self.opaque, self.object_escape, self.field_value)
         m.top, m.slots, m.escaped, m.flags = set(self.top), dict(self.slots), self.escaped, self.flags
+        m.escape_lo = self.escape_lo
         return m
+
+    def _clobber_slots(self) -> None:
+        """What a callee / a store through an unknown pointer may have written."""
+        if not self.escaped:
+            return
+        if self.object_escape and self.escape_lo is not None:
+            self.slots = {a: v for a, v in self.slots.items() if a + v[0] <= self.escape_lo}
+        else:
+            self.slots.clear()
 
     def join(self, other: "_Machine") -> "_Machine":
         """What holds on both paths (for :meth:`Flow.propagate`, whose machines have no
         fallback: an absent register is unknown)."""
-        m = _Machine({r: v for r, v in self.regs.items() if other.regs.get(r) == v})
+        m = _Machine({r: v for r, v in self.regs.items() if other.regs.get(r) == v},
+                     opaque=self.opaque, object_escape=self.object_escape,
+                     field_value=self.field_value)
         m.slots = {a: s for a, s in self.slots.items() if other.slots.get(a) == s}
         m.escaped = self.escaped or other.escaped
+        los = [x for x in (self.escape_lo, other.escape_lo) if x is not None]
+        m.escape_lo = min(los) if los else None
         m.flags = self.flags if self.flags == other.flags else None
         return m
 
     def same(self, other: "_Machine") -> bool:
         return (self.regs == other.regs and self.slots == other.slots
-                and self.escaped == other.escaped and self.flags == other.flags)
+                and self.escaped == other.escaped and self.flags == other.flags
+                and self.escape_lo == other.escape_lo)
 
     def get(self, tok: str) -> Optional[int]:
         r = _norm_reg(tok)
@@ -216,7 +248,17 @@ class _Machine:
             v = self.fallback(r)
             if v is None:
                 return None
+        if self.opaque is not None and self.opaque(v):
+            return None
         return v & _mask(tok)
+
+    def copy_of(self, tok: str) -> Optional[int]:
+        """The value a register copy (``mov Rd, Rn``) moves: as :meth:`get`, except that an
+        opaque value is carried by a 64-bit copy (a 32-bit one cannot hold it)."""
+        r = _norm_reg(tok)
+        if self.opaque is not None and r in self.regs and self.opaque(self.regs[r]):
+            return self.regs[r] if tok.strip().lower().startswith('x') else None
+        return self.get(tok)
 
     def put(self, tok: str, v: Optional[int]) -> None:
         r = _norm_reg(tok)
@@ -231,19 +273,21 @@ class _Machine:
         self.top.discard(r)
         if r not in _FRAME_REGS and _is_stack(v):
             self.escaped = True
+            self.escape_lo = v if self.escape_lo is None else min(self.escape_lo, v)
 
     def call(self) -> None:
         """A call: the caller-saved registers and the flags are the callee's."""
-        for r in _CALLER_SAVED:
-            self.put(r, None)
+        regs, top = self.regs, self.top
+        for r in _CALLER_SAVED:                 # canonical names: no _norm_reg round trip
+            regs.pop(r, None)
+        top.update(_CALLER_SAVED)
         self.flags = None
-        if self.escaped:
-            self.slots.clear()
+        self._clobber_slots()
 
     def store(self, addr: Optional[int], size: int, v: Optional[int]) -> None:
         if not _is_stack(addr):
-            if addr is None and self.escaped:
-                self.slots.clear()
+            if addr is None:
+                self._clobber_slots()
             return                              # memory outside the frame is not modelled
         for a in [a for a, (s, _v) in self.slots.items() if a < addr + size and addr < a + s]:
             del self.slots[a]
@@ -251,15 +295,57 @@ class _Machine:
             self.slots[addr] = (size, v & ((1 << (8 * size)) - 1))
 
 
+@dataclass
+class CallSite:
+    """One call met by :meth:`Flow.run_from`: its instruction index and address, its target
+    (None for a ``blr`` through an unknown register), the argument registers known at it, and
+    whether it is a tail call (``b`` out of the function)."""
+    k: int
+    addr: int
+    target: Optional[int]
+    args: Dict[str, int]
+    tail: bool = False
+
+
+@dataclass
+class Region:
+    """What :meth:`Flow.run_from` reached: blocks in first-visit order, the calls, the known
+    target of every ``br`` met (a caller can add the ones that are not yet CFG edges and run
+    again), and the ``br`` instructions whose target was not known."""
+    order: List[int] = field(default_factory=list)
+    blocks: Set[int] = field(default_factory=set)
+    calls: List[CallSite] = field(default_factory=list)
+    br_targets: Set[Tuple[int, int]] = field(default_factory=set)     # (br address, target)
+    unresolved_br: List[int] = field(default_factory=list)
+
+
 class Flow:
     """CFG + reaching definitions + the enum evaluator for ONE function body."""
 
-    def __init__(self, ctx, insns: List[Insn], jump_table_arms: Iterable[int] = ()):
+    def __init__(self, ctx, insns: List[Insn], jump_table_arms: Iterable[int] = (),
+                 split_at_arms: bool = False, br_arms: Optional[Dict[int, Iterable[int]]] = None):
         self.ctx = ctx
         self.insns = insns
         self.addr_idx = {ins.addr: k for k, ins in enumerate(insns)}
-        self.cfg = build_blocks(insns)
-        inject_arm_edges(self.cfg, jump_table_arms)
+        jump_table_arms = tuple(jump_table_arms)
+        if br_arms is not None:
+            # ``{br address: its own arms}``: each arm starts a block and is an edge of ITS br
+            # only (``jump_table_arms`` makes every arm an edge of every br, so a br whose index
+            # is unknown would reach the arms of every other table in the function too).
+            leaders = {a for arms in br_arms.values() for a in arms}
+            self.cfg = build_blocks(insns, leaders)
+            for b in self.cfg.order:
+                last = self.cfg.blocks[b][-1]
+                if last.mnemonic == 'br':
+                    for a in sorted(br_arms.get(last.addr, ())):
+                        ab = self.cfg.addr_to_block.get(a)
+                        if ab is not None and ab not in self.cfg.succ[b]:
+                            self.cfg.succ[b].append(ab)
+        else:
+            # split_at_arms: each arm starts its own block (needed when an arm can lie
+            # mid-block, e.g. arms found by evaluating the ``br`` rather than from a table).
+            self.cfg = build_blocks(insns, jump_table_arms if split_at_arms else ())
+            inject_arm_edges(self.cfg, jump_table_arms)
         self._block_of: Dict[int, int] = {}          # insn index -> block leader address
         self._first_in_block: Dict[int, int] = {}    # block leader -> index of its first insn
         for b in self.cfg.order:
@@ -280,6 +366,7 @@ class Flow:
         self._solve()
         self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
         self._ivar_memo: Dict[int, Optional[int]] = {}
+        self._interval_sink: Optional[List[Tuple[int, int]]] = None
 
     # ── reaching definitions ────────────────────────────────────────────────
 
@@ -482,7 +569,8 @@ class Flow:
 
     # ── candidate values: the constants V is compared / indexed against ─────
 
-    def candidates(self, root: int, dest: str, domain) -> Set[int]:
+    def candidates(self, root: int, dest: str, domain,
+                   intervals: Optional[List[Tuple[int, int]]] = None) -> Set[int]:
         """Values of the loaded integer worth evaluating, from the comparisons it takes part
         in.  Registers are tracked as ``V + b`` through ``mov`` / ``add|sub`` of an immediate
         or of a constant register; comparing such a register with *c* gives the point
@@ -490,9 +578,13 @@ class Flow:
         guards (``sub w9,w8,#35; cmp w9,#30; b.hi`` -> V in 35..65).  The scan follows the CFG
         from the load and stops each path at its first call (where the name is consumed).
         *domain* is ``hi`` (values ``0 <= v < hi``) or ``(lo, hi)``: a 4-byte value is a signed
-        int32, so an enum may start below zero (``add w8, w2, #1; cmp w8, #10`` is -1..8)."""
+        int32, so an enum may start below zero (``add w8, w2, #1; cmp w8, #10`` is -1..8).
+        *intervals*, when given, receives the ``(lo, hi)`` of EVERY ordered gate met, whether or
+        not a table load then uses it (a gate whose index is clamped by a ``csel`` before the
+        load is not followed to the load)."""
         cands: Set[int] = {0}
         self._gate_capped = False        # set when a table gate was wider than _MAX_GATE_SPAN
+        self._interval_sink = intervals
         root_blk = self._block_of.get(root) if root >= 0 else self.cfg.entry
         if root_blk is None:
             return cands
@@ -548,6 +640,8 @@ class Flow:
                     if cond in _ORDERED_CONDS:
                         lo, hi = sorted((-st[r], point))
                         st[f"gate_lo:{st[r]}"], st[f"gate_hi:{st[r]}"] = lo, hi   # keyed by the VALUE's offset: a register copy keeps it
+                        if self._interval_sink is not None:
+                            self._interval_sink.append((lo, hi))
         elif mn in ('cbz', 'cbnz') and ops:
             r = _norm_reg(ops[0])
             if r in st:
@@ -692,7 +786,7 @@ class Flow:
             m.flags = (a, b, 32 if ops[0].startswith('w') else 64) \
                 if a is not None and b is not None else None
         elif mn in ('mov', 'movz') and len(ops) == 2:
-            put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1]))
+            put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else m.copy_of(ops[1]))
         elif mn == 'movn' and len(ops) >= 2:
             v = _parse_imm(ops[1])
             put(ops[0], None if v is None else ~(v << ((_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0)))
@@ -750,6 +844,12 @@ class Flow:
                 m.flags = None
                 put(ops[0], None)
         elif mn in _EXEC_LOADS and len(ops) in (2, 3):
+            ft = (self._field_load(m, ops[1])
+                  if len(ops) == 2 and mn == 'ldr' and ops[0].strip().lower().startswith('x')
+                  else None)
+            if ft is not None:
+                put(ops[0], ft)
+                return
             addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
             size = _EXEC_LOADS[mn] or _reg_bytes(ops[0])
             put(ops[0], self._read(m, addr, size, mn in _SIGNED_LOADS))
@@ -759,11 +859,11 @@ class Flow:
             put(ops[0], self._read(m, addr, size, mn == 'ldpsw'))
             put(ops[1], self._read(m, None if addr is None else addr + size, size, mn == 'ldpsw'))
         elif mn in _STORES and len(ops) in (2, 3):
-            v = get(ops[0])
+            v = m.copy_of(ops[0])                   # a spill is a copy (opaque values survive)
             addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
             m.store(addr, _STORES[mn] or _reg_bytes(ops[0]), v)
         elif mn == 'stp' and len(ops) in (3, 4):
-            v0, v1 = get(ops[0]), get(ops[1])
+            v0, v1 = m.copy_of(ops[0]), m.copy_of(ops[1])
             addr = self._access(m, ops[2], ops[3] if len(ops) == 4 else None)
             size = _reg_bytes(ops[0])
             m.store(addr, size, v0)
@@ -771,6 +871,31 @@ class Flow:
         else:
             for r in _writes(ins):
                 put(r, None)
+
+    def _field_load(self, m: "_Machine", mem: str) -> Optional[int]:
+        """``m.field_value(object, offset)`` for a 64-bit load from an opaque object at a known
+        offset (``ldr x0, [x19, x8]`` with x19 = self and x8 an ivar offset), else None."""
+        if m.field_value is None:
+            return None
+        pm = _parse_mem(mem)
+        if pm is None or mem.endswith('!'):
+            return None
+        base, index, disp, ext, shift, idx_w = pm
+        r = _norm_reg(base) if base else None
+        obj = m.regs.get(r) if r else None
+        if obj is None or m.opaque is None or not m.opaque(obj):
+            return None
+        off = disp
+        if index:
+            iv = m.get(index)
+            if iv is None:
+                return None
+            if idx_w or ext in ('sxtw', 'uxtw'):
+                iv &= 0xFFFFFFFF
+                if ext == 'sxtw' and iv & 0x80000000:
+                    iv -= 1 << 32
+            off += iv << shift
+        return m.field_value(obj, off)
 
     def _access(self, m: "_Machine", mem: str, post: Optional[str]) -> Optional[int]:
         """Address a memory operand accesses under *m* (None if unknown), applying a pre-index
@@ -823,7 +948,10 @@ class Flow:
 
     # ── constant propagation over the whole function ────────────────────────
 
-    def propagate(self, entry: Dict[str, int], at: Iterable[int]) -> Dict[int, Dict[str, int]]:
+    def propagate(self, entry: Dict[str, int], at: Iterable[int], opaque=None,
+                  object_escape: bool = False,
+                  slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None,
+                  call_result=None, field_value=None) -> Dict[int, Dict[str, int]]:
         """``{k: {register: value}}``: the registers known before each ``insns[k]`` in *at*
         when the function is entered with *entry* (say a flag argument's value) and sp at
         the frame's top; an index missing from the result is unreachable under *entry*.
@@ -832,12 +960,14 @@ class Flow:
         registers) and over the whole CFG: a forward fixpoint in which a register, stack slot
         or the flags is known at a block iff every path into it that can execute agrees.  A
         branch whose condition is known follows only the side taken, so code that depends on
-        *entry* is resolved the same way whether it was compiled to a ``csel`` or a branch."""
+        *entry* is resolved the same way whether it was compiled to a ``csel`` or a branch.
+        *opaque*, *object_escape*: see :class:`_Machine`; *slots_out*, when given, receives the
+        stack slots known before each ``insns[k]`` in *at*; *call_result*: see :meth:`run_from`."""
         cfg = self.cfg
         want = set(at)
         if cfg.entry is None:
             return {}
-        start = _Machine(entry)
+        start = _Machine(entry, opaque=opaque, object_escape=object_escape, field_value=field_value)
         start.put('sp', _STACK_TOP)
         states: Dict[int, _Machine] = {}
         work: deque = deque()
@@ -863,7 +993,7 @@ class Flow:
             st = states[blk].copy()
             first = self._first_in_block[blk]
             for k in range(first, first + len(cfg.blocks[blk])):
-                self._propagate_step(st, k)
+                self._propagate_step(st, k, call_result)
             for succ in self._live_successors(blk, st):
                 push(succ, st)
         out: Dict[int, Dict[str, int]] = {}
@@ -873,14 +1003,25 @@ class Flow:
             for k in range(first, first + len(cfg.blocks[blk])):
                 if k in want:
                     out[k] = dict(st.regs)
-                self._propagate_step(st, k)
+                    if slots_out is not None:
+                        slots_out[k] = dict(st.slots)
+                self._propagate_step(st, k, call_result)
         return out
 
-    def _propagate_step(self, m: "_Machine", k: int) -> None:
+    def _propagate_step(self, m: "_Machine", k: int, call_result=None) -> None:
         ins = self.insns[k]
         mn = ins.mnemonic
         if mn in ('bl', 'blr'):
+            if call_result is None:
+                m.call()
+                return
+            x0 = m.copy_of('x0')
+            ops = split_ops(ins.op_str)
+            target = _parse_imm(ins.op_str) if mn == 'bl' else (m.get(ops[0]) if ops else None)
             m.call()
+            v = call_result(k, target, x0)
+            if v is not None:
+                m.put('x0', v)
         elif mn in ('b', 'br', 'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz') \
                 or _is_cond_branch(mn):
             return
@@ -903,6 +1044,126 @@ class Flow:
         dest = target if taken else (self.insns[k + 1].addr if k + 1 < len(self.insns) else None)
         b = self.cfg.addr_to_block.get(dest) if dest is not None else None
         return [b] if b in succ else []
+
+    def run_from(self, k0: int, regs: Dict[str, int], stop: FrozenSet[int] = frozenset(),
+                 ret_value=None, opaque=None, object_escape: bool = False,
+                 slots: Optional[Dict[int, Tuple[int, int]]] = None,
+                 tail_targets: FrozenSet[int] = frozenset(),
+                 rejoin: FrozenSet[int] = frozenset(), call_result=None,
+                 field_value=None) -> "Region":
+        """Run from ``insns[k0]`` with *regs* known (nothing else is) to every block it can
+        reach without entering a block in *stop*, through calls, and record each call.
+
+        The same forward fixpoint as :meth:`propagate` -- a value is known at a block iff every
+        path into it that can execute agrees, and a branch whose condition is known follows only
+        the side taken -- but started mid-function and bounded by *stop* (e.g. the blocks that
+        dominate a reader's ``lsr Wf, Wtag, #3``, so one loop iteration is evaluated).  A call
+        clobbers the caller-saved registers, flags and (once a stack address has escaped) the
+        slots; ``ret_value(k)``, when given, is then the value of x0 after the call at ``insns[k]``
+        (an opaque token naming that call's result, so it can be followed to later arguments).
+        The result lists every call (``bl`` / ``blr`` / a ``b`` out of the function) with the
+        argument registers x0-x7 known at it (opaque values included, see :class:`_Machine`),
+        and the blocks reached in first-visit order.  *object_escape*: see :class:`_Machine`;
+        *slots*: stack slots known at ``insns[k0]``.  A ``b`` to an address in *tail_targets*
+        (known function entries) is a tail call even when that address lies in the window.
+        *call_result(k, target, x0_before)*, when given, is the value of x0 after the call at
+        ``insns[k]`` instead of ``ret_value(k)`` (None: unknown) -- e.g. *x0_before* for a runtime
+        function that returns its argument (``objc_retain``).
+        *rejoin*: a path that has left this set of blocks stops when it enters it again (e.g. the
+        blocks an unknown field number reaches: after a field's own handler, everything from
+        there on is common to every field)."""
+        cfg = self.cfg
+        start_blk = self._block_of.get(k0)
+        region = Region()
+        if start_blk is None:
+            return region
+        states: Dict[int, _Machine] = {}
+        work: deque = deque()
+        queued: Set[int] = set()
+
+        def push(blk: int, st: _Machine, frm: Optional[int] = None) -> None:
+            if blk in stop or (frm is not None and blk in rejoin and frm not in rejoin):
+                return
+            if blk not in states:
+                region.order.append(blk)
+            cur = states.get(blk)
+            if cur is None:
+                states[blk] = st.copy()
+            else:
+                merged = cur.join(st)
+                if merged.same(cur):
+                    return
+                states[blk] = merged
+            if blk not in queued:
+                queued.add(blk)
+                work.append(blk)
+
+        def step(st: _Machine, k: int, record: bool) -> None:
+            ins = self.insns[k]
+            mn = ins.mnemonic
+            tgt = _parse_imm(ins.op_str) if mn == 'b' else None
+            tail = tgt is not None and (tgt not in self.addr_idx or tgt in tail_targets)
+            if mn in ('bl', 'blr') or tail:
+                if record:
+                    target = (m_get_target(st, ins) if mn == 'blr' else _parse_imm(ins.op_str))
+                    args = {f"x{n}": v for n in range(8) if (v := st.copy_of(f"x{n}")) is not None}
+                    region.calls.append(CallSite(k, ins.addr, target, args, tail))
+                if mn != 'b':
+                    x0 = st.copy_of('x0')
+                    target = (m_get_target(st, ins) if mn == 'blr' else _parse_imm(ins.op_str))
+                    st.call()
+                    v = (call_result(k, target, x0) if call_result is not None
+                         else ret_value(k) if ret_value is not None else None)
+                    if v is not None:
+                        st.put('x0', v)
+            else:
+                self._propagate_step(st, k)
+
+        def m_get_target(st: _Machine, ins: Insn) -> Optional[int]:
+            ops = split_ops(ins.op_str)
+            return st.get(ops[0]) if ops else None
+
+        def successors(blk: int, st: _Machine) -> List[int]:
+            last = cfg.blocks[blk][-1]
+            if last.mnemonic == 'b' and _parse_imm(last.op_str) in tail_targets:
+                return []
+            return self._live_successors(blk, st)
+
+        def run_block(blk: int, st: _Machine, lo: int, record: bool) -> None:
+            first = self._first_in_block[blk]
+            for k in range(lo, first + len(cfg.blocks[blk])):
+                step(st, k, record)
+            last = cfg.blocks[blk][-1]
+            if record and last.mnemonic == 'br':
+                v = m_get_target(st, last)
+                if v is None:
+                    region.unresolved_br.append(last.addr)
+                else:
+                    region.br_targets.add((last.addr, v))
+
+        # The partial first block runs once; its successors seed the fixpoint.
+        st0 = _Machine(regs, opaque=opaque, object_escape=object_escape, field_value=field_value)
+        if 'sp' not in regs:
+            st0.put('sp', _STACK_TOP)
+        if slots:
+            st0.slots = dict(slots)
+        first_st = st0.copy()
+        run_block(start_blk, st0, k0, False)
+        for succ in successors(start_blk, st0):
+            push(succ, st0, start_blk)
+        while work:
+            blk = work.popleft()
+            queued.discard(blk)
+            st = states[blk].copy()
+            run_block(blk, st, self._first_in_block[blk], False)
+            for succ in successors(blk, st):
+                push(succ, st, blk)
+        # Record the calls from the final (fixpoint) state of each block.
+        run_block(start_blk, first_st, k0, True)
+        for blk in region.order:
+            run_block(blk, states[blk].copy(), self._first_in_block[blk], True)
+        region.blocks = set(region.order) | {start_blk}
+        return region
 
     def flag_arguments(self) -> Tuple[str, ...]:
         """Argument registers (x1-x7) whose value on entry is tested: a compare, test or

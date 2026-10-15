@@ -1,10 +1,8 @@
-"""Synthetic unit tests for readFrom dispatch helpers — NO real binary.
+"""Synthetic unit tests for proto/dispatch.py's jump-table CFG completion — NO real binary.
 
-#2 (post-#11 split): proto/dispatch.py's raw-word decoders (_find_dispatch_cluster,
-_find_field_number_register, …) already have synthetic cover in test_readfrom_dispatch.
-This adds cover for _arm_calls_own_method, which had ZERO non-live references — the
-check that confirms a candidate readFrom core belongs to THIS class because its
-jump-table arm bl's into one of the class's own method IMPs.
+(The ownership check _arm_calls_own_method and the wrapper-core hop these tests also
+covered were retired 2026-10-15 with the rest of the readFrom: shape decoders; the dispatch
+is decoded by evaluation now -- tests/test_dispatch_eval.py.)
 """
 import os
 import sys
@@ -15,78 +13,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 from macho.memory import BinaryContext
 from proto.arm64cfg import build_blocks, inject_arm_edges
-from proto.dispatch import _arm_calls_own_method, _jump_table_arm_addrs
+from proto.dispatch import _jump_table_arm_addrs
 from tests.conftest import build_text_binary, encode_bl, RET_BYTES
-
-
-class TestArmCallsOwnMethod(unittest.TestCase):
-    V = 0x4000
-
-    def _ctx(self, code):
-        return BinaryContext(build_text_binary(code, vmaddr=self.V))
-
-    def test_bl_into_own_imp_is_true(self):
-        # arm: `bl +8` (absolute target V+8) ; ret  — and V+8 is an own IMP.
-        ctx = self._ctx(encode_bl(8) + RET_BYTES)
-        self.assertTrue(_arm_calls_own_method(ctx, self.V, frozenset({self.V + 8})))
-
-    def test_bl_into_foreign_target_is_false(self):
-        # The bl target is NOT among own_imps -> the core belongs to a nested message.
-        ctx = self._ctx(encode_bl(8) + RET_BYTES)
-        self.assertFalse(
-            _arm_calls_own_method(ctx, self.V, frozenset({self.V + 0x9999})))
-
-    def test_no_bl_is_false(self):
-        ctx = self._ctx(RET_BYTES)
-        self.assertFalse(_arm_calls_own_method(ctx, self.V, frozenset({self.V + 8})))
-
-    def test_empty_own_imps_is_false(self):
-        ctx = self._ctx(encode_bl(8) + RET_BYTES)
-        self.assertFalse(_arm_calls_own_method(ctx, self.V, frozenset()))
-
-
-class TestWiringBugGuard(unittest.TestCase):
-    """#3 robustness: a wiring/refactor bug (NameError/ImportError) inside a guarded
-    decoder must PROPAGATE — not be swallowed as a graceful "decode failed" (that's how
-    the enums-carve missing-import bug could have hidden). Data-driven failures
-    (ValueError) still degrade gracefully."""
-
-    V = 0x4000
-
-    def _ctx_with_bl(self):
-        # _find_field_count(ctx, V) == 0 for this synthetic ctx, so _readspecified_and_count
-        # falls through to the GUARDED ReadAllFrom hop (iter_bl_targets is hop-only).
-        from macho.memory import BinaryContext
-        return BinaryContext(build_text_binary(encode_bl(8) + RET_BYTES, vmaddr=self.V))
-
-    def test_nameerror_in_guarded_hop_propagates(self):
-        from proto import dispatch as D
-        ctx = self._ctx_with_bl()
-        orig = D.iter_bl_targets
-        D.iter_bl_targets = lambda *a, **k: (_ for _ in ()).throw(NameError("carve bug"))
-        try:
-            with self.assertRaises(NameError):       # guard re-raises wiring bugs
-                D._readspecified_and_count(ctx, self.V)
-        finally:
-            D.iter_bl_targets = orig
-
-    def test_value_error_in_guarded_hop_swallowed(self):
-        # NOTE: this documents the PRE-EXISTING broad `except Exception` (which
-        # predates d0c95f4 and would swallow ValueError regardless), not d0c95f4's
-        # actual addition -- the NEW `except (NameError, ImportError): raise` clause
-        # that must re-raise WIRING bugs instead of masking them as "hop failed".
-        # test_nameerror_in_guarded_hop_propagates (above) is what actually
-        # regression-guards that addition. Kept here as a pre-existing-behavior
-        # guard: a data-driven ValueError must still degrade gracefully.
-        from proto import dispatch as D
-        ctx = self._ctx_with_bl()
-        orig = D.iter_bl_targets
-        D.iter_bl_targets = lambda *a, **k: (_ for _ in ()).throw(ValueError("bad data"))
-        try:
-            # data-driven failure still degrades gracefully
-            self.assertEqual(D._readspecified_and_count(ctx, self.V), (None, 0))
-        finally:
-            D.iter_bl_targets = orig
 
 
 class TestJumpTableArmAddrsRangeGuardRedundant(unittest.TestCase):

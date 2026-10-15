@@ -51,7 +51,7 @@ from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import disasm, _parse_imm, _norm_reg
 
 from proto.arm64cfg import (
-    split_ops, dst_reg, mem_operand, _next_imp, dominates,
+    split_ops, dst_reg, mem_operand, _next_imp,
 )
 from proto.writeto import (
     _writeto_field_number_before, _selector_stub_name,
@@ -63,10 +63,6 @@ from proto.write_helpers import (
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
-from proto.dispatch import (
-    _locate_dispatch_arms, _func_end, _find_field_number_register,
-    _compare_handlers, _classref_class_name,
-)
 
 log = logging.getLogger(__name__)
 
@@ -582,67 +578,20 @@ def readfrom_value_classes(
     ctx: BinaryContext, cls: ObjcClass, number: int,
     core_index: Dict[int, str], known_classes: FrozenSet[str],
 ) -> Optional[Set[str]]:
-    """Proto classes referenced (``[Cls alloc]`` classref, or a ``bl`` into a known
-    ReadAllFrom core) anywhere in the region dominated by the OUTERMOST handler of
-    field *number* in *cls*'s ``readFrom:`` — i.e. the map entry's whole parse, nested
-    key/value tag compares included.  ``None`` when the reader/handler can't be
-    located unambiguously (the caller then reports the value class as unrecovered)."""
-    arms, core_va, readfrom_va = _locate_dispatch_arms(ctx, cls, core_index)
-    if readfrom_va is None:
+    """Proto classes field *number*'s ``readFrom:`` handler builds -- the map entry's whole
+    parse, its own key/value dispatch included: the ReadAllFrom core it calls on a new object
+    and every proto class it allocates (:mod:`proto.dispatch_eval`, which runs the dispatch
+    with the field number set to *number*).  ``None`` when the dispatch, or a handler for that
+    number, can't be found (the caller then reports the value class as unrecovered)."""
+    from proto.dispatch_eval import evaluate_class
+    ev = evaluate_class(ctx, cls, core_index or {})   # an empty index still names allocated classes
+    fd = ev.fields.get(number)
+    if fd is None:
         return None
-    core = core_va if core_va is not None else readfrom_va
-    func_end = _func_end(ctx, core)
-    if func_end is None:
-        return None
-    field_reg = _find_field_number_register(ctx, core, func_end)
-    if field_reg is None:
-        return None
-    built = _compare_handlers(ctx, core, func_end, field_reg)
-    if built is None:
-        return None
-    cfg, idom, handlers = built
-
-    tops = []
-    for n, h in handlers:
-        if n != number:
-            continue
-        # outermost = not dominated by any OTHER handler (a nested tag compare inside
-        # another field's arm is dominated by that arm's handler).
-        if not any(h2 != h and dominates(idom, h2, h) for _n2, h2 in handlers):
-            tops.append(h)
-    if len(set(tops)) != 1:
-        return None
-    top = tops[0]
-
-    # Classref page registers are often hoisted far from the load (``adrp x27,#pg`` in
-    # the prologue, ``ldr x0,[x27,#off]`` in the arm), so collect every page ever
-    # assigned to each register function-wide; a candidate only counts if it resolves
-    # to a KNOWN proto class (the validator — an unrelated slot can't pass it).
-    pages: Dict[str, Set[int]] = {}
-    for b in cfg.order:
-        for ins in cfg.blocks[b]:
-            if ins.mnemonic == 'adrp':
-                ops = split_ops(ins.op_str)
-                page = _parse_imm(ops[1]) if len(ops) == 2 else None
-                if page is not None and _norm_reg(ops[0]):
-                    pages.setdefault(_norm_reg(ops[0]), set()).add(page)
-    names: Set[str] = set()
-    for b in cfg.order:
-        if not dominates(idom, top, b):
-            continue
-        for ins in cfg.blocks[b]:
-            if ins.mnemonic == 'ldr':
-                mem = mem_operand(ins.op_str)
-                if mem is not None and mem[2] is None:
-                    for page in pages.get(mem[1], ()):
-                        name = _classref_class_name(ctx, page + mem[3])
-                        if name in known_classes:
-                            names.add(name)
-            elif ins.mnemonic == 'bl':
-                t = _parse_imm(ins.op_str)
-                if t in core_index:
-                    names.add(core_index[t])
-    return names
+    names = set(fd.element_classes)
+    if fd.element_core:
+        names.add(fd.element_core)
+    return {n for n in names if n in known_classes}
 
 
 # ── Type resolution ───────────────────────────────────────────────────────────

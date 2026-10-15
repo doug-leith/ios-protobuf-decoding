@@ -15,13 +15,21 @@ hand in fixture.m, not derived from any tool output.
       repeated TestGrElemA deltas = 5;
     }
 
-TestGrContainer's element types are recoverable ONLY through the compare-chain
-tier accepting a guard-less engine (call-site csel + independent dispatch check
-+ the class's own ivar-offset variables).  TestGrPlainCall and
-TestGrForeignEngine are the two NEGATIVES that must keep degrading to the
-`bytes` fallback — each lacks exactly one of those signals (see fixture.m) —
-even though every one of these classes really does contain a TestGrElemA:
-the tool must not claim what it cannot confirm.
+TestGrContainer's element types are recoverable only by following the guard-less
+engine its readFrom: hands itself to (proto.dispatch_eval: the call handed self,
+then each field number evaluated through the compare tree).
+
+TestGrForeignEngine is the NEGATIVE that must keep degrading to the `bytes`
+fallback: it hands itself to TestGrContainer's engine, whose handlers fill
+TestGrContainer's ivars through TestGrContainer's ivar-offset variables -- the
+dispatch is not this class's, so the tool must not claim it.
+
+TestGrPlainCall was a negative too until 2026-10-15: the call-site-shape decoder
+could not confirm its engine (a plain call with one table, no `csel`) and left
+`gammas` as `bytes`.  Its engine is its own (handed self, fills its own ivar), so
+the evaluator confirms the field's real type, the one declared above:
+`repeated TestGrElemA gammas = 5` (fixture.m's "stays bytes" comments describe
+the old decoder).
 """
 
 EXPECTED = {
@@ -37,8 +45,9 @@ EXPECTED = {
     },
     "TestGrPlainCall": {
         "fields": [
-            {"name": "gammas", "number": 5, "type_name": "bytes",
-             "label": "repeated", "number_confirmed": True},
+            {"name": "gammas", "number": 5, "type_name": "TestGrElemA",
+             "label": "repeated", "type_class": "TestGrElemA",
+             "number_confirmed": True},
         ],
     },
     "TestGrForeignEngine": {

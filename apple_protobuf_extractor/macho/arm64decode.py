@@ -236,13 +236,9 @@ def _decode_lsr_imm(word: int) -> Optional[Tuple[int, int, int]]:
     Decode an ``lsr xRd, xRn, #shift`` immediate (a UBFM alias) instruction word.
     Returns ``(Rd, Rn, shift)`` or ``None``.
 
-    Used to find the protobuf **field-number register**: every generated reader
-    computes ``field# = tag >> 3`` with a single ``lsr Wf, Wtag, #3``.  Anchoring
-    the compare-chain dispatch on that register (rather than scanning every
-    ``bl``) is what lets :func:`_resolve_compare_chain_elements` bind an element
-    parse to the field number that actually guards it — and reject calls guarded
-    by a comparison on a *different* register (e.g. a ``cmp wTag,#0`` end-of-input
-    check that happens to precede a runtime-helper call).
+    The protobuf **field-number extraction** has this shape: every generated reader
+    computes ``field# = tag >> 3`` with a single ``lsr Wf, Wtag, #3`` (the readFrom:
+    dispatch evaluator, proto.dispatch_eval, sets Wf there to each field number).
 
     UBFM/LSR encoding: 64-bit ``(w & 0xFFC00000)==0xD3400000`` with ``imms==63``;
     32-bit ``(w & 0xFFC00000)==0x53000000`` with ``imms==31``.  ``immr`` is the
@@ -302,7 +298,7 @@ def range_from_unsigned_gate(cond: Optional[int], imm: int) -> int:
 
     Any other condition is not a range gate → ``0``.  Single source of truth so
     the off-by-one convention is fixed in ONE place (it was previously inlined in
-    _find_dispatch_cluster, the jump-table enum harvester, and the dictRep
+    the former readFrom: dispatch-cluster decoder, the jump-table enum harvester, and the dictRep
     harvester; a divergence here silently drops the last enum value / dispatch
     arm).  Note: this is the default-branch sense; the comparison-tree *routing*
     gate (b.ls/b.lo into a segment) has the inverse polarity and is handled at

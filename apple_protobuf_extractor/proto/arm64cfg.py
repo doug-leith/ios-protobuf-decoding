@@ -260,8 +260,10 @@ class CFG:
         self.entry = order[0] if order else None
 
 
-def build_blocks(insns):
-    """Partition a function's Insn list into basic blocks + successor edges."""
+def build_blocks(insns, extra_leaders=()):
+    """Partition a function's Insn list into basic blocks + successor edges.  *extra_leaders*
+    (e.g. jump-table arm addresses) also start a block, so an edge to one enters at that
+    instruction rather than at the start of the block that would otherwise contain it."""
     if not insns:
         return CFG({}, {}, {}, [])
     insns = sorted(insns, key=lambda i: i.addr)
@@ -269,7 +271,7 @@ def build_blocks(insns):
     by_addr = {i.addr: i for i in insns}
     nxt = {insns[k].addr: (insns[k + 1].addr if k + 1 < len(insns) else None)
            for k in range(len(insns))}
-    leaders = {insns[0].addr}
+    leaders = {insns[0].addr} | {a for a in extra_leaders if a in by_addr}
     for ins in insns:
         if _is_block_end(ins):
             n = nxt[ins.addr]

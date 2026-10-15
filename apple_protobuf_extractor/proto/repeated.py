@@ -1,25 +1,22 @@
 """proto/repeated — repeated-field element-type resolution.
 
-Carved from ``proto.extractor`` (#11 monolith split, step 4): given a class's readFrom
-dispatch (from proto.dispatch) and metaclass type-pool, resolve the element type of a
-repeated field — via the readFrom dispatch arms, the compare-chain, the adder->ivar
-lever, or the name-suffix fallback. Imports macho.* + arm64decode + protocore + dispatch
-(never proto.extractor) -> cycle-free; extractor re-imports the surface.
+Carved from ``proto.extractor`` (#11 monolith split, step 4): resolve the element type of a
+repeated field from the class's readFrom: dispatch -- decoded by evaluation in
+:mod:`proto.dispatch_eval` (element class per field number, and per ivar through the
+accessor its handler appends with) -- or from the metaclass ``+xyzType`` method / writeTo:
+helper.  Imports macho.* + arm64cfg + protocore (never proto.extractor) -> cycle-free;
+extractor re-imports the surface.
 """
 from __future__ import annotations
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from macho.memory    import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm    import disasm, _parse_imm, _norm_reg
+from macho.disasm    import disasm, _norm_reg
 from proto.arm64cfg  import parse_adrp, mem_operand
-from macho.arm64decode import _decode_b_bl_target, _is_bl_word
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
-from proto.dispatch  import (_ARM_MAX_INSNS, _dominance_field_of,
-    _find_field_number_register, _func_end, _locate_dispatch_arms, _read_raw_word,
-    _walk_jumptable_arms)
 
 log = logging.getLogger(__name__)
 
@@ -79,149 +76,11 @@ _ADDER_MAX_INSNS    = 256    # runaway guard only; first-match returns well befo
 # (excluding the flags/has-bits struct ivar the same accessor also touches).
 _ARRAY_IVAR_ENCS = ('@"NSArray"', '@"NSMutableArray"')
 
-
-# _degenerate_block_partition (registry `degenerate-partition`, REPLACE) was DELETED in
-# TODO #42: dominance attribution (_dominance_field_of, over a COMPLETE CFG) makes the
-# bail-out unnecessary by construction — each field owns exactly the blocks its match
-# edge dominates, so a collapsed jump-table / stray sentinel can no longer lump multiple
-# element cores under one field.
-
-
-def _resolve_compare_chain_elements(
-    ctx: BinaryContext, read_specified_va: int, core_index: Dict[int, str],
-) -> Dict[int, str]:
-    """
-    Resolve ``{field_number: element_class}`` from a reader core that dispatches
-    fields with an explicit **compare chain** rather than a jump table.
-
-    This is the small-/few-field encoding of the very same field→handler dispatch
-    the jump table expresses for larger messages (and the form used for the low
-    fields of a hybrid reader, e.g. ALSLocationResponse's fields 1/2 alongside a
-    jump table for 21-24).  The idiom is::
-
-        lsr  Wf, Wtag, #3              ; field# = tag >> 3   (Wf = field-number reg)
-        ...
-        cmp  Wf, #N ; b.cond TGT       ; routes field N to its handler block
-        ...
-        bl   _<ElementClass>ReadAllFrom
-
-    Principled, not a blind ``bl`` scan: handler blocks are located by control
-    flow (:func:`_compare_chain_blocks` — ``b.eq`` → target, ``b.ne`` →
-    fall-through), and an element ``bl`` to a known ReadAllFrom core is attributed
-    to the field whose block address-range contains it.  A ``bl`` outside every
-    field block (e.g. a runtime helper in the preamble) is ignored.
-
-    Returns ``{}`` when the field-number register can't be uniquely identified or
-    no guarded element call is found.
-    """
-    if not core_index:
-        return {}
-    func_end = _func_end(ctx, read_specified_va)
-    if func_end is None:
-        return {}
-    field_reg = _find_field_number_register(ctx, read_specified_va, func_end)
-    if field_reg is None:
-        return {}
-    # TODO #42: attribute each element bl by DOMINANCE (exact) rather than the old
-    # _compare_chain_blocks + address-range _field_for_addr.  _dominance_field_of builds
-    # the COMPLETE CFG (br jump-table arms injected) so handlers reached via an indirect
-    # dispatch are reachable; dominance then makes the degenerate-partition guard
-    # unnecessary by construction (a field owns exactly the blocks its match edge
-    # dominates, so a collapsed jump-table / stray sentinel can't lump cores under it).
-    field_of = _dominance_field_of(ctx, read_specified_va, func_end, field_reg)
-    result: Dict[int, str] = {}
-    va = read_specified_va
-    while va < func_end:
-        word = _read_raw_word(ctx, va)
-        if word is None:
-            break
-        if _is_bl_word(word):                          # bl
-            target = _decode_b_bl_target(word, va)
-            if target in core_index:
-                fn = field_of(va)
-                if fn is not None:
-                    result.setdefault(fn, core_index[target])
-                    log.debug("dispatch(cmp-chain): field %d -> %s (-> 0x%x)",
-                              fn, core_index[target], target)
-        va += 4
-    return result
-
-
-def _resolve_compare_chain_ivars(
-    ctx: BinaryContext, read_specified_va: int, core_index: Dict[int, str],
-    cls: ObjcClass,
-) -> Dict[str, Tuple[str, int]]:
-    """Adder→ivar lever for the **compare-chain** reader shape — the small-message
-    counterpart of :func:`_resolve_repeated_element_ivars`.
-
-    A compare-chain block that handles a repeated-message field N holds both the
-    element parse and the append::
-
-        cmp  Wf, #N ; b.cond TGT
-        ...
-        bl   _<ElementClass>ReadAllFrom     ; parse element  (∈ core_index)
-        ...
-        bl   -[Cls _addNoFlags<X>:]         ; append it      (∈ own_imps)
-
-    Both ``bl``s are attributed to N's handler block (located by control flow via
-    :func:`_compare_chain_blocks`, not linear adjacency), yielding
-    ``{ivar_name: (element_class, field_number)}`` bound to the EXACT backing ivar
-    (via :func:`_adder_array_ivar`).  Applied without needing the field number to
-    be write-confirmed, so it reaches classes whose compare chain knows the
-    element type but whose ivar number the writeTo:/pointer-table pass left
-    unconfirmed (e.g. GEOPDExternalAction).  Returns ``{}`` when the field-number
-    register is ambiguous or no element+adder pair is found.
-    """
-    if not core_index:
-        return {}
-    own_imps: FrozenSet[int] = frozenset(m.imp for m in cls.methods if m.imp)
-    array_offsets: FrozenSet[int] = frozenset(
-        iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_IVAR_ENCS)
-    if not own_imps or not array_offsets:
-        return {}
-    off_to_ivar: Dict[int, ObjcIvar] = {iv.offset: iv for iv in cls.ivars}
-    func_end = _func_end(ctx, read_specified_va)
-    if func_end is None:
-        return {}
-    field_reg = _find_field_number_register(ctx, read_specified_va, func_end)
-    if field_reg is None:
-        return {}
-    # TODO #42: dominance attribution (exact, COMPLETE CFG) replaces _compare_chain_blocks
-    # + address-range _field_for_addr; the degenerate-partition guard is unnecessary by
-    # construction (each field owns exactly the blocks its match edge dominates).
-    field_of = _dominance_field_of(ctx, read_specified_va, func_end, field_reg)
-
-    # Collect, per field block, the first element-core bl and the first adder bl.
-    by_field: Dict[int, Dict[str, Any]] = {}
-    va = read_specified_va
-    while va < func_end:
-        word = _read_raw_word(ctx, va)
-        if word is None:
-            break
-        if _is_bl_word(word):                          # bl
-            target = _decode_b_bl_target(word, va)
-            fn = field_of(va)
-            if fn is not None and target is not None:
-                slot = by_field.setdefault(fn, {})
-                if target in core_index:
-                    slot.setdefault("element", core_index[target])
-                elif target in own_imps:
-                    slot.setdefault("adder", target)
-        va += 4
-
-    out: Dict[str, Tuple[str, int]] = {}
-    for fn, slot in by_field.items():
-        element = slot.get("element")
-        adder = slot.get("adder")
-        if element is None or adder is None:
-            continue
-        off = _adder_array_ivar(ctx, adder, array_offsets)
-        if off is None:
-            continue
-        # off is always a key of off_to_ivar: array_offsets (which bounds
-        # _adder_array_ivar's return value) is built from the same cls.ivars.
-        out.setdefault(off_to_ivar[off].name, (element, fn))
-    return out
+# The readFrom: dispatch idioms that used to live here and in proto.dispatch -- jump-table
+# cluster decoding, the clamped-gate matcher, compare-chain dominance attribution, the
+# wrapper->core scan with its ownership signals, the arm walkers, the class-reference windows
+# -- were retired 2026-10-15 for proto.dispatch_eval, which runs the dispatch for each field
+# number instead of matching its shape.
 
 
 def _adder_array_ivar(
@@ -279,133 +138,21 @@ def _adder_array_ivar(
     return None
 
 
-def _resolve_repeated_element_ivars(
-    ctx: BinaryContext,
-    cls: ObjcClass,
-    arms: Dict[int, int],
-    core_index: Dict[int, str],
-) -> Dict[str, Tuple[str, int]]:
-    """Bind ``{ivar_name: (element_class, field_number)}`` directly from the
-    readFrom: jump-table arms — the **adder→ivar lever**.
-
-    The field-number-keyed resolver (:func:`_resolve_repeated_via_dispatch`) is
-    only safe to apply when a field's number is *confirmed* (writeTo:/pointer
-    table), because an unconfirmed ordinal can attach a sibling's type.  This
-    resolver sidesteps the number entirely: each repeated-message arm carries the
-    field→ivar binding directly, so the element type is attached to the exact
-    ivar with no ordinal guess.
-
-    Per arm we read two ``bl`` targets:
-
-      * **element class** — the arm's ``bl`` whose target is a known ReadAllFrom
-        core (``∈ core_index``).
-      * **backing ivar** — the arm's ``bl`` into one of *this class's* method IMPs
-        (the ``_addNoFlags<X>:`` accessor); the accessor's ivar-offset variable
-        pins the exact array ivar (:func:`_adder_array_ivar`).
-
-    An arm with both is an unambiguous repeated-message field.  Arms with only an
-    element ``bl`` (a *singular* message field — it has a setter, not an adder)
-    are intentionally not bound here, which is exactly what prevents the
-    singular-vs-repeated mis-binding the field-number ordinal hit (e.g.
-    GEOETARequest's singular field-3 ``GEOWaypoint`` vs repeated field-4
-    ``destinations``).  The jump-table index is returned alongside the type as
-    the *dispatch's* field number, but the caller treats only the **type** as
-    authoritative — the index is informational, since some readers yield an
-    unreliable index and the writeTo:/pointer-table pass owns number confirmation.
-    """
-    if not arms:
-        return {}
-    own_imps: FrozenSet[int] = frozenset(m.imp for m in cls.methods if m.imp)
-    if not own_imps:
-        return {}
-    array_offsets: FrozenSet[int] = frozenset(
-        iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_IVAR_ENCS)
-    if not array_offsets:
-        return {}
-    off_to_ivar: Dict[int, ObjcIvar] = {iv.offset: iv for iv in cls.ivars}
-
-    out: Dict[str, Tuple[str, int]] = {}
-    for field_number, arm_va in arms.items():
-        element: Optional[str] = None
-        adder_imp: Optional[int] = None
-        try:
-            arm_insns = disasm(ctx, arm_va, max_insns=_ARM_MAX_INSNS,
-                               stop_at_ret=False)
-        except Exception:
-            continue
-        for insn in arm_insns:
-            if insn.mnemonic in ('b', 'br', 'ret', 'retaa', 'retab'):
-                break
-            if insn.mnemonic != 'bl':
-                continue
-            t = _parse_imm(insn.op_str)
-            if t is None:
-                continue
-            if element is None and t in core_index:
-                element = core_index[t]
-            elif adder_imp is None and t in own_imps:
-                adder_imp = t
-        if element is None or adder_imp is None:
-            continue
-        off = _adder_array_ivar(ctx, adder_imp, array_offsets)
-        if off is None:
-            continue
-        # off is always a key of off_to_ivar: array_offsets (which bounds
-        # _adder_array_ivar's return value) is built from the same cls.ivars.
-        out.setdefault(off_to_ivar[off].name, (element, field_number))
-    return out
-
-
 def _resolve_repeated_via_dispatch_ivars(
     ctx: BinaryContext,
     cls: ObjcClass,
     core_index: Dict[int, str],
 ) -> Dict[str, Tuple[str, int]]:
-    """Public entry for the adder→ivar lever: bind ``{ivar_name: (element_class,
-    field_number)}`` from this class's readFrom: dispatch, reading BOTH encodings.
-
-    The jump-table form (:func:`_resolve_repeated_element_ivars`) takes precedence;
-    the compare-chain form (:func:`_resolve_compare_chain_ivars`) fills the
-    small-message readers a jump table doesn't cover.  Both bind the element type
-    to the exact backing ivar via the ``_addNoFlags<X>:`` accessor's ivar-offset
-    variable, so the result is safe to apply even when the field number is not
-    write-confirmed.  Empty when neither encoding yields an element+adder pair."""
+    """Bind ``{ivar_name: (element_class, field_number)}`` from this class's readFrom:
+    dispatch: for each field the evaluator (:mod:`proto.dispatch_eval`) finds, the array ivar
+    its handler appends the element to -- the accessor it hands (self, element), method IMP or
+    objc_direct C function alike, identified by the ivar-offset variable it loads; or
+    ``[self->_array addObject:element]``.  Keyed by IVAR, so safe to apply even when the field
+    number is not write-confirmed.  Empty when nothing binds."""
     if not core_index:
         return {}
-    arms, core_va, readfrom_va = _locate_dispatch_arms(ctx, cls, core_index)
-    if readfrom_va is None:
-        return {}
-    out: Dict[str, Tuple[str, int]] = {}
-    if arms:
-        out.update(_resolve_repeated_element_ivars(ctx, cls, arms, core_index))
-    # Compare-chain fill (runs on the dispatch core when located, else the
-    # readFrom: entry itself).  setdefault → jump table wins on any overlap.
-    chain_core = core_va if core_va is not None else readfrom_va
-    for ivn, val in _resolve_compare_chain_ivars(
-            ctx, chain_core, core_index, cls).items():
-        out.setdefault(ivn, val)
-    return out
-
-
-def _classref_name(ctx: BinaryContext, cl: ClassList, slot_va: int) -> Optional[str]:
-    """Name of the class whose ``__objc_classrefs`` slot is at *slot_va*, or None.
-
-    A binary-local class resolves through ``cl.by_vmaddr``; an external class (a
-    chained-fixup bind) through :meth:`BinaryContext.bind_name_for`.  Returns None
-    when the slot is not a class reference at all (a selector reference, an ivar
-    offset slot, ...), which is how a class-ref load is told from other ``ldr``s."""
-    try:
-        v = ctx.read_ptr(slot_va)
-        if v:
-            c = cl.by_vmaddr(v)
-            if c is not None and not c.is_meta:
-                return c.name
-        b = ctx.bind_name_for(slot_va)
-        if b and b.startswith("_OBJC_CLASS_$_"):      # not an _OBJC_IVAR_$_ offset slot
-            return b[len("_OBJC_CLASS_$_"):]
-    except Exception:
-        pass
-    return None
+    from proto.dispatch_eval import evaluate_class
+    return evaluate_class(ctx, cls, core_index).ivars()
 
 
 def _selref_name(ctx: BinaryContext, slot_va: int) -> Optional[str]:
@@ -445,158 +192,28 @@ def _msgsend_stub_selector(ctx: BinaryContext, va: int) -> Optional[str]:
     return sel
 
 
-def _classref_windows(
-    ctx: BinaryContext, cl: ClassList, insns: List[Any],
-    adder_ivar: Dict[int, str], adder_sel: Dict[str, str], *, is_arm: bool,
-) -> List[Tuple[str, Tuple[str, ...]]]:
-    """Walk *insns* in order and return ``[(ivar_name, class_refs_seen)]``: one entry
-    per call of an add-accessor, holding every class reference loaded since the
-    previous add-accessor call (or the start of the stream).
-
-    A call is a direct ``bl`` to the accessor's IMP (``adder_ivar``), or, for readers
-    that message it, a ``bl`` to the accessor's ``_objc_msgSend$<selector>`` stub or a
-    load of its selector reference (``adder_sel``).  A dispatch arm (*is_arm*) ends at
-    its first branch/return, exactly as the adder->ivar lever reads one."""
-    pages: Dict[str, int] = {}
-    recent: List[str] = []
-    out: List[Tuple[str, Tuple[str, ...]]] = []
-    for ins in insns:
-        mn = ins.mnemonic
-        if is_arm and mn in ('b', 'br', 'ret', 'retaa', 'retab'):
-            break
-        if mn == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None:
-                pages[pa[0]] = pa[1]
-        elif mn == 'ldr':
-            mo = mem_operand(ins.op_str)
-            if mo is None or mo[2] is not None:
-                continue
-            dest = _norm_reg(ins.op_str.split(',')[0].strip())
-            if mo[1] in pages and dest is not None and dest.startswith('x'):
-                slot = pages[mo[1]] + mo[3]
-                name = _classref_name(ctx, cl, slot)
-                if name is not None:
-                    recent.append(name)
-                else:
-                    sel = _selref_name(ctx, slot)
-                    if sel is not None and sel in adder_sel:
-                        out.append((adder_sel[sel], tuple(recent)))
-                        recent = []
-            pages.pop(dest, None)       # dest now holds a loaded value, not a page
-        elif mn == 'bl':
-            t = _parse_imm(ins.op_str)
-            if t in adder_ivar:
-                out.append((adder_ivar[t], tuple(recent)))
-                recent = []
-            elif adder_sel and t is not None:
-                sel = _msgsend_stub_selector(ctx, t)
-                if sel is not None and sel in adder_sel:
-                    out.append((adder_sel[sel], tuple(recent)))
-                    recent = []
-    return out
-
-
 def _resolve_repeated_via_classrefs(
     ctx: BinaryContext,
     cls: ObjcClass,
     cl: ClassList,
     core_index: Dict[int, str],
 ) -> Dict[str, Tuple[str, int]]:
-    """Bind ``{ivar_name: (element_class, field_number)}`` from the **element class
-    reference** the reader loads next to the add-accessor call -- the class-ref
-    counterpart of the adder->ivar lever.
+    """Bind ``{ivar_name: (element_class, field_number)}`` from the element class a field's
+    readFrom: handler allocates and appends -- for readers that call no ``<Class>ReadAllFrom``
+    core (small inline readers, ``objc_msgSend``-ing ones).  The evaluator
+    (:mod:`proto.dispatch_eval`) reads both the allocated class and the append from each
+    handler's call arguments, so this is its adder->ivar result, kept as a separate entry
+    point because the caller applies it only to a field written by the MESSAGE write helper.
 
-    A generated reader builds each repeated-message element with
-    ``[[ElementClass alloc] init]``, reads it, then appends it with the field's own
-    ``-add<X>:`` accessor.  The element class therefore appears in the binary as a
-    class-reference load immediately before the accessor call, whatever helper does
-    the reading.  This is the structural source for readers that do NOT call a
-    ``<Class>ReadAllFrom`` core (which :func:`_resolve_repeated_element_ivars`
-    keys on), e.g. the small inline-reader messages (``GEOPDTileList.tiles`` ->
-    ``GEOTileCoordinate``) and the old-style classes that message the accessor via
-    ``objc_msgSend`` (locationd ``TRANSITPbLocationFingerprints*``).
-
-    The accessor is identified structurally (the own IMP whose body loads the
-    backing array's ivar offset, :func:`_adder_array_ivar`), never by the ivar name;
-    its selector is used only to spot an ``objc_msgSend`` call site.  Streams read:
-    every dispatch arm, the C read function, the dispatch core and the ObjC
-    ``readFrom:`` body.
-
-    Strict by construction (precision over recall): an ivar is bound only if EVERY
-    call site of its accessor has exactly one distinct class reference in its
-    window and all sites agree, and that class is a binary-local class.  Zero or
-    several candidates, or disagreeing sites, bind nothing.  The result is an
-    element TYPE only (the field number is informational)."""
-    array_offsets: FrozenSet[int] = frozenset(
-        iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_IVAR_ENCS)
-    if not array_offsets:
+    (The former lever paired the class references seen since the previous adder call with
+    each adder call site in instruction order.  Measured 2026-10-15 against the evaluator over
+    every class of three builds: it bound nothing the golden schema confirms that the evaluator
+    misses, and its 3 iPhone 8 extras were all wrong -- string/bytes fields next to a message
+    field -- held back only by that write-helper guard.)"""
+    if not core_index:
         return {}
-    off_to_ivar: Dict[int, ObjcIvar] = {iv.offset: iv for iv in cls.ivars}
-    adder_ivar: Dict[int, str] = {}
-    adder_sel: Dict[str, str] = {}
-    for m in cls.methods:
-        if not m.imp:
-            continue
-        # With resolved selector names, restrict to the add-accessors themselves
-        # (other own methods -- readFrom:, writeTo:, copyWithZone: -- also touch the
-        # array).  Without names the structural test below is all there is.
-        if m.name is not None and not (m.name.startswith('add')
-                                       or m.name.startswith('_addNoFlags')):
-            continue
-        off = _adder_array_ivar(ctx, m.imp, array_offsets)
-        if off is None:
-            continue
-        adder_ivar[m.imp] = off_to_ivar[off].name
-        if m.name is not None:
-            adder_sel[m.name] = off_to_ivar[off].name
-    if not adder_ivar:
-        return {}
-
-    arms, core_va, readfrom_va = _locate_dispatch_arms(ctx, cls, core_index)
-    streams: List[Tuple[int, bool, int]] = []        # (start_va, is_arm, field_number)
-    seen: Set[int] = set()
-    for va in (readfrom_va, core_va,
-               next((m.imp for m in cls.methods if m.name == 'readFrom:' and m.imp), None)):
-        if va and va not in seen:
-            seen.add(va)
-            streams.append((va, False, 0))
-    for fn, av in (arms or {}).items():
-        streams.append((av, True, fn))
-
-    sites: Dict[str, List[Tuple[str, ...]]] = {}
-    field_of: Dict[str, int] = {}
-    for va, is_arm, fn in streams:
-        try:
-            if is_arm:
-                insns = disasm(ctx, va, max_insns=_ARM_MAX_INSNS, stop_at_ret=False)
-            else:
-                end = _func_end(ctx, va)
-                if end is None:
-                    continue
-                insns = disasm(ctx, va, max_insns=max(1, (end - va) // 4),
-                               stop_at_ret=False)
-        except Exception:
-            continue
-        for ivn, window in _classref_windows(ctx, cl, insns, adder_ivar, adder_sel,
-                                             is_arm=is_arm):
-            sites.setdefault(ivn, []).append(window)
-            if is_arm:
-                field_of.setdefault(ivn, fn)
-
-    out: Dict[str, Tuple[str, int]] = {}
-    for ivn, windows in sites.items():
-        # every site must name exactly one class, and the same one
-        verdicts = {(w[0] if len(set(w)) == 1 else None) for w in windows}
-        if len(verdicts) != 1 or None in verdicts:
-            continue
-        name = next(iter(verdicts))
-        c = cl.find(name)
-        if c is None or c.is_meta:           # external / system class: not an element message
-            continue
-        out[ivn] = (name, field_of.get(ivn, 0))
-    return out
-
+    from proto.dispatch_eval import evaluate_class
+    return evaluate_class(ctx, cls, core_index).ivars()
 
 def _resolve_repeated_via_dispatch(
     ctx: BinaryContext,
@@ -604,67 +221,29 @@ def _resolve_repeated_via_dispatch(
     core_index: Dict[int, str],
 ) -> Dict[int, str]:
     """
-    Resolve ``repeated <message>`` element classes for *cls* by reading its
-    readFrom: field dispatch and matching each field handler's ``bl`` target
-    against *core_index* (``{ReadAllFrom_vmaddr: class_name}``).
+    Resolve ``{field_number: element_class}`` for *cls* by running its readFrom: dispatch for
+    each field number (:mod:`proto.dispatch_eval`): the class each field's handler builds --
+    the ReadAllFrom core it calls on a new object, or the class it allocates.
 
-    Why readFrom: and not writeTo: — element message *types* are intrinsically
+    Why readFrom: and not writeTo: -- element message *types* are intrinsically
     a READ-side fact.  ``writeTo:`` serialises objects that already exist: every
     message field (singular or repeated, any element class) goes through the
     SAME generic sub-message write helper, which dispatches ``[element writeTo:]``
-    on the object's runtime type — it never reveals *which* class, only that a
+    on the object's runtime type -- it never reveals *which* class, only that a
     field *is* a message.  ``readFrom:`` must *create* the elements, so it
-    statically references the element class (``[ElementClass alloc]`` /
-    ``ElementClassReadAllFrom``) — the information this resolver reads.  So the
-    writeTo CFG-walk is the sole decoder for field NUMBERS, but element TYPES
-    require this resolver; it is not removable.  (Exception: an inline-C struct
-    element, serialised via a named C writer — see TODO #37.)
+    statically references the element class -- the information read here.  (Exception: an
+    inline-C struct element, serialised via a named C writer -- see TODO #37.)
 
-    Two dispatch encodings of the same field→handler routing are read, both
-    principled (they read the binary's own dispatch constants, never names): a
-    **jump table** (:func:`_decode_readfrom_jumptable`, used by large messages —
-    each arm's element ``bl`` names the field's class) and a **compare chain**
-    (:func:`_resolve_compare_chain_elements`, used by few-field messages and the
-    low fields of a hybrid reader).  The jump table takes precedence; the
-    compare chain fills any field it doesn't cover.
-
-    Returns ``{field_number: element_class_name}`` for every field whose handler
-    calls a known proto class's ReadAllFrom core; fields calling no known core
-    (scalar/string/enum) are simply absent (caller falls back to other
-    heuristics).  Empty dict when the dispatch can't be followed at all
-    (precision over recall).
-
-    Results are keyed by field NUMBER, which the caller may only trust when it
-    is *confirmed* (:func:`_confirm_field_numbers`) or the message has a single
-    field — an unconfirmed ordinal must not be used to bind a type to an ivar
-    (a whole-binary diff caught exactly this mis-binding for wrapper→separate-
-    core classes like GEOPDDepartureSequence, which are therefore NOT resolved
-    here; see the application site in :func:`extract_proto_message`).
+    The dispatch is decoded by evaluation, whatever its encoding (jump table, clamped gate,
+    compare chain or tree, a mix): which function dispatches is decided by data flow (the one
+    handed this object), not by call-site shape.  Results are keyed by field NUMBER, which the
+    caller may only trust when it is *confirmed* (:func:`_confirm_field_numbers`) or the
+    message has a single field.  Empty dict when the dispatch can't be followed.
     """
     if not core_index:
         return {}
-    arms, core_va, readfrom_va = _locate_dispatch_arms(ctx, cls, core_index)
-    if readfrom_va is None:
-        return {}
-
-    result: Dict[int, str] = {}
-
-    # ── Jump-table tier ───────────────────────────────────────────────────────
-    # `arms` come from the directly-anchored core or the wrapper→separate-core
-    # finder (e.g. GEOPDDepartureSequence) — see :func:`_locate_dispatch_arms`.
-    if arms:
-        result.update(_walk_jumptable_arms(ctx, arms, core_index))
-
-    # ── Compare-chain tier (fills fields the table doesn't cover) ─────────────
-    # Run on the dispatch core when located, else the readFrom entry itself
-    # (table-less readers may have no field-count gate, so core_va is None — the
-    # compare-chain walk doesn't need the count).
-    chain_core = core_va if core_va is not None else readfrom_va
-    for field_number, name in _resolve_compare_chain_elements(
-            ctx, chain_core, core_index).items():
-        result.setdefault(field_number, name)
-
-    return result
+    from proto.dispatch_eval import evaluate_class
+    return evaluate_class(ctx, cls, core_index).elements()
 
 
 def _class_from_type_method_imp(
