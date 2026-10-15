@@ -74361,24 +74361,6 @@ true,
 false,
 false
 ],
-"GEOMapItemStorage.geoMapItem": [
-"<GEOMapItem>",
-"<GEOMapItem>",
-11,
-"optional",
-false,
-true,
-false
-],
-"GEOMapItemStorage.geoMapItemIsolater": [
-"geo_isolater",
-"geo_isolater",
-12,
-"optional",
-false,
-true,
-false
-],
 "GEOMapItemStorage.internalDetourInfo": [
 "GEOPDResultDetourInfo",
 "GEOPDResultDetourInfo",
@@ -74431,15 +74413,6 @@ false
 "optional",
 true,
 false,
-false
-],
-"GEOMapItemStorage.trampoline": [
-"_GEOMapItemStorageNotificationTrampoline",
-"_GEOMapItemStorageNotificationTrampoline",
-10,
-"optional",
-false,
-true,
 false
 ],
 "GEOMapItemStorage.userValues": [

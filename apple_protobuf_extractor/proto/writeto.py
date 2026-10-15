@@ -674,14 +674,34 @@ def _selector_stub_name(ctx, target):
     The compiler emits one stub per selector:
         adrp x1,#page ; ldr x1,[x1,#off] ; adrp x16,#p2 ; ldr x16,[x16,#o2] ; br x16
     The pointer stored at ``page+off`` IS the uniqued SEL, whose value equals the
-    selector cstring address — so read it and return the string.  Returns None for
-    any `bl` target that is not exactly this shape (a normal call / ARC thunk)."""
+    selector cstring address — so read it and return the string.  Newer caches (iOS 27)
+    share one stub per selector of the form ``adrp x1,#page ; add x1,x1,#off ;
+    b _objc_msgSend``, where x1 is the string itself.  Returns None for any `bl` target
+    that is neither shape (a normal call / ARC thunk)."""
     if target is None:
         return None
     try:
         ins = disasm(ctx, target, 6, stop_at_ret=False)
     except Exception:
         return None
+    if (len(ins) >= 3 and ins[0].mnemonic == 'adrp' and ins[1].mnemonic == 'add'
+            and ins[2].mnemonic == 'b'):
+        # The shared stub newer caches use (iOS 27): `adrp x1,#page ; add x1,x1,#off ;
+        # b _objc_msgSend` -- x1 is the selector string itself.  When the branch target is
+        # named (the cache's export trie / the binary's import), it must be objc_msgSend.
+        from proto.callees import callee_name
+        pa = parse_adrp(ins[0].op_str)
+        ops = split_ops(ins[1].op_str)
+        if (pa is None or pa[0] != 'x1' or len(ops) != 3 or _norm_reg(ops[0]) != 'x1'
+                or _norm_reg(ops[1]) != 'x1' or not ops[2].startswith('#')):
+            return None
+        target_name = callee_name(ctx, _parse_imm(ins[2].op_str))
+        if target_name is not None and target_name != '_objc_msgSend':
+            return None
+        try:
+            return ctx.read_cstring(pa[1] + _parse_imm(ops[2]))
+        except Exception:
+            return None
     if len(ins) < 5 or ins[0].mnemonic != 'adrp' or ins[1].mnemonic != 'ldr':
         return None
     pa = parse_adrp(ins[0].op_str)

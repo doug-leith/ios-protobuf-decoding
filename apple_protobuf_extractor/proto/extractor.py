@@ -67,6 +67,7 @@ from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from proto.models    import FieldLabel, ProtoField, ProtoMessage, get_diagnostics
 from proto.writeto   import (_extract_writeto_field_numbers, build_writeto_indegree,
                              writeto_sent_selectors)
+from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
     _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree,
@@ -1093,6 +1094,27 @@ def extract_proto_message(
     fields = [f for f in fields
               if not _is_backing_store_phantom(f, _ivar_enc_by_pname)]
 
+    # Drop estimated fields whose ivar the class's own writeTo: provably never serialises:
+    # no value derived from it can reach the PBDataWriter (:mod:`proto.writer_flow`).  Only
+    # when that analysis decides the class, and only if it agrees with the walk -- every
+    # ivar the walk bound to a field number must be among the reachable ones; otherwise the
+    # two disagree and nothing is dropped.
+    _writes_no_ivars = False
+    if any(not f.number_confirmed for f in fields):
+        _reach, _why = writer_reachable_ivars(ctx, cl, cls)
+        if _reach is not None and set(confirmed_numbers) <= _reach:
+            _ivar_by_pname = {_proto_name(iv.name): iv.name for iv in field_ivars}
+            fields = [f for f in fields
+                      if f.number_confirmed or _ivar_by_pname.get(f.name) in _reach]
+            _writes_no_ivars = not fields
+        elif _reach is not None:
+            log.warning("%s: writer flow disagrees with the writeTo: walk (%s not reachable);"
+                        " estimated fields kept", cls.name,
+                        sorted(set(confirmed_numbers) - _reach))
+        else:
+            log.debug("%s: writer flow undecided (%s); estimated fields kept",
+                      cls.name, "; ".join(_why))
+
     # Annotate (do NOT drop) object ivars whose type does not resolve to a proto
     # message or Foundation type — bare protocols and internal helper classes (locks,
     # KVO trampolines) that may not be real wire fields.  We keep them and flag them
@@ -1127,6 +1149,7 @@ def extract_proto_message(
         # the emitter can say which it is.  Only the field-less case pays the
         # writeTo: disasm cost.
         opaque_passthrough=(not fields) and _is_opaque_passthrough(ctx, cls),
+        writes_no_ivars=_writes_no_ivars,
         class_detected_by_heuristic=_class_detected_by_heuristic,
         class_detected_by_va_cluster=_class_detected_by_va_cluster,
     )

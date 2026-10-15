@@ -195,6 +195,9 @@ _MAX_IMAGES         = 65536    # sanity cap on imagesTextCount
 # Mach-O constants for image_sections() load-command walker
 _MH_MAGIC_64        = 0xFEEDFACF  # little-endian 64-bit mach-o magic
 _LC_SEGMENT_64_CMD  = 0x19        # load command type for 64-bit segments
+_LC_DYLD_INFO        = 0x22        # dyld info (its export range is a trie)
+_LC_DYLD_INFO_ONLY   = 0x80000022
+_LC_DYLD_EXPORTS_TRIE = 0x80000033
 _MAX_SIZEOFCMDS     = 1 << 20     # 1 MB sanity cap on sizeofcmds
 # [cap:INPUT-SANITY — leave as-is] Bounds the section-iteration loop against a corrupt
 # header `nsects` on the cache-image parse path (the analogue of memory.py's
@@ -1096,6 +1099,88 @@ class DyldCacheReader:
             pos += cmdsize
 
         return result
+
+    def _image_load_commands(self, mach_header_va: int) -> List[Tuple[int, bytes]]:
+        """``[(cmd, command bytes)]`` of the image at *mach_header_va*; ``[]`` if unreadable."""
+        hdr = self.read_raw(mach_header_va, 32)
+        if not hdr or len(hdr) < 32 or struct.unpack_from('<I', hdr, 0)[0] != _MH_MAGIC_64:
+            return []
+        ncmds, sizeofcmds = struct.unpack_from('<II', hdr, 16)
+        if ncmds == 0 or sizeofcmds < 8 or sizeofcmds > _MAX_SIZEOFCMDS:
+            return []
+        lc = self.read_raw(mach_header_va + 32, sizeofcmds)
+        if not lc:
+            return []
+        out, pos = [], 0
+        for _ in range(ncmds):
+            if pos + 8 > len(lc):
+                break
+            cmd, cmdsize = struct.unpack_from('<II', lc, pos)
+            if cmdsize < 8:
+                break
+            out.append((cmd, lc[pos:pos + cmdsize]))
+            pos += cmdsize
+        return out
+
+    def image_exports(self, mach_header_va: int) -> Dict[str, int]:
+        """``{exported symbol name: vmaddr}`` for the image at *mach_header_va*, from its dyld
+        export trie (``LC_DYLD_EXPORTS_TRIE``, else the export range of ``LC_DYLD_INFO``).
+
+        In the cache the trie lives in the shared ``__LINKEDIT``; the load command gives its
+        file offset, which maps to a vmaddr through the image's own ``__LINKEDIT`` segment
+        (``vmaddr + (offset - fileoff)``).  Names keep their leading underscore
+        (``_objc_retain_x2``).  Re-exports are omitted (they name another image's symbol).
+        Memoised per image; ``{}`` when the image has no readable trie."""
+        memo = self.__dict__.setdefault('_image_exports_memo', {})
+        if mach_header_va in memo:
+            return memo[mach_header_va]
+        from .export_trie import decode_export_trie
+        linkedit = trie = None
+        for cmd, body in self._image_load_commands(mach_header_va):
+            if cmd == _LC_SEGMENT_64_CMD and len(body) >= 56 \
+                    and body[8:24].rstrip(b'\x00') == b'__LINKEDIT':
+                vmaddr, _vmsize, fileoff = struct.unpack_from('<QQQ', body, 24)
+                linkedit = (vmaddr, fileoff)
+            elif cmd == _LC_DYLD_EXPORTS_TRIE and len(body) >= 16:
+                trie = struct.unpack_from('<II', body, 8)
+            elif cmd in (_LC_DYLD_INFO, _LC_DYLD_INFO_ONLY) and len(body) >= 48 and trie is None:
+                trie = struct.unpack_from('<II', body, 40)
+        out: Dict[str, int] = {}
+        if linkedit is not None and trie is not None and trie[1]:
+            data = self.read_raw(linkedit[0] + (trie[0] - linkedit[1]), trie[1])
+            if data:
+                out = {name: mach_header_va + off
+                       for name, (_flags, off) in decode_export_trie(data).items()}
+        memo[mach_header_va] = out
+        return out
+
+    def export_name_at(self, vmaddr: int) -> Optional[str]:
+        """Name of the symbol some cache image exports at *vmaddr*, or None.
+
+        The image is the one whose ``__TEXT`` segment holds *vmaddr*; its exports are read
+        once (:meth:`image_exports`).  Lets a caller name a direct call into another image
+        (``bl`` to libobjc's ``objc_retain_x2``), which the cache links without stubs."""
+        text = self.__dict__.get('_image_text_ranges')
+        if text is None:
+            text = []
+            for mh, _path in self.list_images():
+                bounds = self.image_sections(mh).get('__TEXT')
+                if bounds:
+                    text.append((bounds[0], bounds[1], mh))
+            text.sort()
+            self._image_text_ranges = text
+            self._image_text_starts = [t[0] for t in text]
+        i = bisect.bisect_right(self._image_text_starts, vmaddr) - 1
+        if i < 0 or not text[i][0] <= vmaddr < text[i][1]:
+            return None
+        names = self.__dict__.setdefault('_export_names_by_addr', {})
+        mh = text[i][2]
+        if mh not in names:
+            by_addr: Dict[int, str] = {}
+            for name, va in sorted(self.image_exports(mh).items()):
+                by_addr.setdefault(va, name)     # aliases (objc_retain = objc_retain_x0): first
+            names[mh] = by_addr
+        return names[mh].get(vmaddr)
 
     def decode_ptr(self, raw: int) -> int:
         """

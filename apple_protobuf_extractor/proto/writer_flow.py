@@ -1,0 +1,667 @@
+"""proto/writer_flow.py -- which ivars can reach the wire through ``-[Cls writeTo:]``.
+
+The only way a value reaches the wire is through the ``PBDataWriter`` that ``writeTo:`` is
+handed (``x2``).  This module follows every value in ``writeTo:`` by a forward *may*-dataflow
+over its CFG and collects what can arrive at a call that receives the writer.  An ivar that
+can never get there is not a wire field, whatever its storage looks like.
+
+Each register and stack slot carries the set of origins its value may derive from:
+
+  ``W``          the writer (or a value the analysis must treat as possibly the writer)
+  ``S``          ``self`` itself
+  ``('I', iv)``  a value read from ivar *iv* (or derived from one: arithmetic, a pointer the
+                 ivar holds, the address ``self + offset(iv)``)
+  ``('O', iv)``  the byte offset of ivar *iv* (loaded from its offset variable)
+  ``T``          an unknown part of ``self`` (a load from ``self`` at an unresolved offset, or
+                 the result of a call handed ``self`` that is not summarised)
+
+A call's inputs are what its callee reads.  Calls into the Objective-C runtime and the
+ProtocolBuffer runtime are named by their exported / imported ABI symbol
+(:func:`proto.callees.callee_name`) and have fixed contracts (:data:`_ARC`, :data:`_PB_WRITE`):
+``objc_retain_x2`` reads x2 and returns it; ``PBDataWriterWriteInt32Field(writer, value,
+field)`` serialises x1.  Any other callee is assumed to read the AAPCS64 argument registers
+(x0-x8, v0-v7) -- for a function of the image itself (possibly a machine-outlined fragment
+with no calling convention), every register its entry path has not yet written -- and to
+return a value derived from all of them.
+
+A call that receives the writer serialises its contract's value argument, or -- with no
+contract -- everything it reads.  The writer handed to a call with no contract may be kept
+by it, so from then on every call counts as a writer call.
+
+The answer is *undecided* (None) when the proof does not go through: ``self`` or an unknown
+part of it can reach the writer, the writer is stored outside the frame, control leaves the
+function window other than by a call, an indirect jump is unresolved, or the fixpoint does
+not settle.  Undecided never drops anything: callers keep their fallback.
+"""
+from __future__ import annotations
+
+import bisect
+import logging
+import re
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+
+from macho.classlist import ClassList, ObjcClass
+from macho.disasm import disasm, _parse_imm, _norm_reg
+from macho.memory import BinaryContext, _ctx_cache
+from proto.arm64cfg import build_blocks, parse_adrp, split_ops
+from proto.callees import callee_name
+from proto.dictrep_flow import _writes, reg_name, _parse_mem
+from proto.writeto import _selector_stub_name
+
+log = logging.getLogger(__name__)
+
+E: FrozenSet = frozenset()
+_W, _S, _T = 'W', 'S', 'T'
+
+# AAPCS64 argument registers (x8: indirect result) and every register a callee could read.
+_ARGS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
+_ALL = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
+_CALLER_SAVED = (tuple(f"x{i}" for i in range(19)) + ("x30",)
+                 + tuple(f"v{i}" for i in range(8)) + tuple(f"v{i}" for i in range(16, 32)))
+_CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
+_LOADS = frozenset(('ldr', 'ldrb', 'ldrh', 'ldrsw', 'ldrsb', 'ldrsh', 'ldur', 'ldurb', 'ldurh',
+                    'ldursw', 'ldursb', 'ldursh'))
+_PAIR_LOADS = frozenset(('ldp', 'ldpsw', 'ldnp'))
+_STORES = frozenset(('str', 'strb', 'strh', 'stur', 'sturb', 'sturh'))
+_PAIR_STORES = frozenset(('stp', 'stnp'))
+_COND = ('cbz', 'cbnz', 'tbz', 'tbnz')
+_RET = ('ret', 'retaa', 'retab')
+_REG_BYTES = {'x': 8, 'w': 4, 'd': 8, 's': 4, 'h': 2, 'b': 1, 'q': 16}
+
+# [cap:INPUT-SANITY] runaway backstops (a writeTo: settles in a few sweeps of its blocks).
+_MAX_BLOCK_VISITS = 50_000
+_MAX_SUMMARY_DEPTH = 3
+_ENTRY_SCAN_INSNS = 64
+
+
+# ── ABI contracts ─────────────────────────────────────────────────────────────
+# (reads, returns) by exported symbol name.  ``returns`` is the register whose value the call
+# hands back in x0, or None (no data result: void / status / a class or bool).  Fixed by the
+# Objective-C runtime ABI: the compiler emits these calls by name in every binary.
+_ARC: Dict[str, Tuple[Tuple[str, ...], Optional[str]]] = {}
+for _n in range(29):
+    _ARC[f"_objc_retain_x{_n}"] = ((f"x{_n}",), f"x{_n}")
+    _ARC[f"_objc_release_x{_n}"] = ((f"x{_n}",), None)
+for _name in ("_objc_retain", "_objc_autorelease", "_objc_autoreleaseReturnValue",
+              "_objc_retainAutorelease", "_objc_retainAutoreleaseReturnValue",
+              "_objc_retainAutoreleasedReturnValue", "_objc_claimAutoreleasedReturnValue",
+              "_objc_unsafeClaimAutoreleasedReturnValue", "_objc_retain_autorelease",
+              "_objc_retainBlock"):
+    _ARC[_name] = (("x0",), "x0")
+for _name in ("_objc_release", "_objc_sync_enter", "_objc_sync_exit",
+              "_objc_enumerationMutation", "_os_unfair_lock_lock", "_os_unfair_lock_unlock",
+              "_os_unfair_lock_assert_owner", "_os_unfair_lock_assert_not_owner"):
+    _ARC[_name] = (("x0",), None)
+_ARC["_os_unfair_lock_lock_with_options"] = (("x0", "x1"), None)
+for _name in ("_objc_opt_class", "_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
+    _ARC[_name] = (("x0", "x1"), None)
+_NORETURN = frozenset(("___stack_chk_fail", "__Unwind_Resume", "_objc_exception_throw",
+                       "_abort", "___assert_rtn"))
+
+# PBDataWriter functions (ProtocolBuffer runtime ABI): (reads, serialised value register).
+# ``PBDataWriterWrite<T>Field(writer, value, field)``; the floating-point ones take the value
+# in v0 and the field number in w1.  Marks are length bookkeeping: they serialise nothing of
+# ours.
+_PB_WRITE: Dict[str, Tuple[Tuple[str, ...], Optional[str]]] = {
+    "_PBDataWriterWriteDoubleField": (("x0", "v0", "x1"), "v0"),
+    "_PBDataWriterWriteFloatField": (("x0", "v0", "x1"), "v0"),
+    "_PBDataWriterWriteBareVarint": (("x0", "x1"), "x1"),
+    "_PBDataWriterPlaceMark": (("x0", "x1", "x2"), None),
+    "_PBDataWriterRecallMark": (("x0", "x1"), None),
+}
+for _t in ("BOOL", "Int32", "Int64", "Uint32", "Uint64", "Sint32", "Sint64", "Fixed32",
+           "Fixed64", "Sfixed32", "Sfixed64", "String", "Data"):
+    _PB_WRITE[f"_PBDataWriterWrite{_t}Field"] = (("x0", "x1", "x2"), "x1")
+for _t in ("Submessage", "Subgroup"):
+    _PB_WRITE[f"_PBDataWriterWrite{_t}"] = (("x0", "x1", "x2"), "x1")
+
+# Message sends with a fixed contract (the PB protocol this tool decodes): ``[m writeTo:w]``
+# serialises the receiver into the writer it is handed; ``[w writeData:d]`` appends d.
+_SEND_SERIALISES = {"writeTo:": "x0", "writeData:": "x2"}
+
+
+def _reg_bytes(tok: str) -> int:
+    return _REG_BYTES.get(tok.strip()[:1].lower(), 8)
+
+
+def _regs(tokens: Iterable[str]) -> List[str]:
+    out = []
+    for t in tokens:
+        t = t.strip().strip('[]!')
+        t = t.split()[0] if t else t
+        r = reg_name(t) if t else None
+        if r and r not in ('xzr', 'sp'):
+            out.append(r)
+    return out
+
+
+class _St:
+    """May-state at a program point: origin sets per register / stack slot, plus the
+    must-known frame addresses (``sv``: register -> offset from entry sp), page constants
+    (``cv``) and whether the writer has escaped into a call with no contract."""
+    __slots__ = ('r', 'sl', 'sv', 'cv', 'esc', 'fl')
+
+    def __init__(self, r=None, sl=None, sv=None, cv=None, esc=False, fl=None):
+        self.r = dict(r or {})
+        self.sl = dict(sl or {})      # 8-byte frame granule (offset from entry sp) -> origins
+        self.sv = dict(sv or {})
+        self.cv = dict(cv or {})
+        self.esc = esc
+        self.fl = dict(fl or {})      # a callee was handed the frame from here up: origins
+
+    def copy(self) -> "_St":
+        return _St(self.r, self.sl, self.sv, self.cv, self.esc, self.fl)
+
+    def join(self, o: "_St") -> "_St":
+        return _St({k: self.r.get(k, E) | o.r.get(k, E) for k in set(self.r) | set(o.r)},
+                   {k: self.sl.get(k, E) | o.sl.get(k, E) for k in set(self.sl) | set(o.sl)},
+                   {k: v for k, v in self.sv.items() if o.sv.get(k) == v},
+                   {k: v for k, v in self.cv.items() if o.cv.get(k) == v},
+                   self.esc or o.esc,
+                   {k: self.fl.get(k, E) | o.fl.get(k, E) for k in set(self.fl) | set(o.fl)})
+
+    def same(self, o: "_St") -> bool:
+        return (self.r == o.r and self.sl == o.sl and self.sv == o.sv and self.cv == o.cv
+                and self.esc == o.esc and self.fl == o.fl)
+
+    def frame_read(self, a: int, size: int) -> FrozenSet:
+        """Origins of *size* bytes at frame address *a*: every granule they touch, plus what
+        any callee handed the frame at or below *a* may have written there."""
+        out: Set = set()
+        g = a - (a % 8)
+        while g < a + size:
+            out |= self.sl.get(g, E)
+            g += 8
+        for lo, v in self.fl.items():
+            if lo <= a + size - 1:
+                out |= v
+        return frozenset(out)
+
+    def frame_write(self, a: int, size: int, v: FrozenSet) -> None:
+        g = a - (a % 8)
+        while g < a + size:
+            whole = g >= a and g + 8 <= a + size
+            self.sl[g] = v if whole else (self.sl.get(g, E) | v)
+            g += 8
+
+    def frame_from(self, lo: int) -> FrozenSet:
+        """Origins of everything in the frame at or above *lo* (what a callee handed a
+        pointer to *lo* can read)."""
+        out: Set = set()
+        for g, v in self.sl.items():
+            if g + 8 > lo:
+                out |= v
+        for flo, v in self.fl.items():
+            out |= v
+        return frozenset(out)
+
+    def p(self, reg: str) -> FrozenSet:
+        return self.r.get(reg, E)
+
+    def kill(self, reg: str, prov: FrozenSet = E) -> None:
+        self.r[reg] = prov
+        self.sv.pop(reg, None)
+        self.cv.pop(reg, None)
+
+
+class _Result:
+    __slots__ = ('ser', 'ret', 'complete', 'why')
+
+    def __init__(self):
+        self.ser: Set = set()
+        self.ret: Set = set()
+        self.complete = True
+        self.why: List[str] = []
+
+    def fail(self, why: str) -> None:
+        self.complete = False
+        if len(self.why) < 8:
+            self.why.append(why)
+
+
+class WriterFlow:
+    """One analysis context per image: memoises callee entry scans and method summaries."""
+
+    def __init__(self, ctx: BinaryContext, cl: ClassList):
+        self.ctx, self.cl = ctx, cl
+        self.entries = sorted({m.imp for c in cl for m in c.methods if m.imp})
+        self.entry_set = frozenset(self.entries)
+        self._live_memo: Dict[int, Tuple[str, ...]] = {}
+        self._summary_memo: Dict[int, FrozenSet] = {}
+        self.cls: Optional[ObjcClass] = None
+        self.own_imps: Dict[int, str] = {}
+        self.slot_to_ivar: Dict[int, str] = {}
+        self.off_to_ivar: Dict[int, str] = {}
+        from proto.writeto import _image_text_range
+        self.text = _image_text_range(ctx)
+
+    # ── public entry ─────────────────────────────────────────────────────────
+    def reachable_ivars(self, cls: ObjcClass) -> Tuple[Optional[FrozenSet[str]], List[str]]:
+        """``(ivars whose values can reach the writer, reasons)``; the set is None when
+        undecided (the reasons say why)."""
+        m = cls.get_method("writeTo:")
+        if m is None or not m.imp:
+            return None, ["no writeTo:"]
+        chain = self._chain(cls)
+        self.cls = cls
+        self.own_imps = {mm.imp: mm.name for c in chain for mm in c.methods if mm.imp and mm.name}
+        self.slot_to_ivar = {iv.offset_slot: iv.name for c in chain for iv in c.ivars
+                             if iv.offset_slot}
+        self.off_to_ivar = {iv.offset: iv.name for iv in cls.ivars if iv.offset}
+        self._summary_memo = {}
+        res = self._run(m.imp, {'x0': frozenset({_S}), 'x2': frozenset({_W})}, 0, m.imp)
+        if res is None:
+            return None, ["writeTo: body not decoded"]
+        if not res.complete:
+            return None, res.why
+        bad = sorted(str(x) for x in res.ser if not isinstance(x, tuple) or x[0] != 'I')
+        if any(x in (_S, _T) for x in res.ser):
+            return None, [f"self reaches the writer ({', '.join(bad)})"]
+        return frozenset(x[1] for x in res.ser if isinstance(x, tuple) and x[0] == 'I'), []
+
+    def _chain(self, cls: ObjcClass) -> List[ObjcClass]:
+        out, c = [], cls
+        while c is not None and len(out) < 64:
+            out.append(c)
+            c = self.cl.find(c.superclass_name) if c.superclass_name else None
+        return out
+
+    # ── function body ────────────────────────────────────────────────────────
+    def _insns(self, va: int):
+        from proto.dispatch_eval import _function_insns
+        return _function_insns(self.ctx, va, entries=self.entries)
+
+    def _run(self, imp: int, entry: Dict[str, FrozenSet], depth: int, top: int
+             ) -> Optional[_Result]:
+        from proto import dispatch as D
+        insns = self._insns(imp)
+        if not insns:
+            return None
+        arms = D._jump_table_arm_addrs(self.ctx, insns, per_br=True)
+        cfg = build_blocks(insns, {a for v in arms.values() for a in v})
+        for b in cfg.order:
+            last = cfg.blocks[b][-1]
+            if last.mnemonic == 'br':
+                for a in arms.get(last.addr, ()):
+                    ab = cfg.addr_to_block.get(a)
+                    if ab is not None and ab not in cfg.succ[b]:
+                        cfg.succ[b].append(ab)
+        lo, hi = insns[0].addr, insns[-1].addr + 4
+        res = _Result()
+        states = {cfg.entry: _St(entry, sv={'sp': 0})}
+        work, visits = [cfg.entry], 0
+        while work:
+            b = work.pop()
+            visits += 1
+            if visits > _MAX_BLOCK_VISITS:
+                res.fail("fixpoint did not settle")
+                break
+            st = states[b].copy()
+            if self._block(st, cfg.blocks[b], res, lo, hi, depth, arms, top):
+                continue
+            last = cfg.blocks[b][-1]
+            zero_edge = self._zero_edge(last)
+            for s in cfg.succ.get(b, []):
+                cur = states.get(s)
+                out = st
+                if zero_edge is not None and cfg.blocks[s][0].addr == zero_edge[1]:
+                    out = st.copy()                  # on this edge the register is 0
+                    out.kill(zero_edge[0])
+                nxt = out.copy() if cur is None else cur.join(out)
+                if cur is None or not nxt.same(cur):
+                    states[s] = nxt
+                    work.append(s)
+        return res
+
+    def _block(self, st: _St, blk, res: _Result, lo: int, hi: int, depth: int, arms,
+               top: int) -> bool:
+        """Run one block; True when the path ends (return, tail call, no-return call)."""
+        for ins in blk:
+            mn = ins.mnemonic
+            ops = split_ops(ins.op_str)
+            if mn in _RET:
+                res.ret |= st.p('x0') | st.p('v0')
+                return True
+            tgt = _parse_imm(ops[0]) if (mn in ('b', 'bl') and ops) else None
+            out_of_window = mn == 'b' and tgt is not None and not (lo <= tgt < hi)
+            if mn in ('bl', 'blr') or out_of_window:
+                if out_of_window and not self._is_function(tgt):
+                    res.fail(f"branch out of the function window at {ins.addr:#x}")
+                    return True
+                if self._call(st, ins, mn, tgt, res, depth, top):
+                    return True                      # no-return callee
+                if mn == 'b':
+                    res.ret |= st.p('x0') | st.p('v0')
+                    return True
+                continue
+            if mn == 'br':
+                if not arms.get(ins.addr):
+                    res.fail(f"unresolved indirect jump at {ins.addr:#x}")
+                return False
+            if mn == 'b' or mn.startswith('b.') or mn in _COND:
+                t = _parse_imm(ops[-1]) if ops else None
+                if t is not None and not (lo <= t < hi):
+                    res.fail(f"branch out of the function window at {ins.addr:#x}")
+                    return True
+                if mn == 'b':
+                    return False
+                continue
+            self._exec(st, ins, mn, ops, res)
+        return False
+
+    @staticmethod
+    def _zero_edge(ins) -> Optional[Tuple[str, int]]:
+        """``(register, successor address)`` of the edge on which a ``cbz`` / ``cbnz``
+        register is 0, else None: the value there is the constant 0 and carries nothing."""
+        if ins.mnemonic not in ('cbz', 'cbnz'):
+            return None
+        ops = split_ops(ins.op_str)
+        r = _norm_reg(ops[0]) if ops else None
+        t = _parse_imm(ops[-1]) if len(ops) > 1 else None
+        if r is None or t is None:
+            return None
+        return (r, t) if ins.mnemonic == 'cbz' else (r, ins.addr + 4)
+
+    def _is_function(self, va: int) -> bool:
+        return (va in self.entry_set or callee_name(self.ctx, va) is not None
+                or _selector_stub_name(self.ctx, va) is not None)
+
+    # ── calls ────────────────────────────────────────────────────────────────
+    def _call(self, st: _St, ins, mn: str, tgt: Optional[int], res: _Result, depth: int,
+              top: int) -> bool:
+        name = callee_name(self.ctx, tgt) if tgt is not None else None
+        sel = _selector_stub_name(self.ctx, tgt) if tgt is not None else None
+        if name in _NORETURN:
+            return True
+        contract = _ARC.get(name) if name else None
+        pb = _PB_WRITE.get(name) if name else None
+        if pb is not None:
+            reads, value = pb
+        elif contract is not None:
+            reads, value = contract[0], None
+        else:
+            reads, value = self._live_in(tgt, sel, name), None
+        argp: Set = set()
+        for r in reads:
+            argp |= st.p(r)
+            if r in st.sv:                           # a frame address: callee reads upward
+                argp |= st.frame_from(st.sv[r])
+        has_w = _W in argp or st.esc
+        if has_w:
+            if pb is not None:
+                if value is not None:
+                    res.ser |= st.p(value)
+            elif contract is not None:
+                pass                                 # ARC: reads it, writes nothing out
+            elif sel in _SEND_SERIALISES and _W in (st.p('x2') if sel == 'writeTo:' else st.p('x0')):
+                res.ser |= st.p(_SEND_SERIALISES[sel]) - {_W}
+            else:
+                res.ser |= argp - {_W}
+                if _W in argp:
+                    st.esc = True                    # the callee may keep the writer
+        # result
+        if contract is not None:
+            rp = st.p(contract[1]) if contract[1] else E
+        elif pb is not None:
+            rp = E
+        else:
+            rp = self._call_result(st, tgt, sel, argp, depth, top)
+        lows = [st.sv[r] for r in reads if r in st.sv]
+        if lows and contract is None and pb is None:
+            m = min(lows)                            # the callee may write the frame upward
+            st.fl[m] = st.fl.get(m, E) | frozenset(argp)
+        for r in _CALLER_SAVED:
+            st.r.pop(r, None)
+            st.sv.pop(r, None)
+            st.cv.pop(r, None)
+        st.r['x0'] = frozenset(rp)
+        st.r['v0'] = frozenset(rp - {_W, _S})        # an object is never returned in v0
+        return False
+
+    def _call_result(self, st: _St, tgt, sel, argp, depth, top) -> FrozenSet:
+        imp = None
+        if st.p('x0') == frozenset({_S}):
+            if sel is not None and self.cls is not None:
+                m = self.cls.get_method(sel)
+                if m is None:
+                    for c in self._chain(self.cls)[1:]:
+                        m = c.get_method(sel)
+                        if m is not None:
+                            break
+                imp = m.imp if m is not None else None
+            elif tgt in self.own_imps:
+                imp = tgt
+            elif (tgt is not None and self.text is not None
+                  and self.text[0] <= tgt < self.text[1]):
+                imp = tgt                            # a C function of this image handed self
+        if imp is not None and imp != top:
+            return self._summary(imp, depth)
+        r = set(argp)
+        if _S in r:
+            r.discard(_S)
+            r.add(_T)
+        return frozenset(r)
+
+    def _summary(self, imp: int, depth: int) -> FrozenSet:
+        """Origins of the value a method of self returns (called with x0 = self)."""
+        if imp in self._summary_memo:
+            return self._summary_memo[imp]
+        self._summary_memo[imp] = frozenset({_T})    # recursion guard
+        out = frozenset({_T})
+        if depth < _MAX_SUMMARY_DEPTH:
+            res = self._run(imp, {'x0': frozenset({_S})}, depth + 1, imp)
+            if res is not None and res.complete:
+                out = frozenset(res.ret)
+        self._summary_memo[imp] = out
+        return out
+
+    def _live_in(self, tgt: Optional[int], sel: Optional[str], name: Optional[str]
+                 ) -> Tuple[str, ...]:
+        """Registers a callee with no contract may read."""
+        if tgt is None or sel is not None or name is not None:
+            return _ARGS                             # a method / library function: the ABI
+        if tgt in self._live_memo:
+            return self._live_memo[tgt]
+        res: Tuple[str, ...] = _ALL
+        try:
+            # A function of this image (possibly a machine-outlined fragment with no calling
+            # convention): what its entry path reads before writing, and -- once it
+            # branches -- every register not yet written.
+            written: Set[str] = set()
+            read: Set[str] = set()
+            for ins in disasm(self.ctx, tgt, max_insns=_ENTRY_SCAN_INSNS, stop_at_ret=True):
+                mn = ins.mnemonic
+                ops = split_ops(ins.op_str)
+                if mn in _RET:
+                    res = tuple(r for r in _ALL if r in read or (r == 'x0' and r not in written))
+                    break
+                if mn in ('b', 'bl', 'blr', 'br') or mn.startswith('b.') or mn in _COND:
+                    if mn in _COND:
+                        read |= set(_regs(ops[:1])) - written
+                    res = tuple(r for r in _ALL if r in read or r not in written)
+                    break
+                dst = set(_writes(ins))
+                if mn in _STORES or mn in _PAIR_STORES or mn in ('cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'ccmp'):
+                    src = set(_regs(ops))
+                    if (mn in _STORES or mn in _PAIR_STORES) and '[sp' in ins.op_str:
+                        src -= _CALLEE_SAVED       # a prologue spill is not a use
+                else:
+                    src = set(_regs(ops[1:] if dst else ops))
+                read |= src - written
+                written |= dst
+        except Exception:
+            res = _ALL
+        self._live_memo[tgt] = res
+        return res
+
+    # ── one instruction ──────────────────────────────────────────────────────
+    def _frame_addr(self, st: _St, base: str) -> Optional[int]:
+        if base == 'sp':
+            return st.sv.get('sp', 0)
+        return st.sv.get(base)
+
+    @staticmethod
+    def _access(st: _St, mem: str, ops: List[str], base: str, fa: int, disp: int
+                ) -> Tuple[int, Optional[int]]:
+        """``(address accessed, new base value or None)`` for a frame access: pre-index
+        ``[b, #d]!`` uses and keeps b+d; post-index ``[b], #d`` uses b and then adds d."""
+        if mem.rstrip().endswith('!'):
+            return fa + disp, fa + disp
+        tail = ops[-1].strip() if ops else ''
+        if tail.startswith('#') and '[' not in tail and ops.index(mem) == len(ops) - 2:
+            return fa, fa + (_parse_imm(tail) or 0)
+        return fa + disp, None
+
+    def _exec(self, st: _St, ins, mn: str, ops: List[str], res: _Result) -> None:
+        dsts = [d for d in _writes(ins) if d != 'sp']
+        if mn == 'adrp':
+            pa = parse_adrp(ins.op_str)
+            for d in dsts:
+                st.kill(d)
+                if pa:
+                    st.cv[d] = pa[1]
+            return
+        if mn in ('add', 'sub') and len(ops) == 3 and ops[2].strip().startswith('#'):
+            s = 'sp' if ops[1].strip() == 'sp' else _norm_reg(ops[1])
+            d = 'sp' if ops[0].strip() == 'sp' else _norm_reg(ops[0])
+            imm = _parse_imm(ops[2]) or 0
+            imm = imm if mn == 'add' else -imm
+            base = self._frame_addr(st, s) if s else None
+            if base is not None:
+                if d == 'sp':
+                    st.sv['sp'] = base + imm
+                else:
+                    st.kill(d, frozenset({'STK'}))
+                    st.sv[d] = base + imm
+                return
+            if s in st.cv and d:
+                p, c = st.p(s), st.cv[s] + imm
+                st.kill(d, p)
+                st.cv[d] = c
+                return
+        if mn == 'mov' and len(ops) == 2 and ops[1].strip() == 'sp':
+            d = _norm_reg(ops[0])
+            st.kill(d, frozenset({'STK'}))
+            st.sv[d] = st.sv.get('sp', 0)
+            return
+        if mn in _LOADS or mn in _PAIR_LOADS:
+            self._load(st, ins, mn, ops, dsts)
+            return
+        if mn in _STORES or mn in _PAIR_STORES:
+            self._store(st, ins, mn, ops, res)
+            return
+        # anything else: each destination derives from every source register
+        src: Set = set()
+        for r in _regs(ops[1:] if dsts else ops):
+            src |= st.p(r)
+            if r in st.sv:
+                src.add('STK')
+        if mn == 'add' and _S in src:
+            # self + an ivar's offset = the address of that ivar (C pointer provenance)
+            names = [x[1] for x in src if isinstance(x, tuple) and x[0] == 'O']
+            if names:
+                src = {x for x in src if x != _S and not (isinstance(x, tuple) and x[0] == 'O')}
+                src |= {('I', n) for n in names}
+        for d in dsts:
+            st.kill(d, frozenset(src))
+        if mn in ('mov', 'orr') and len(ops) == 2 and dsts:
+            s = _norm_reg(ops[1])
+            if s in st.sv:
+                st.sv[dsts[0]] = st.sv[s]
+            if s in st.cv:
+                st.cv[dsts[0]] = st.cv[s]
+
+    def _load(self, st: _St, ins, mn: str, ops: List[str], dsts: List[str]) -> None:
+        mem = next((o for o in ops if '[' in o), None)
+        pm = _parse_mem(mem) if mem else None
+        regs_out = [reg_name(o) for o in ops if '[' not in o and not o.strip().startswith('#')]
+        regs_out = [r for r in regs_out if r]
+        if pm is None:                               # PC-relative literal: ldr x, #addr
+            iv = self.slot_to_ivar.get(_parse_imm(ops[-1]) if ops else None)
+            for d in dsts:
+                st.kill(d, frozenset({('O', iv)}) if iv else E)
+            return
+        base, idx, disp = pm[0], pm[1], pm[2]
+        width = _reg_bytes(ops[0]) if ops else 8
+        outs = regs_out[:2] if mn in _PAIR_LOADS else regs_out[:1]
+        fa = self._frame_addr(st, base) if base else None
+        if fa is not None and idx is None:
+            a0, nb = self._access(st, mem, ops, base, fa, disp)
+            vals = [st.frame_read(a0 + width * i, width) for i in range(len(outs))]
+            for d in dsts:
+                st.kill(d)
+            for d, v in zip(outs, vals):
+                st.kill(d, v)
+            if nb is not None:
+                st.sv[base] = nb
+            return
+        if base in st.cv and idx is None:
+            esize = 4 if mn == 'ldpsw' else width   # ldpsw: two 32-bit offset variables
+            addr = st.cv[base] + disp
+            ivs = [self.slot_to_ivar.get(addr + esize * i) for i in range(len(outs))]
+            for d in dsts:
+                st.kill(d)
+            for d, iv in zip(outs, ivs):
+                st.kill(d, frozenset({('O', iv)}) if iv else E)
+            return
+        bp = st.p(base) | (st.p(idx) if idx else E)
+        out: Set = set()
+        if _S in bp:
+            names = [x[1] for x in bp if isinstance(x, tuple) and x[0] == 'O']
+            if names:
+                out |= {('I', n) for n in names}
+            elif idx is None and disp in self.off_to_ivar:
+                out.add(('I', self.off_to_ivar[disp]))
+            else:
+                out.add(_T)
+        out |= {x for x in bp if x != _S and x != 'STK'
+                and not (isinstance(x, tuple) and x[0] == 'O')}
+        for d in dsts:
+            st.kill(d)
+        for d in outs:
+            st.kill(d, frozenset(out))
+
+    def _store(self, st: _St, ins, mn: str, ops: List[str], res: _Result) -> None:
+        mem = next((o for o in ops if '[' in o), None)
+        pm = _parse_mem(mem) if mem else None
+        srcs = [o for o in ops if '[' not in o and not o.strip().startswith('#')]
+        if mn in _PAIR_STORES:
+            srcs = srcs[:2]
+        else:
+            srcs = srcs[:1]
+        if pm is None:
+            return
+        base = pm[0]
+        fa = self._frame_addr(st, base) if base else None
+        if fa is not None and pm[1] is None:
+            a, nb = self._access(st, mem, ops, base, fa, pm[2])
+            for tok in srcs:
+                w = _reg_bytes(tok)
+                r = reg_name(tok.strip())
+                v = (st.p(r) | (frozenset({'STK'}) if r in st.sv else E)) if r else E
+                st.frame_write(a, w, frozenset(v))
+                a += w
+            if nb is not None:
+                st.sv[base] = nb
+            return
+        for tok in srcs:
+            r = reg_name(tok.strip())
+            if r and _W in st.p(r):
+                res.fail(f"writer stored outside the frame at {ins.addr:#x}")
+
+
+def writer_reachable_ivars(ctx: BinaryContext, cl: ClassList, cls: ObjcClass
+                           ) -> Tuple[Optional[FrozenSet[str]], List[str]]:
+    """``(ivars whose values can reach -[cls writeTo:]'s writer, reasons)``: the set is None
+    when undecided.  One :class:`WriterFlow` per image is cached on *ctx*."""
+    wf = getattr(ctx, "_writer_flow", None)
+    if wf is None or wf.cl is not cl:
+        wf = WriterFlow(ctx, cl)
+        ctx._writer_flow = wf
+    try:
+        return wf.reachable_ivars(cls)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:                         # bad input: undecided, never a drop
+        log.debug("writer flow failed for %s: %s", cls.name, exc)
+        return None, [f"analysis error: {exc}"]

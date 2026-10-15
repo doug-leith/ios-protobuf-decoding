@@ -263,6 +263,10 @@ class ProtoMessage:
     # then has no fields BY DESIGN: its ivars are not wire fields.  Emitted as a
     # class-level comment in place of "(no fields recovered)".
     serialised_by: Optional[str] = None
+    # True when the class's own writeTo: provably serialises none of its ivars (no value
+    # derived from any of them reaches the PBDataWriter; :mod:`proto.writer_flow`) and every
+    # ivar-backed field was therefore dropped.  Emitted in place of "(no fields recovered)".
+    writes_no_ivars: bool = False
     # True when this class is a zero-typed-field OPAQUE PASSTHROUGH: a PBCodable
     # subclass whose only ivar is the inherited ``_unknownFields`` bag and whose
     # ``writeTo:`` simply loads it and tail-calls ``writeTo:`` on it.  Such a

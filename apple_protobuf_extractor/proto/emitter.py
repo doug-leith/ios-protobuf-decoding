@@ -525,6 +525,9 @@ class ProtoFile:
             out.append(f"  // no writeTo: of its own: serialised by {msg.serialised_by}'s "
                        "writeTo:, which writes only that message's fields (this class's "
                        "own ivars are not wire fields)")
+        elif msg.writes_no_ivars and not msg.fields:
+            out.append("  // writeTo: serialises none of this class's ivars (no value derived "
+                       "from them reaches the PBDataWriter)")
         elif not msg.fields:
             out.append("  " + OPAQUE_PASSTHROUGH_COMMENT
                        if msg.opaque_passthrough

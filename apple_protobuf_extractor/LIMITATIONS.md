@@ -47,10 +47,12 @@ so a result of "no classes" on a version-5 cache from an older Extractor is not 
 **Residual cases (each flagged inline, never silently wrong):**
 
 * **No map-entry writer in `writeTo:`** — the field stays `bytes // number estimated;
-  map<> field … no map-entry writer found in writeTo:`. Seen on `PETProtobufRawDecodedMessage`
-  (`decodedDict`, `nestedFields`, ProactiveEventTracker): its `writeTo:` is a bare `ret`; the
-  two ivars are the ObjC decoder's runtime output, not serialized wire fields, so there is
-  nothing to recover (the numbers 1/2 are estimates and are not wire evidence).
+  map<> field … no map-entry writer found in writeTo:`, unless the class's `writeTo:` provably
+  never serialises the dictionary, in which case it is not emitted at all
+  (`proto/writer_flow.py`).  That was the only case seen: `PETProtobufRawDecodedMessage`
+  (`decodedDict`, `nestedFields`, ProactiveEventTracker), whose `writeTo:` is a bare `ret` —
+  the two ivars are the ObjC decoder's runtime output, not wire fields; since 2026-10-15 the
+  message emits no fields and says that `writeTo:` serialises none of its ivars.
 * **Entry writer found but a type not proven** (key helper not identified as a legal map-key
   type, value helper unseen/conflicting, `writeTo:` and `readFrom:` disagree about the value, or
   an NSNumber unboxing selector contradicts the helper): emitted as `repeated bytes` — every

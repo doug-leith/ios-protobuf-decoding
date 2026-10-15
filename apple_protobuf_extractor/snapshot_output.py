@@ -70,6 +70,8 @@ def _snap_messages(msgs):
         # it).  Recorded only when set, like the two flags above.
         if getattr(m, "serialised_by", None):
             out[f"{m.class_name}.<serialised_by>"] = m.serialised_by
+        if getattr(m, "writes_no_ivars", False):
+            out[f"{m.class_name}.<writes_no_ivars>"] = True
     return out
 
 
