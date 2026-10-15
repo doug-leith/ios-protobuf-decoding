@@ -23654,7 +23654,7 @@ message FlyoverRegion {
   // inline C struct 'GEOFlyoverRegion' (no ObjC class): member layout from its @encode, field numbers from the owner's writeTo: serialiser, member names from the @encode or the owner's _dictionaryRepresentation:
   uint32 region = 1;
   uint32 version = 2;
-  uint32 field3 = 3;  // member name not recovered (the struct's @encode names no members); see LIMITATIONS.md (2)
+  uint32 dataVersion = 3;
 }
 
 message FlyoverRegionVersions {
@@ -27821,7 +27821,7 @@ message PDLinkedServiceFilter {
 message PDLitePlaceResult {
   // inline C struct 'GEOPDLitePlaceResult' (no ObjC class): member layout from its @encode, field numbers from the owner's writeTo: serialiser, member names from the @encode or the owner's _dictionaryRepresentation:
   uint64 muid = 1;
-  int32 litePlaceResult = 2;
+  int32 resultProviderId = 2;
 }
 
 message PDLocalTimeRange {

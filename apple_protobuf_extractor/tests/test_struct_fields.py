@@ -76,6 +76,26 @@ class _Patched(unittest.TestCase):
         self.addCleanup(setattr, SF, 'disasm', orig)
 
 
+class _SelectorsPatched(_Patched):
+    """Also answers which selector each ``bl`` target sends (``None``: not a message send)."""
+
+    def patch_selectors(self, selectors):
+        orig = SF._call_selector
+        SF._call_selector = lambda ctx, target: selectors.get(target)
+        self.addCleanup(setattr, SF, '_call_selector', orig)
+
+
+# The selector stubs the real GeoServices listings below call, as resolved in the cache (the
+# others -- objc_retainAutoreleasedReturnValue, objc_release... -- send no selector).  The
+# synthetic listings use 0x3000 for setObject:forKey:, 0x3100 for the NSNumber box and 0x3200
+# for the ARC return-value handshake.
+_GEO_SELECTORS = {0x18db17fc0: 'setObject:forKey:', 0x18dafbee0: 'numberWithUnsignedInt:',
+                  0x18dafbe20: 'numberWithInt:', 0x18dacae80: 'addObject:',
+                  0x18daee0e0: 'initWithCapacity:', 0x18dade6e0: 'dictionary',
+                  0x3000: 'setObject:forKey:', 0x3100: 'numberWithInt:'}
+_BOX = [('bl', '#0x3100'), ('bl', '#0x3200'), ('mov', 'x2, x0')]
+
+
 # ── @encode parsing ────────────────────────────────────────────────────────────
 
 
@@ -240,11 +260,17 @@ class _CfCtx(_NoStringsMixin):
         return len(self.TEXT[va - 24][1])
 
     def read_bytes(self, va, n):
-        return next(b for p, b in self.TEXT.values() if p == va)[:n]
+        for p, b in self.TEXT.values():
+            if p == va:
+                return b[:n]
+        raise KeyError(va)                   # like the cache: no mapped bytes there
 
 
-class TestDecodeDictrepNames(_Patched):
-    def test_keys_are_paired_with_the_member_loaded_just_before(self):
+class TestDecodeDictrepNames(_SelectorsPatched):
+    def setUp(self):
+        self.patch_selectors(_GEO_SELECTORS)
+
+    def test_each_key_names_the_member_its_call_files(self):
         _, fake = asm(_WIFI_TIMERANGE_DICTREP, _WIFI_TIMERANGE_DICTREP_2, _WIFI_TIMERANGE_DICTREP_3)
         self.patch(fake)
         self.assertEqual(SF.decode_dictrep_names(_CfCtx(), 0x18cb8cdb8, {0, 4}), {0: 'from', 4: 'to'})
@@ -261,26 +287,13 @@ class TestDecodeDictrepNames(_Patched):
         self.patch(fake)
         self.assertEqual(SF.decode_dictrep_names(_CfCtx(), 0x18c241b50, {0, 4}), {})
 
-    def test_a_member_loaded_into_a_scratch_register_still_gets_its_key(self):
-        # real GEOProblemDetail dictrep shape: member 0 is an enum, so its value is loaded into
-        # w8 (to index the name table), not into x2 for boxing; member 1 is boxed from [x20,#4]
-        _, fake = asm((0x1000, [
-            ('mov', 'x20, x0'), ('bl', '#0x2000'), ('ldrb', 'w8, [x20, #8]'),
-            ('tbz', 'w8, #0, #0x1050'), ('ldr', 'w8, [x20]'), ('sub', 'w9, w8, #1'),
-            ('adrp', 'x3, #0x1d5fda000'), ('add', 'x3, x3, #0xae0'), ('bl', '#0x3000'),
-            ('ldrb', 'w8, [x20, #8]'), ('tbz', 'w8, #1, #0x1070'), ('ldr', 'w2, [x20, #4]'),
-            ('adrp', 'x3, #0x1d5fda000'), ('add', 'x3, x3, #0xb00'), ('bl', '#0x3000'),
-            ('mov', 'x0, x19'), ('ret', '')]))
-        self.patch(fake)
-        self.assertEqual(SF.decode_dictrep_names(_CfCtx(), 0x1000, {0, 4}), {0: 'from', 4: 'to'})
-
     def test_json_dependent_key_takes_the_camel_case_spelling(self):
         # real GEOPBTransitTimeRange dictrep: ``forJSON ? @"startTime" : @"start_time"`` is
         # chosen with a csel, the two CFStrings built by separate adrp+add pairs
         ctx = _CfCtx()
         ctx.TEXT = {0x1d5fdaae0: (0x2000, b'start_time'), 0x1d5fdab00: (0x2010, b'startTime')}
         _, fake = asm((0x1000, [
-            ('mov', 'x21, x0'), ('ldr', 'w2, [x21, #4]'),
+            ('mov', 'x20, x1'), ('mov', 'x21, x0'), ('ldr', 'w2, [x21, #4]'), *_BOX,
             ('adrp', 'x8, #0x1d5fda000'), ('add', 'x8, x8, #0xae0'),
             ('adrp', 'x9, #0x1d5fda000'), ('add', 'x9, x9, #0xb00'),
             ('cmp', 'w20, #0'), ('csel', 'x3, x9, x8, ne'), ('bl', '#0x3000'), ('ret', '')]))
@@ -370,7 +383,10 @@ _RING_DICTREP = (0x18c50dd90, [
 ])
 
 
-class TestInlineDictrepNames(_Patched):
+class TestInlineDictrepNames(_SelectorsPatched):
+    def setUp(self):
+        self.patch_selectors(_GEO_SELECTORS)
+
     def test_keys_are_paired_through_the_ivar_offset_variable(self):
         insns, fake = asm(_RING_DICTREP)
         self.patch(fake)
@@ -387,6 +403,117 @@ class TestInlineDictrepNames(_Patched):
         layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
         self.assertEqual(
             SF.decode_inline_dictrep_names(_CfCtx(), insns, lambda a: a == 0xdead0000, layout), {})
+
+
+# Real listing: -[GEOFlyoverRegionVersions _dictionaryRepresentation:] 0x18c502e6c, the loop that
+# builds one dictionary per GEOFlyoverRegion {u32 @0, u32 @4, u32 @8, has-bits @0xc}, inlined.
+# Member 0's key is chosen BEFORE the loop by the JSON flag (x1 -> w22: ``cmp w22,#0; csel
+# x8,x9,x8,ne`` between @"dataVersion" and @"data_version"), spilled to [sp,#8] and reloaded
+# into x3 at its setObject:forKey: (0x18c502fc4); members 4 and 8 build their keys in x3.
+_FLYOVER_DICTREP = (0x18c502e6c, [
+    ('sub', 'sp, sp, #0x70'), ('stp', 'x28, x27, [sp, #0x10]'), ('stp', 'x26, x25, [sp, #0x20]'),
+    ('stp', 'x24, x23, [sp, #0x30]'), ('stp', 'x22, x21, [sp, #0x40]'), ('stp', 'x20, x19, [sp, #0x50]'),
+    ('stp', 'x29, x30, [sp, #0x60]'), ('add', 'x29, sp, #0x60'), ('cbz', 'x0, #0x18c503054'),
+    ('mov', 'x22, x1'), ('mov', 'x20, x0'), ('adrp', 'x8, #0x1dcfa5000'),
+    ('ldr', 'x0, [x8, #0x800]'), ('bl', '#0x18dade6e0'), ('bl', '#0x18dbdbd58'),
+    ('mov', 'x19, x0'), ('adrp', 'x24, #0x1dcfaf000'), ('ldrsw', 'x8, [x24, #0x424]'),
+    ('ldr', 'x8, [x20, x8]'), ('cbz', 'x8, #0x18c503030'), ('str', 'x19, [sp]'),
+    ('adrp', 'x8, #0x1dcfa5000'), ('ldr', 'x0, [x8, #0x7a8]'), ('bl', '#0x18dbdbd04'),
+    ('ldrsw', 'x8, [x24, #0x424]'), ('ldr', 'x2, [x20, x8]'), ('bl', '#0x18daee0e0'),
+    ('mov', 'x21, x0'), ('ldrsw', 'x8, [x24, #0x424]'), ('ldr', 'x8, [x20, x8]'),
+    ('cbz', 'x8, #0x18c503014'), ('mov', 'x19, #0'), ('mov', 'x23, #0'),
+    ('adrp', 'x8, #0x1d5f9f000'), ('add', 'x8, x8, #0x6c0'), ('adrp', 'x9, #0x1d5f9f000'),
+    ('add', 'x9, x9, #0x6a0'), ('cmp', 'w22, #0'), ('csel', 'x8, x9, x8, ne'),
+    ('str', 'x8, [sp, #8]'), ('adrp', 'x27, #0x1dcfa5000'), ('mov', 'x22, x24'),
+    ('adrp', 'x8, #0x1dcfaf000'), ('ldrsw', 'x8, [x8, #0x428]'), ('ldr', 'x28, [x20, x8]'),
+    ('adrp', 'x8, #0x1dcfa5000'), ('ldr', 'x0, [x8, #0x800]'), ('bl', '#0x18dade6e0'),
+    ('bl', '#0x18dbdbd58'), ('mov', 'x25, x0'), ('add', 'x24, x28, x19'),
+    ('ldrb', 'w8, [x24, #0xc]'), ('tbnz', 'w8, #0, #0x18c502fa8'), ('tbnz', 'w8, #1, #0x18c502fd8'),
+    ('tbz', 'w8, #2, #0x18c502f78'), ('ldr', 'x0, [x27, #0x838]'), ('add', 'x8, x28, x19'),
+    ('ldr', 'w2, [x8, #8]'), ('bl', '#0x18dafbee0'), ('bl', '#0x18dbdbd58'),
+    ('mov', 'x26, x0'), ('mov', 'x0, x25'), ('mov', 'x2, x26'),
+    ('adrp', 'x3, #0x1d5f9f000'), ('add', 'x3, x3, #0x6e0'), ('bl', '#0x18db17fc0'),
+    ('bl', '#0x18dbdbeb4'), ('mov', 'x0, x21'), ('mov', 'x2, x25'),
+    ('bl', '#0x18dacae80'), ('bl', '#0x18dbdbea8'), ('add', 'x23, x23, #1'),
+    ('mov', 'x24, x22'), ('ldrsw', 'x8, [x22, #0x424]'), ('ldr', 'x8, [x20, x8]'),
+    ('add', 'x19, x19, #0x10'), ('cmp', 'x23, x8'), ('b.lo', '#0x18c502f10'),
+    ('b', '#0x18c503014'), ('ldr', 'x0, [x27, #0x838]'), ('ldr', 'w2, [x28, x19]'),
+    ('bl', '#0x18dafbee0'), ('bl', '#0x18dbdbd58'), ('mov', 'x26, x0'),
+    ('mov', 'x0, x25'), ('mov', 'x2, x26'), ('ldr', 'x3, [sp, #8]'),
+    ('bl', '#0x18db17fc0'), ('bl', '#0x18dbdbeb4'), ('ldrb', 'w8, [x24, #0xc]'),
+    ('tbz', 'w8, #1, #0x18c502f44'), ('ldr', 'x0, [x27, #0x838]'), ('add', 'x8, x28, x19'),
+    ('ldr', 'w2, [x8, #4]'), ('bl', '#0x18dafbee0'), ('bl', '#0x18dbdbd58'),
+    ('mov', 'x26, x0'), ('mov', 'x0, x25'), ('mov', 'x2, x26'),
+    ('adrp', 'x3, #0x1d5f9f000'), ('add', 'x3, x3, #0x680'), ('bl', '#0x18db17fc0'),
+    ('bl', '#0x18dbdbeb4'), ('ldrb', 'w8, [x24, #0xc]'), ('tbnz', 'w8, #2, #0x18c502f48'),
+    ('b', '#0x18c502f78'), ('adrp', 'x3, #0x1d5f9f000'), ('add', 'x3, x3, #0x680'),
+    ('ldr', 'x19, [sp]'), ('mov', 'x0, x19'), ('mov', 'x2, x21'),
+    ('bl', '#0x18db17fc0'), ('bl', '#0x18dbdbe78'), ('mov', 'x0, x19'),
+    ('ldp', 'x29, x30, [sp, #0x60]'), ('ldp', 'x20, x19, [sp, #0x50]'), ('ldp', 'x22, x21, [sp, #0x40]'),
+    ('ldp', 'x24, x23, [sp, #0x30]'), ('ldp', 'x26, x25, [sp, #0x20]'), ('ldp', 'x28, x27, [sp, #0x10]'),
+    ('add', 'sp, sp, #0x70'), ('b', '#0x18dbdbd40'), ('mov', 'x19, #0'),
+    ('b', '#0x18c503030'),
+])
+# What the stubs it calls send (None: objc_retainAutoreleasedReturnValue / objc_release, no
+# selector) and the CFString keys it uses, as resolved in the cache.
+_FLYOVER_SELECTORS = _GEO_SELECTORS
+_FLYOVER_KEYS = {0x1d5f9f6a0: 'dataVersion', 0x1d5f9f6c0: 'data_version', 0x1d5f9f6e0: 'version',
+                 0x1d5f9f680: 'region'}
+
+
+class TestKeysReadAtTheDictionaryCall(_SelectorsPatched):
+    LAYOUT = '^{GEOFlyoverRegion=III{?=b1b1b1}}'
+
+    def setUp(self):
+        self.insns, fake = asm(_FLYOVER_DICTREP)
+        self.patch(fake)
+        self.patch_selectors(_FLYOVER_SELECTORS)
+        self.ctx = _TextCtx(_FLYOVER_KEYS)
+
+    def test_a_key_hoisted_by_the_json_flag_and_spilled_to_the_stack_names_its_member(self):
+        layout = SF.parse_struct_encoding(self.LAYOUT)
+        self.assertEqual(
+            SF.decode_inline_dictrep_names(self.ctx, self.insns, lambda a: a == 0x1dcfaf428, layout),
+            {0: 'dataVersion', 4: 'region', 8: 'version'})
+
+
+class TestPairingAtTheCall(_SelectorsPatched):
+    SELS = {0x3000: 'setObject:forKey:', 0x3100: 'numberWithInt:'}     # 0x3200: ARC, no selector
+
+    def pair(self, *lines):
+        insns, fake = asm((0x1000, list(lines)))
+        self.patch(fake)
+        self.patch_selectors(self.SELS)
+        loads = {k for k, i in enumerate(insns) if i.op_str == 'w2, [x20]'}
+        return SF._pair_members(_CfCtx(), insns, lambda k: 0 if k in loads else None)
+
+    BOX = [('ldr', 'w2, [x20]'), ('bl', '#0x3100'), ('bl', '#0x3200'), ('mov', 'x2, x0')]
+
+    def test_the_key_is_the_one_x3_holds_at_the_call(self):
+        # @"from" is built in x3 but overwritten by the reload of @"to" before the call
+        members, unpaired = self.pair(
+            ('sub', 'sp, sp, #0x20'), ('adrp', 'x8, #0x1d5fda000'), ('add', 'x8, x8, #0xb00'),
+            ('str', 'x8, [sp, #8]'), *self.BOX,
+            ('adrp', 'x3, #0x1d5fda000'), ('add', 'x3, x3, #0xae0'), ('ldr', 'x3, [sp, #8]'),
+            ('bl', '#0x3000'), ('ret', ''))
+        self.assertEqual((members, unpaired), ({0: SF.MemberDict('to', None)}, 0))
+
+    def test_a_call_with_no_selector_is_followed_only_through_the_return_value_handshake(self):
+        # x0 at the selectorless call is a copy, not the result of the call right before it:
+        # nothing says that callee returns its argument, so the member is not paired
+        members, _ = self.pair(
+            ('sub', 'sp, sp, #0x20'), ('adrp', 'x8, #0x1d5fda000'), ('add', 'x8, x8, #0xb00'),
+            ('str', 'x8, [sp, #8]'), ('ldr', 'w2, [x20]'), ('bl', '#0x3100'), ('mov', 'x19, x0'),
+            ('mov', 'x0, x19'), ('bl', '#0x3200'), ('mov', 'x2, x0'), ('ldr', 'x3, [sp, #8]'),
+            ('bl', '#0x3000'), ('ret', ''))
+        self.assertEqual(members, {})
+
+    def test_the_handshake_is_followed_to_the_boxed_member(self):
+        members, _ = self.pair(
+            ('sub', 'sp, sp, #0x20'), ('adrp', 'x8, #0x1d5fda000'), ('add', 'x8, x8, #0xb00'),
+            ('str', 'x8, [sp, #8]'), *self.BOX, ('ldr', 'x3, [sp, #8]'),
+            ('bl', '#0x3000'), ('ret', ''))
+        self.assertEqual(members, {0: SF.MemberDict('to', None)})
 
 
 class TestDecodeDictrepNamesRejectsLargerStructs(_Patched):
@@ -467,7 +594,7 @@ class TestLiveInlineStructRecovery(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.by = _extract(['GEOTransitRouteUpdateRequest', 'GEOTileSetVersion', 'GEOTileGroup',
-                           'GEOCoarseLocationRing'])
+                           'GEOCoarseLocationRing', 'GEOFlyoverRegionVersions'])
 
     def setUp(self):
         if self.by is None:
@@ -498,6 +625,11 @@ class TestLiveInlineStructRecovery(unittest.TestCase):
         self.assertEqual([n for _, n, _ in self._members('GEORegionalResourceIndex')],
                          ['regionalResourceIndex', 'iconIndex', 'attributionIndex'])
 
+    def test_key_spilled_to_the_stack_names_the_member(self):
+        # member 0's key is chosen by the JSON flag before the loop and reloaded from the frame
+        self.assertEqual(self._members('GEOFlyoverRegion'),
+                         [(1, 'region', 'uint32'), (2, 'version', 'uint32'), (3, 'dataVersion', 'uint32')])
+
     def test_inlined_dictionary_representation_names_the_members(self):
         self.assertEqual(self._members('GEOCoarseLocationPoint'),
                          [(1, 'lat', 'sint32'), (2, 'lng', 'sint32')])
@@ -523,7 +655,7 @@ class _TextCtx(_NoStringsMixin):
         return self.texts[va - 0x100000].encode()[:n]
 
 
-class TestEnumMemberEvidence(_Patched):
+class TestEnumMemberEvidence(_SelectorsPatched):
     def _insns(self, *lines):
         order, _ = asm((0x1000, list(lines)))
         return order
@@ -538,10 +670,13 @@ class TestEnumMemberEvidence(_Patched):
     KEY_VA, KEY_CHARS = 0x9000, 0x9100
 
     def _member_run(self, switch, strings, *, member_off=0x10):
+        # helper: setObject:forKey: (and, on the fallback path, the "(unknown: %i)" formatter);
+        # box / arc: +[NSNumber numberWithInt:] and the ARC return-value handshake
         code = ['ldr w8, [x20, #0x10]'] + switch + [
             'merge:', 'adrp x3, #0x9000', 'add x3, x3, #0', 'mov x0, x19', 'bl helper',
-            'end:', 'ret', 'helper:', 'ret']
-        words, _ = assemble(0x1000, code)
+            'end:', 'ret', 'helper:', 'ret', 'box:', 'ret', 'arc:', 'ret']
+        words, labels = assemble(0x1000, code)
+        self.patch_selectors({labels['helper']: 'setObject:forKey:', labels['box']: 'numberWithInt:'})
         ctx = self._MemberCtx(0x1000, words)
         ctx.put_ptr(self.KEY_VA + 16, self.KEY_CHARS)
         ctx.put_bytes(self.KEY_CHARS, b'kind')
@@ -571,35 +706,58 @@ class TestEnumMemberEvidence(_Patched):
         self.assertEqual(members[0x10].enum, ((0, 'KIND_ZERO'), (1, 'KIND_ONE')))
 
     def test_a_plain_number_member_is_not_an_enum(self):
-        members, _ = self._member_run(['bl helper'], {})
+        members, _ = self._member_run(['mov x2, x8', 'bl box', 'bl arc', 'mov x2, x0'], {})
         self.assertEqual(members, {0x10: SF.MemberDict('kind', None)})
 
-    def test_an_enum_like_switch_that_cannot_be_evaluated_is_reported_as_unread(self):
-        # every path branches on a register the analysis does not track: still an enum
-        # (the compare constants show it) but with no values, never silently a number
+    def test_an_enum_like_switch_that_cannot_be_evaluated_files_no_member(self):
+        # every path branches on a register the analysis does not track: no run reaches the
+        # call with a name, so nothing ties the key to the member -- it is counted unpaired,
+        # never handed to the nearest load
         chain = ['cbz x5, merge', 'cbz w8, merge', 'cmp w8, #1', 'b.eq merge',
                  'cmp w8, #2', 'b.eq merge', 'cmp w8, #3', 'b.eq merge', 'bl helper']
-        members, _ = self._member_run(chain, self.NAMES)
-        self.assertEqual(members, {0x10: SF.MemberDict('kind', ())})
+        self.assertEqual(self._member_run(chain, self.NAMES), ({}, 1))
 
     def test_a_key_chosen_between_two_spellings_that_differ_only_in_case(self):
         # real GEONavigationAudioFeedback dictrep: ``isJSON ? @"BTHFPRoutesAvailable" :
         # @"bTHFPRoutesAvailable"`` -- no name is guessed, but the member is still filed
         # (the helper is accepted and its enum-ness read)
         ctx = _TextCtx({0x1d5fda0e0: 'bTHFPRoutesAvailable', 0x1d5fda100: 'BTHFPRoutesAvailable'})
+        self.patch_selectors({0x3000: 'setObject:forKey:', 0x3100: 'numberWithBool:'})
         order = self._insns(
-            ('mov', 'x21, x0'), ('ldrb', 'w2, [x21, #1]'),
+            ('mov', 'x20, x1'), ('mov', 'x21, x0'), ('ldrb', 'w2, [x21, #1]'), *_BOX,
             ('adrp', 'x8, #0x1d5fda000'), ('add', 'x8, x8, #0xe0'),
             ('adrp', 'x9, #0x1d5fda000'), ('add', 'x9, x9, #0x100'),
-            ('cmp', 'w20, #0'), ('csel', 'x3, x9, x8, ne'), ('bl', '#0x3000'))
+            ('cmp', 'w20, #0'), ('csel', 'x3, x9, x8, ne'), ('bl', '#0x3000'), ('ret', ''))
         members, unpaired = SF._pair_members(
             ctx, order, lambda k: 1 if order[k].mnemonic == 'ldrb' else None)
         self.assertEqual((unpaired, members), (0, {1: SF.MemberDict(None, None)}))
 
-    def test_a_plain_member_is_not_an_enum_even_with_a_key(self):
+    def test_a_double_member_is_traced_through_the_float_argument_register(self):
+        # +[NSNumber numberWithDouble:] takes its value in d0, not x2
         ctx = _TextCtx({0x1d5fda0e0: 'time'})
-        order = self._insns(('ldr', 'd0, [x20]'), ('adrp', 'x3, #0x1d5fda000'),
-                            ('add', 'x3, x3, #0xe0'), ('bl', '#0x3000'))
+        self.patch_selectors({0x3000: 'setObject:forKey:', 0x3100: 'numberWithDouble:'})
+        order = self._insns(('ldr', 'd0, [x20]'), *_BOX, ('adrp', 'x3, #0x1d5fda000'),
+                            ('add', 'x3, x3, #0xe0'), ('bl', '#0x3000'), ('ret', ''))
+        members, _ = SF._pair_members(ctx, order, lambda k: 0 if k == 0 else None)
+        self.assertEqual(members, {0: SF.MemberDict('time', None)})
+
+    def test_a_float_member_boxed_as_a_double_is_traced_through_the_conversion(self):
+        ctx = _TextCtx({0x1d5fda0e0: 'speed'})
+        self.patch_selectors({0x3000: 'setObject:forKey:', 0x3100: 'numberWithDouble:'})
+        order = self._insns(('ldr', 's0, [x20, #4]'), ('fcvt', 'd0, s0'), *_BOX,
+                            ('adrp', 'x3, #0x1d5fda000'), ('add', 'x3, x3, #0xe0'),
+                            ('bl', '#0x3000'), ('ret', ''))
+        members, _ = SF._pair_members(ctx, order, lambda k: 4 if k == 0 else None)
+        self.assertEqual(members, {4: SF.MemberDict('speed', None)})
+
+    def test_a_double_in_a_callee_saved_register_survives_the_calls_before_the_box(self):
+        # d8 is preserved across a call (AAPCS64); d0 is not, so a value parked in d8 is still
+        # the member's at the box
+        ctx = _TextCtx({0x1d5fda0e0: 'time'})
+        self.patch_selectors({0x3000: 'setObject:forKey:', 0x3100: 'numberWithDouble:'})
+        order = self._insns(('ldr', 'd8, [x20]'), ('bl', '#0x3300'), ('fmov', 'd0, d8'), *_BOX,
+                            ('adrp', 'x3, #0x1d5fda000'), ('add', 'x3, x3, #0xe0'),
+                            ('bl', '#0x3000'), ('ret', ''))
         members, _ = SF._pair_members(ctx, order, lambda k: 0 if k == 0 else None)
         self.assertEqual(members, {0: SF.MemberDict('time', None)})
 

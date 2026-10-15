@@ -7,7 +7,7 @@ touched.
 
 **2026-10-14 update — one engine for all three enum sources.**  The same evaluator now also recovers (a) the
 `xAsString:` method (`_extract_xasstring`, value register x2, name read at the call/return) and (b) the name switches of
-struct members (`structfields._member_enum`).  The window/idiom decoders they replaced (`_harvest_jumptable_segments`,
+struct members (`structfields._enum_calls`, which also ties each name to the `setObject:forKey:` call it reaches).  The window/idiom decoders they replaced (`_harvest_jumptable_segments`,
 `_harvest_isolated_compares`, `_harvest_cbz_value0`, `_valid_value_bitmask`, `_find_index_bias`, `_sub_imm_bias`,
 `_leading_materialized_bias`, `_detect_unreached_branch_gate`, `_detect_unrecovered_csel_chain`, the pointer-table reader
 `_extract_enum_values_windows`, …; ~1070 lines of `proto/enums.py`) are deleted.  What could not be evaluated is reported

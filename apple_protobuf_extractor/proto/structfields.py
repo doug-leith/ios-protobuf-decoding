@@ -20,9 +20,10 @@ Everything needed is nevertheless in the binary, and none of it is a heuristic:
   already classifies;
 * **enum members** — a member that is an enum is emitted by the struct's dictionary
   representation through the compiler-inlined ``xAsString:`` (a value-name switch ending in
-  the CFString ``"(unknown: %i)"``) before its key; a plain number goes through ``NSNumber``.
-  :func:`decode_dictrep_members` reads that per member and, from the same compare chain or
-  pointer table the class-level enum recovery reads (:mod:`proto.enums`), the value names;
+  the CFString ``"(unknown: %i)"``) into the ``setObject:forKey:`` call that files it; a plain
+  number goes through ``NSNumber``.  :func:`decode_dictrep_members` reads each call's key and
+  the member its value comes from (:func:`_pair_members`), and an enum's value names from the
+  same data-flow evaluation the class-level recovery uses (:mod:`proto.dictrep_flow`);
 * **validation** — the writer's member offsets and load widths must match the encoding's
   layout exactly (:func:`match_layout`): every member written once, no write at an unknown
   offset.  A struct that does not match is left as the flagged ``bytes`` fallback, never
@@ -51,7 +52,7 @@ from proto.arm64cfg import split_ops, mem_operand, _next_imp
 from proto.config import _class_to_proto_name
 from proto.dispatch import _jump_table_arm_addrs
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
-from proto.mapfields import _scratch_slot_of
+from proto.mapfields import _scratch_slot_of, _stub_selector
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
@@ -548,24 +549,8 @@ class MemberDict:
     enum: Optional[Tuple[Tuple[int, str], ...]] = None
     # None: emitted as a plain number.  A tuple: the member's value is driven through an
     # enum-name switch (proto.dictrep_flow decides: the string handed to the call varies
-    # with the value) -- the ``(value, name)`` pairs recovered from it, empty when the code
-    # shows an enum-like switch that could not be evaluated.
-
-
-def _member_enum(ctx, insns: Sequence, root: int, member_at) -> Optional[Tuple[Tuple[int, str], ...]]:
-    """The enum ``(value, name)`` pairs of the struct member loaded by ``insns[root]``, ``()``
-    for an enum-like switch that could not be evaluated, or ``None`` for a plain number.
-
-    The member's value is driven through *insns* by :class:`proto.dictrep_flow.Flow`, the same
-    analysis the class-level recovery uses; the other members' loads bound its code."""
-    flow = _flow_for(ctx, insns)
-    stop = frozenset(k for k in range(len(insns)) if member_at(k) is not None) - {root}
-    res = flow.enum_of_load(root, stop)
-    if res is None:
-        return None
-    if res.pairs:
-        return tuple(sorted(res.pairs.items()))
-    return () if res.problems and res.n_candidates >= 3 else None
+    # with the value) -- the ``(value, name)`` pairs recovered from it, empty when two calls
+    # filing the member show different pairs.
 
 
 def _flow_for(ctx, insns: Sequence):
@@ -584,62 +569,197 @@ def _flow_for(ctx, insns: Sequence):
     return hit[1]
 
 
+def _key_spelling(cands: Sequence[str]) -> Tuple[Optional[str], bool]:
+    """``(key, case_twins)`` for a key chosen between two spellings by the JSON flag
+    (``isJSON ? @"camelCase" : @"snake_case"``): the camelCase one, the ivar/field naming
+    convention; ``None`` when neither or both lack ``_`` -- *case_twins* when they are two
+    spellings that differ only in case (``bTHFPx`` / ``BTHFPx``), whose member is still filed."""
+    plain = [c for c in cands if '_' not in c]
+    key = plain[0] if len(plain) == 1 else None
+    return key, len(plain) == 2 and plain[0].lower() == plain[1].lower()
+
+
+_SET_FOR_KEY = "setObject:forKey:"
+_BOX_PREFIX = "numberWith"                 # +[NSNumber numberWithInt: / …Bool: / …UnsignedLongLong:]
+_FP_BOXES = ("numberWithDouble:", "numberWithFloat:")
+_COPIES = ('mov', 'fmov', 'fcvt')
+
+
+def _call_selector(ctx, target: Optional[int]) -> Optional[str]:
+    """Selector of the objc-message stub a ``bl`` calls (``None``: not a message send),
+    memoised per target."""
+    cache = _ctx_cache(ctx, "_struct_call_selectors", dict)
+    if target not in cache:
+        cache[target] = _stub_selector(ctx, target)
+    return cache[target]
+
+
+def _boxed_member(ctx, flow, insns: Sequence, k: int, member_at) -> Optional[int]:
+    """The member whose value the ``setObject:forKey:`` call at ``insns[k]`` files as a number,
+    by use-def chain from its object argument x2: through ``mov`` copies to the result of a
+    ``numberWith*`` send, whose value argument (x2; v0 for ``numberWithDouble:`` /
+    ``numberWithFloat:``, the AAPCS64 float register) must come from a member load.  Between
+    the two, a call that is not a message send is followed into its x0 argument only when that
+    argument is the result of the call right before it -- the ARC return-value handshake
+    (``bl numberWith… ; bl objc_retainAutoreleasedReturnValue``), whose callee returns its
+    argument.  ``None`` for anything else."""
+    reg, at, seen = 'x2', k, set()
+    while (reg, at) not in seen:
+        seen.add((reg, at))
+        defs = flow.defs_before(at, reg)
+        if len(defs) != 1:
+            return None
+        (d,) = defs
+        if d < 0:
+            return None
+        ins, ops = insns[d], split_ops(insns[d].op_str)
+        if ins.mnemonic == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
+            reg, at = _norm_reg(ops[1]), d
+            if reg is None or reg == 'xzr':
+                return None
+            continue
+        if ins.mnemonic != 'bl' or reg != 'x0':
+            return None
+        sel = _call_selector(ctx, _parse_imm(ins.op_str))
+        if sel is not None:
+            if not sel.startswith(_BOX_PREFIX):
+                return None
+            return _member_in(flow, insns, d, 'v0' if sel in _FP_BOXES else 'x2', member_at)
+        if flow.defs_before(d, 'x0') != frozenset((d - 1,)) or insns[d - 1].mnemonic != 'bl':
+            return None
+        at = d                                   # the handshake: x0 is the previous call's result
+    return None
+
+
+def _member_in(flow, insns: Sequence, k: int, reg: str, member_at) -> Optional[int]:
+    """The member offset *reg* holds before ``insns[k]``: every definition reaching it is a
+    member load, directly or through value-preserving copies (``mov`` / ``fmov`` / ``fcvt``:
+    a float member boxed as a double), of the same member."""
+    from proto.dictrep_flow import reg_name
+    found = set()
+    work, seen = [(k, reg)], set()
+    while work:
+        at, r = work.pop()
+        if (at, r) in seen:
+            continue
+        seen.add((at, r))
+        for d in flow.defs_before(at, r):
+            if d < 0:
+                return None
+            off = member_at(d)
+            if off is not None:
+                found.add(off)
+                continue
+            ops = split_ops(insns[d].op_str)
+            src = reg_name(ops[1]) if insns[d].mnemonic in _COPIES and len(ops) == 2 \
+                and not ops[1].startswith('#') else None
+            if src is None or src == 'xzr':
+                return None
+            work.append((d, src))
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def _enum_calls(flow, insns: Sequence, calls, member_at) -> Dict[int, Dict[int, tuple]]:
+    """``{call index: {member offset: (value, name) pairs}}``: the ``setObject:forKey:`` calls
+    an enum member's name reaches.  Each member load is driven through the code by
+    :meth:`proto.dictrep_flow.Flow.enum_of_load` (the class-level recovery's analysis; the
+    other members' loads bound its code); a member is an enum there iff the string handed on
+    varies with its value, and the call a named value's run stops at, with the name in x2,
+    is the call that files it."""
+    loads = frozenset(k for k in range(len(insns)) if member_at(k) is not None)
+    out: Dict[int, Dict[int, tuple]] = {}
+    for root in sorted(loads):
+        res = flow.enum_of_load(root, loads - {root})
+        if res is None or not res.pairs or res.name_reg != 'x2':
+            continue
+        pairs = tuple(sorted(res.pairs.items()))
+        for v in res.pairs:
+            c = res.stops.get(v)
+            if c in calls:
+                out.setdefault(c, {})[member_at(root)] = pairs
+    return out
+
+
+_NO_KEY = object()
+
+
+def _call_key(ctx, runs, k: int):
+    """The dictionary key of the ``setObject:forKey:`` call at ``insns[k]``: x3's value on every
+    flag run that reaches it (:meth:`proto.dictrep_flow.Flow.flag_runs`), a CFString
+    identifier.  Two spellings across the flag values are resolved by :func:`_key_spelling`.
+    Returns the key, ``None`` (an unresolvable spelling pair -- :data:`_CASE_TWINS` when the
+    two differ only in case), or :data:`_NO_KEY` when x3 is not a constant identifier on some
+    run (or no run reaches the call)."""
+    texts = set()
+    for run in runs:
+        if k not in run:
+            continue                                  # not reached with this flag value
+        va = run[k].get('x3')
+        text = _cfstring(ctx, va) if va is not None else None
+        if text is None:
+            return _NO_KEY
+        texts.add(text)
+    if not texts or len(texts) > 2:
+        return _NO_KEY
+    if len(texts) == 1:
+        return next(iter(texts))
+    key, twins = _key_spelling(sorted(texts))
+    return _CASE_TWINS if key is None and twins else key
+
+
+_CASE_TWINS = object()
+
+
 def _pair_members(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, MemberDict], int]:
-    """Pair each dictionary key in a dictionary-representation listing with the struct member
-    it files: ``(members, unpaired)`` — ``{member offset: MemberDict}`` and how many keys found
-    no member.
+    """Pair the dictionary keys of a dictionary-representation listing with the struct members
+    they file: ``(members, unpaired)`` — ``{member offset: MemberDict}`` and how many keyed
+    calls file no member.
 
+    Every pairing is read at the ``setObject:forKey:`` call itself: the key is x3's value there
+    (:func:`_call_key`: by constant propagation over the whole function, so a key hoisted out
+    of a loop, chosen by the JSON flag or spilled to the stack is read as well as one built
+    in place), the member is the one whose value x2 carries -- a number boxed from it
+    (:func:`_boxed_member`), or an enum's name chosen by a switch on it (:func:`_enum_calls`).
     *member_at(k)* gives the member offset loaded by ``insns[k]`` (``None`` for any other
-    instruction).  A key is a ``CFString`` constant built into x3 (``adrp x3 ; add x3,x3,#imm``)
-    — or chosen by ``csel x3`` between two of them (``isJSON ? @"camelCase" : @"snake_case"``,
-    of which the camelCase spelling, the ivar/field naming convention, is taken) — and belongs
-    to the closest preceding member load.  The code between that member's first load and its
-    key is the member's own: an enum member's holds the name switch (:class:`MemberDict`)."""
-    members: Dict[int, MemberDict] = {}
+    instruction).  A member filed under two different keys keeps no name (nothing is guessed);
+    a keyed call whose object traces to no member counts as unpaired."""
+    calls = [k for k, ins in enumerate(insns) if ins.mnemonic == 'bl'
+             and _call_selector(ctx, _parse_imm(ins.op_str)) == _SET_FOR_KEY]
+    if not calls:
+        return {}, 0
+    flow = _flow_for(ctx, insns)
+    runs = flow.flag_runs(calls)
+    by_enum = _enum_calls(flow, insns, set(calls), member_at)
+    keys: Dict[int, set] = {}
+    enums: Dict[int, tuple] = {}
     unpaired = 0
-    member: Optional[int] = None
-    first_load = 0                          # index of the current member's first load
-    pages: Dict[str, int] = {}              # reg -> page set by the last ``adrp``
-    consts: Dict[str, int] = {}             # reg -> address built by ``adrp`` + ``add``
-    for k, ins in enumerate(insns):
-        m = member_at(k)
-        if m is not None:
-            if m != member:
-                first_load = k
-            member = m
+    for k in calls:
+        key = _call_key(ctx, runs, k)
+        if key is _NO_KEY:
             continue
-        mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        if mn == 'adrp' and len(ops) == 2 and _parse_imm(ops[1]) is not None:
-            pages[ops[0]] = _parse_imm(ops[1])
-            consts.pop(ops[0], None)
-            continue
-        if mn == 'add' and len(ops) == 3 and ops[1] == ops[0] and ops[0] in pages \
-                and _parse_imm(ops[2]) is not None:
-            consts[ops[0]] = pages[ops[0]] + _parse_imm(ops[2])
-        key, is_key, case_twins = None, False, False
-        if mn == 'add' and ops and ops[0] == 'x3' and 'x3' in consts:
-            key = _cfstring(ctx, consts['x3'])
-            is_key = key is not None
-        elif mn == 'csel' and len(ops) == 4 and ops[0] == 'x3':
-            cands = [_cfstring(ctx, consts[r]) for r in ops[1:3] if r in consts]
-            is_key = len(cands) == 2 and None not in cands
-            plain = [c for c in cands if c and '_' not in c]
-            key = plain[0] if is_key and len(plain) == 1 else None
-            case_twins = (is_key and len(plain) == 2 and plain[0].lower() == plain[1].lower())
-        if not is_key:
-            continue
-        if (key is None and not case_twins) or member is None or member in members:
+        if key is None:                               # two spellings, neither the camelCase one
             unpaired += 1
+            continue
+        if k in by_enum:
+            if len(by_enum[k]) != 1:
+                unpaired += 1                         # two members' names reach one call
+                continue
+            ((member, pairs),) = by_enum[k].items()
+            if enums.setdefault(member, pairs) != pairs:
+                enums[member] = ()
         else:
-            members[member] = MemberDict(key, _member_enum(ctx, insns, first_load, member_at))
-        member = None
+            member = _boxed_member(ctx, flow, insns, k, member_at)
+            if member is None:
+                unpaired += 1
+                continue
+        keys.setdefault(member, set()).add(None if key is _CASE_TWINS else key)
+    members: Dict[int, MemberDict] = {}
+    for off, ks in keys.items():
+        if len(ks) != 1:
+            log.debug("struct member +%#x filed under keys %r; name left unrecovered",
+                      off, sorted(ks, key=str))
+        members[off] = MemberDict(next(iter(ks)) if len(ks) == 1 else None, enums.get(off))
     return members, unpaired
-
-
-def _pair_keys(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, str], int]:
-    """:func:`_pair_members` reduced to the keys: ``({member offset: key}, unpaired)``."""
-    members, unpaired = _pair_members(ctx, insns, member_at)
-    return {off: md.key for off, md in members.items() if md.key}, unpaired
 
 
 def decode_dictrep_members(ctx, entry: int, offsets) -> Dict[int, MemberDict]:

@@ -28,8 +28,10 @@ compilers simply omit a value that has no name).  A constant string, or an int h
 from __future__ import annotations
 
 import logging
+import re
 from collections import deque
-from dataclasses import dataclass
+from itertools import product
+from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm, _SOURCE_FIRST_MNEMONICS
@@ -42,11 +44,16 @@ UNKNOWN_ENUM_FORMAT = "(unknown: %i)"
 
 _ENTRY = -1                                   # pseudo-definition: value on function entry
 _CALLER_SAVED = tuple(f"x{n}" for n in range(0, 19)) + ("x30",)
-_REGS = tuple(f"x{n}" for n in range(0, 31))
+# The SIMD/FP registers, named vN whatever the width (b/h/s/d/q/vN.T): tracked by the reaching
+# definitions only (a float/double argument rides in v0), never by value.  AAPCS64 preserves
+# v8-v15 (their low 64 bits, all a scalar uses) across a call.
+_FP_CALLER_SAVED = tuple(f"v{n}" for n in range(0, 8)) + tuple(f"v{n}" for n in range(16, 32))
+_REGS = tuple(f"x{n}" for n in range(0, 31)) + tuple(f"v{n}" for n in range(0, 32))
+_FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?$')
 # Mnemonics whose first operand is NOT a destination (and calls, handled separately).
 _NO_DEST = _SOURCE_FIRST_MNEMONICS | {
     'b', 'bl', 'blr', 'br', 'nop', 'ccmp', 'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz', 'cmp', 'cmn', 'tst',
-    'prfm', 'dmb', 'dsb', 'isb',
+    'prfm', 'dmb', 'dsb', 'isb', 'fcmp', 'fcmpe', 'fccmp', 'fccmpe',
 }
 _LOADS = {'ldr': None, 'ldrb': 1, 'ldrh': 2, 'ldrsw': 4, 'ldrsb': 1, 'ldrsh': 2}
 _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
@@ -56,26 +63,78 @@ _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
 # whose register then indexes a table is expanded to the whole interval.
 _MAX_GATE_SPAN = 1 << 12
 
+# The evaluator's loads and stores: bytes moved (None: the register's width) and whether a
+# load sign-extends.  ``_LOADS`` above is only the scaled forms the field roots are read with.
+_EXEC_LOADS = {**_LOADS, 'ldur': None, 'ldurb': 1, 'ldurh': 2, 'ldursw': 4, 'ldursb': 1, 'ldursh': 2}
+_SIGNED_LOADS = frozenset(('ldrsw', 'ldrsb', 'ldrsh', 'ldursw', 'ldursb', 'ldursh', 'ldpsw'))
+_STORES = {'str': None, 'stur': None, 'strb': 1, 'sturb': 1, 'strh': 2, 'sturh': 2}
+_REG_BYTES = {'x': 8, 'w': 4, 'd': 8, 's': 4, 'q': 16, 'h': 2, 'b': 1}
+
+# sp on entry to an evaluated function.  A stack address is then an ordinary integer that
+# arithmetic carries through ``sub sp`` / ``add x29, sp, #k`` / writeback, told apart from image
+# and heap addresses (below 2^48 on arm64) by where it lives; a frame is far smaller than the
+# 2^32 bytes either side of the entry sp this partition gives the stack.
+_STACK_TOP = 1 << 62
+_STACK_SPAN = 1 << 32
+_FRAME_REGS = ('sp', 'x29')
+# Registers that may carry a flag argument into a function: x0 holds the object / struct.
+_FLAG_ARG_REGS = tuple(f"x{n}" for n in range(1, 8))
+
+
+def _is_stack(v: Optional[int]) -> bool:
+    return v is not None and _STACK_TOP - _STACK_SPAN <= v < _STACK_TOP + _STACK_SPAN
+
+
+def _reg_bytes(tok: str) -> int:
+    return _REG_BYTES.get(tok.strip()[:1].lower(), 8)
+
 
 def _is_cond_branch(mn: str) -> bool:
     return mn.startswith('b.')
 
 
+def _writeback_base(ops: List[str]) -> Optional[str]:
+    """Base register a pre-index (``[Rn, #imm]!``) or post-index (``[Rn], #imm``) memory
+    operand updates, else None."""
+    i = next((j for j, o in enumerate(ops) if o.startswith('[')), None)
+    if i is None:
+        return None
+    if ops[i].endswith('!') or (len(ops) > i + 1 and ops[i + 1].startswith('#')):
+        pm = _parse_mem(ops[i])
+        return pm[0] if pm else None
+    return None
+
+
+def reg_name(tok: str) -> Optional[str]:
+    """A register operand's name for the reaching definitions: ``xN`` for x/w registers (as
+    :func:`macho.disasm._norm_reg`), ``vN`` for an SIMD/FP register of any width."""
+    r = _norm_reg(tok)
+    if r is not None:
+        return r
+    m = _FP_REG.match(tok.strip().lower())
+    return f"v{m.group(1)}" if m and int(m.group(1)) < 32 else None
+
+
 def _writes(ins: Insn) -> List[str]:
-    """Registers (xN form) *ins* overwrites."""
+    """Registers (xN / vN form) *ins* overwrites."""
     mn = ins.mnemonic
     if mn in ('bl', 'blr'):
-        return list(_CALLER_SAVED)
-    if mn in _NO_DEST or _is_cond_branch(mn):
+        return list(_CALLER_SAVED + _FP_CALLER_SAVED)
+    if _is_cond_branch(mn):
         return []
     ops = split_ops(ins.op_str)
     out = []
+    wb = _writeback_base(ops)
+    if wb is not None and wb not in ('xzr', 'sp'):
+        out.append(wb)
+    if mn in _NO_DEST:
+        return out
     if ops:
-        r = _norm_reg(ops[0])
+        r = reg_name(ops[0])
         if r is not None and r != 'xzr' and r != 'sp':
             out.append(r)
     if mn in ('ldp', 'ldnp', 'ldpsw') and len(ops) > 1:
-        r = _norm_reg(ops[1])
+        r = reg_name(ops[1])
         if r is not None and r != 'xzr' and r != 'sp':
             out.append(r)
     return out
@@ -105,6 +164,91 @@ def _eval_cond(cond: str, flags: Tuple[int, int, int]) -> Optional[bool]:
 class _Abort(Exception):
     """The evaluation reached something it cannot decide (a branch on a value the analysis
     does not track, an unbounded jump, a revisited instruction); the message says which."""
+
+
+class _Machine:
+    """What an evaluation knows: register values, stack slots and the condition flags.
+
+    A register absent from *regs* is asked of *fallback* (the reaching-definition constant at
+    the evaluation's root) unless it was since overwritten with something unknown (*top*).
+    *slots* maps a stack address to ``(size, value)``.  *escaped* records that a stack address
+    has been put in a register other than sp / x29: from then on a callee, or a store through
+    a pointer the evaluation does not know, may write any slot, so either clears them all.
+    Until then the frame is the function's own and a call leaves its slots alone."""
+
+    def __init__(self, regs: Dict[str, int], fallback=None):
+        self.regs: Dict[str, int] = dict(regs)
+        self.top: Set[str] = set()
+        self.fallback = fallback
+        self.slots: Dict[int, Tuple[int, int]] = {}
+        self.escaped = False
+        self.flags: Optional[Tuple[int, int, int]] = None
+
+    def copy(self) -> "_Machine":
+        m = _Machine(self.regs, self.fallback)
+        m.top, m.slots, m.escaped, m.flags = set(self.top), dict(self.slots), self.escaped, self.flags
+        return m
+
+    def join(self, other: "_Machine") -> "_Machine":
+        """What holds on both paths (for :meth:`Flow.propagate`, whose machines have no
+        fallback: an absent register is unknown)."""
+        m = _Machine({r: v for r, v in self.regs.items() if other.regs.get(r) == v})
+        m.slots = {a: s for a, s in self.slots.items() if other.slots.get(a) == s}
+        m.escaped = self.escaped or other.escaped
+        m.flags = self.flags if self.flags == other.flags else None
+        return m
+
+    def same(self, other: "_Machine") -> bool:
+        return (self.regs == other.regs and self.slots == other.slots
+                and self.escaped == other.escaped and self.flags == other.flags)
+
+    def get(self, tok: str) -> Optional[int]:
+        r = _norm_reg(tok)
+        if r is None:
+            return None
+        if r == 'xzr':
+            return 0
+        if r in self.regs:
+            v = self.regs[r]
+        elif r in self.top or self.fallback is None:
+            return None
+        else:
+            v = self.fallback(r)
+            if v is None:
+                return None
+        return v & _mask(tok)
+
+    def put(self, tok: str, v: Optional[int]) -> None:
+        r = _norm_reg(tok)
+        if r is None or r == 'xzr':
+            return
+        if v is None:
+            self.regs.pop(r, None)
+            self.top.add(r)
+            return
+        v &= _mask(tok)
+        self.regs[r] = v
+        self.top.discard(r)
+        if r not in _FRAME_REGS and _is_stack(v):
+            self.escaped = True
+
+    def call(self) -> None:
+        """A call: the caller-saved registers and the flags are the callee's."""
+        for r in _CALLER_SAVED:
+            self.put(r, None)
+        self.flags = None
+        if self.escaped:
+            self.slots.clear()
+
+    def store(self, addr: Optional[int], size: int, v: Optional[int]) -> None:
+        if not _is_stack(addr):
+            if addr is None and self.escaped:
+                self.slots.clear()
+            return                              # memory outside the frame is not modelled
+        for a in [a for a, (s, _v) in self.slots.items() if a < addr + size and addr < a + s]:
+            del self.slots[a]
+        if v is not None:
+            self.slots[addr] = (size, v & ((1 << (8 * size)) - 1))
 
 
 class Flow:
@@ -458,7 +602,8 @@ class Flow:
     # ── concrete evaluation of the switch for one value ─────────────────────
 
     def evaluate(self, root: int, dest: str, value: int,
-                 stop: FrozenSet[int] = frozenset(), direct: bool = False) -> Dict[str, str]:
+                 stop: FrozenSet[int] = frozenset(), direct: bool = False,
+                 where: Optional[List[int]] = None) -> Dict[str, str]:
         """Run the code from just after the field-value load *root* (the function's entry for
         ``root == -1``) with ``dest = value`` to the first call -- or to the return / tail call
         out of the function, where a converter hands back its result -- and return
@@ -468,38 +613,13 @@ class Flow:
         another field's value load listed in *stop* first -- an older compiler simply omits the
         entry for a value with no name).  *direct* also accepts plain C strings from
         ``__TEXT,__cstring`` (standalone binaries' name tables).  Which register carries the
-        NAME is decided by the caller: the one whose text varies with the value."""
-        regs: Dict[str, int] = {dest: value & 0xFFFFFFFF if value < 0 else value}
-        top: Set[str] = set()
-        flags: List[Optional[Tuple[int, int, int]]] = [None]
+        NAME is decided by the caller: the one whose text varies with the value.  *where*, when
+        given, receives the index of the call / return the run stopped at."""
+        m = _Machine({dest: value & 0xFFFFFFFF if value < 0 else value},
+                     fallback=lambda r: self.const_before(root, r))
+        if root < 0:
+            m.put('sp', _STACK_TOP)               # from the entry the frame is the function's
         seen: Set[int] = set()
-
-        def get(tok: str) -> Optional[int]:
-            r = _norm_reg(tok)
-            if r is None:
-                return None
-            if r == 'xzr':
-                return 0
-            if r in regs:
-                v = regs[r]
-            elif r in top:
-                return None
-            else:
-                v = self.const_before(root, r)
-                if v is None:
-                    return None
-            return v & _mask(tok)
-
-        def put(tok: str, v: Optional[int]) -> None:
-            r = _norm_reg(tok)
-            if r is None or r in ('xzr', 'sp'):
-                return
-            if v is None:
-                regs.pop(r, None)
-                top.add(r)
-            else:
-                regs[r] = v & _mask(tok)
-                top.discard(r)
 
         def jump(target: Optional[int]) -> int:
             if target is None or target not in self.addr_idx:
@@ -517,136 +637,316 @@ class Flow:
             mn, ops = ins.mnemonic, split_ops(ins.op_str)
             nxt = k + 1
             if mn in ('bl', 'blr', 'ret', 'retaa', 'retab'):
-                return self._string_args(get, direct)
+                if where is not None:
+                    where.append(k)
+                return self._string_args(m.get, direct)
             if mn == 'b' and len(ops) == 1:
                 target = _parse_imm(ops[0])
                 if target is not None and target not in self.addr_idx:
-                    return self._string_args(get, direct)   # a tail call out of the function
+                    if where is not None:
+                        where.append(k)
+                    return self._string_args(m.get, direct)   # a tail call out of the function
                 nxt = jump(target)
             elif mn == 'br' and len(ops) == 1:
-                nxt = jump(get(ops[0]))
-            elif _is_cond_branch(mn):
-                if flags[0] is None:
-                    raise _Abort(f"{mn} at {ins.addr:#x} tests flags the analysis cannot compute")
-                taken = _eval_cond(mn[2:], flags[0])
+                nxt = jump(m.get(ops[0]))
+            elif _is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                taken, target = self._branch(m, ins)
                 if taken is None:
-                    raise _Abort(f"unmodelled condition {mn} at {ins.addr:#x}")
-                if taken:
-                    nxt = jump(_parse_imm(ops[0]))
-            elif mn in ('cbz', 'cbnz') and len(ops) == 2:
-                v = get(ops[0])
-                if v is None:
-                    nxt = self._skip_trap_branch(k, _parse_imm(ops[1]), mn, ins)
-                elif (v == 0) == (mn == 'cbz'):
-                    nxt = jump(_parse_imm(ops[1]))
-            elif mn in ('tbz', 'tbnz') and len(ops) == 3:
-                v = get(ops[0])
-                if v is None:
-                    nxt = self._skip_trap_branch(k, _parse_imm(ops[2]), mn, ins)
-                elif (((v >> (_parse_imm(ops[1]) or 0)) & 1) == 0) == (mn == 'tbz'):
-                    nxt = jump(_parse_imm(ops[2]))
-            elif mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12``
-                a = get(ops[0])
-                b = _imm_operand(ops, 1) if ops[1].startswith('#') else get(ops[1])
-                if b is not None and mn == 'cmn':       # flags of a + b, as `adds` below
-                    b = -b
-                flags[0] = (a, b, 32 if ops[0].startswith('w') else 64) \
-                    if a is not None and b is not None else None
-            elif mn in ('mov', 'movz') and len(ops) == 2:
-                put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1]))
-            elif mn == 'movn' and len(ops) >= 2:
-                v = _parse_imm(ops[1])
-                put(ops[0], None if v is None else ~(v << ((_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0)))
-            elif mn == 'movk' and len(ops) >= 2:
-                base, v = get(ops[0]), _parse_imm(ops[1])
-                sh = (_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0
-                put(ops[0], None if base is None or v is None
-                    else (base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh))
-            elif mn in ('adrp', 'adr') and len(ops) == 2:
-                v = (parse_adrp(ins.op_str) or (None, None))[1] if mn == 'adrp' else _parse_imm(ops[1])
-                put(ops[0], v)
-            elif mn in ('add', 'sub') and len(ops) >= 3:
-                a = get(ops[1])
-                if ops[2].startswith('#'):
-                    b = _imm_operand(ops, 2)
-                else:
-                    b = get(ops[2])
-                    if b is not None and len(ops) > 3:
-                        b = _shifted(b, ops[3])
-                put(ops[0], None if a is None or b is None else (a + b if mn == 'add' else a - b))
-            elif mn == 'csel' and len(ops) == 4:
-                if flags[0] is None:
-                    put(ops[0], None)
-                else:
-                    c = _eval_cond(ops[3], flags[0])
-                    put(ops[0], None if c is None else get(ops[1] if c else ops[2]))
-            elif mn in _SHIFTS and len(ops) == 3:
-                a = get(ops[1])
-                n = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
-                put(ops[0], None if a is None or n is None else _shift(mn, a, n, ops[0]))
-            elif mn in ('and', 'orr', 'eor') and len(ops) >= 3:
-                a = get(ops[1])
-                b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
-                if b is not None and len(ops) > 3 and not ops[2].startswith('#'):
-                    b = _shifted(b, ops[3])
-                put(ops[0], None if a is None or b is None
-                    else {'and': a & b, 'orr': a | b, 'eor': a ^ b}[mn])
-            elif mn == 'ubfx' and len(ops) == 4:
-                a, lsb, width = get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
-                put(ops[0], None if a is None or lsb is None or not width
-                    else (a >> lsb) & ((1 << width) - 1))
-            elif mn == 'tst' and len(ops) == 2:          # Z <=> (a & b) == 0
-                a = get(ops[0])
-                b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
-                flags[0] = ((a & b), 0, 32 if ops[0].startswith('w') else 64) \
-                    if a is not None and b is not None else None
-            elif mn in ('subs', 'adds') and len(ops) == 3:
-                a = get(ops[1])
-                b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
-                if a is not None and b is not None:
-                    width = 32 if ops[0].startswith('w') else 64
-                    flags[0] = (a, b if mn == 'subs' else -b, width)
-                    put(ops[0], a - b if mn == 'subs' else a + b)
-                else:
-                    flags[0] = None
-                    put(ops[0], None)
-            elif mn in _LOADS and len(ops) == 2:
-                put(ops[0], self._load(mn, ops, get))
+                    if _is_cond_branch(mn):
+                        raise _Abort(f"{mn} at {ins.addr:#x} tests flags the analysis cannot compute"
+                                     if m.flags is None else f"unmodelled condition {mn} at {ins.addr:#x}")
+                    nxt = self._skip_trap_branch(k, target, mn, ins)
+                elif taken:
+                    nxt = jump(target)
             else:
-                for r in _writes(ins):
-                    regs.pop(r, None)
-                    top.add(r)
+                self._exec(m, ins)
             k = nxt
         return {}
 
-    def _load(self, mn: str, ops: List[str], get) -> Optional[int]:
-        pm = _parse_mem(ops[1])
+    def _branch(self, m: "_Machine", ins: Insn) -> Tuple[Optional[bool], Optional[int]]:
+        """``(taken, target)`` of a conditional branch under *m*; ``taken`` is None when the
+        condition is not known."""
+        mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        if _is_cond_branch(mn):
+            target = _parse_imm(ops[0]) if ops else None
+            return (None if m.flags is None else _eval_cond(mn[2:], m.flags)), target
+        if mn in ('cbz', 'cbnz') and len(ops) == 2:
+            v = m.get(ops[0])
+            return (None if v is None else (v == 0) == (mn == 'cbz')), _parse_imm(ops[1])
+        if mn in ('tbz', 'tbnz') and len(ops) == 3:
+            v = m.get(ops[0])
+            bit = _parse_imm(ops[1]) or 0
+            return (None if v is None else (((v >> bit) & 1) == 0) == (mn == 'tbz')), _parse_imm(ops[2])
+        return None, None
+
+    def _exec(self, m: "_Machine", ins: Insn) -> None:
+        """One non-branching instruction's effect on *m* (registers, flags, stack slots).
+        Anything not modelled makes the registers it writes unknown."""
+        mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        get, put = m.get, m.put
+        if mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12``
+            a = get(ops[0])
+            b = _imm_operand(ops, 1) if ops[1].startswith('#') else get(ops[1])
+            if b is not None and mn == 'cmn':       # flags of a + b, as `adds` below
+                b = -b
+            m.flags = (a, b, 32 if ops[0].startswith('w') else 64) \
+                if a is not None and b is not None else None
+        elif mn in ('mov', 'movz') and len(ops) == 2:
+            put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1]))
+        elif mn == 'movn' and len(ops) >= 2:
+            v = _parse_imm(ops[1])
+            put(ops[0], None if v is None else ~(v << ((_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0)))
+        elif mn == 'movk' and len(ops) >= 2:
+            base, v = get(ops[0]), _parse_imm(ops[1])
+            sh = (_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0
+            put(ops[0], None if base is None or v is None
+                else (base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh))
+        elif mn in ('adrp', 'adr') and len(ops) == 2:
+            v = (parse_adrp(ins.op_str) or (None, None))[1] if mn == 'adrp' else _parse_imm(ops[1])
+            put(ops[0], v)
+        elif mn in ('add', 'sub') and len(ops) >= 3:
+            a = get(ops[1])
+            if ops[2].startswith('#'):
+                b = _imm_operand(ops, 2)
+            else:
+                b = get(ops[2])
+                if b is not None and len(ops) > 3:
+                    b = _shifted(b, ops[3])
+            put(ops[0], None if a is None or b is None else (a + b if mn == 'add' else a - b))
+        elif mn == 'csel' and len(ops) == 4:
+            if m.flags is None:
+                put(ops[0], None)
+            else:
+                c = _eval_cond(ops[3], m.flags)
+                put(ops[0], None if c is None else get(ops[1] if c else ops[2]))
+        elif mn in _SHIFTS and len(ops) == 3:
+            a = get(ops[1])
+            n = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+            put(ops[0], None if a is None or n is None else _shift(mn, a, n, ops[0]))
+        elif mn in ('and', 'orr', 'eor') and len(ops) >= 3:
+            a = get(ops[1])
+            b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+            if b is not None and len(ops) > 3 and not ops[2].startswith('#'):
+                b = _shifted(b, ops[3])
+            put(ops[0], None if a is None or b is None
+                else {'and': a & b, 'orr': a | b, 'eor': a ^ b}[mn])
+        elif mn == 'ubfx' and len(ops) == 4:
+            a, lsb, width = get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
+            put(ops[0], None if a is None or lsb is None or not width
+                else (a >> lsb) & ((1 << width) - 1))
+        elif mn == 'tst' and len(ops) == 2:          # Z <=> (a & b) == 0
+            a = get(ops[0])
+            b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
+            m.flags = ((a & b), 0, 32 if ops[0].startswith('w') else 64) \
+                if a is not None and b is not None else None
+        elif mn in ('subs', 'adds') and len(ops) == 3:
+            a = get(ops[1])
+            b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+            if a is not None and b is not None:
+                width = 32 if ops[0].startswith('w') else 64
+                m.flags = (a, b if mn == 'subs' else -b, width)
+                put(ops[0], a - b if mn == 'subs' else a + b)
+            else:
+                m.flags = None
+                put(ops[0], None)
+        elif mn in _EXEC_LOADS and len(ops) in (2, 3):
+            addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
+            size = _EXEC_LOADS[mn] or _reg_bytes(ops[0])
+            put(ops[0], self._read(m, addr, size, mn in _SIGNED_LOADS))
+        elif mn in ('ldp', 'ldpsw') and len(ops) in (3, 4):
+            addr = self._access(m, ops[2], ops[3] if len(ops) == 4 else None)
+            size = 4 if mn == 'ldpsw' else _reg_bytes(ops[0])
+            put(ops[0], self._read(m, addr, size, mn == 'ldpsw'))
+            put(ops[1], self._read(m, None if addr is None else addr + size, size, mn == 'ldpsw'))
+        elif mn in _STORES and len(ops) in (2, 3):
+            v = get(ops[0])
+            addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
+            m.store(addr, _STORES[mn] or _reg_bytes(ops[0]), v)
+        elif mn == 'stp' and len(ops) in (3, 4):
+            v0, v1 = get(ops[0]), get(ops[1])
+            addr = self._access(m, ops[2], ops[3] if len(ops) == 4 else None)
+            size = _reg_bytes(ops[0])
+            m.store(addr, size, v0)
+            m.store(None if addr is None else addr + size, size, v1)
+        else:
+            for r in _writes(ins):
+                put(r, None)
+
+    def _access(self, m: "_Machine", mem: str, post: Optional[str]) -> Optional[int]:
+        """Address a memory operand accesses under *m* (None if unknown), applying a pre-index
+        (``[Rn, #imm]!``) or post-index (``[Rn], #imm``) base update to *m*."""
+        pm = _parse_mem(mem)
         if pm is None:
             return None
         base, index, disp, ext, shift, idx_w = pm
-        addr = get(base) if base else None
+        b = m.get(base) if base else None
+        addr = b
+        if addr is not None and index:
+            iv = m.get(index)
+            if iv is None:
+                addr = None
+            else:
+                if idx_w or ext in ('sxtw', 'uxtw'):
+                    iv &= 0xFFFFFFFF
+                    if ext == 'sxtw' and iv & 0x80000000:
+                        iv -= 1 << 32
+                addr += iv << shift
+        if mem.endswith('!'):
+            addr = None if addr is None else addr + disp
+            m.put(base, addr)
+        elif post is not None and post.startswith('#'):
+            imm = _parse_imm(post)
+            m.put(base, None if b is None or imm is None else b + imm)
+        elif addr is not None:
+            addr += disp
+        return None if addr is None else addr & 0xFFFFFFFFFFFFFFFF
+
+    def _read(self, m: "_Machine", addr: Optional[int], size: int, signed: bool) -> Optional[int]:
+        """The *size*-byte value at *addr*: a stack slot stored with that width, or the image."""
         if addr is None:
             return None
-        if index:
-            iv = get(index)
-            if iv is None:
+        if _is_stack(addr):
+            slot = m.slots.get(addr)
+            if slot is None or slot[0] != size:
                 return None
-            if idx_w or ext in ('sxtw', 'uxtw'):
-                iv &= 0xFFFFFFFF
-                if ext == 'sxtw' and iv & 0x80000000:
-                    iv -= 1 << 32
-            addr += iv << shift
-        addr += disp
-        size = _LOADS[mn] or (4 if ops[0].startswith('w') else 8)
-        try:
-            if size == 8:
-                return self.ctx.read_ptr(addr)
-            raw = int.from_bytes(self.ctx.read_bytes(addr, size), 'little')
-        except (ValueError, KeyError, IndexError):
-            return None
-        if mn in ('ldrsw', 'ldrsb', 'ldrsh') and raw & (1 << (size * 8 - 1)):
+            raw = slot[1]
+        else:
+            try:
+                if size == 8:
+                    return self.ctx.read_ptr(addr)
+                raw = int.from_bytes(self.ctx.read_bytes(addr, size), 'little')
+            except (ValueError, KeyError, IndexError):
+                return None
+        if signed and size < 8 and raw & (1 << (size * 8 - 1)):
             raw -= 1 << (size * 8)
         return raw
+
+    # ── constant propagation over the whole function ────────────────────────
+
+    def propagate(self, entry: Dict[str, int], at: Iterable[int]) -> Dict[int, Dict[str, int]]:
+        """``{k: {register: value}}``: the registers known before each ``insns[k]`` in *at*
+        when the function is entered with *entry* (say a flag argument's value) and sp at
+        the frame's top; an index missing from the result is unreachable under *entry*.
+
+        Unlike :meth:`evaluate` this runs through calls (which clobber the caller-saved
+        registers) and over the whole CFG: a forward fixpoint in which a register, stack slot
+        or the flags is known at a block iff every path into it that can execute agrees.  A
+        branch whose condition is known follows only the side taken, so code that depends on
+        *entry* is resolved the same way whether it was compiled to a ``csel`` or a branch."""
+        cfg = self.cfg
+        want = set(at)
+        if cfg.entry is None:
+            return {}
+        start = _Machine(entry)
+        start.put('sp', _STACK_TOP)
+        states: Dict[int, _Machine] = {}
+        work: deque = deque()
+        queued: Set[int] = set()
+
+        def push(blk: int, st: _Machine) -> None:
+            cur = states.get(blk)
+            if cur is None:
+                states[blk] = st.copy()
+            else:
+                merged = cur.join(st)
+                if merged.same(cur):
+                    return
+                states[blk] = merged
+            if blk not in queued:
+                queued.add(blk)
+                work.append(blk)
+
+        push(cfg.entry, start)
+        while work:
+            blk = work.popleft()
+            queued.discard(blk)
+            st = states[blk].copy()
+            first = self._first_in_block[blk]
+            for k in range(first, first + len(cfg.blocks[blk])):
+                self._propagate_step(st, k)
+            for succ in self._live_successors(blk, st):
+                push(succ, st)
+        out: Dict[int, Dict[str, int]] = {}
+        for blk, st0 in states.items():
+            st = st0.copy()
+            first = self._first_in_block[blk]
+            for k in range(first, first + len(cfg.blocks[blk])):
+                if k in want:
+                    out[k] = dict(st.regs)
+                self._propagate_step(st, k)
+        return out
+
+    def _propagate_step(self, m: "_Machine", k: int) -> None:
+        ins = self.insns[k]
+        mn = ins.mnemonic
+        if mn in ('bl', 'blr'):
+            m.call()
+        elif mn in ('b', 'br', 'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz') \
+                or _is_cond_branch(mn):
+            return
+        else:
+            self._exec(m, ins)
+
+    def _live_successors(self, blk: int, m: "_Machine") -> List[int]:
+        """The successors of *blk* that can execute under *m*: one side of a branch whose
+        condition is known (or the known target of a ``br``), else all of them."""
+        succ = self.cfg.succ.get(blk, [])
+        last = self.cfg.blocks[blk][-1]
+        if last.mnemonic == 'br':
+            v = m.get(split_ops(last.op_str)[0]) if last.op_str else None
+            b = self.cfg.addr_to_block.get(v) if v is not None else None
+            return [b] if b in succ else list(succ)
+        taken, target = self._branch(m, last)
+        if taken is None:
+            return list(succ)
+        k = self.addr_idx[last.addr]
+        dest = target if taken else (self.insns[k + 1].addr if k + 1 < len(self.insns) else None)
+        b = self.cfg.addr_to_block.get(dest) if dest is not None else None
+        return [b] if b in succ else []
+
+    def flag_arguments(self) -> Tuple[str, ...]:
+        """Argument registers (x1-x7) whose value on entry is tested: a compare, test or
+        test-and-branch reads it, directly or through ``mov`` copies, by reaching definitions.
+        A generated ``_dictionaryRepresentation:`` takes its JSON-or-not flag this way."""
+        out: Set[str] = set()
+        for k, ins in enumerate(self.insns):
+            if k not in self._block_of:
+                continue
+            mn, ops = ins.mnemonic, split_ops(ins.op_str)
+            if mn not in ('cmp', 'cmn', 'tst', 'ccmp', 'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz') or not ops:
+                continue
+            r = self._entry_arg(k, _norm_reg(ops[0]), set())
+            if r in _FLAG_ARG_REGS:
+                out.add(r)
+        return tuple(sorted(out))
+
+    def _entry_arg(self, k: int, reg: Optional[str], seen: Set[int]) -> Optional[str]:
+        """The register whose ENTRY value *reg* holds before ``insns[k]``, through copies."""
+        if reg is None:
+            return None
+        defs = self.defs_before(k, reg)
+        if defs == frozenset((_ENTRY,)):
+            return reg
+        if len(defs) != 1:
+            return None
+        (d,) = defs
+        if d < 0 or d in seen:
+            return None
+        seen.add(d)
+        ins = self.insns[d]
+        ops = split_ops(ins.op_str)
+        if ins.mnemonic == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
+            return self._entry_arg(d, _norm_reg(ops[1]), seen)
+        return None
+
+    def flag_runs(self, at: Iterable[int]) -> List[Dict[int, Dict[str, int]]]:
+        """:meth:`propagate` once per assignment of 0 / 1 to the :meth:`flag_arguments` (one
+        run with nothing fixed when there are none) -- e.g. the JSON and the plain
+        dictionary representation of one ``_dictionaryRepresentation:``."""
+        at = list(at)
+        flags = self.flag_arguments()
+        return [self.propagate(dict(zip(flags, bits)), at)
+                for bits in product((0, 1), repeat=len(flags))]
 
     def _string_args(self, get, direct: bool = False) -> Dict[str, str]:
         out: Dict[str, str] = {}
@@ -704,12 +1004,17 @@ class Flow:
         else:
             values = sorted(cands | {probe})
         seen: Dict[int, Dict[str, str]] = {}
+        stops: Dict[int, int] = {}
         for v in values:
+            where: List[int] = []
             try:
-                seen[v] = self.evaluate(k, dest, v, stop, direct)
+                seen[v] = self.evaluate(k, dest, v, stop, direct, where)
             except _Abort as exc:
                 problems.append(f"value {v}: {exc}")
+            if where and v in seen:
+                stops[v] = where[0]
         best: Dict[int, str] = {}
+        best_reg: Optional[str] = None
         for reg in sorted({r for obs in seen.values() for r in obs}):   # sorted: ties must not depend on hash order
             # A converter (k == _ENTRY: the value arrives as its argument) has no constant
             # string argument of its own: a run either returns the name (x0 at the tail call)
@@ -725,8 +1030,9 @@ class Flow:
             names = {v: obs[reg] for v, obs in seen.items()
                      if v in cands and reg in obs and _is_enum_name(obs[reg])}
             if len(set(names.values())) > len(set(best.values())):
-                best = names
-        return RootResult(best, problems, len(cands))
+                best, best_reg = names, reg
+        return RootResult(best, problems, len(cands), best_reg,
+                          {v: stops[v] for v in best if v in stops})
 
     def enum_of_load(self, k: int, stop: FrozenSet[int] = frozenset()) -> Optional["RootResult"]:
         """:meth:`analyse_root` for the integer loaded by ``insns[k]`` -- a struct member's
@@ -787,6 +1093,8 @@ class RootResult:
     pairs: Dict[int, str]          # value -> name; empty: not an enum (or not evaluable)
     problems: List[str]            # values/gates the evaluation could not settle
     n_candidates: int              # how many distinct values the code compares / indexes with
+    name_reg: Optional[str] = None  # the argument register that carries the name
+    stops: Dict[int, int] = field(default_factory=dict)   # value -> index of the call its run reached
 
 
 def _is_enum_name(text: str) -> bool:

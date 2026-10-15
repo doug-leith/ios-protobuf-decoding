@@ -126,9 +126,15 @@ repeated bytes pairs = 1;  // element type could not be determined; emitted as b
 
 - The message name is the C struct tag with the class prefix stripped; Apple's own `.proto`
   name for these inline messages is not recorded in the binary.
-- A member whose dictionary key is chosen at run time (`isJSON ? @"startTime" : @"start_time"`)
-  gets the camelCase spelling; a member no source names (one in `GEOFlyoverRegion`, whose key is
-  spilled to the stack before use) is emitted `field<N>` with an inline note.
+- Member names come from the `@encode` or, when it names none, from the dictionary
+  representation, read at each `setObject:forKey:` call: the key is x3's value there (constant
+  propagation over the whole function, once per value of the JSON flag argument, stack spills
+  included), the member is the one whose value x2 files (a boxed number traced by use-def, or an
+  enum name whose switch run reaches that call). A key chosen at run time
+  (`isJSON ? @"startTime" : @"start_time"`) gets the camelCase spelling. A member no source names
+  is emitted `field<N>` with an inline note: none in the iPhone 8 protos today. Not traced (the
+  member stays unnamed, never given a nearby key): an enum member whose name switch cannot be
+  evaluated, and a JSON flag that the function only ever tests after reloading it from the stack.
 - `int32` vs `uint32` (and 64-bit) is not recoverable from the `@encode` + helper any more than
   for ordinary fields (see the README caveat); sint/fixed forms are recovered from the write
   helper as usual.
