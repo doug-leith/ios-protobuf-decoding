@@ -521,7 +521,11 @@ class ProtoFile:
             out.append("  // WARNING: enum recovery may be INCOMPLETE "
                        "(_dictionaryRepresentation: disassembly budget exceeded); "
                        "some int32 fields may actually be enums")
-        if not msg.fields:
+        if msg.serialised_by:
+            out.append(f"  // no writeTo: of its own: serialised by {msg.serialised_by}'s "
+                       "writeTo:, which writes only that message's fields (this class's "
+                       "own ivars are not wire fields)")
+        elif not msg.fields:
             out.append("  " + OPAQUE_PASSTHROUGH_COMMENT
                        if msg.opaque_passthrough
                        else "  // (no fields recovered)")

@@ -65,7 +65,8 @@ from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
 from proto.models    import FieldLabel, ProtoField, ProtoMessage, get_diagnostics
-from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegree
+from proto.writeto   import (_extract_writeto_field_numbers, build_writeto_indegree,
+                             writeto_sent_selectors)
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
     _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree,
@@ -528,6 +529,47 @@ def _unresolved_object_field_note(
     return _UNRESOLVED_OBJECT_NOTE         # unresolved non-Foundation class
 
 
+def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
+                             cls: ObjcClass) -> Optional[ObjcClass]:
+    """The ancestor whose ``-writeTo:`` serialises *cls*, when *cls* has none of its own
+    and that inherited ``writeTo:`` provably cannot serialise *cls*'s own ivars; else None.
+
+    A class with no ``writeTo:`` in its method list is serialised by the nearest
+    ancestor's.  That code was compiled against the ancestor's layout: it reaches ivars
+    through the ancestor's ivar-offset variables and writes literal field numbers, so the
+    subclass's own ivars (with their own offset variables) can reach the wire only
+    through a method the subclass implements.  The rule therefore needs:
+
+      * every method name on *cls* and on the classes between it and the ancestor
+        resolved, so that "no ``writeTo:``" is a fact rather than an unresolved name;
+      * the ancestor in this image, with its ``writeTo:`` (else: cannot tell); and
+      * that ``writeTo:`` sending no selector *cls* or an intermediate class implements
+        (:func:`proto.writeto.writeto_sent_selectors`; None there -- a truncated walk,
+        an indirect call, an unentered thunk -- is "cannot tell").
+
+    Not checked: a send made by a function the ancestor's ``writeTo:`` calls.
+    GeoServices: GEOAnalyticsPipelineSharedStateData, GEOComposedWaypointEVStop,
+    GEOSearchRequest, GEOSearchResponse (IDA cross-check 2026-10-15)."""
+    if cls.get_method("writeTo:") is not None:
+        return None
+    below: Set[str] = set()
+    cur = cls
+    while True:
+        if any(m.name is None for m in cur.methods):
+            return None
+        if cur is not cls and cur.get_method("writeTo:") is not None:
+            break
+        below.update(m.name for m in cur.methods)
+        parent = cl.find(cur.superclass_name) if cur.superclass_name else None
+        if parent is None:
+            return None
+        cur = parent
+    sent = writeto_sent_selectors(ctx, cur.get_method("writeTo:").imp)
+    if sent is None or sent & below:
+        return None
+    return cur
+
+
 #: ObjC type-encoding of the inherited PBCodable unknown-fields bag.
 _UNKNOWN_FIELDS_ENC = '@"PBUnknownFields"'
 
@@ -845,6 +887,20 @@ def extract_proto_message(
         or cls.name in (getattr(ctx, "_proto_class_heuristic_only", None) or frozenset()))
     _class_detected_by_va_cluster = cls.name in (
         getattr(ctx, "_proto_class_cluster_only", None) or frozenset())
+
+    # No writeTo: of its own: the ancestor's writeTo: serialises this class and cannot
+    # reach its own ivars, so none of them is a wire field (they used to be emitted with
+    # ivar-order "estimated" numbers that collide with the parent's real fields).
+    _writer_owner = _inherited_writeto_owner(ctx, cl, cls)
+    if _writer_owner is not None:
+        return ProtoMessage(
+            name=_class_to_proto_name(cls.name, _pfx),
+            class_name=cls.name,
+            inherits_from=_inherits_from,
+            serialised_by=_class_to_proto_name(_writer_owner.name, _pfx),
+            class_detected_by_heuristic=_class_detected_by_heuristic,
+            class_detected_by_va_cluster=_class_detected_by_va_cluster,
+        )
 
     # Collect method names, filtering unresolved (None) entries from
     # preoptimised shared-cache method lists.

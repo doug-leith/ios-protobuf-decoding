@@ -257,6 +257,12 @@ class ProtoMessage:
     # incomplete: it also inherits the parent's.  Emitted as a class-level comment.
     # (Inherited fields are flagged but not merged — see LIMITATIONS.md (5), #50.)
     inherits_from: Optional[str] = None
+    # Proto message name of the ancestor whose ``writeTo:`` serialises this class, when
+    # the class has no ``writeTo:`` of its own and that inherited one cannot reach the
+    # class's own ivars (:func:`proto.extractor._inherited_writeto_owner`).  The message
+    # then has no fields BY DESIGN: its ivars are not wire fields.  Emitted as a
+    # class-level comment in place of "(no fields recovered)".
+    serialised_by: Optional[str] = None
     # True when this class is a zero-typed-field OPAQUE PASSTHROUGH: a PBCodable
     # subclass whose only ivar is the inherited ``_unknownFields`` bag and whose
     # ``writeTo:`` simply loads it and tail-calls ``writeTo:`` on it.  Such a

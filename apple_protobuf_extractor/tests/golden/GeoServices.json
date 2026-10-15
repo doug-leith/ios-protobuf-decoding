@@ -3489,177 +3489,7 @@ false,
 false
 ],
 "GEOAnalyticsPipelineSharedStateData.<inherits_from>": "AnalyticsPipelineStateData",
-"GEOAnalyticsPipelineSharedStateData.actionButtonDetailsStateIso": [
-"geo_isolater",
-"geo_isolater",
-13,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.impressionObjectStateIso": [
-"geo_isolater",
-"geo_isolater",
-11,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.isMapsApp": [
-"bool",
-null,
-1,
-"optional",
-false,
-false,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.mapFeaturesIso": [
-"geo_isolater",
-"geo_isolater",
-7,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.mapSettingsIso": [
-"geo_isolater",
-"geo_isolater",
-4,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.mapUIShownIso": [
-"geo_isolater",
-"geo_isolater",
-5,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.mapUserSettingsIso": [
-"geo_isolater",
-"geo_isolater",
-8,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.mapViewIso": [
-"geo_isolater",
-"geo_isolater",
-3,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.periodicSettingsTimer": [
-"NSObject<OS_dispatch_source>",
-"NSObject<OS_dispatch_source>",
-19,
-"optional",
-false,
-false,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.photoSubmissionStateIso": [
-"geo_isolater",
-"geo_isolater",
-14,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.placeIso": [
-"geo_isolater",
-"geo_isolater",
-2,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.placeMapsIdIso": [
-"geo_isolater",
-"geo_isolater",
-17,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.ratingPhotoSubmissionStateIso": [
-"geo_isolater",
-"geo_isolater",
-16,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.ratingSubmissionStateIso": [
-"geo_isolater",
-"geo_isolater",
-15,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.routingSettingsIso": [
-"geo_isolater",
-"geo_isolater",
-9,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.searchResultsStateIso": [
-"geo_isolater",
-"geo_isolater",
-10,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.tapEventStateIso": [
-"geo_isolater",
-"geo_isolater",
-12,
-"optional",
-false,
-true,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.taskQueue": [
-"NSObject<OS_dispatch_queue>",
-"NSObject<OS_dispatch_queue>",
-18,
-"optional",
-false,
-false,
-false
-],
-"GEOAnalyticsPipelineSharedStateData.userProfileIso": [
-"geo_isolater",
-"geo_isolater",
-6,
-"optional",
-false,
-true,
-false
-],
+"GEOAnalyticsPipelineSharedStateData.<serialised_by>": "AnalyticsPipelineStateData",
 "GEOAnalyticsPipelineStateData.<enum:AnalyticsPipelineStateDataMapLaunchAction>": [
 [
 [
@@ -15391,60 +15221,7 @@ false,
 false
 ],
 "GEOComposedWaypointEVStop.<inherits_from>": "ComposedWaypoint",
-"GEOComposedWaypointEVStop.artwork": [
-"<GEOTransitArtworkDataSource>",
-"<GEOTransitArtworkDataSource>",
-4,
-"optional",
-false,
-true,
-false
-],
-"GEOComposedWaypointEVStop.chargingInfo": [
-"GEOComposedRouteEVChargingStationInfo",
-"GEOComposedRouteEVChargingStationInfo",
-6,
-"optional",
-false,
-true,
-false
-],
-"GEOComposedWaypointEVStop.coordinate": [
-"bytes",
-null,
-3,
-"optional",
-false,
-false,
-false
-],
-"GEOComposedWaypointEVStop.isServerProvidedWaypoint": [
-"bool",
-null,
-5,
-"optional",
-false,
-false,
-false
-],
-"GEOComposedWaypointEVStop.muid": [
-"uint64",
-null,
-2,
-"optional",
-false,
-false,
-false
-],
-"GEOComposedWaypointEVStop.name": [
-"string",
-null,
-1,
-"optional",
-false,
-false,
-false
-],
+"GEOComposedWaypointEVStop.<serialised_by>": "ComposedWaypoint",
 "GEOCondition.<enum:ConditionType>": [
 [
 [
@@ -139198,7 +138975,9 @@ false,
 false
 ],
 "GEOSearchRequest.<inherits_from>": "PlaceSearchRequest",
+"GEOSearchRequest.<serialised_by>": "PlaceSearchRequest",
 "GEOSearchResponse.<inherits_from>": "PlaceSearchResponse",
+"GEOSearchResponse.<serialised_by>": "PlaceSearchResponse",
 "GEOSearchResult.<enum:SearchResultsResultType>": [
 [
 [

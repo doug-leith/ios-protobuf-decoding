@@ -242,13 +242,25 @@ message GEOSearchRequest {
 }
 ```
 
-Three of the five such GeoServices classes emit with no own fields at all (just the
-comment).
+All five such GeoServices classes emit with no own fields (just the comment).
 
 **Why.** Each ObjC subclass declares only its *own* field ivars; the parent's fields
 live on the parent class, and the subclass's `writeTo:`/`readFrom:` serialize them via
 `[super writeTo:]`. The extractor recovers fields per class from ivars, so a subclass
 message naturally contains only the subclass's own fields.
+
+**A subclass with no `writeTo:` of its own** (4 of the 5: `GEOSearchRequest`,
+`GEOSearchResponse`, `GEOAnalyticsPipelineSharedStateData`, `GEOComposedWaypointEVStop`)
+is serialised by the parent's `writeTo:`, which reaches only the parent's ivars, so the
+subclass's own ivars are not wire fields at all.  These messages emit no fields and say
+so (`// no writeTo: of its own: serialised by <Parent>'s writeTo: …`;
+`ProtoMessage.serialised_by`, `proto/extractor.py:_inherited_writeto_owner`).  Until
+2026-10-15 their ivars were emitted with ivar-order "number estimated" numbers that
+collided with the parent's real fields (AnalyticsPipelineSharedStateData 1-19,
+ComposedWaypointEVStop 1-6; found by the whole-image IDA cross-check).  The rule needs
+every method name on the subclass resolved, the parent's `writeTo:` in the image, and
+that `writeTo:` to send no selector the subclass implements; otherwise the old
+behaviour stands.  Not checked: a send made by a function the parent's `writeTo:` calls.
 
 **Accepted as-is (owner decision).** The inline `// inherits all fields from <Parent>`
 comment (`ProtoMessage.inherits_from`) is considered sufficient — it tells the reader
@@ -263,7 +275,8 @@ the PBCodable forward scan — e.g. `GEOSearchRequest` (→ `GEOPlaceSearchReque
 `GEOAnalyticsPipelineSharedStateData`, `GEOComposedWaypointEVStop`.
 
 **Source site.** `proto/models.py` / `proto/emitter.py` (`ProtoMessage.inherits_from`
-→ the `// inherits all fields from …` comment).
+→ the `// inherits all fields from …` comment; `ProtoMessage.serialised_by` → the
+`// no writeTo: of its own …` comment).
 
 
 ## 6. Recovered enum *type names* are a convention-only reconstruction  — to-do #57

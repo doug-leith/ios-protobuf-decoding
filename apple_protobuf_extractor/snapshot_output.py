@@ -66,6 +66,10 @@ def _snap_messages(msgs):
         # field-less message that is NOT a passthrough still snapshots as before.
         if getattr(m, "opaque_passthrough", False):
             out[f"{m.class_name}.<opaque_passthrough>"] = True
+        # Class-level "no writeTo: of its own" (the ancestor whose writeTo: serialises
+        # it).  Recorded only when set, like the two flags above.
+        if getattr(m, "serialised_by", None):
+            out[f"{m.class_name}.<serialised_by>"] = m.serialised_by
     return out
 
 

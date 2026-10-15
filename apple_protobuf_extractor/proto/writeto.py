@@ -372,6 +372,13 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
     writes = []
     seen_writes = set()             # (n) first-wins
     zero_writes = []                # top-level fields written with literal field# 0
+    # Every call the visited code makes (see :func:`writeto_sent_selectors`): `bl` and
+    # tail-`b` targets, `blr` (target unknown), and the shared thunks the walk does not
+    # enter (their code is not examined).
+    call_targets = []
+    x1_loads = []                   # addresses `ldr x1,[adrp page + k]` reads
+    indirect_calls = 0
+    unexamined_thunks = 0
     while True:
         popped = walker.next_block()
         if popped is None:
@@ -457,7 +464,18 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                         off_addr = _resolve_offset_addr(blk[:k], offreg, cur_base)
                         if off_addr is not None:
                             cur_off = off_addr
+            if mn == 'ldr' and _norm_reg(dst_reg(ins.op_str) or '') == 'x1':
+                # The selector of a plain `objc_msgSend` call (no selector stub) is
+                # loaded into x1 from its __objc_selrefs slot (`adrp; ldr x1,[xN,#k]`).
+                _m = mem_operand(ins.op_str)
+                if _m is not None and _m[2] is None:
+                    _pg = _adrp_page(blk[:k], _m[1])
+                    if _pg is not None:
+                        x1_loads.append(_pg + _m[3])
+            if mn == 'blr':
+                indirect_calls += 1
             if mn == 'bl':
+                call_targets.append(_parse_imm(ins.op_str))
                 pre = list(blk[last_bl + 1:k + 1])   # since the previous call
                 last_bl = k
                 fn = _writeto_field_number_before(blk, k)
@@ -528,6 +546,10 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                     break                   # tail-call ends this path
                 if kind == 'follow':
                     walker.push(t, (cur_guard, cur_off, dict(cur_base), brackets))
+                elif kind == 'thunk':
+                    unexamined_thunks += 1
+                else:
+                    call_targets.append(t)  # tail call out of the function
                 break                       # unconditional: no fall-through
             # any other insn: keep decoding this block
         else:
@@ -535,7 +557,9 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
             walker.push_continue(blk[-1].addr + 4, (cur_guard, cur_off, dict(cur_base),
                                                  brackets))
     return writes, dict(truncated=walker.truncated, blocks=walker.blocks_seen,
-                        zero_writes=zero_writes)
+                        zero_writes=zero_writes, call_targets=call_targets,
+                        x1_loads=x1_loads, indirect_calls=indirect_calls,
+                        unexamined_thunks=unexamined_thunks)
 
 
 def detect_context(ctx, imp, max_insns=40):
@@ -937,3 +961,39 @@ def _extract_writeto_field_numbers(
         # Bad binary input → per-class fail-safe (flagged ivar-order estimate).
         log.debug("writeTo walk failed for %s: %s", getattr(cls, "name", "?"), exc)
         return {}
+
+
+def writeto_sent_selectors(ctx: BinaryContext, imp: int) -> Optional[frozenset]:
+    """Every selector the ``writeTo:`` at *imp* sends, or None when that cannot be told.
+
+    Read off the code the CFG walk visits: a ``bl`` / tail-``b`` to an
+    ``objc_msgSend$<sel>`` stub sends ``<sel>``, and a selector loaded into x1 from
+    ``__objc_selrefs`` is the selector of a plain ``objc_msgSend`` call (counted whether
+    or not the call follows — an over-count only makes the caller more cautious).
+    None when the walk did not see all of the method: it was truncated, made an
+    indirect call (``blr``), or branched into a shared thunk it does not enter; or when
+    the binary-wide walk pre-pass is absent."""
+    indeg = getattr(ctx, "_writeto_indeg", None)
+    foreign_imps = getattr(ctx, "_writeto_foreign_imps", None)
+    if indeg is None or foreign_imps is None or not imp:
+        return None
+    try:
+        _writes, flags = writeto_walk(ctx, imp, foreign_imps - {imp}, indeg)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        log.debug("writeTo walk failed at %#x: %s", imp, exc)
+        return None
+    if flags['truncated'] or flags['indirect_calls'] or flags['unexamined_thunks']:
+        return None
+    sels = {_selector_stub_name(ctx, t) for t in flags['call_targets']}
+    selrefs = [s for (_seg, name), s in getattr(ctx, "_sections", {}).items()
+               if name == "__objc_selrefs"]
+    for slot in flags['x1_loads']:
+        if _is_in_any_section(slot, selrefs):
+            try:
+                sels.add(ctx.read_cstring(ctx.read_ptr(slot)))
+            except Exception:
+                return None             # a selector slot we cannot read: cannot tell
+    sels.discard(None)
+    return frozenset(sels)
