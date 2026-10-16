@@ -107,6 +107,23 @@ fallback below. One message is emitted per struct *tag* (`GEOWiFiQualityTimeRang
 `WiFiQualityTimeRange`) and carries an `// inline C struct '<tag>' …` comment. On the iPhone 8
 GeoServices image this retypes 78 fields (41 arrays, 37 by value) and adds 28 messages.
 
+The struct serialiser is read by data flow: it is evaluated with the struct and the writer as
+opaque tokens, a write is a call handed the writer, and its field number (w2; w1 for a
+float/double, whose value rides in v0) and member load are found by constant evaluation and
+reaching definitions, not by instruction windows. Until 2026-10-16 a backward window was used,
+and the newer toolchain (macOS 27 / iOS 27, arm64e) defeated it in three ways:
+
+- the last member's tail call carries the return-address check (`autibsp ; eor x16,x30,x30,lsl #1 ;
+  tbz x16,#62 ; brk`) between its argument setup and the branch;
+- an inline array element is addressed as `add xS,self,xOff ; ldr xA,[xS] ; add xE,xA,xI,lsl #s`;
+- macOS 27 leaves `_dictionaryRepresentation:` out of the method list. Its body is found from
+  `-dictionaryRepresentation`'s tail call handed self with the flag 0, or with x1 never written
+  (the compiler drops the argument when the body does not read it).
+
+Those builds had left 64 (macOS 27) and 66 (iOS 27) GeoServices struct fields as `bytes`. Now
+none is, and every struct the iPhone 8 image also has comes out identical (numbers, names,
+types, enums), plus `GEOPBOfflineDataLayerVersion`, which only the newer builds have.
+
 **Residual (still emitted as flagged `bytes`).**
 
 - **`NSMutableArray` elements of an unnamed class** (20 GeoServices fields, e.g. the

@@ -51,11 +51,12 @@ from macho.memory import _ctx_cache
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
 from proto.config import _class_to_proto_name
 from proto.dispatch import _jump_table_arm_addrs
-from proto.enums import _ENUM_UNRESOLVED_COMMENT, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
+from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.mapfields import _scratch_slot_of, _stub_selector
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
+from proto.dispatch_eval import SELF, READER, _opaque
 from proto.protocore import _SCALAR_ENC
 
 log = logging.getLogger(__name__)
@@ -236,72 +237,63 @@ def _dest_kind(ins) -> Optional[str]:
     return None
 
 
-def _value_load(insns: Sequence, j: int, base_regs, fp_hint: bool) -> Optional[Tuple[int, int]]:
-    """``(member_offset, width)`` of the ``ldr`` that produced the value argument of the write
-    call at ``insns[j]``: the closest earlier definition of x1/w1 (or d0/s0 for a float/double
-    field, whose field number is the one in w1) within the same straight-line run, which must
-    be a load from ``[struct_base + offset]``.  ``None`` for any other source."""
-    want = 'fp' if fp_hint else 'int'
-    for k in range(j - 1, max(j - _VALUE_LOAD_WINDOW, -1), -1):
-        ins = insns[k]
-        if ins.mnemonic in _BRANCH_MNEMONICS and ins.mnemonic not in ('tbz', 'tbnz', 'cbz', 'cbnz'):
-            return None
-        if _dest_kind(ins) != want:
-            continue
-        mem = mem_operand(ins.op_str)
-        if (mem is None or mem[2] is not None or mem[1] not in base_regs
-                or not (ins.mnemonic.startswith('ldr') or ins.mnemonic.startswith('ldur'))):
-            return None
-        vreg = mem[0]
-        if ins.mnemonic in _LOAD_WIDTH_MNEMONICS:
-            width = _LOAD_WIDTH_MNEMONICS[ins.mnemonic]
-        elif vreg[0] in 'wsf':
-            width = 4
-        elif vreg[0] in 'xd':
-            width = 8
-        else:
-            return None
-        return mem[3], width
-    return None
+# The serialiser's two arguments as opaque tokens for the evaluation (any two values the
+# evaluator treats as objects: register copies carry them, arithmetic does not).
+_STRUCT_ARG, _WRITER_ARG = SELF, READER
 
 
 def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
     """The member writes of the struct serialiser at *entry* — ``f(struct *x0, writer x1)`` —
     in address order; ``[]`` when it writes no member (not a struct writer).
 
-    A write is any call/tail-call that sets a field number (``mov w2,#N``; ``w1`` for a
-    float/double, whose value rides in d0/s0 — :func:`proto.writeto._writeto_field_number_before`)
-    and whose value argument is loaded straight from ``[struct + offset]``.  A write whose
-    value does not trace to a struct member is skipped here and the layout match
-    (:func:`match_layout`) then rejects the struct as incomplete."""
+    Decided by data flow, not by instruction windows.  The function is evaluated
+    (:meth:`proto.dictrep_flow.Flow.run_from`) with the struct and the writer as opaque
+    tokens; a write is a call (or tail call) handed the writer in x0.  The AAPCS64 argument
+    positions of ``PBDataWriterWrite*Field(writer, value, field#)`` then say where the rest
+    is: an integer value in x1 with the field number in w2, a float/double value in v0 with
+    the field number in w1.  The field number must be a constant at the call and the value
+    must trace, by reaching definitions through copies (:func:`_member_in`), to one load
+    from ``[struct + offset]`` (a register holding x0's entry value).  So a tail call behind
+    the arm64e return-address check (``autibsp ; eor x16,x30,x30,lsl #1 ; tbz x16,#62 ;
+    brk``), or setup instructions in any order, read the same.  A write whose value does not
+    trace to a struct member is skipped here and the layout match (:func:`match_layout`)
+    then rejects the struct as incomplete."""
+    from proto.dictrep_flow import Flow
     insns = _writer_insns(ctx, entry)
-    # The struct pointer arrives in x0; the prologue copies it into a callee-saved register
-    # (``mov x20, x0``) that every member load then uses.  Aliases are read from the entry run
-    # only (up to its first call/branch), so an epilogue ``ldp x20,…`` restore on one path
-    # cannot be mistaken for a redefinition on another.
-    base = {'x0'}
-    for ins in insns:
-        if ins.mnemonic in _BRANCH_MNEMONICS:
-            break
-        ops = split_ops(ins.op_str)
-        if ins.mnemonic == 'mov' and len(ops) == 2 and _norm_reg(ops[1]) == 'x0' and _norm_reg(ops[0]):
-            base.add(_norm_reg(ops[0]))
+    if not insns:
+        return []
+    try:
+        flow = Flow(ctx, list(insns))
+        region = flow.run_from(0, {'x0': _STRUCT_ARG, 'x1': _WRITER_ARG}, opaque=_opaque)
+    except Exception:
+        return []
+
+    def member_at(d: int) -> Optional[Tuple[int, int]]:
+        ins = insns[d]
+        if not (ins.mnemonic.startswith('ldr') or ins.mnemonic.startswith('ldur')):
+            return None
+        mem = mem_operand(ins.op_str)
+        if mem is None or mem[2] is not None or flow.entry_arg(d, mem[1]) != 'x0':
+            return None
+        return mem[3], _load_width(ins, mem)
+
+    calls = {c.k: c for c in region.calls}          # the fixpoint's last (final) state per call
     writes: List[MemberWrite] = []
-    for j, ins in enumerate(insns):
-        mn = ins.mnemonic
-        if mn not in ('bl', 'b'):
+    for k in sorted(calls):
+        c = calls[k]
+        if c.args.get('x0') != _WRITER_ARG or c.target is None:
             continue
-        n = _writeto_field_number_before(insns, j)
-        target = _branch_target(ins)
-        if n is None or target is None:
+        got = []
+        for number_reg, value_reg in (('x2', 'x1'), ('x1', 'v0')):
+            n = c.args.get(number_reg)
+            if n is not None and not _opaque(n):
+                member = _member_in(flow, insns, k, value_reg, member_at)
+                if member is not None:
+                    got.append((member, n))
+        if len(got) != 1:
             continue
-        # the field number sits in w1 exactly when the value is a float/double in d0/s0
-        fp = any(i2.mnemonic in ('mov', 'movz') and i2.op_str.startswith('w1,')
-                 for i2 in insns[max(j - 6, 0):j])
-        got = _value_load(insns, j, base, fp)
-        if got is None:
-            continue
-        writes.append(MemberWrite(got[0], n, target, got[1]))
+        (offset, width), n = got[0]
+        writes.append(MemberWrite(offset, n, c.target, width))
     return writes
 
 
@@ -427,15 +419,17 @@ def track_struct_loads(insns: Sequence, last: int, is_ivar_offset, is_array: boo
       says whether that address holds this ivar's offset);
     * **by value**: ``add xB, xSelf, xOff`` is the struct, members ``[xB, #k]`` (member 0 may
       be the load ``ldr xV,[xSelf, xOff]`` itself);
-    * **array** (*is_array*): ``ldr xA,[xSelf, xOff]`` is the element array, ``add xE, xA, xI``
-      an element, members ``[xE, #k]`` (member 0 may be ``[xA, xI]``).
+    * **array** (*is_array*): ``ldr xA,[xSelf, xOff]`` -- or ``add xS, xSelf, xOff`` (the
+      address of the ivar, which holds the array pointer) then ``ldr xA,[xS]`` -- is the element
+      array, ``add xE, xA, xI`` (``xI`` possibly scaled: ``, lsl #s``) an element, members
+      ``[xE, #k]`` (member 0 may be ``[xA, xI]``).
 
     Registers are tracked in address order from the start of the listing (the offset load is
     often hoisted above the loop); a register written by anything not modelled — and every
     caller-saved one across a call — is forgotten, so only a genuine chain from the offset
     variable yields a member."""
     pages: Dict[str, int] = {}
-    state: Dict[str, tuple] = {}                    # reg -> ('ivoff',) | ('base', offset)
+    state: Dict[str, tuple] = {}                    # reg -> ('ivoff',) | ('slot',) | ('base', offset)
     out: Dict[int, Tuple[int, int]] = {}
     for k in range(last + 1):
         ins = insns[k]
@@ -469,15 +463,18 @@ def track_struct_loads(insns: Sequence, last: int, is_ivar_offset, is_array: boo
                         new = ('base', 0)                           # the element array
                     elif window is None or k in window:
                         out[k] = (0, _load_width(ins, mem))         # by value: member 0
+                elif base_st == ('slot',) and mem[2] is None and mem[3] == 0:
+                    new = ('base', 0)                               # the element array
                 elif base_st is not None and base_st[0] == 'base' and (window is None or k in window):
                     out[k] = (base_st[1] + (mem[3] if mem[2] is None else 0), _load_width(ins, mem))
-        elif mn == 'add' and len(ops) == 3:
+        elif mn == 'add' and len(ops) in (3, 4):                    # 4: ``add xE, xA, xI, lsl #s``
             a = state.get(_norm_reg(ops[1]))
             if ops[2].startswith('#'):
-                if a and a[0] == 'base':
+                if a and a[0] == 'base' and len(ops) == 3:
                     new = ('base', a[1] + (_parse_imm(ops[2]) or 0))
-            elif state.get(_norm_reg(ops[2])) == ('ivoff',):
-                new = ('base', 0)                                   # &self->ivar (by value)
+            elif state.get(_norm_reg(ops[2])) == ('ivoff',) and len(ops) == 3:
+                # &self->ivar: the struct itself (by value), or the slot holding the array pointer
+                new = ('slot',) if is_array else ('base', 0)
             elif a and a[0] == 'base':
                 new = ('base', a[1])                                # array element
         elif mn == 'mov' and len(ops) == 2 and _norm_reg(ops[1]) in state:
@@ -847,17 +844,28 @@ _STRUCT_COMMENT = ("inline C struct '{tag}' (no ObjC class): member layout from 
                    "@encode or the owner's _dictionaryRepresentation:")
 
 
+def _method_body(ctx, cls, selector: str) -> Optional[int]:
+    """Where the class's *selector* method's code starts: its IMP, except that a
+    ``_dictionaryRepresentation:`` a build leaves out of the method list is found through the
+    public wrappers that tail-branch into it (:func:`proto.enums._find_dictrep_c_func`)."""
+    if selector == _DICTREP_SELECTOR:
+        return _find_dictrep_c_func(ctx, cls)
+    m = cls.get_method(selector)
+    return m.imp if m is not None and m.imp else None
+
+
 def _linear_method(ctx, cls, selector: str, foreign_sorted: List[int], memo: dict):
-    """The class's *selector* method as one linear instruction list (``imp`` .. next method
-    IMP — its structural extent, including out-of-line tail blocks), memoised per class."""
+    """The class's *selector* method as one linear instruction list (its body .. the next
+    method IMP — its structural extent, including out-of-line tail blocks), memoised per
+    class."""
     key = (cls.name, selector)
     if key not in memo:
-        m = cls.get_method(selector)
+        imp = _method_body(ctx, cls, selector)
         insns = None
-        if m is not None and m.imp:
-            end = _next_imp(foreign_sorted, m.imp)
+        if imp:
+            end = _next_imp(foreign_sorted, imp)
             try:
-                insns = disasm(ctx, m.imp, max_insns=max(64, (end - m.imp) // 4),
+                insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4),
                                stop_at_ret=False)
             except Exception:
                 insns = None

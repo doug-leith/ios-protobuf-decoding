@@ -268,47 +268,83 @@ def _read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
         return None
 
 
+# [cap:INPUT-SANITY] a runaway backstop for reading a representation wrapper's opening (it
+# is cut at its first unconditional terminator; the wrappers seen are 1-2 instructions).
+_DICTREP_WRAPPER_INSNS = 16
+
+
 def _find_dictrep_c_func(ctx: BinaryContext, cls: ObjcClass) -> Optional[int]:
     """Return the IMP whose disassembly holds the real ``_dictionaryRepresentation:``
     switch-table body, or ``None``.
 
     Normally ``-[cls _dictionaryRepresentation:]`` is itself a registered ObjC
-    method (found directly).  Some toolchains (observed on a macOS system dyld
-    cache's GeoServices) instead compile it as a plain internal function with
-    no class_ro_t entry of its own — reached only via a tail branch from the
-    *public*, no-arg ``-[cls dictionaryRepresentation]`` wrapper, e.g.::
+    method (found directly).  Some toolchains (a macOS 27 system dyld cache's
+    GeoServices) instead leave it out of the method list: the body is a plain internal
+    function, reached only by a tail branch from the public, no-arg wrappers, with the
+    JSON flag in w1::
 
-        -[cls dictionaryRepresentation]:
-            mov w1, #0
-            b   _real_dictionaryRepresentation_body   ; not a separate method
+        -[cls dictionaryRepresentation]:   mov w1, #0 ; b body
+        -[cls jsonRepresentation]:         mov w1, #1 ; b body
 
-    Mirrors :func:`proto.dispatch._find_readfrom_c_func`'s tail-call-following
-    for ``readFrom:``/its C core — but unlike ``readFrom:`` (always a thin
-    wrapper on every corpus this tool has seen), ``dictionaryRepresentation``
-    is sometimes a genuine, self-contained implementation (confirmed: iOS
-    locationd's ``ALSNr5GCellTower``), so the tail-call shape must be
-    positively confirmed, not assumed — an unconditional ``b`` preceded only
-    by argument-setup ``mov``s.  Anything else first (a real prologue:
-    ``pacibsp``/``stp``/``sub sp``/…) means this IS the real implementation,
-    just not registered as ``_dictionaryRepresentation:`` for some other
-    reason, and following an unrelated internal branch inside it would
-    disassemble garbage."""
+    and when the body never reads the flag the compiler drops the argument (a bare
+    ``b body``, x1 left as it came in; GEOCoarseLocationRing on macOS 27, fixture f24).
+
+    Decided by data flow (:func:`_wrapper_tail`), not by the wrapper's shape: the body is
+    the target of the tail call ``-dictionaryRepresentation`` opens with, handed self, into
+    this image's own code, with x1 = 0 or x1 still its entry value (``_cmd``, never written
+    on the way: the argument dropped).  Any other x1 -- a nonzero constant, another value
+    the wrapper computed -- is not this call.  A ``dictionaryRepresentation`` that is a
+    genuine, self-contained implementation (confirmed: iOS locationd's
+    ``ALSNr5GCellTower``) opens with a frame and calls, not a tail call, and is not
+    followed."""
     m = cls.get_method('_dictionaryRepresentation:')
     if m is not None and m.imp != 0:
         return m.imp
-    wrapper = cls.get_method('dictionaryRepresentation')
-    if wrapper is None or wrapper.imp == 0:
+    tail = _wrapper_tail(ctx, cls, 'dictionaryRepresentation')
+    if tail is None:
+        return None
+    target, flag = tail
+    return target if flag in (0, _ARG_UNTOUCHED) else None
+
+
+# :func:`_wrapper_tail`'s x1 when the wrapper never wrote it (it still holds the method's
+# ``_cmd``): the callee's argument dropped.
+_ARG_UNTOUCHED = 'untouched'
+
+
+def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
+                  selector: str) -> Optional[Tuple[int, Optional[int]]]:
+    """``(target, x1)`` of the tail call ``-[cls selector]`` opens with -- evaluated up to its
+    first unconditional terminator with x0 = self (an opaque token): the first call must be
+    a tail call handed self, into this image's ``__text``.  *x1* is its constant value at the
+    call, :data:`_ARG_UNTOUCHED` if it still holds its entry value (reaching definitions),
+    else ``None``.  ``None`` for any other opening."""
+    from proto.dispatch_eval import SELF, _opaque, _in_image_text
+    m = cls.get_method(selector)
+    if m is None or m.imp == 0:
         return None
     try:
-        insns = disasm(ctx, wrapper.imp, max_insns=4, stop_at_ret=False)
+        insns = disasm(ctx, m.imp, max_insns=_DICTREP_WRAPPER_INSNS, stop_at_ret=False)
     except Exception:
         return None
-    for ins in insns:
-        if ins.mnemonic == 'b':
-            return _parse_imm(ins.op_str)
-        if ins.mnemonic not in ('mov', 'movz', 'movk', 'movn'):
-            return None
-    return None
+    end = next((k for k, i in enumerate(insns)
+                if i.mnemonic in ('b', 'br', 'braa', 'brab', 'ret', 'retaa', 'retab', 'udf')), None)
+    if end is None:
+        return None
+    try:
+        flow = Flow(ctx, insns[:end + 1])
+        region = flow.run_from(0, {'x0': SELF}, opaque=_opaque)
+    except Exception:
+        return None
+    if not region.calls:
+        return None
+    c = region.calls[0]
+    if not c.tail or c.args.get('x0') != SELF or not _in_image_text(ctx, c.target):
+        return None
+    x1 = c.args.get('x1')
+    if x1 is not None and not _opaque(x1):
+        return c.target, x1
+    return c.target, (_ARG_UNTOUCHED if flow.entry_arg(c.k, 'x1') == 'x1' else None)
 
 
 def _harvest_dictrep_enums(

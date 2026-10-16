@@ -12,8 +12,10 @@ Synthetic tests use instruction listings copied from the real iPhone 8 GeoServic
 with ``disasm`` monkeypatched to read them (no binary needed).  The live-gated tests run the
 extractor on the dyld cache.
 """
+import os
 import unittest
 
+import artifacts
 import proto.extractor as E
 import proto.structfields as SF
 import proto.writeto as W
@@ -890,6 +892,268 @@ class TestLiveStructEnums(unittest.TestCase):
         self.assertEqual((f.number, f.type_name, f.label, f.number_confirmed),
                          (11, 'GEOPDTimeRange', FieldLabel.REPEATED, True))
         self.assertFalse([f for f in owner.fields if f.name == 'operatingHoursCount'])
+
+
+
+# ── newer toolchain (macOS 27 / iOS 27, arm64e) ────────────────────────────────
+
+
+# Real listing (macOS 27 GeoServices): the same GEOPDTimeRange serialiser as
+# _PD_TIMERANGE_WRITER.  The last member's tail call now carries the arm64e return-address
+# check between its argument setup and the branch (autibsp ; eor x16,x30,x30,lsl #1 ;
+# tbz x16,#62 ; brk), which hid its field number from a backward window.
+_PD_TIMERANGE_WRITER_ARM64E = (0x19848d78c, [
+    ('pacibsp', ''), ('stp', 'x20, x19, [sp, #-0x20]!'), ('stp', 'x29, x30, [sp, #0x10]'),
+    ('add', 'x29, sp, #0x10'), ('mov', 'x19, x1'), ('mov', 'x20, x0'),
+    ('ldrb', 'w8, [x0, #8]'), ('tbz', 'w8, #1, #0x19848d7c0'),
+    ('ldr', 'w1, [x20, #4]'), ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x1a0103de0'),
+    ('ldrb', 'w8, [x20, #8]'), ('tbnz', 'w8, #0, #0x19848d7d0'),
+    ('ldp', 'x29, x30, [sp, #0x10]'), ('ldp', 'x20, x19, [sp], #0x20'), ('retab', ''),
+    ('ldr', 'w1, [x20]'), ('mov', 'x0, x19'), ('mov', 'w2, #2'),
+    ('ldp', 'x29, x30, [sp, #0x10]'), ('ldp', 'x20, x19, [sp], #0x20'), ('autibsp', ''),
+    ('eor', 'x16, x30, x30, lsl #1'), ('tbz', 'x16, #0x3e, #0x19848d7f4'), ('brk', '#0xc471'),
+    ('b', '#0x1a0103de0'),
+])
+
+# Real listing (macOS 27): the GEOTimepoint serialiser {_time d @0, _currentUserTime d @8,
+# _type i @16, has-bits @20}.  The doubles ride in d0 with the field number in w1; the last
+# one is a tail call behind the return-address check.
+_TIMEPOINT_WRITER_ARM64E = (0x19850174c, [
+    ('pacibsp', ''), ('stp', 'x20, x19, [sp, #-0x20]!'), ('stp', 'x29, x30, [sp, #0x10]'),
+    ('add', 'x29, sp, #0x10'), ('mov', 'x19, x1'), ('mov', 'x20, x0'),
+    ('ldrb', 'w8, [x0, #0x14]'), ('tbnz', 'w8, #1, #0x198501780'),
+    ('tbnz', 'w8, #2, #0x198501798'), ('tbnz', 'w8, #0, #0x1985017b0'),
+    ('ldp', 'x29, x30, [sp, #0x10]'), ('ldp', 'x20, x19, [sp], #0x20'), ('retab', ''),
+    ('ldr', 'd0, [x20, #8]'), ('mov', 'x0, x19'), ('mov', 'w1, #1'), ('bl', '#0x1a0103d40'),
+    ('ldrb', 'w8, [x20, #0x14]'), ('tbz', 'w8, #2, #0x198501770'),
+    ('ldr', 'w1, [x20, #0x10]'), ('mov', 'x0, x19'), ('mov', 'w2, #2'), ('bl', '#0x1a0103d60'),
+    ('ldrb', 'w8, [x20, #0x14]'), ('tbz', 'w8, #0, #0x198501774'),
+    ('ldr', 'd0, [x20]'), ('mov', 'x0, x19'), ('mov', 'w1, #4'),
+    ('ldp', 'x29, x30, [sp, #0x10]'), ('ldp', 'x20, x19, [sp], #0x20'), ('autibsp', ''),
+    ('eor', 'x16, x30, x30, lsl #1'), ('tbz', 'x16, #0x3e, #0x1985017d4'), ('brk', '#0xc471'),
+    ('b', '#0x1a0103d40'),
+])
+
+
+class TestDecodeStructWriterNewerToolchain(_Patched):
+    def test_a_tail_write_behind_the_return_address_check_is_read(self):
+        _, fake = asm(_PD_TIMERANGE_WRITER_ARM64E)
+        self.patch(fake)
+        writes = SF.decode_struct_writer(None, 0x19848d78c)
+        self.assertEqual(sorted((w.offset, w.number, w.width, w.helper) for w in writes),
+                         [(0, 2, 4, 0x1a0103de0), (4, 1, 4, 0x1a0103de0)])
+
+    def test_float_values_ride_in_v0_with_the_field_number_in_w1(self):
+        _, fake = asm(_TIMEPOINT_WRITER_ARM64E)
+        self.patch(fake)
+        writes = SF.decode_struct_writer(None, 0x19850174c)
+        self.assertEqual(sorted((w.offset, w.number, w.width) for w in writes),
+                         [(0, 4, 8), (8, 1, 8), (16, 2, 4)])
+        layout = SF.parse_struct_encoding('{GEOTimepoint="_time"d"_currentUserTime"d"_type"i'
+                                          '"_has"{?="time"b1"currentUserTime"b1"type"b1}}')
+        self.assertEqual(SF.match_layout(layout, writes), {0: 4, 8: 1, 16: 2})
+
+    def test_a_value_not_loaded_from_the_struct_is_not_a_member_write(self):
+        # the field number is a constant but x1 comes from the stack, not [struct + k]
+        _, fake = asm((0x1000, [('mov', 'x19, x1'), ('mov', 'x20, x0'), ('ldr', 'w1, [sp, #4]'),
+                                ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x2000'),
+                                ('ret', '')]))
+        self.patch(fake)
+        self.assertEqual(SF.decode_struct_writer(None, 0x1000), [])
+
+
+# Real listing (macOS 27): -[GEOCoarseLocationRing writeTo:] up to the end mark of field 1, a
+# repeated GEOCoarseLocationPoint {i lat @0, i lng @4}.  The element is addressed as
+# add xS,self,xOff ; ldr xA,[xS] ; add xE,xA,xI,lsl #3 (iPhone 8: ldr xA,[self,xOff] ;
+# add xE,xA,xI).
+_RING_WRITETO_ARM64E = (0x1986d66b8, [
+    ('pacibsp', ''), ('sub', 'sp, sp, #0x50'), ('stp', 'x24, x23, [sp, #0x10]'),
+    ('stp', 'x22, x21, [sp, #0x20]'), ('stp', 'x20, x19, [sp, #0x30]'),
+    ('stp', 'x29, x30, [sp, #0x40]'), ('add', 'x29, sp, #0x40'), ('mov', 'x19, x0'),
+    ('mov', 'x0, x2'), ('bl', '#0x1a01057e0'), ('mov', 'x20, x0'),
+    ('adrp', 'x8, #0x1e4930000'), ('ldrsw', 'x21, [x8, #0x554]'), ('add', 'x8, x19, x21'),
+    ('ldr', 'x8, [x8]'), ('cbz', 'x8, #0x1986d6760'), ('mov', 'x22, #0'),
+    ('adrp', 'x23, #0x1e4930000'), ('str', 'xzr, [sp, #8]'), ('add', 'x1, sp, #8'),
+    ('mov', 'x0, x20'), ('mov', 'w2, #1'), ('bl', '#0x1a0103d00'),               # begin, field 1
+    ('ldrsw', 'x8, [x23, #0x558]'), ('add', 'x8, x19, x8'), ('ldr', 'x8, [x8]'),
+    ('add', 'x24, x8, x22, lsl #3'), ('ldr', 'w1, [x24]'), ('mov', 'x0, x20'),
+    ('mov', 'w2, #1'), ('bl', '#0x1a0103da0'), ('ldr', 'w1, [x24, #4]'), ('mov', 'x0, x20'),
+    ('mov', 'w2, #2'), ('bl', '#0x1a0103da0'), ('add', 'x1, sp, #8'), ('mov', 'x0, x20'),
+    ('bl', '#0x1a0103d10'),                                                     # end
+    ('add', 'x22, x22, #1'), ('ret', ''),
+])
+
+
+class TestInlineStructWritesNewerToolchain(_Patched):
+    def test_array_element_through_the_ivar_slot_and_a_scaled_index(self):
+        insns, fake = asm(_RING_WRITETO_ARM64E)
+        self.patch(fake)
+        begin = next(i for i, x in enumerate(insns)
+                     if x.mnemonic == 'bl' and x.op_str == '#0x1a0103d00')
+        br = SF.analyze_bracket(insns, begin)
+        layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
+        var = lambda a: a == 0x1e4930558                                       # noqa: E731
+        loads = SF.track_struct_loads(insns, max(br.region), var, True, window=set(br.region))
+        # the array-pointer load through &self->_points is not a member; the two element loads are
+        self.assertEqual(sorted(loads.values()), [(0, 4), (4, 4)])
+        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        self.assertEqual(SF.match_layout(layout, w), {0: 1, 4: 2})
+
+    def test_a_by_value_struct_through_add_is_still_the_struct(self):
+        insns, _ = asm((0x1000, [('adrp', 'x8, #0x5000'), ('ldrsw', 'x8, [x8, #0x10]'),
+                                 ('add', 'x8, x19, x8'), ('ldr', 'w1, [x8, #4]')]))
+        loads = SF.track_struct_loads(insns, 3, lambda a: a == 0x5010, False)
+        self.assertEqual(loads, {3: (4, 4)})
+
+
+class _FakeMethod:
+    def __init__(self, imp):
+        self.imp = imp
+
+
+class _FakeClass:
+    def __init__(self, methods):
+        self.methods = methods                     # {selector: IMP}
+
+    def get_method(self, sel):
+        imp = self.methods.get(sel)
+        return _FakeMethod(imp) if imp is not None else None
+
+
+class TestDictrepBodyOfAStrippedMethod(_Patched):
+    """macOS 27 leaves `_dictionaryRepresentation:` out of the method list; its body is reached
+    from the public wrappers' tail branch (proto.enums._find_dictrep_c_func)."""
+
+    def setUp(self):
+        import proto.enums as EN
+        import proto.dispatch_eval as DE
+        orig_d, orig_t = EN.disasm, DE._in_image_text
+        self.addCleanup(setattr, EN, 'disasm', orig_d)
+        self.addCleanup(setattr, DE, '_in_image_text', orig_t)
+        self.EN, self.DE = EN, DE
+        DE._in_image_text = lambda ctx, va: va is not None and 0x2000 <= va < 0x3000
+
+    def find(self, cls, *blocks):
+        _, fake = asm(*blocks)
+        self.EN.disasm = fake
+        return self.EN._find_dictrep_c_func(None, cls)
+
+    def test_the_registered_method_wins(self):
+        cls = _FakeClass({'_dictionaryRepresentation:': 0x2400, 'dictionaryRepresentation': 0x1000})
+        self.assertEqual(self.find(cls, (0x1000, [('mov', 'w1, #0'), ('b', '#0x2000')])), 0x2400)
+
+    def test_the_plain_wrapper_hands_self_and_flag_zero(self):
+        cls = _FakeClass({'dictionaryRepresentation': 0x1000, 'jsonRepresentation': 0x1100})
+        self.assertEqual(self.find(cls, (0x1000, [('mov', 'w1, #0'), ('b', '#0x2000')]),
+                                   (0x1100, [('mov', 'w1, #1'), ('b', '#0x2000')])), 0x2000)
+
+    def test_a_dropped_flag_leaves_x1_as_it_came_in(self):
+        # the body never reads the flag, so the compiler passes none: x1 is still _cmd
+        cls = _FakeClass({'dictionaryRepresentation': 0x1000})
+        self.assertEqual(self.find(cls, (0x1000, [('b', '#0x2008')])), 0x2008)
+        # ... but an x1 the wrapper computed is some other argument
+        self.assertIsNone(self.find(cls, (0x1000, [('ldr', 'x1, [x0, #8]'), ('b', '#0x2008')])))
+
+    def test_a_self_contained_implementation_is_not_followed(self):
+        cls = _FakeClass({'dictionaryRepresentation': 0x1000, 'jsonRepresentation': 0x1100})
+        self.assertIsNone(self.find(cls, (0x1000, [('pacibsp', ''), ('stp', 'x29, x30, [sp, #-0x10]!'),
+                                                   ('bl', '#0x2000'), ('b', '#0x2100')])))
+
+    def test_a_branch_not_handed_self_or_out_of_the_image_is_not_the_body(self):
+        cls = _FakeClass({'dictionaryRepresentation': 0x1000})
+        self.assertIsNone(self.find(cls, (0x1000, [('mov', 'x0, x1'), ('mov', 'w1, #0'),
+                                                   ('b', '#0x2000')])))
+        self.assertIsNone(self.find(cls, (0x1000, [('mov', 'w1, #0'), ('b', '#0x9000')])))
+        self.assertIsNone(self.find(cls, (0x1000, [('mov', 'w1, #1'), ('b', '#0x2000')])))
+
+
+# ── live: the newer caches ─────────────────────────────────────────────────────
+
+
+def _cache_file(env, *rel):
+    d = os.environ.get(env, '').strip() or os.path.join(artifacts.REPO_ROOT, *rel)
+    path = os.path.join(d, 'dyld_shared_cache_arm64e')
+    return path if os.path.isfile(path) else None
+
+
+_MACOS27 = _cache_file('MACHO_TEST_MACOS27_CACHE', 'macos27_data', 'dylib')
+_IOS27 = _cache_file('MACHO_TEST_IOS27_CACHE', 'ios27_data', 'dylib')
+
+# The iPhone 8 golden's struct messages (number, name, type), which the newer builds must
+# reproduce: a by-value struct, a float/double tail write with an enum, two inline arrays (one
+# with a folded JSON flag), an inline array with an enum, a has-bit jump table.
+_GOLDEN_STRUCTS = {
+    'GEOPDTimeRange': [(1, 'startTime', 'uint32'), (2, 'duration', 'uint32')],
+    'GEOTimepoint': [(1, 'time', 'double'), (2, 'type', 'TimepointType'),
+                     (4, 'currentUserTime', 'double')],
+    'GEOCoarseLocationPoint': [(1, 'lat', 'sint32'), (2, 'lng', 'sint32')],
+    'GEOGenericTile': [(1, 'tileType', 'GenericTileType'), (2, 'textureIndex', 'uint32'),
+                       (3, 'resourceIndex', 'uint32')],
+    'GEOFlyoverRegion': [(1, 'region', 'uint32'), (2, 'version', 'uint32'),
+                         (3, 'dataVersion', 'uint32')],
+    'GEOVLFPositionContextClassification': [(1, 'type', 'VLFPositionContextType'),
+                                            (2, 'indoorProbability', 'double'),
+                                            (3, 'outdoorProbability', 'double')],
+}
+_OWNERS = ['GEOPDDeparturePredicate', 'GEOETARequest', 'GEOCoarseLocationRing',
+           'GEOTileSetVersion', 'GEOFlyoverRegionVersions', 'GEOVLFLocalizationResults']
+
+
+def _extract_from(cache, classes):
+    from macho.dyld_cache import DyldCacheReader
+    from macho.memory import BinaryContext
+    from macho.strings import build_string_table
+    from macho import classlist as CL
+    from macho.local_symbols import apply_to_classes
+    reader = DyldCacheReader(cache)
+    try:
+        mv = reader.find_image_header('GeoServices')
+        ctx = BinaryContext.from_cache(reader, mv)
+        st = build_string_table(ctx)
+        cl = CL.build_class_list(ctx, st)
+        syms = reader.image_local_symbols(mv)
+        if syms:
+            apply_to_classes(cl, syms)
+        msgs = [E.extract_proto_message(ctx, st, cl, cl.find(c)) for c in classes]
+        SF.finalize_struct_fields(ctx, cl, msgs)
+        return {m.class_name: m for m in msgs}
+    finally:
+        reader.close()
+
+
+class _NewerBuild:
+    CACHE = None
+
+    @classmethod
+    def setUpClass(cls):
+        cls.by = _extract_from(cls.CACHE, _OWNERS)
+
+    def test_struct_messages_match_the_iphone8_golden(self):
+        for tag, want in _GOLDEN_STRUCTS.items():
+            with self.subTest(tag=tag):
+                self.assertIn(tag, self.by)
+                self.assertEqual(sorted((f.number, f.name, f.type_name) for f in self.by[tag].fields),
+                                 want)
+
+    def test_owner_fields_are_typed(self):
+        for owner, fname, tag, label in (
+                ('GEOPDDeparturePredicate', 'timeRange', 'GEOPDTimeRange', FieldLabel.OPTIONAL),
+                ('GEOETARequest', 'timepoint', 'GEOTimepoint', FieldLabel.OPTIONAL),
+                ('GEOCoarseLocationRing', 'points', 'GEOCoarseLocationPoint', FieldLabel.REPEATED),
+                ('GEOTileSetVersion', 'genericTiles', 'GEOGenericTile', FieldLabel.REPEATED)):
+            with self.subTest(owner=owner):
+                f = next(f for f in self.by[owner].fields if f.name == fname)
+                self.assertEqual((f.type_name, f.type_class, f.label), (tag, tag, label))
+
+
+@unittest.skipUnless(_MACOS27, 'macOS 27 cache not present (macos27_data/dylib or MACHO_TEST_MACOS27_CACHE)')
+class TestLiveStructRecoveryMacOS27(_NewerBuild, unittest.TestCase):
+    CACHE = _MACOS27
+
+
+@unittest.skipUnless(_IOS27, 'iOS 27 cache not present (ios27_data/dylib or MACHO_TEST_IOS27_CACHE)')
+class TestLiveStructRecoveryIOS27(_NewerBuild, unittest.TestCase):
+    CACHE = _IOS27
 
 
 if __name__ == '__main__':

@@ -1181,6 +1181,11 @@ class Flow:
                 out.add(r)
         return tuple(sorted(out))
 
+    def entry_arg(self, k: int, reg: Optional[str]) -> Optional[str]:
+        """The argument register whose value on ENTRY *reg* holds before ``insns[k]`` (by
+        reaching definitions, through ``mov`` copies), else None."""
+        return self._entry_arg(k, reg, set())
+
     def _entry_arg(self, k: int, reg: Optional[str], seen: Set[int]) -> Optional[str]:
         """The register whose ENTRY value *reg* holds before ``insns[k]``, through copies."""
         if reg is None:
