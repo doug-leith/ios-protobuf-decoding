@@ -8,6 +8,8 @@ edition = "2023";
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package _cpcardsectionforfeedback;
 
+import "_cpbuttonforfeedback.proto";
+
 message _CPCardSectionForFeedback {
   string cardSectionId = 1;
   string actionTarget = 2;
@@ -15,8 +17,8 @@ message _CPCardSectionForFeedback {
   string resultId = 4;
   int32 commandType = 6;
   string commandDetail = 7;
-  repeated bytes cardSections = 8;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated _CPCardSectionForFeedback cardSections = 8;
   int32 cardSectionType = 9;
   string cardSectionDetail = 10;
-  repeated bytes buttons = 11;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated _cpbuttonforfeedback._CPButtonForFeedback buttons = 11;
 }

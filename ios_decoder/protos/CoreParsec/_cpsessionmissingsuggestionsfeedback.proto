@@ -8,7 +8,9 @@ edition = "2023";
 // package reconstructed from the ObjC class-name prefix (not stored in the binary); may be inexact, harmless — see PACKAGE_NAMES.md
 package _cpsessionmissingsuggestionsfeedback;
 
+import "_cpsearchsuggestionforfeedback.proto";
+
 message _CPSessionMissingSuggestionsFeedback {
   uint64 timestamp = 1;
-  repeated bytes suggestions = 2;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated _cpsearchsuggestionforfeedback._CPSearchSuggestionForFeedback suggestions = 2;
 }

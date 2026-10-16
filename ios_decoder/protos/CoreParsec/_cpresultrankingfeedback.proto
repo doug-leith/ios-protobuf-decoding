@@ -13,8 +13,8 @@ import "_cpsearchresultforfeedback.proto";
 message _CPResultRankingFeedback {
   uint64 timestamp = 1;
   _cpsearchresultforfeedback._CPSearchResultForFeedback result = 2;
-  repeated bytes hiddenResults = 3;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
-  repeated bytes duplicateResults = 4;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated _cpsearchresultforfeedback._CPSearchResultForFeedback hiddenResults = 3;
+  repeated _cpsearchresultforfeedback._CPSearchResultForFeedback duplicateResults = 4;
   uint32 localResultPosition = 5;
   double personalizationScore = 6;
 }

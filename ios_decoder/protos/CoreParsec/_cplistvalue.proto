@@ -9,5 +9,5 @@ edition = "2023";
 package _cplistvalue;
 
 message _CPListValue {
-  repeated bytes values = 1;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes values = 1;  // message _CPValue; emitted as bytes because typing it would make _cplistvalue.proto and _cpvalue.proto import each other (protoc rejects import cycles) — wire-identical
 }
