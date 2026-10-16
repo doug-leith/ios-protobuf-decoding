@@ -553,11 +553,17 @@ adder is the C function 0x19874757c).
   past every compared value.  The CFG is still seeded with the decoded jump tables
   (`proto.dispatch._jump_table_arm_addrs`) plus `and`-masked tables evaluated per index: a
   control `br` ahead of the field-number extraction has an index the propagation cannot know.
-- An element core is recognised only through the readFrom core index, which still maps a
-  runtime stub to `GEOFlyoverRegionVersions` for inline readers (`_find_readfrom_c_func` takes
-  the first branch target) and is empty for CoreParsec (its classes fail
-  `_is_proto_class`); the element class still comes from the allocation then, but the
-  repeated-field resolvers skip a class when the index is empty.
+- An element core is recognised through the readFrom core index: the function a thin
+  `-readFrom:` wrapper hands its object and reader to (decided by data flow; an inline reader,
+  or a `-readFrom:` that hands on only the reader, has none), over the image's proto-class set.
+  Until 2026-10-15 the index took the first branch target, which put a runtime stub in it for
+  every inline reader, and gated on the name heuristic, which left CoreParsec's empty (16
+  CoreParsec repeated fields now typed; a 17th, `_CPListValue.values`, stays `bytes` because
+  `_CPValue` holds a `_CPListValue`, an import cycle between per-class files).
+- Selector names come from `_objc_msgSend$sel` stubs in both forms: the per-selector
+  `adrp x1; ldr x1,[x1,#o]` and the shared `adrp x1; add x1,x1,#o; b _objc_msgSend` of iOS 27 /
+  macOS 27 (about 52,000 handler sends per build; no output change, since those fields were
+  already typed by other evidence).
 
 **Pointer authentication is not a cause.** Pointer *encodings* are decoded: in cache
 mode by the cache reader, and in binary mode for chained-fixup formats 1, 2, 6, 9 and

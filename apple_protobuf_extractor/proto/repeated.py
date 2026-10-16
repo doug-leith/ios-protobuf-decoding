@@ -14,7 +14,7 @@ from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from macho.memory    import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm    import disasm, _norm_reg
+from macho.disasm    import disasm, _norm_reg, _parse_imm
 from proto.arm64cfg  import parse_adrp, mem_operand
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
@@ -108,13 +108,24 @@ def _adder_array_ivar(
     ivar and stops before any later confounding array-offset load.  ``None`` if the
     accessor references no array offset.  This first-match rule is what makes the
     result independent of ``_ADDER_MAX_INSNS`` (now only a runaway guard).
+
+    The scan ends at the next known function entry (every method IMP and ReadAllFrom
+    core, stamped on *ctx* by :func:`proto.dispatch._build_readfrom_core_index`): a
+    setter that ends in a tail branch rather than ``ret`` would otherwise run on into
+    the next method -- e.g. CoreParsec ``-[_CPVisibleResultsFeedback setGoTakeoverResult:]``
+    into ``setUniqueIdsOfVisibleButtons:``, binding a singular field's setter to an array.
     """
+    import bisect
     if imp_va == 0 or not array_offsets:
         return None
     try:
         insns = disasm(ctx, imp_va, max_insns=_ADDER_MAX_INSNS, stop_at_ret=True)
     except Exception:
         return None
+    entries = sorted(getattr(ctx, "_function_entries", None) or ())
+    i = bisect.bisect_right(entries, imp_va)
+    if i < len(entries):
+        insns = [ins for ins in insns if ins.addr < entries[i]]
     adrp_page: Dict[str, int] = {}
     for ins in insns:
         if ins.mnemonic == 'adrp':
@@ -167,25 +178,42 @@ def _selref_name(ctx: BinaryContext, slot_va: int) -> Optional[str]:
 def _msgsend_stub_selector(ctx: BinaryContext, va: int) -> Optional[str]:
     """Selector baked into the ``_objc_msgSend$<selector>`` stub at *va*, or None.
 
-    The linker emits one such stub per selector a binary messages::
+    The linker emits one such stub per selector a binary messages, in one of two forms::
 
         adrp  x1, <page>
         ldr   x1, [x1, #off]      ; the __objc_selrefs slot  -> x1 = the selector
         adrp  x16, ... ; ldr x16, [x16, ...] ; br x16     ; tail to objc_msgSend
 
-    so a ``bl`` to it is a message send of that selector.  Memoised on *ctx*."""
+        adrp  x1, <page>          ; newer caches (iOS 27 / macOS 27): one shared stub per
+        add   x1, x1, #off        ; selector, x1 = the selector string itself
+        b     _objc_msgSend
+
+    so a ``bl`` to it is a message send of that selector.  The second form is a send only if
+    its branch lands on ``objc_msgSend``, named by its export (:func:`proto.callees.callee_name`),
+    not by the shape.  Memoised on *ctx*."""
     cache = _ctx_cache(ctx, "_msgsend_stub_sel", dict)
     if va in cache:
         return cache[va]
     sel: Optional[str] = None
     try:
-        ins = disasm(ctx, va, max_insns=2, stop_at_ret=False)
-        if (len(ins) == 2 and ins[0].mnemonic == 'adrp' and ins[1].mnemonic == 'ldr'):
+        ins = disasm(ctx, va, max_insns=3, stop_at_ret=False)
+        if (len(ins) >= 2 and ins[0].mnemonic == 'adrp' and ins[1].mnemonic == 'ldr'):
             pa = parse_adrp(ins[0].op_str)
             mo = mem_operand(ins[1].op_str)
             if (pa is not None and mo is not None and mo[2] is None
                     and mo[1] == pa[0] and _norm_reg(mo[0]) == 'x1'):
                 sel = _selref_name(ctx, pa[1] + mo[3])
+        elif (len(ins) == 3 and ins[0].mnemonic == 'adrp' and ins[1].mnemonic == 'add'
+              and ins[2].mnemonic == 'b'):
+            from proto.arm64cfg import split_ops
+            from proto.callees import callee_name
+            pa = parse_adrp(ins[0].op_str)
+            ops = split_ops(ins[1].op_str)
+            if (pa is not None and pa[0] == 'x1' and len(ops) == 3
+                    and _norm_reg(ops[0]) == 'x1' and _norm_reg(ops[1]) == 'x1'
+                    and ops[2].startswith('#')
+                    and callee_name(ctx, _parse_imm(ins[2].op_str)) == '_objc_msgSend'):
+                sel = ctx.read_cstring(pa[1] + _parse_imm(ops[2]))
     except Exception:
         sel = None
     cache[va] = sel

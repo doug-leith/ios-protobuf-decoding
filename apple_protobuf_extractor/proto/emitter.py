@@ -989,43 +989,63 @@ def _break_map_import_cycles(
     proto_files: List[ProtoFile],
     class_to_pkg: Dict[str, str],
 ) -> None:
-    """Degrade a recovered ``map<K, Message>`` value to ``bytes`` when typing it would
-    make two output files import each other.
+    """Degrade a message reference to ``bytes`` when typing it would make two output files
+    import each other.
 
     Per-class packages (e.g. CoreParsec: one ``_cpstruct.proto`` per ObjC class) make a
     mutually-recursive pair of messages — ``_CPStruct`` holds ``map<string, _CPValue>``
     while ``_CPValue`` holds a ``_CPStruct`` — a file import cycle, which protoc rejects
-    for the whole set.  Only map-value references are cut (the schema compiled before maps
-    were typed, so every other edge is already cycle-free in combination): the value
-    becomes ``bytes`` (a message is length-delimited, so each entry still decodes) with an
-    inline note naming the class.  The cut is by (source file → target file) pair, in
-    sorted order, re-checking after each, so no more references are degraded than needed."""
+    for the whole set.  Map-value references are cut first (as before 2026-10-15); a cycle
+    with no map edge left is cut at a message-typed field (``_CPListValue`` holds ``repeated
+    _CPValue`` while ``_CPValue`` holds a ``_CPListValue``).  The reference becomes ``bytes``
+    (a message is length-delimited, so it still decodes) with an inline note naming the
+    class.  The cut is by (source file → target file) pair, in sorted order, re-checking
+    after each, so no more references are degraded than needed."""
     pkg_to_filename = {pf.package: pf.filename for pf in proto_files}
     while True:
         comps = _import_cycles(proto_files)
         if not comps:
             return
         in_cycle = {f: i for i, comp in enumerate(comps) for f in comp}
-        edges: Dict[Tuple[str, str], List[ProtoField]] = {}
+
+        def same_cycle(src: str, dst: Optional[str]) -> bool:
+            return bool(dst) and dst != src and src in in_cycle \
+                and in_cycle.get(dst) == in_cycle[src]
+
+        map_edges: Dict[Tuple[str, str], List[ProtoField]] = {}
+        field_edges: Dict[Tuple[str, str], List[ProtoField]] = {}
         for pf in proto_files:
             for msg in pf.messages:
                 for fld in msg.fields:
-                    if fld.map_key_type is None or not fld.map_value_class \
-                            or fld.unresolved_type_class is not None:
-                        continue
-                    dst = pkg_to_filename.get(class_to_pkg.get(fld.map_value_class, ""))
-                    if (dst and dst != pf.filename and pf.filename in in_cycle
-                            and in_cycle.get(dst) == in_cycle[pf.filename]):
-                        edges.setdefault((pf.filename, dst), []).append(fld)
+                    if fld.map_key_type is not None:
+                        if not fld.map_value_class or fld.unresolved_type_class is not None:
+                            continue
+                        dst = pkg_to_filename.get(class_to_pkg.get(fld.map_value_class, ""))
+                        if same_cycle(pf.filename, dst):
+                            map_edges.setdefault((pf.filename, dst), []).append(fld)
+                    elif (fld.type_class and not fld.type_class.startswith("ENUM:")
+                          and fld.unresolved_type_class is None
+                          and fld.type_name not in _KNOWN_SCALAR_TYPES):
+                        dst = pkg_to_filename.get(class_to_pkg.get(fld.type_class, ""))
+                        if same_cycle(pf.filename, dst):
+                            field_edges.setdefault((pf.filename, dst), []).append(fld)
+        edges = map_edges or field_edges
         if not edges:
             return                      # remaining cycles aren't ours to cut
         (src, dst), flds = sorted(edges.items(), key=lambda kv: kv[0])[0]
         for fld in flds:
-            fld.type_inference_note = (
-                f"map value is message {fld.map_value_class}; emitted as bytes because "
-                f"typing it would make {src} and {dst} import each other (protoc rejects "
-                f"import cycles) — wire-identical, see LIMITATIONS.md (1)")
-            fld.map_value_type, fld.map_value_class = "bytes", None
+            if fld.map_key_type is not None:
+                fld.type_inference_note = (
+                    f"map value is message {fld.map_value_class}; emitted as bytes because "
+                    f"typing it would make {src} and {dst} import each other (protoc rejects "
+                    f"import cycles) — wire-identical, see LIMITATIONS.md (1)")
+                fld.map_value_type, fld.map_value_class = "bytes", None
+            else:
+                fld.type_inference_note = (
+                    f"message {fld.type_class}; emitted as bytes because typing it would make "
+                    f"{src} and {dst} import each other (protoc rejects import cycles) — "
+                    f"wire-identical")
+                fld.type_name, fld.type_class = "bytes", None
         _compute_imports(proto_files, class_to_pkg)
 
 

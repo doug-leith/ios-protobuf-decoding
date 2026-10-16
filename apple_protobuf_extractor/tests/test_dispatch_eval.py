@@ -201,6 +201,42 @@ class TestCandidateIntervals(unittest.TestCase):
         self.assertNotIn(5, cands)            # without the sink only the gate's end points
 
 
+class TestSelectorStubForms(unittest.TestCase):
+    """repeated._msgsend_stub_selector, which the evaluator's adder / init tracking reads
+    selectors with: the per-selector ``adrp x1; ldr x1,[x1,#o]`` stub, and the shared stub
+    newer caches use (iOS 27 / macOS 27), ``adrp x1; add x1,x1,#o; b _objc_msgSend``."""
+
+    STUB, SEL_PAGE, SEL_OFF, TARGET = 0x10000, 0x20000, 0x48, 0x30000
+
+    def _ctx(self):
+        import struct
+        from tests.conftest import WordCtx, encode_adrp, encode_add_imm64, encode_b
+        words = [struct.unpack('<I', w)[0] for w in (
+            encode_adrp(1, (self.SEL_PAGE - self.STUB) >> 12),
+            encode_add_imm64(1, 1, self.SEL_OFF),
+            encode_b(self.TARGET - (self.STUB + 8)))]
+        sel_va = self.SEL_PAGE + self.SEL_OFF
+
+        class Ctx(WordCtx):
+            def read_cstring(self, va, max_len=4096):
+                if va != sel_va:
+                    raise ValueError(va)
+                return 'addPredictedSpeed:'
+        return Ctx(self.STUB, words)
+
+    def _sel(self, target_name):
+        from unittest.mock import patch
+        from proto.repeated import _msgsend_stub_selector
+        with patch('proto.callees.callee_name', lambda ctx, va: target_name if va == self.TARGET else None):
+            return _msgsend_stub_selector(self._ctx(), self.STUB)
+
+    def test_shared_stub_names_its_selector(self):
+        self.assertEqual(self._sel('_objc_msgSend'), 'addPredictedSpeed:')
+
+    def test_the_same_shape_branching_elsewhere_is_not_a_send(self):
+        self.assertIsNone(self._sel('_objc_retain'))
+
+
 # ── the compiled synthetic fixtures ───────────────────────────────────────────
 
 _FIXTURES_DIR = os.path.join(_HERE, 'synthetic_fixtures')
@@ -288,6 +324,7 @@ _MACOS27 = _cache_dir('MACHO_TEST_MACOS27_CACHE', 'macos27_data', 'dylib')
 
 class _Live(unittest.TestCase):
     CACHE = None
+    IMAGE = 'GeoServices'
 
     @classmethod
     def setUpClass(cls):
@@ -298,7 +335,7 @@ class _Live(unittest.TestCase):
         from macho.local_symbols import apply_to_classes
         from proto.dispatch import _build_readfrom_core_index
         cls.reader = DyldCacheReader(cls.CACHE)
-        mva = cls.reader.resolve_image('GeoServices')
+        mva = cls.reader.resolve_image(cls.IMAGE)
         cls.ctx = BinaryContext.from_cache(cls.reader, mva)
         cl = build_class_list(cls.ctx, build_string_table(cls.ctx))
         syms = cls.reader.image_local_symbols(mva)
@@ -338,6 +375,11 @@ class TestMacOS27(_Live):
         # the -readFrom: wrapper's tail b runs into the engine that follows it in memory
         self.assertEqual(self.ev('GEORegionalResourceTileData').elements(), {2: 'GEOAttribution'})
 
+    def test_readers_that_hand_only_the_reader_on_have_no_core(self):
+        # -[GEOPDStorefrontFilter readFrom:] is `mov x0,x2; b <skip-everything helper>`
+        # (shared by three field-less filters): never handed self, so not this class's core.
+        self.assertNotIn('GEOPDStorefrontFilter', self.core_index.values())
+
     def test_self_held_in_a_stack_slot(self):
         self.assertEqual(self.ev('GEODirectionsFeedbackLogMessage').elements(),
                          {1: 'GEODirectionsFeedback', 2: 'GEOLocation'})
@@ -365,8 +407,41 @@ class TestIPhone8(_Live):
         self.assertEqual(got.elements()[1], 'GEOLocalizedString')
         self.assertTrue(any('self not held' in n for n in got.notes))
 
+    def test_an_inline_reader_has_no_c_core(self):
+        # -[GEOPDTileList readFrom:] holds the dispatch itself; its first call retains the
+        # reader.  The runtime stub it calls must not be indexed (it used to be, named after
+        # the first inline reader, GEOFlyoverRegionVersions).
+        self.assertNotIn('GEOPDTileList', self.core_index.values())
+        self.assertNotIn('GEOFlyoverRegionVersions', self.core_index.values())
+        self.assertEqual(self.ev('GEOPDTileList').ivars(), {'_tiles': ('GEOTileCoordinate', 1)})
+
+    def test_a_thin_wrapper_core_is_indexed(self):
+        from proto.dispatch import _find_readfrom_c_func
+        core = _find_readfrom_c_func(self.ctx, self.by_name['GEOPDComponentValue'])
+        self.assertEqual(self.core_index.get(core), 'GEOPDComponentValue')
+
     def test_a_preamble_lsr_that_dispatches_nothing_does_not_hide_the_real_one(self):
         self.assertEqual(self.ev('GEOMapServiceTraits').elements()[39], 'GEOAutomobileOptions')
+
+
+@unittest.skipUnless(_IPHONE8, 'iPhone 8 cache not present (iphone8_data/dylib or MACHO_TEST_CACHE)')
+class TestIPhone8CoreParsec(_Live):
+    """CoreParsec's ``_CP...`` classes are proto classes only through the PBCodable superclass
+    closure; the core index used to gate on the name heuristic alone and came out empty."""
+    CACHE = _IPHONE8
+    IMAGE = 'CoreParsec'
+
+    def test_the_core_index_holds_the_closure_classes(self):
+        self.assertIn('_CPValue', self.core_index.values())
+        self.assertGreater(len(self.core_index), 50)
+
+    def test_a_singular_setter_ending_in_a_tail_branch_is_not_an_adder(self):
+        # Field 4 is the singular goTakeoverResult: [self setGoTakeoverResult:e].  The setter
+        # ends in a tail branch, and the next method (setUniqueIdsOfVisibleButtons:) loads an
+        # array ivar's offset; reading past the setter's own end bound field 4 to that array.
+        ev = self.ev('_CPVisibleResultsFeedback')
+        self.assertEqual(ev.elements().get(4), '_CPSearchResultForFeedback')
+        self.assertEqual(ev.ivars(), {'_results': ('_CPSearchResultForFeedback', 2)})
 
 
 if __name__ == '__main__':

@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 
 from macho.memory    import BinaryContext, _ctx_cache
 from macho.classlist import ObjcClass
-from macho.disasm   import disasm, Insn, find_adrp_add_target, iter_branch_targets
+from macho.disasm   import disasm, Insn, find_adrp_add_target
 from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
                                range_from_unsigned_gate)
 from proto.protoclass_heuristic import _is_proto_class
@@ -38,29 +38,45 @@ def _find_readfrom_c_func(
     ctx: BinaryContext, cls: ObjcClass
 ) -> Optional[int]:
     """
-    Locate the C ReadFrom helper called by the ObjC -[Cls readFrom:] method.
+    The C ReadFrom core ``-[Cls readFrom:]`` is a thin wrapper around, or None.
 
-    The ObjC method is always a one-or-two-instruction wrapper:
-        mov x1, x2
-        b   _ClsReadFrom        ; or: bl _ClsReadFrom
+    The thin wrapper hands its object and its reader straight on::
 
-    Returns the vmaddr of the C ReadFrom function, or None.
+        mov x1, x2              ; (mov w2, #0)
+        b   _ClsReadFrom        ; or: bl _ClsReadFrom ... ret
+
+    Decided by data flow, not by "the first branch": the wrapper (up to its first
+    unconditional terminator) is run with x0 = self and x2 = the reader as opaque tokens
+    (:mod:`proto.dispatch_eval`), and its first call must be handed both (x0 = self, x1 =
+    reader).  So an inline reader -- ``-readFrom:`` holding the dispatch itself, whose first
+    call retains the reader -- has no C core (a parent cannot ``bl`` one; it messages
+    ``readFrom:``), and a ``-readFrom:`` that hands only the reader to a shared function
+    (a field-less filter's skip-everything helper) has none either.  Before 2026-10-15 the
+    first branch target was taken whatever it was, which put a runtime stub into the core
+    index for every inline reader (37-40 classes per build, all named after the first).
     """
+    from proto.dictrep_flow import Flow
+    from proto.dispatch_eval import SELF, READER, _opaque
     method = cls.get_method("readFrom:")
     if method is None or method.imp == 0:
         return None
 
     try:
-        insns = disasm(ctx, method.imp, max_insns=_READFROM_MAX_INSNS)
+        insns = disasm(ctx, method.imp, max_insns=_READFROM_MAX_INSNS, stop_at_ret=False)
     except Exception:
         return None
-
-    # iter_branch_targets captures both 'b' (tail call) and 'bl' forms.
-    # The old iter_bl_targets missed tail-call wrappers that use 'b'.
-    targets = list(iter_branch_targets(insns))
-    if not targets:
+    end = next((k for k, i in enumerate(insns)
+                if i.mnemonic in ('b', 'br', 'ret', 'retaa', 'retab', 'udf')), None)
+    insns = insns[:end + 1] if end is not None else insns
+    if not insns:
         return None
-    return targets[0]
+    region = Flow(ctx, insns).run_from(0, {'x0': SELF, 'x2': READER}, opaque=_opaque)
+    if not region.calls:
+        return None
+    first = region.calls[0]
+    if first.args.get('x0') == SELF and first.args.get('x1') == READER:
+        return first.target
+    return None
 
 
 # _COND_EQ/NE/HI/HS are imported from macho.arm64decode (canonical set).
@@ -283,15 +299,19 @@ def _build_readfrom_core_index(
     precision/recall tradeoff, not an oversight — but it is not the "rare
     aliasing" edge case it might look like from the code alone.
     """
+    from proto.protoclass_set import _proto_class_set
     index: Dict[int, str] = {}
     # Every method IMP starts a function: the readFrom: evaluator (proto.dispatch_eval) uses
     # these, with the cores below, as function boundaries and tail-call targets.
     entries = _ctx_cache(ctx, "_function_entries", set)
     ivar_slots = _ctx_cache(ctx, "_ivar_offset_slots", set)       # every class's, ditto
+    # The image's proto classes: the PBCodable superclass closure as well as the name
+    # heuristic (CoreParsec's ``_CP...`` classes are proto only through the closure).
+    proto_classes = _proto_class_set(ctx, cl)
     for cls in cl:
         entries.update(m.imp for m in cls.methods if m.imp)
         ivar_slots.update(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
-        if cls.is_meta or not _is_proto_class(cls):
+        if cls.is_meta or not (cls.name in proto_classes or _is_proto_class(cls)):
             continue
         core = _find_readfrom_c_func(ctx, cls)
         if core is None:
