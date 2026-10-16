@@ -270,7 +270,8 @@ def _read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
 
 
 # [cap:INPUT-SANITY] a runaway backstop for reading a representation wrapper's opening (it
-# is cut at its first unconditional terminator; the wrappers seen are 1-2 instructions).
+# is cut at its first call or unconditional terminator; the wrappers seen are 1-2
+# instructions, a self-contained implementation's first call comes within ~10).
 _DICTREP_WRAPPER_INSNS = 16
 
 
@@ -294,23 +295,57 @@ def _find_dictrep_c_func(ctx: BinaryContext, cls: ObjcClass) -> Optional[int]:
     the target of the tail call ``-dictionaryRepresentation`` opens with, handed self, into
     this image's own code, with x1 = 0 or x1 still its entry value (``_cmd``, never written
     on the way: the argument dropped).  Any other x1 -- a nonzero constant, another value
-    the wrapper computed -- is not this call.  A ``dictionaryRepresentation`` that is a
-    genuine, self-contained implementation (confirmed: iOS locationd's
-    ``ALSNr5GCellTower``) opens with a frame and calls, not a tail call, and is not
-    followed."""
+    the wrapper computed -- is not this call.
+
+    A ``dictionaryRepresentation`` that is a genuine, self-contained implementation opens
+    with a frame and a call that is not a tail call: it builds the dictionary itself, so
+    its own IMP is the body (iOS 16 CoreDuet's ``_DKPRValueType``, whose only dictRep is
+    the no-arg one; iOS locationd's ``ALSNr5GCellTower``).  Its internal branches are
+    never followed; :func:`_dictrep_body` bounds it like any other body."""
     m = cls.get_method('_dictionaryRepresentation:')
     if m is not None and m.imp != 0:
         return m.imp
     tail = _wrapper_tail(ctx, cls, 'dictionaryRepresentation')
-    if tail is None:
-        return None
-    target, flag = tail
-    return target if flag in (0, _ARG_UNTOUCHED) else None
+    if tail is not None:
+        target, flag = tail
+        return target if flag in (0, _ARG_UNTOUCHED) else None
+    first = _wrapper_first_call(ctx, cls, 'dictionaryRepresentation')
+    if first is not None and not first[0].tail:
+        return cls.get_method('dictionaryRepresentation').imp
+    return None
 
 
 # :func:`_wrapper_tail`'s x1 when the wrapper never wrote it (it still holds the method's
 # ``_cmd``): the callee's argument dropped.
 _ARG_UNTOUCHED = 'untouched'
+
+
+def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
+    """``(call, flow)``: the first call ``-[cls selector]`` makes, evaluated up to that call
+    or its first unconditional terminator, whichever comes first, with x0 = self (an opaque
+    token), and the Flow it ran in.  ``None`` when the method is absent, cannot be
+    evaluated, or makes no call there."""
+    from proto.dispatch_eval import SELF, _opaque
+    m = cls.get_method(selector)
+    if m is None or m.imp == 0:
+        return None
+    try:
+        insns = disasm(ctx, m.imp, max_insns=_DICTREP_WRAPPER_INSNS, stop_at_ret=False)
+    except Exception:
+        return None
+    end = next((k for k, i in enumerate(insns)
+                if i.mnemonic in ('b', 'br', 'braa', 'brab', 'ret', 'retaa', 'retab', 'udf',
+                                  'bl', 'blr', 'blraa', 'blrab')), None)
+    if end is None:
+        return None
+    try:
+        flow = Flow(ctx, insns[:end + 1])
+        region = flow.run_from(0, {'x0': SELF}, opaque=_opaque)
+    except Exception:
+        return None
+    if not region.calls:
+        return None
+    return region.calls[0], flow
 
 
 def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
@@ -321,25 +356,10 @@ def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
     call, :data:`_ARG_UNTOUCHED` if it still holds its entry value (reaching definitions),
     else ``None``.  ``None`` for any other opening."""
     from proto.dispatch_eval import SELF, _opaque, _in_image_text
-    m = cls.get_method(selector)
-    if m is None or m.imp == 0:
+    first = _wrapper_first_call(ctx, cls, selector)
+    if first is None:
         return None
-    try:
-        insns = disasm(ctx, m.imp, max_insns=_DICTREP_WRAPPER_INSNS, stop_at_ret=False)
-    except Exception:
-        return None
-    end = next((k for k, i in enumerate(insns)
-                if i.mnemonic in ('b', 'br', 'braa', 'brab', 'ret', 'retaa', 'retab', 'udf')), None)
-    if end is None:
-        return None
-    try:
-        flow = Flow(ctx, insns[:end + 1])
-        region = flow.run_from(0, {'x0': SELF}, opaque=_opaque)
-    except Exception:
-        return None
-    if not region.calls:
-        return None
-    c = region.calls[0]
+    c, flow = first
     if not c.tail or c.args.get('x0') != SELF or not _in_image_text(ctx, c.target):
         return None
     x1 = c.args.get('x1')

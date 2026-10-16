@@ -1091,5 +1091,68 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
             self.assertIn(v, values['uiTarget'])
         self.assertFalse(incomplete)
 
+@unittest.skipUnless(_CACHE_MAIN is not None, _SKIP_MSG)
+class TestNoArgDictRepLive(unittest.TestCase):
+    """Classes whose only dictRep is a self-contained no-arg ``dictionaryRepresentation``
+    (no ``_dictionaryRepresentation:``), which leaves by a tail call, not a ``ret``.
+
+    _DKPRValueType (iOS 16 CoreDuet, 0x190beb400): ``cmp w8,#5 ; b.hs`` then a CFString
+    pointer table from "INTEGER", exit ``b`` at 0x190beb4d4; Apple's iOS 13
+    knowledge.proto gives the same five values.  AWDProactiveAppPredictionSubscores
+    (AppPredictionInternal, 0x1bfec6464): ~15.5k insns whose last is a backward ``b``
+    (0x1bfed565c) -- the body must close there, not run on to the 40000 safety ceiling."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        from macho.strings import build_string_table
+        from macho.classlist import build_class_list
+        from macho.local_symbols import apply_to_classes
+        from proto.protocore import _proto_name
+        from proto.enums import _harvest_dictrep_enums
+
+        cls.reader = DyldCacheReader(_CACHE_MAIN)
+        cls.res = {}
+        for image, cn, field in (('/CoreDuet.framework/CoreDuet', '_DKPRValueType', 'type'),
+                                 ('/AppPredictionInternal.framework/AppPredictionInternal',
+                                  'AWDProactiveAppPredictionSubscores', None)):
+            mv = cls.reader.find_image_header(image)
+            if mv is None:
+                continue
+            ctx = BinaryContext.from_cache(cls.reader, mv)
+            st = build_string_table(ctx)
+            clist = build_class_list(ctx, st)
+            syms = cls.reader.image_local_symbols(mv)
+            if syms:
+                apply_to_classes(clist, syms)
+            # the method-IMP set extract_all threads onto ctx bounds the body
+            ctx._writeto_foreign_imps = {m.imp for c in clist for m in c.methods if m.imp}
+            c = next((c for c in clist if c.name == cn and not c.is_meta), None)
+            if c is None or c.get_method('_dictionaryRepresentation:') is not None:
+                continue
+            enums = _harvest_dictrep_enums(ctx, c, st)
+            off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}.get(field)
+            cls.res[cn] = (dict(enums.get(off, [])),
+                           cn in (getattr(ctx, '_dictrep_truncated_classes', None) or set()))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.reader.close()
+
+    def _get(self, cn):
+        if cn not in self.res:
+            self.skipTest(f'{cn} absent or not a no-arg-only dictRep in this cache')
+        return self.res[cn]
+
+    def test_value_type_enum_recovered(self):
+        values, _ = self._get('_DKPRValueType')
+        self.assertEqual(values, {0: 'INTEGER', 1: 'DOUBLE', 2: 'STRING', 3: 'BLOB', 4: 'DATE'})
+
+    def test_long_body_closes_on_its_own_exit(self):
+        _, truncated = self._get('AWDProactiveAppPredictionSubscores')
+        self.assertFalse(truncated)
+
+
 if __name__ == '__main__':
     unittest.main()

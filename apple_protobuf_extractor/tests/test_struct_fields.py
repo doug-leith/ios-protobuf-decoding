@@ -1054,10 +1054,12 @@ class TestDictrepBodyOfAStrippedMethod(_Patched):
         # ... but an x1 the wrapper computed is some other argument
         self.assertIsNone(self.find(cls, (0x1000, [('ldr', 'x1, [x0, #8]'), ('b', '#0x2008')])))
 
-    def test_a_self_contained_implementation_is_not_followed(self):
+    def test_a_self_contained_implementation_is_its_own_body(self):
+        # opens with a frame and a call that is not a tail call: it builds the dictionary
+        # itself, so its own IMP is the body; its branches are not followed
         cls = _FakeClass({'dictionaryRepresentation': 0x1000, 'jsonRepresentation': 0x1100})
-        self.assertIsNone(self.find(cls, (0x1000, [('pacibsp', ''), ('stp', 'x29, x30, [sp, #-0x10]!'),
-                                                   ('bl', '#0x2000'), ('b', '#0x2100')])))
+        self.assertEqual(self.find(cls, (0x1000, [('pacibsp', ''), ('stp', 'x29, x30, [sp, #-0x10]!'),
+                                                  ('bl', '#0x2000'), ('b', '#0x2100')])), 0x1000)
 
     def test_a_branch_not_handed_self_or_out_of_the_image_is_not_the_body(self):
         cls = _FakeClass({'dictionaryRepresentation': 0x1000})
