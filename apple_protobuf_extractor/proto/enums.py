@@ -28,6 +28,7 @@ from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs
 from proto.dictrep_flow import Flow
+from proto.arm64cfg   import _next_imp
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
 
@@ -361,6 +362,32 @@ def _harvest_dictrep_enums(
     return _harvest_dictrep(ctx, cls, st, wanted)[0]
 
 
+def _dictrep_body(ctx: BinaryContext, imp: int) -> Optional[List[Insn]]:
+    """The dictRep function at *imp* as the linear range ``[imp, next method IMP)`` -- or
+    None when the method-IMP set is not on *ctx* (it is built once by ``extract_all``;
+    see build_writeto_indegree).
+
+    Bound by structure, not by a count or by a `ret`: the next method IMP is a hard upper
+    bound on the function (as for the writeTo: pre-scan).  A dictRep leaves by a tail
+    call (``b objc_autoreleaseReturnValue``) or ends in a noreturn call, never a `ret` of
+    its own, so the stop-at-ret probe / _function_body_extent ran on into the following
+    functions: on the iPhone 8 iOS 16 cache every one of the 1,641 harvested bodies did
+    (550,916 foreign instructions in all), and no body reaches code past the next method
+    IMP.  Reachability within the range is left to :class:`proto.dictrep_flow.Flow`, which
+    walks from the entry and resolves `br` targets by evaluation: pruning the range to a
+    static CFG first drops jump-table arms only that evaluation finds (iOS 27
+    GEOPDSUserActionMetadataElement lost 8 values that way)."""
+    imps = getattr(ctx, "_writeto_foreign_imps", None)
+    if not imps:
+        return None
+    memo = getattr(ctx, "_dictrep_imps_sorted", None)
+    if memo is None or memo[0] is not imps:
+        memo = (imps, sorted(imps))
+        ctx._dictrep_imps_sorted = memo
+    end = _next_imp(memo[1], imp)
+    return disasm(ctx, imp, max_insns=max(1, (end - imp) // 4), stop_at_ret=False)
+
+
 def _harvest_dictrep(
     ctx: BinaryContext, cls: ObjcClass, st: Optional[StringTable],
     wanted: Optional[Set[int]] = None,
@@ -376,7 +403,8 @@ def _harvest_dictrep(
     if imp is None:
         return result, {}, {}
     try:
-        insns = disasm(ctx, imp, max_insns=_DICTREP_PROBE_INSNS)
+        body = _dictrep_body(ctx, imp)
+        insns = body if body is not None else disasm(ctx, imp, max_insns=_DICTREP_PROBE_INSNS)
     except Exception as exc:
         log.warning("-[%s _dictionaryRepresentation:] could not be disassembled (%s); "
                     "enum recovery from it is skipped", cls.name, exc)
@@ -384,14 +412,11 @@ def _harvest_dictrep(
     if not insns:
         return result, {}, {}
 
-    # If the cheap probe didn't reach the method's end, recompute the body by its TRUE
-    # function extent.  -[cls _dictionaryRepresentation:] is a CONTIGUOUS serializer
-    # (verified, UNLIKE outlined writeTo:), so its own last `ret` is a value-independent
-    # bound — no magic instruction count.  Proven output-neutral: the extent body yields
-    # the same enums as the 8000 probe on every overrunning class (raising the cap
-    # recovers nothing, dictrep_probe3.py); it simply stops flagging those classes as
-    # truncated.
-    if _disasm_truncated(insns, _DICTREP_PROBE_INSNS):
+    # Without the method-IMP set (a bare call outside extract_all): if the cheap probe
+    # didn't reach a `ret`, widen it to _function_body_extent.  Both run past the
+    # function's own end -- it leaves by a tail call, never a `ret` of its own -- into the
+    # functions that follow (see _dictrep_body), so this is only the fallback.
+    if body is None and _disasm_truncated(insns, _DICTREP_PROBE_INSNS):
         body = _function_body_extent(ctx, imp, _DICTREP_HARD_CAP)
         if body:
             insns = body

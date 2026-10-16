@@ -965,5 +965,131 @@ class TestBiasedDictRepEnumsLive(unittest.TestCase):
         self.assertEqual(d[9], 'OFF_RAMP')
 
 
+@unittest.skipUnless(_CACHE_MAIN is not None, _SKIP_MSG)
+class TestDictRepBodyLive(unittest.TestCase):
+    """_dictrep_body bounds -[cls _dictionaryRepresentation:] by structure: the linear range
+    from its IMP to the next method IMP.  iPhone 8 iOS 16 GeoServices, checked against the
+    cache's .symbols (the next symbol after the IMP):
+
+      GEOPDSearchQueryIntentMetadata   0x18cbe0068..0x18cbe1b90 (jsonRepresentation next)
+      GEOLogMsgStateCuratedCollection  0x18d4ca87c..0x18d4d2084
+      GEOPDPlace                       0x18c1e2cc0..0x18c1e33c8
+      GEOLatLng                        0x18c1c1688..0x18c1c21b4: its C reader sits between
+                                       the dictRep (.symbols end 0x18c1c18a8) and the next
+                                       method, unreachable from the entry
+
+    The stop-at-ret probe / _function_body_extent ran past every one of these (to 11,296 /
+    24,647 / 508 / 704 insns) because a dictRep leaves by a tail call, not a `ret`."""
+
+    CASES = {
+        'GEOPDSearchQueryIntentMetadata': (0x18cbe0068, 0x18cbe1b90),
+        'GEOLogMsgStateCuratedCollection': (0x18d4ca87c, 0x18d4d2084),
+        'GEOPDPlace': (0x18c1e2cc0, 0x18c1e33c8),
+        'GEOLatLng': (0x18c1c1688, 0x18c1c21b4),
+    }
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        from macho.strings import build_string_table
+        from macho.classlist import build_class_list
+        from macho.local_symbols import apply_to_classes
+        from proto.enums import _dictrep_body
+
+        cls.reader = DyldCacheReader(_CACHE_MAIN)
+        cls.bodies = {}
+        mv = cls.reader.find_image_header('GeoServices')
+        if mv is None:
+            return
+        ctx = BinaryContext.from_cache(cls.reader, mv)
+        st = build_string_table(ctx)
+        clist = build_class_list(ctx, st)
+        syms = cls.reader.image_local_symbols(mv)
+        if syms:
+            apply_to_classes(clist, syms)
+        ctx._writeto_foreign_imps = {m.imp for c in clist for m in c.methods if m.imp}
+        for c in clist:
+            if c.is_meta or c.name not in cls.CASES:
+                continue
+            m = c.get_method('_dictionaryRepresentation:')
+            if m is not None and m.imp == cls.CASES[c.name][0]:
+                cls.bodies[c.name] = _dictrep_body(ctx, m.imp)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.reader.close()
+
+    def test_body_is_the_range_to_the_next_method(self):
+        if len(self.bodies) != len(self.CASES):
+            self.skipTest('GeoServices classes not at the pinned addresses in this cache')
+        for name, (imp, end) in self.CASES.items():
+            body = self.bodies[name]
+            self.assertEqual(body[0].addr, imp, name)
+            self.assertEqual(body[-1].addr + 4, end, name)
+            self.assertEqual(len(body), (end - imp) // 4, name)
+
+
+def _ios27_cache():
+    d = os.environ.get('MACHO_TEST_IOS27_CACHE', '').strip() or \
+        os.path.join(artifacts.REPO_ROOT, 'ios27_data', 'dylib')
+    p = os.path.join(d, 'dyld_shared_cache_arm64e')
+    return p if os.path.isfile(p) else None
+
+
+@unittest.skipUnless(_ios27_cache() is not None, 'iOS 27 cache not present')
+class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
+    """iOS 27 GEOPDSUserActionMetadataElement's dictRep switches through `br` jump tables
+    some of whose arms only Flow's evaluation resolves.  Pruning the body to a static CFG
+    lost 6 uiAction values (1065 TAP_GEO, 2200, 3088, 5039, 7030, 11029) and 2 uiTarget
+    values (1313, 1810); the whole range to the next method keeps all 46 / 31."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        from macho.strings import build_string_table
+        from macho.classlist import build_class_list
+        from macho.local_symbols import apply_to_classes
+        from proto.protocore import _proto_name
+        from proto.enums import _harvest_dictrep
+
+        cls.reader = DyldCacheReader(_ios27_cache())
+        cls.res = None
+        mv = cls.reader.find_image_header('/GeoServices.framework/GeoServices')
+        if mv is None:
+            return
+        ctx = BinaryContext.from_cache(cls.reader, mv)
+        st = build_string_table(ctx)
+        clist = build_class_list(ctx, st)
+        syms = cls.reader.image_local_symbols(mv)
+        if syms:
+            apply_to_classes(clist, syms)
+        ctx._writeto_foreign_imps = {m.imp for c in clist for m in c.methods if m.imp}
+        c = next((c for c in clist
+                  if c.name == 'GEOPDSUserActionMetadataElement' and not c.is_meta), None)
+        if c is None:
+            return
+        off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}
+        enums, incomplete, _ = _harvest_dictrep(ctx, c, st)
+        cls.res = ({k: dict(enums.get(off.get(k), [])) for k in ('uiAction', 'uiTarget')},
+                   incomplete)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.reader.close()
+
+    def test_every_value_is_recovered(self):
+        if self.res is None:
+            self.skipTest('GEOPDSUserActionMetadataElement not in this cache')
+        values, incomplete = self.res
+        self.assertEqual(len(values['uiAction']), 46)
+        self.assertEqual(len(values['uiTarget']), 31)
+        for v in (1065, 2200, 3088, 5039, 7030, 11029):
+            self.assertIn(v, values['uiAction'])
+        for v in (1313, 1810):
+            self.assertIn(v, values['uiTarget'])
+        self.assertFalse(incomplete)
+
 if __name__ == '__main__':
     unittest.main()
