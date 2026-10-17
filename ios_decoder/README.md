@@ -94,6 +94,16 @@ grepped out and parsed — that contract is preserved from the original addon.
 
 - **Apple `PBCodable` protobuf** over ARPC (GeoServices / locationd), against named
   `.proto` schemas where known, else schema-free.
+- **Apple protobuf over plain HTTP(S)**: iCloud Private Relay (`mask-api.icloud.com`
+  `fetchAuthTokens` / `fetchConfigFile`, NetworkServiceProxy), CloudKit
+  (`/ckdatabase/api/client/…`, CloudKitDaemon; length-delimited `CKDPRequestOperation` /
+  `CKDPResponseOperation` streams, shown `[1] {…}`, `[2] {…}`), cloudd's metrics
+  (`metrics.icloud.com/c2`, C2), the store's `inAppMessagesSync` (iTunesCloud) and the artist
+  new-releases bundle (`radio-services…/new-releases-model/`, itunescloudd). A binary body
+  sent under an `application/x-www-form-urlencoded` label (Private Relay does this) is not
+  form data, so it falls through to the protobuf sniff instead of being shown as text; a
+  JSON body labelled JSON is shown as JSON even on a protobuf endpoint (the store's 403
+  errors).
 - **Unknown fields exactly like `protoc --decode_raw`** — a partial schema still
   prints the fields it doesn't know, by number (the reason `protoc` was originally
   used), with matching hex/float/escaping.
@@ -143,13 +153,24 @@ with no shim. (Run each with `--help` for its options.)
 
 - **Named-schema decoding is self-contained.** The `.proto` schemas are the committed
   `apple_protobuf_extractor` output under `ios_decoder/protos/<Framework>/` (GeoServices,
-  locationd, CoreLocationProtobuf for the geo + positioning endpoints, plus the smoot `/fb`
-  types) — every endpoint in the table resolves against them, so a fresh clone decodes named
+  locationd, CoreLocationProtobuf for the geo + positioning endpoints, the smoot `/fb`
+  types, AdCore for iAd, and NetworkServiceProxy, CloudKitDaemon, C2, iTunesCloud and
+  `itunescloudd` for the iCloud/store endpoints) — every endpoint in the table resolves
+  against them, so a fresh clone decodes named
   messages with **no `addon_ios` at all**. You can still add extra schema dirs with
   `--proto-dir DIR` (repeatable). With no schema resolvable, protobuf still decodes
   schema-free (fields by number, à la `--decode_raw`) with a one-line note. The tile parsers
   and gloria tile-id math (`+++XYZ`/`+++LATLON` markers) are likewise committed under the
   package.
+- **CloudKit fields typed by a CloudKit.framework class are `bytes`.** The CloudKitDaemon
+  schema refers to `CKDPRecordIdentifier`, `CKDPDate`, `CKDPIdentifier`, … (64 fields,
+  each annotated `// unresolved: <Class>`), which live in CloudKit.framework; the Extractor
+  resolves message classes within one image only, so those values print as escaped bytes.
+  Nothing is lost (0 unknown fields, byte-identical round trip), but they are not named.
+- **Key Transparency (`kt-prod.ess.apple.com/kt_client/…`) is not schema-decoded.** Its
+  messages (`ConsistencyProofRequest`, `PublicKeysResponse`, …) are Google ObjC protobuf
+  (`GPBMessage`) classes in `transparencyd`, which the Extractor detects but does not yet
+  decode; the bodies still get the structural (schema-free) decode.
 - **Scope is Apple `PBCodable` protobuf** (see the repo README). Foreign runtimes are
   surfaced honestly, not mis-decoded: FlatBuffers bodies (Siri auth) are shown as a
   flagged hex preview rather than guessed.

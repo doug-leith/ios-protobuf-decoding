@@ -169,6 +169,20 @@ Downloaded without a location by `geod`.
 | `gspe*-ssl.ls.apple.com/other/publisher_attribution_dot_coms-N.pb` | Publisher attribution manifest (`PublisherAttributionManifest`). | response: `geo.PublisherAttributionManifest` |
 | `gspe*-ssl.ls.apple.com/other/publisher_attribution_manifest_index-N.pb` | Index of the publisher attribution manifests. | response: `geo.PublisherAttributionManifestIndex` |
 | `gspe*-ssl.ls.apple.com/other/regional_vehicle_info-N.pb` | Regional vehicle (EV) information (`LPRWorld`). | response: `geo.LPRWorld` |
+| `gspe*-ssl.ls.apple.com/config/announcements` | Maps announcements: notices, each with the map region (a bounding box and polygon) where it applies. The request names the hardware model, OS build and language. | response: `geo.AvailableAnnouncements` |
+
+#### iCloud and media store
+
+Apple protobuf sent over plain HTTPS rather than ARPC, by `networkserviceproxy` (iCloud Private Relay), `cloudd` (CloudKit) and `itunescloudd` (Apple Music and the store).
+
+| Endpoint | What it is | Messages |
+|---|---|---|
+| `mask-api.icloud.com/vN/fetchAuthTokens` | iCloud Private Relay access tokens. The request is signed with a Basic Attestation (BAA) certificate, which it carries with its intermediate, and names the proxy and token key; it sends a batch of unactivated tokens and the reply returns them activated with an expiry time. Sent with a form-urlencoded Content-Type although the body is protobuf. | request: `nsp.NSPPrivacyProxyTokenActivationQuery`<br>response: `nsp.NSPPrivacyProxyTokenActivationResponse` |
+| `mask-api.icloud.com/vN/fetchConfigFile` | iCloud Private Relay configuration, signed: the authentication and token URLs, the traffic each subscription tier sends through the relay, and the proxies and DNS resolvers. | response: `nsp.NSPPrivacyProxySignedConfiguration` |
+| `gateway.icloud.com/ckdatabase/api/client/…` | CloudKit database calls from `cloudd` (record queries, fetches and change syncs) for system services and apps. Each request names the container, the calling bundle ID and the device software and hardware versions. Bodies are length-delimited streams of operations. | request: `ckdp.CKDPRequestOperation`<br>response: `ckdp.CKDPResponseOperation` |
+| `metrics.icloud.com/c2` | CloudKit network metrics from `cloudd`: the device model and OS build, the calling bundle ID and container, and per-operation timings and outcomes. | request: `c2mpmetric.C2MPMetric` |
+| `se2.itunes.apple.com/…/inAppMessagesSync` | In-app message sync from `itunescloudd`: the request carries a command serial number, the account DSID and a device ID; the reply holds the messages to show in each app (Music and others). | request: `iciam.ICIAMSynchronizeMessagesRequest`<br>response: `iciam.ICIAMSynchronizeMessagesResponse` |
+| `radio-services.itunes.apple.com/resources/v1/bundle/new-releases-model/N` | Apple Music new releases, fetched by `itunescloudd` for the storefront in the URL: artists (ID and name) with their new albums and release dates. | response: `amp.AMPMusicArtistNewContentResponse` |
 
 #### Feedback, advertising and certificates
 

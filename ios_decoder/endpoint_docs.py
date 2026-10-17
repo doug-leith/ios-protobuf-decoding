@@ -56,6 +56,9 @@ CATEGORIES = [
     ("wifi", "Wi-Fi quality",
      "Used by the Wi-Fi pre-fetch service (`ThreeBarsXPCService`)."),
     ("manifests", "Map manifests and resources", "Downloaded without a location by `geod`."),
+    ("icloud", "iCloud and media store",
+     "Apple protobuf sent over plain HTTPS rather than ARPC, by `networkserviceproxy` (iCloud Private "
+     "Relay), `cloudd` (CloudKit) and `itunescloudd` (Apple Music and the store)."),
     ("feedback", "Feedback, advertising and certificates",
      "Feedback and analytics uploads, advertising SDK traffic and certificate responses."),
     ("tiles", "Tiles (`locationd` and `geod`)",
@@ -139,6 +142,35 @@ DOCS = [
     Doc("manifests", "gspe*-ssl.ls.apple.com/other/regional_vehicle_info-N.pb",
         r"gspe[0-9]+-ssl\.ls\.apple\.com/other/regional_vehicle_info-[0-9]+\.pb",
         "Regional vehicle (EV) information (`LPRWorld`)."),
+    Doc("manifests", "gspe*-ssl.ls.apple.com/config/announcements",
+        r"gspe[0-9]+-ssl\.ls\.apple\.com/config/announcements",
+        "Maps announcements: notices, each with the map region (a bounding box and polygon) where it "
+        "applies. The request names the hardware model, OS build and language."),
+    # --- iCloud and media store --------------------------------------------------------------
+    Doc("icloud", "mask-api.icloud.com/vN/fetchAuthTokens", r"mask-api\.icloud\.com/v[0-9_]+/fetchAuthTokens",
+        "iCloud Private Relay access tokens. The request is signed with a Basic Attestation (BAA) "
+        "certificate, which it carries with its intermediate, and names the proxy and token key; it "
+        "sends a batch of unactivated tokens and the reply returns them activated with an expiry time. "
+        "Sent with a form-urlencoded Content-Type although the body is protobuf."),
+    Doc("icloud", "mask-api.icloud.com/vN/fetchConfigFile", r"mask-api\.icloud\.com/v[0-9_]+/fetchConfigFile",
+        "iCloud Private Relay configuration, signed: the authentication and token URLs, the traffic "
+        "each subscription tier sends through the relay, and the proxies and DNS resolvers."),
+    Doc("icloud", "gateway.icloud.com/ckdatabase/api/client/…", r"\.icloud\.com(:443)?/ckdatabase/api/client/",
+        "CloudKit database calls from `cloudd` (record queries, fetches and change syncs) for system "
+        "services and apps. Each request names the container, the calling bundle ID and the device "
+        "software and hardware versions. Bodies are length-delimited streams of operations."),
+    Doc("icloud", "metrics.icloud.com/c2", r"metrics\.icloud\.com/c2\b",
+        "CloudKit network metrics from `cloudd`: the device model and OS build, the calling bundle ID "
+        "and container, and per-operation timings and outcomes."),
+    Doc("icloud", "se2.itunes.apple.com/…/inAppMessagesSync",
+        r"itunes\.apple\.com/WebObjects/MZStoreElements2\.woa/wa/inAppMessagesSync",
+        "In-app message sync from `itunescloudd`: the request carries a command serial number, the "
+        "account DSID and a device ID; the reply holds the messages to show in each app (Music and "
+        "others)."),
+    Doc("icloud", "radio-services.itunes.apple.com/resources/v1/bundle/new-releases-model/N",
+        r"radio-services\.itunes\.apple\.com/resources/v1/bundle/new-releases-model/",
+        "Apple Music new releases, fetched by `itunescloudd` for the storefront in the URL: artists "
+        "(ID and name) with their new albums and release dates."),
     # --- feedback, ads, certificates ---------------------------------------------------------
     Doc("feedback", "fbs.smoot.apple.com/fb and api.smoot.apple.com/fb", r"(fbs|api)\.smoot\.apple\.com/fb\b",
         "Feedback and analytics upload. The message depends on the `?type=` channel."),

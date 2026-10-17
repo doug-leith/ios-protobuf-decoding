@@ -52,6 +52,29 @@ def _build_empty_message_class() -> type[Message]:
 _RAW_MESSAGE_CLASS = _build_empty_message_class()
 
 
+def split_delimited(data: bytes) -> list[bytes] | None:
+    """Split a length-delimited stream (``<varint len><message>`` repeated) into its messages.
+
+    Returns ``None`` unless the framing consumes ``data`` exactly -- a truncated length, or a
+    length that runs past the end, means the bytes are not this framing.  (Each element is
+    returned unparsed; whether it is valid protobuf is the caller's question.)
+    """
+    from google.protobuf.internal.decoder import _DecodeVarint32
+
+    pos, out, n = 0, [], len(data)
+    while pos < n:
+        try:
+            length, start = _DecodeVarint32(data, pos)
+        except (IndexError, ValueError):
+            return None
+        end = start + length
+        if end > n:
+            return None
+        out.append(data[start:end])
+        pos = end
+    return out
+
+
 def parse(data: bytes, message_cls: type[Message] | None = None) -> Message:
     """Parse ``data`` into ``message_cls`` (or the schema-free raw message).
 

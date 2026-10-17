@@ -24,7 +24,8 @@ from typing import Callable, Optional
 
 from . import arpc, iad, rawproto
 from .markers import MarkerSink
-from .protobuf import DecodeError, decode_to_text
+from .httputil import indent
+from .protobuf import DecodeError, decode_to_text, split_delimited
 from .schemas import SchemaError, SchemaRegistry
 
 __all__ = ["DecodeContext", "Rule", "RuleHandler", "decode_arpc_or_raw"]
@@ -57,7 +58,10 @@ class Rule:
 
       * ``arpc_request`` / ``arpc_response`` — strip the ARPC header (and decompress);
       * ``iad``                              — strip the 8-byte iAd header;
-      * ``plain``                            — body is bare protobuf.
+      * ``plain``                            — body is bare protobuf;
+      * ``delimited``                        — body is a stream of ``<varint length><message>``
+                                               records, each one ``message`` (CloudKit's
+                                               ``delimited=true`` operation bodies).
     """
     schema_file: Optional[str] = None
     message: Optional[str] = None
@@ -145,32 +149,74 @@ def _decode_schema_rule(rule: Rule, body: bytes, ctx: DecodeContext) -> str:
     head, payload = _header_and_payload(body, rule.framing)
     if not payload:
         return head + "(empty payload)"
+    if rule.framing == "delimited":
+        return head + _decode_delimited(rule, payload, ctx)
     try:
-        if rule.embedded:
-            text, unknown, nested = ctx.schemas.decode_with_coverage(
-                rule.schema_file, rule.message, payload, embedded=rule.embedded)
-        else:
-            text, unknown, nested = ctx.schemas.decode_with_coverage(
-                rule.schema_file, rule.message, payload)
+        text, unknown, nested = _decode_one(rule, payload, ctx)
     except (SchemaError, DecodeError) as e:
+        return head + _raw_fallback(payload, e)
+    return head + _coverage_note(rule, unknown, nested) + text
+
+
+def _decode_one(rule: Rule, payload: bytes, ctx: DecodeContext) -> tuple[str, list[int], int]:
+    """``(text, top-level unknown numbers, nested unknown count)`` for one message."""
+    if rule.embedded:
+        return ctx.schemas.decode_with_coverage(
+            rule.schema_file, rule.message, payload, embedded=rule.embedded)
+    return ctx.schemas.decode_with_coverage(rule.schema_file, rule.message, payload)
+
+
+def _decode_delimited(rule: Rule, payload: bytes, ctx: DecodeContext) -> str:
+    """Decode a length-delimited stream, every record against ``rule.message``.
+
+    Records are shown ``[1] {...}``, ``[2] {...}`` (the framing the schema-free array decoder
+    uses), under one coverage note that totals the unknown fields over all of them.
+    """
+    records = split_delimited(payload)
+    if records is None:
+        return ("// WARNING: body is not a length-delimited message stream; "
+                "showing schema-free raw decode\n" + _raw_text(payload))
+    parts, unknown, nested = [], set(), 0
+    for i, record in enumerate(records, 1):
         try:
-            raw = decode_to_text(payload)
-        except DecodeError as e2:
-            return head + (f"// ERROR: schema decode failed ({e}); "
-                           f"raw decode also failed ({e2})\n")
-        return head + (f"// WARNING: schema decode failed ({e}); "
-                       f"showing schema-free raw decode\n") + raw
-    note = ""
-    if unknown or nested:                # partial schema — name the gap, both top-level + nested
-        parts = []
-        if unknown:
-            parts.append(f"{len(unknown)} top-level (shown by number: "
-                         + ", ".join(str(n) for n in unknown) + ")")
-        if nested:
-            parts.append(f"{nested} inside known sub-message(s)")
-        note = (f"// note: fields present on the wire are not in schema "
-                f"{rule.schema_file}:{rule.message} — " + "; ".join(parts) + "\n")
-    return head + note + text
+            text, unk, nst = _decode_one(rule, record, ctx)
+        except (SchemaError, DecodeError) as e:
+            return f"// record {i} of {len(records)}: " + _raw_fallback(payload, e)
+        unknown.update(unk)
+        nested += nst
+        parts.append(f"[{i}] {{\n" + indent(text, 3) + "\n}" if text else f"[{i}] {{\n}}")
+    return _coverage_note(rule, sorted(unknown), nested) + "\n".join(parts)
+
+
+def _coverage_note(rule: Rule, unknown: list[int], nested: int) -> str:
+    """The ``// note:`` naming wire fields the schema lacks, or ``""`` when it covered all."""
+    if not (unknown or nested):
+        return ""
+    parts = []
+    if unknown:
+        parts.append(f"{len(unknown)} top-level (shown by number: "
+                     + ", ".join(str(n) for n in unknown) + ")")
+    if nested:
+        parts.append(f"{nested} inside known sub-message(s)")
+    return (f"// note: fields present on the wire are not in schema "
+            f"{rule.schema_file}:{rule.message} — " + "; ".join(parts) + "\n")
+
+
+def _raw_text(payload: bytes) -> str:
+    try:
+        return decode_to_text(payload)
+    except DecodeError as e:
+        return f"// ERROR: raw decode also failed ({e})\n"
+
+
+def _raw_fallback(payload: bytes, err: Exception) -> str:
+    """The schema decode failed: say why, then show the schema-free decode (or its error)."""
+    try:
+        raw = decode_to_text(payload)
+    except DecodeError as e2:
+        return f"// ERROR: schema decode failed ({err}); raw decode also failed ({e2})\n"
+    return (f"// WARNING: schema decode failed ({err}); "
+            f"showing schema-free raw decode\n") + raw
 
 
 def decode_arpc_or_raw(body: bytes, framing: str) -> str:

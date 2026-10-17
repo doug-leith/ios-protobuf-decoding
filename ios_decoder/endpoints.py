@@ -201,6 +201,13 @@ def _build_default_endpoints() -> list[Endpoint]:
         Endpoint(r"gspe[0-9]+-ssl\.ls\.apple\.com/geo_manifest/dynamic/config",
                  None,
                  Rule(_GEO, "geo.Resources", "plain")),
+        # The manifest's announcementsURL resource (GEOResources field announcementsURL).
+        # GEOAvailableAnnouncements is the GeoServices container of GEOAnnouncement, and the one
+        # whose name fits; it parses both captured bodies with no unknown fields and
+        # re-serialises them byte-identical.  (The image that fetches it was not located.)
+        Endpoint(r"gspe[0-9]+-ssl\.ls\.apple\.com/config/announcements",
+                 None,
+                 Rule(_GEO, "geo.AvailableAnnouncements", "plain")),
 
         # --- locationd's "harvest" uploads: CoreLocationProtobuf *CollectionRequest ---
         # The ARPC requestType on the wire is the request class's requestTypeCode:
@@ -264,6 +271,52 @@ def _build_default_endpoints() -> list[Endpoint]:
                  Rule("ad.proto", "ad.ADUserTransparencyResponse", "iad")),
         # Any other 2.6 path: strip the header and raw-decode (no schema is known for it).
         Endpoint(r"iadsdk\.apple\.com/adserver/2\.6/", iad_rule, iad_rule),
+
+        # --- iCloud Private Relay (NetworkServiceProxy, package "nsp") ---
+        # -[NSPPrivacyTokenManager fetchPrivacyTokensOnInterface:...] builds an
+        # NSPPrivacyProxyTokenActivationQuery and parses an NSPPrivacyProxyTokenActivationResponse.
+        # The request is a binary protobuf sent with Content-Type
+        # application/x-www-form-urlencoded, so this rule (not the label) decides it.
+        # NSPConfigurationManager parses the config file with
+        # [[NSPPrivacyProxySignedConfiguration alloc] initWithData:], then reads its
+        # certificates; the URL version (v1 .. v2_4 in the binary) does not change the message.
+        Endpoint(r"mask-api\.icloud\.com/v[0-9_]+/fetchAuthTokens",
+                 Rule("nsp.proto", "nsp.NSPPrivacyProxyTokenActivationQuery", "plain"),
+                 Rule("nsp.proto", "nsp.NSPPrivacyProxyTokenActivationResponse", "plain")),
+        Endpoint(r"mask-api\.icloud\.com/v[0-9_]+/fetchConfigFile",
+                 None,
+                 Rule("nsp.proto", "nsp.NSPPrivacyProxySignedConfiguration", "plain")),
+
+        # --- CloudKit database API (CloudKitDaemon, package "ckdp") ---
+        # Every /ckdatabase/api/client/ call carries the same envelope, a length-delimited
+        # stream of CKDPRequestOperation, answered by a stream of CKDPResponseOperation; the
+        # operation (query/retrieve, record/sync, ...) is the oneof-like field set inside it.
+        # The request Content-Type declares the framing itself
+        # (`messageType=RequestOperation; delimited=true`).  Fields whose type is a CloudKit.framework
+        # class (CKDPRecordIdentifier, CKDPDate, ...) are `bytes` in this schema: the Extractor
+        # resolves classes within one image only.
+        Endpoint(r"\.icloud\.com(:443)?/ckdatabase/api/client/",
+                 Rule("ckdp.proto", "ckdp.CKDPRequestOperation", "delimited"),
+                 Rule("ckdp.proto", "ckdp.CKDPResponseOperation", "delimited")),
+
+        # --- cloudd's network metrics upload (C2.framework) ---
+        # +[C2ReportMetrics metricsForMetricRequestOptions:networkEvent:genericEvent:triggers:]
+        # builds the C2MPMetric that cloudd POSTs to metrics.icloud.com/c2.
+        Endpoint(r"metrics\.icloud\.com/c2\b",
+                 Rule("c2mpmetric.proto", "c2mpmetric.C2MPMetric", "plain"),
+                 None),
+
+        # --- itunescloudd (iTunesCloud framework + the daemon's own classes) ---
+        # ICInAppMessageSyncRequest builds an ICIAMSynchronizeMessagesRequest and parses an
+        # ICIAMSynchronizeMessagesResponse for the store's inAppMessagesSync call.
+        Endpoint(r"itunes\.apple\.com/WebObjects/MZStoreElements2\.woa/wa/inAppMessagesSync",
+                 Rule("iciam.proto", "iciam.ICIAMSynchronizeMessagesRequest", "plain"),
+                 Rule("iciam.proto", "iciam.ICIAMSynchronizeMessagesResponse", "plain")),
+        # The artist new-releases bundle: ICMusicLibraryRecommendationsRequest (itunescloudd)
+        # fetches it from a bag-key URL and parses an AMPMusicArtistNewContentResponse.
+        Endpoint(r"radio-services\.itunes\.apple\.com/resources/v1/bundle/new-releases-model/",
+                 None,
+                 Rule("amp.proto", "amp.AMPMusicArtistNewContentResponse", "plain")),
 
         # --- parsecd feedback upload: polymorphic by ?type= (per-channel message) ---
         Endpoint(r"(fbs|api)\.smoot\.apple\.com/fb\b",

@@ -16,7 +16,8 @@ import urllib.parse
 from typing import Callable, Optional
 
 from . import archives, arpc, certs, doh, nested
-from .protobuf import DecodeError, decode_to_text
+from .httputil import is_form_urlencoded
+from .protobuf import DecodeError, decode_to_text, split_delimited
 
 __all__ = [
     "decode_by_content_type",
@@ -35,28 +36,16 @@ def decode_protobuf_array(body: bytes) -> Optional[str]:
     elements — the cautious choice, so a single message isn't mis-announced as an
     array (a single protobuf also parses as a degenerate one-element array).
     """
-    from google.protobuf.internal.decoder import _DecodeVarint32
-
-    pos, count, parts = 0, 0, []
-    n = len(body)
-    while pos < n:
+    msgs = split_delimited(body)
+    if msgs is None or len(msgs) < 2:
+        return None
+    parts = []
+    for count, msg in enumerate(msgs, 1):
         try:
-            msg_len, new_pos = _DecodeVarint32(body, pos)
-        except (IndexError, ValueError):
-            return None
-        start = new_pos
-        end = start + msg_len
-        if end > n:
-            return None
-        try:
-            text = decode_to_text(body[start:end])
+            text = decode_to_text(msg)
         except DecodeError:
             return None
-        count += 1
         parts.append(f"[{count}] {{\n" + _indent(text) + "}")
-        pos = end
-    if count < 2:
-        return None
     return "\n".join(parts)
 
 
@@ -131,10 +120,9 @@ def _decode_json(body: bytes, ct: str) -> Optional[str]:
 
 
 def _decode_form(body: bytes, ct: str) -> Optional[str]:
-    try:
-        return urllib.parse.unquote(body.decode("utf-8"))
-    except UnicodeDecodeError:
+    if not is_form_urlencoded(body):    # binary under a form label: not form data
         return None
+    return urllib.parse.unquote(body.decode("utf-8"))
 
 
 def _decode_text(body: bytes, ct: str) -> Optional[str]:
