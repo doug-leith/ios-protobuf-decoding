@@ -180,6 +180,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--no-cross-image",
+        action="store_true",
+        help=(
+            "--framework mode: do NOT pull in message classes defined in other cache "
+            "images.  By default a field typed by a PBCodable class from another image "
+            "(e.g. CloudKitDaemon's CKDPRecordIdentifier, defined in CloudKit) is resolved "
+            "to the image that defines it (through the class reference the cache binds, "
+            "else the one linked image defining that name) and that message is emitted "
+            "too, so the output compiles with real message types; with this flag such a "
+            "field stays `bytes  // unresolved: <Class>`."
+        ),
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Parse and report statistics; do not write any files.",
@@ -394,7 +407,7 @@ def _build_and_write_output(messages, args, source_name, ctx) -> int:
     the .proto files (unless --dry-run).  Returns the process exit code
     (``EXIT_INCOMPLETE`` when the output is known to be missing something)."""
     from proto.emitter import (build_proto_files, write_proto_files,
-                               print_summary, package_for_class, enum_error_escalated)
+                               print_summary, enum_error_escalated)
     t = _step("resolving cross-references and grouping by package")
     proto_files = build_proto_files(
         messages,
@@ -416,14 +429,10 @@ def _build_and_write_output(messages, args, source_name, ctx) -> int:
         return status
 
     output_dir = Path(args.output)
-    class_to_pkg = {
-        m.class_name: package_for_class(m.class_name) for m in messages
-    }
 
     try:
         t = _step(f"writing .proto files to {output_dir}/")
-        written = write_proto_files(proto_files, output_dir,
-                                    class_to_pkg=class_to_pkg)
+        written = write_proto_files(proto_files, output_dir)
         _done(t)
     except OSError as exc:
         print(f"error: could not write output: {exc}", file=sys.stderr)
@@ -672,6 +681,24 @@ def _merge_foreign_messages(ctx, image_bytes, messages):
     return messages + foreign
 
 
+def _add_cross_image_messages(cache, mach_va, messages, prefixes):
+    """Cache-native: append the messages other images define that *messages* reference as
+    field types (transitively), each tagged with its defining image — see
+    :mod:`proto.cross_image`.  Reports on stderr what was added and what stays unresolved."""
+    from collections import Counter
+    from proto.cross_image import resolve_cross_image
+    t = _step("resolving message classes defined in other images")
+    res = resolve_cross_image(cache, mach_va, messages, prefixes=prefixes)
+    _done(t)
+    for image, n in sorted(Counter(m.defined_in for m in res.added).items()):
+        print(f"  + {n} message(s) defined in {image}", file=sys.stderr)
+    for image, err in sorted(res.image_errors.items()):
+        print(f"  warning: could not extract {image}: {err}", file=sys.stderr)
+    for cname, why in sorted(res.unresolved.items()):
+        print(f"  unresolved {cname}: {why}", file=sys.stderr)
+    return messages + res.added
+
+
 def _apply_prefix_filter(messages, prefixes):
     """Keep only messages whose ObjC class name starts with one of *prefixes*."""
     if not prefixes:
@@ -730,6 +757,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     mach_va = None         # cache-native only
     try:
         cache = _open_cache(args.cache, cache_native)
+        reader = cache     # kept past the post-extraction close (handles reopen lazily)
 
         # Tell the extractor/emitter whether a cache is in play so the
         # ambiguous-enum comments don't suggest "--cache" when one is in use.
@@ -806,6 +834,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     messages = _merge_foreign_messages(ctx, data, messages)
     messages = _apply_prefix_filter(messages, args.prefixes)
+    if cache_native and messages and not args.no_cross_image:
+        try:
+            messages = _add_cross_image_messages(reader, mach_va, messages, _prefixes)
+        finally:
+            reader.close()
 
     if not messages:
         print("warning: no proto messages found", file=sys.stderr)

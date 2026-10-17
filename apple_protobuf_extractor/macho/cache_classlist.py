@@ -60,7 +60,7 @@ from __future__ import annotations
 from typing import Dict, Iterator, Optional, Tuple
 
 from macho.dyld_cache import DyldCacheReader
-from macho.objc_abi import CLASS_T_DATA, CLASS_RO_NAME, FAST_DATA_MASK
+from macho.objc_abi import CLASS_T_DATA, CLASS_T_SUPERCLASS, CLASS_RO_NAME, FAST_DATA_MASK
 
 
 # ── Pointer decoding ──────────────────────────────────────────────────────────
@@ -184,3 +184,67 @@ def class_names_for_image(
 
     classlist_start, classlist_end = bounds
     return dict(iter_class_names(reader, classlist_start, classlist_end))
+
+
+def _image_pointer_sections(reader: DyldCacheReader, mach_va: int, *sectnames: str):
+    """``(start, end)`` of every section of the image named one of *sectnames*, in any
+    segment (the cache builder moves ``__objc_classrefs`` between ``__DATA`` and
+    ``__DATA_CONST`` / ``__AUTH_CONST`` across OS versions)."""
+    for key, bounds in sorted(reader.image_sections(mach_va).items()):
+        if '/' in key and key.split('/', 1)[1] in sectnames:
+            yield bounds
+
+
+def class_refs_for_image(reader: DyldCacheReader, mach_va: int) -> Dict[str, int]:
+    """``{class name: class_t vmaddr}`` for every class the image at *mach_va* references
+    through a class-reference slot (``__objc_classrefs`` / ``__objc_superrefs``).
+
+    In the shared cache these slots are already bound to the referenced ``class_t``,
+    wherever it lives, so each entry is the exact link-time answer to "which class does
+    this image mean by that name" — no name lookup is involved.  Pair with
+    :meth:`DyldCacheReader.image_containing` to name the image that defines it."""
+    out: Dict[str, int] = {}
+    for start, end in _image_pointer_sections(
+            reader, mach_va, '__objc_classrefs', '__objc_superrefs'):
+        for slot in range(start, end - 7, 8):
+            raw = reader.read_u64(slot)
+            if not raw:
+                continue
+            class_va = _decode_cache_ptr(reader, raw)
+            if not class_va:
+                continue
+            name = read_objc_class_name(reader, class_va)
+            if name:
+                out.setdefault(name, class_va)
+    return out
+
+
+def class_names_defined_by_image(reader: DyldCacheReader, mach_va: int) -> Dict[str, int]:
+    """``{class name: class_t vmaddr}`` for the classes the image at *mach_va* defines
+    (its ``__objc_classlist``, in whichever segment holds it)."""
+    out: Dict[str, int] = {}
+    for start, end in _image_pointer_sections(reader, mach_va, '__objc_classlist'):
+        for class_va, name in iter_class_names(reader, start, end):
+            out.setdefault(name, class_va)
+    return out
+
+
+def superclass_chain_names(reader: DyldCacheReader, class_va: int) -> list:
+    """Names of the superclasses of the ``class_t`` at *class_va*, nearest first, followed
+    across images (the cache builder binds ``superclass`` to the parent's ``class_t``
+    wherever it lives).  Stops at a root (null superclass), an unreadable link, or a
+    repeated class (a malformed cycle)."""
+    names, seen = [], {class_va}
+    va = class_va
+    while True:
+        raw = reader.read_u64(va + CLASS_T_SUPERCLASS)
+        if not raw:
+            return names
+        va = _decode_cache_ptr(reader, raw)
+        if not va or va in seen:
+            return names
+        seen.add(va)
+        name = read_objc_class_name(reader, va)
+        if name is None:
+            return names
+        names.append(name)

@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -267,6 +267,21 @@ def resolve_type_refs(messages: List[ProtoMessage]) -> None:
                 fld.type_name = "bytes"
 
 
+def referenced_message_class(fld: ProtoField) -> Optional[str]:
+    """The ObjC class *fld* refers to AS A MESSAGE — the class :func:`resolve_type_refs`
+    looks up among the extracted messages (a map's value class, else a non-enum, non-builtin
+    ``type_class``) — or None.  Valid before and after resolution."""
+    if fld.map_key_type is not None:
+        return fld.map_value_class
+    if fld.type_class is None or fld.type_class.startswith("ENUM:"):
+        return None
+    if fld.type_class in _OBJC_BUILTINS:
+        return None
+    if fld.type_name in _KNOWN_SCALAR_TYPES and fld.unresolved_type_class is None:
+        return None                     # a scalar the class maps to (NSString → string)
+    return fld.type_class
+
+
 # ── Enum-compatibility helpers ─────────────────────────────────────────────────
 
 def _enums_compatible(a: ProtoEnum, b: ProtoEnum) -> bool:
@@ -358,6 +373,10 @@ class ProtoFile:
     n_ambiguous:  int = 0            # enum fields reverted because their values
                                      # could not be recovered (legacy field name;
                                      # surfaced in output as "unresolved enum type")
+    # ObjC class name -> package of EVERY message in the run, exactly as build_proto_files
+    # grouped them (so in single-file mode every class maps to this file's one package).
+    # emit() qualifies cross-package references with it unless given a map explicitly.
+    class_to_pkg: Dict[str, str] = field(default_factory=dict)
 
     # ── Emission ──────────────────────────────────────────────────────────────
 
@@ -370,9 +389,10 @@ class ProtoFile:
         class_to_pkg
             Maps ObjC class name → package name for all known classes.
             Used to qualify cross-package type references (e.g. ``clp.Location``).
-            If None, type names are emitted without package qualification.
+            If None, the map build_proto_files grouped the messages by is used
+            (``self.class_to_pkg``; empty → no qualification).
         """
-        ctop = class_to_pkg or {}
+        ctop = class_to_pkg if class_to_pkg is not None else self.class_to_pkg
         lines: List[str] = []
 
         # ── File-header comment ───────────────────────────────────────────────
@@ -396,6 +416,17 @@ class ProtoFile:
             + (f", {self.n_estimated} ESTIMATED (ivar order, not read from the binary)"
                if self.n_estimated else "")
         )
+        external: Dict[str, int] = {}
+        for m in self.messages:
+            if m.defined_in:
+                image = m.defined_in.rsplit("/", 1)[-1]
+                external[image] = external.get(image, 0) + 1
+        if external:
+            n_ext = sum(external.values())
+            lines.append(
+                f"// Includes {n_ext} message{'s' if n_ext != 1 else ''} defined in other "
+                f"images, referenced by messages here: "
+                + ", ".join(f"{img} ({n})" for img, n in sorted(external.items())))
         if self.n_enums_incomplete:
             lines.append(
                 f"// Note: {self.n_enums_incomplete} enum(s) may have missing values "
@@ -512,6 +543,9 @@ class ProtoFile:
             out.append("  " + VA_CLUSTER_CLASS_DETECTION_COMMENT)
         if msg.inline_struct:
             out.append(f"  // {msg.inline_struct}")
+        if msg.defined_in:
+            out.append(f"  // defined in {msg.defined_in}"
+                       + (f" ({msg.defined_in_via})" if msg.defined_in_via else ""))
         if msg.message_note:
             out.append(f"  // {msg.message_note}")
         if msg.inherits_from:
@@ -1125,6 +1159,15 @@ def build_proto_files(
             re.sub(r"[^a-z0-9_]", "_", source_name.lower())
             if source_name else "messages"
         )
+        # Every message now lives in this one package, so no reference is cross-package:
+        # qualifying by the ObjC-prefix package (``ck.CKCodeProto2Any``) names a package
+        # the file does not declare, which protoc rejects.
+        class_to_pkg = {c: pkg for c in class_to_pkg}
+        # The same holds for a foreign-serializer reference, which carries its own package
+        # and output file (proto.foreign): there is now one package and one file.
+        for msg in messages:
+            for fld in msg.fields:
+                fld.ref_package = fld.ref_file = None
         proto_files: List[ProtoFile] = [
             ProtoFile(
                 package=pkg,
@@ -1168,6 +1211,9 @@ def build_proto_files(
     # 5. Compute per-file statistics (confirmed / estimated / unresolved counts)
     _compute_stats(proto_files)
 
+    for pf in proto_files:
+        pf.class_to_pkg = class_to_pkg
+
     return proto_files
 
 
@@ -1183,6 +1229,8 @@ def write_proto_files(
 
     Creates *output_dir* (and parents) if it doesn't exist.
     Returns the list of paths written, in the same order as *proto_files*.
+    *class_to_pkg* overrides each file's own map (see :meth:`ProtoFile.emit`); leave it
+    None to qualify references by the packages build_proto_files grouped them into.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1214,12 +1262,7 @@ def write_from_messages(
         package_override=package_override,
         source_name=source_name,
     )
-    # Build full class_to_pkg for cross-package type qualification in emit()
-    class_to_pkg: Dict[str, str] = {
-        m.class_name: package_for_class(m.class_name) for m in messages
-    }
-    written = write_proto_files(proto_files, Path(output_dir),
-                                class_to_pkg=class_to_pkg)
+    written = write_proto_files(proto_files, Path(output_dir))
     return written, proto_files
 
 

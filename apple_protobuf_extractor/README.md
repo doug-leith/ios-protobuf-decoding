@@ -70,7 +70,7 @@ recreating it, re-run the editable install or `import proto` / `import macho` fa
 file; numbered sub-caches (`.01`, `.02`, …) and the `.symbols` file are picked up
 automatically. A dry run prints a per-framework summary (messages, confirmed vs
 estimated field numbers, enums, output files). Other flags: `--package` (override
-the output package name), `--verbose`, `--version`.
+the output package name), `--no-cross-image` (see below), `--verbose`, `--version`.
 
 ## What it recovers — and the honest caveats
 
@@ -84,6 +84,15 @@ the output package name), `--verbose`, `--version`.
   `sfixed*` (distinct wire encodings/helpers) *are* distinguished.
 - **Names are ObjC-derived** (ivar / class names); usually but not always identical
   to the original `.proto`.
+- **Message types defined in other cache images are pulled in** (`--framework` mode).
+  A field typed by a `PBCodable` class from another image (CloudKitDaemon's
+  `CKDPRecordIdentifier` lives in CloudKit.framework) is resolved to the image that
+  defines it: through the class reference the cache builder bound in the referencing
+  image, else the one image in its `LC_LOAD_DYLIB` closure defining that name. That
+  image is extracted the same way and the message (and what it references) joins the
+  output with a `// defined in <image>` comment, so the files compile on their own.
+  A class that is ambiguous, not a PB message, or not found stays `bytes  //
+  unresolved: <Class>` and the reason is printed. `--no-cross-image` turns this off.
 - **Three protobuf runtimes are decoded.**
     - Apple's Objective-C `PBCodable` classes: the tool disassembles the generated
       `writeTo:` / `readFrom:` code (everything above).

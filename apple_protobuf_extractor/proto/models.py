@@ -310,6 +310,13 @@ class ProtoMessage:
     # A one-line caveat about this message as a whole (emitted as a ``//`` comment under the
     # message header), e.g. a decode that disagreed with another decode of the same message.
     message_note: Optional[str] = None
+    # Set when this class is defined in ANOTHER dyld-cache image than the one being
+    # extracted, and was pulled in because an extracted message references it
+    # (proto.cross_image): the defining image's install path, and how the reference was
+    # resolved to it.  Emitted as a comment under the message header and counted in the
+    # file header.
+    defined_in: Optional[str] = None
+    defined_in_via: Optional[str] = None
 
     def __repr__(self) -> str:
         return f"ProtoMessage({self.name!r}, {len(self.fields)} fields, {len(self.enums)} enums)"

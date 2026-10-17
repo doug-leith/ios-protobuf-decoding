@@ -198,6 +198,13 @@ _LC_SEGMENT_64_CMD  = 0x19        # load command type for 64-bit segments
 _LC_DYLD_INFO        = 0x22        # dyld info (its export range is a trie)
 _LC_DYLD_INFO_ONLY   = 0x80000022
 _LC_DYLD_EXPORTS_TRIE = 0x80000033
+# load commands naming a dylib the image links (dylib_command: name offset at +8)
+_LC_LINKED_DYLIBS = frozenset((
+    0x0C,          # LC_LOAD_DYLIB
+    0x80000018,    # LC_LOAD_WEAK_DYLIB
+    0x8000001F,    # LC_REEXPORT_DYLIB
+    0x80000023,    # LC_LOAD_UPWARD_DYLIB
+))
 _MAX_SIZEOFCMDS     = 1 << 20     # 1 MB sanity cap on sizeofcmds
 # [cap:INPUT-SANITY — leave as-is] Bounds the section-iteration loop against a corrupt
 # header `nsects` on the cache-image parse path (the analogue of memory.py's
@@ -1181,6 +1188,43 @@ class DyldCacheReader:
                 by_addr.setdefault(va, name)     # aliases (objc_retain = objc_retain_x0): first
             names[mh] = by_addr
         return names[mh].get(vmaddr)
+
+    def image_containing(self, vmaddr: int) -> Optional[Tuple[int, str]]:
+        """``(mach_header vmaddr, path)`` of the cache image one of whose segments holds
+        *vmaddr*, or None.  Images' segments do not overlap, so the answer is a fact about
+        the address, not a choice: following a pointer the cache builder bound (a class
+        reference to another image's ``class_t``) and asking this names the image that
+        defines the target.  The segment table is built once, on first use."""
+        segs = self.__dict__.get('_image_segment_ranges')
+        if segs is None:
+            segs = []
+            for mh, path in self.list_images():
+                for key, (start, end) in self.image_sections(mh).items():
+                    if '/' not in key:                  # a segment, not a section
+                        segs.append((start, end, mh, path))
+            segs.sort()
+            self._image_segment_ranges = segs
+            self._image_segment_starts = [r[0] for r in segs]
+        i = bisect.bisect_right(self._image_segment_starts, vmaddr) - 1
+        if i < 0 or not segs[i][0] <= vmaddr < segs[i][1]:
+            return None
+        return segs[i][2], segs[i][3]
+
+    def image_dependencies(self, mach_header_va: int) -> List[str]:
+        """Install names of the dylibs the image at *mach_header_va* links
+        (``LC_LOAD_DYLIB`` / ``_WEAK_`` / ``_REEXPORT_`` / ``_UPWARD_``), in load-command
+        order; ``[]`` if its load commands are unreadable."""
+        out: List[str] = []
+        for cmd, data in self._image_load_commands(mach_header_va):
+            if cmd not in _LC_LINKED_DYLIBS or len(data) < 12:
+                continue
+            name_off = struct.unpack_from('<I', data, 8)[0]
+            if name_off >= len(data):
+                continue
+            name = data[name_off:].split(b'\x00', 1)[0]
+            if name:
+                out.append(name.decode('utf-8', errors='replace'))
+        return out
 
     def decode_ptr(self, raw: int) -> int:
         """
