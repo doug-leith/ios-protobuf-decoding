@@ -49,7 +49,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import _ctx_cache, _ctx_store
-from macho.objc_abi import CLASS_T_DATA, CLASS_RO_NAME, FAST_DATA_MASK
+from macho.classlist import class_name_at
 from proto.arm64cfg import build_blocks, dominators, dominates, ivar_slot_loads, split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
@@ -150,16 +150,12 @@ def _known_entries(ctx, cls, core_index: Dict[int, str]) -> "D.FunctionEntries":
 
 
 def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
-    """Name of the ObjC class whose ``class_t`` is at *va* (``class_t.data -> class_ro_t.name``),
-    or None.  Callers accept it only when it is a known proto class."""
+    """Name of the ObjC class whose ``class_t`` is at *va* (an argument value: None for an
+    opaque token or an unknown value).  Callers accept it only when it is a known proto
+    class."""
     if va is None or not 0 < va < TOKEN_BASE:
         return None
-    try:
-        ro = ctx.read_ptr(va + CLASS_T_DATA) & FAST_DATA_MASK
-        name_va = ctx.read_ptr(ro + CLASS_RO_NAME) if ro else 0
-        return ctx.read_cstring(name_va) if name_va else None
-    except (ValueError, KeyError, IndexError, UnicodeDecodeError, TypeError):
-        return None
+    return class_name_at(ctx, va)
 
 
 def _seed_br_arms(ctx, insns) -> Dict[int, Set[int]]:

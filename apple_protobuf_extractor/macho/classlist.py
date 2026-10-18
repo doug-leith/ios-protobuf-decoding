@@ -188,6 +188,20 @@ class ClassList:
         return f"ClassList({len(self)} classes)"
 
 
+def class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:
+    """``class_ro_t.name`` of the ObjC class whose ``class_t`` is at *va*: ``class_t.data``
+    (its low tag bits masked) -> ``class_ro_t`` -> the name, read through *ctx* (cross-image
+    in cache mode).  None when the chain does not resolve or the name is empty."""
+    try:
+        ro = ctx.read_ptr(va + CLASS_T_DATA) & FAST_DATA_MASK
+        name_va = ctx.read_ptr(ro + CLASS_RO_NAME) if ro else 0
+        return (ctx.read_cstring(name_va) or None) if name_va else None
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        return None
+
+
 # ── Builder ───────────────────────────────────────────────────────────────────
 # The cache-wide relative-method-selector anchor (the '🤯' base) is resolved
 # by macho.relative_selector_base._resolve_relative_selector_base, imported

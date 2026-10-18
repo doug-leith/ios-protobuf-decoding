@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Dict, FrozenSet, Optional, Set
 
 from macho.memory import BinaryContext, _ctx_cache, _ctx_store
-from macho.classlist import ClassList, ObjcClass
+from macho.classlist import ClassList, ObjcClass, class_name_at
 from proto.protoclass_heuristic import _is_proto_class, va_cluster_closure
 
 
@@ -38,15 +38,9 @@ def _resolve_class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:
     ``_OBJC_CLASS_$_PBCodable`` → ``PBCodable``.  This is the principled binary-mode
     NAME anchor (parity with the cache-mode cross-image read).  Returns None if
     neither path resolves."""
-    try:
-        data = ctx.read_ptr(va + 32) & ~0x7              # class_t.data → class_ro_t
-        name = ctx.read_cstring(ctx.read_ptr(data + 24))  # class_ro_t.name
-        if name:
-            return name
-    except (NameError, ImportError):
-        raise
-    except Exception:
-        pass
+    name = class_name_at(ctx, va)
+    if name:
+        return name
     sym = ctx.import_name_for_bind(va)
     if sym and sym.startswith(_OBJC_CLASS_SYM_PREFIX):
         return sym[len(_OBJC_CLASS_SYM_PREFIX):]
