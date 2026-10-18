@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from . import doh, geo, mime, reqlog, siri
+from . import apns_mitm, doh, geo, mime, reqlog, siri
 from .bodies import BodyDisplayOptions, summarize_undecoded
 from .decode import decode_request_body, decode_response_body
 from .endpoints import DecodeContext, default_table
@@ -162,25 +162,41 @@ def _tcp_endpoint(flow) -> str:
     return f"{sni or addr[0]}:{addr[1]}"
 
 
-def _print_tcp_flow(flow, decoded_only: bool, body_opts: BodyDisplayOptions) -> bool:
-    """Print one raw TCP flow: Siri (ACE / HTTP-2) decoded, else a raw-bytes summary.
+def _decode_tcp(flow, messages) -> tuple[Optional[str], Optional[str]]:
+    """``(label, decoded text)`` for a raw TCP flow we can decode, else ``(None, None)``.
 
-    Returns True if the flow was decoded as Siri.  Non-Siri TCP is surfaced (unless
-    ``--decoded-only``) as a one-line-per-direction byte summary — never silently dropped.
+    Siri (ACE / HTTP-2) is recognised from the bytes; APNs (the push-notification courier,
+    port 5223/443) from the flow's ALPN / server name, and decoded by ``apns_mitm`` — the same
+    decoder as the mitmproxy addon, so a capture made with that addon decodes here too.
+    """
+    decoded = siri.decode_tcp_flow(messages)
+    if decoded is not None:
+        return "Siri", decoded
+    if apns_mitm.is_courier(flow):
+        framing, lines = apns_mitm.decode_flow(flow, full=True)
+        return f"APNs, {framing} encoding", "\n".join(lines) if lines else "   (no complete APNs message)"
+    return None, None
+
+
+def _print_tcp_flow(flow, decoded_only: bool, body_opts: BodyDisplayOptions) -> bool:
+    """Print one raw TCP flow: Siri or APNs decoded, else a raw-bytes summary.
+
+    Returns True if the flow was decoded.  Other TCP is surfaced (unless ``--decoded-only``)
+    as a one-line-per-direction byte summary — never silently dropped.
     """
     endpoint = _tcp_endpoint(flow)
     messages = [(m.from_client, m.content) for m in flow.messages]
-    decoded = siri.decode_tcp_flow(messages)
+    label, decoded = _decode_tcp(flow, messages)
     if decoded is None and decoded_only:
         return False
 
     ts = flow.client_conn.timestamp_start if flow.client_conn else None
     print(f"\ntimestamp {_fmt_time(ts)}")
     if decoded is not None:
-        print(f"TCP {endpoint}  (Siri)")
+        print(f"TCP {endpoint}  ({label})")
         print(decoded)
         return True
-    print(f"TCP {endpoint}  (not Siri)")
+    print(f"TCP {endpoint}  (not Siri or APNs)")
     client, server = siri.split_directions(messages)
     print("  client → server " + summarize_undecoded(client, "", body_opts))
     print("  server → client " + summarize_undecoded(server, "", body_opts))

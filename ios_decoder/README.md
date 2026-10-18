@@ -110,6 +110,12 @@ grepped out and parsed — that contract is preserved from the original addon.
 - **Siri** (raw TCP): the ACE stream to `guzzoni` (plist/ping/pong/**speech** packets,
   Opus frames summarised) and HTTP/2 + gRPC to `swallow` (protobuf; FlatBuffers
   bodies are surfaced as a flagged hex preview).
+- **Apple Push Notification service (APNs)** (raw TCP to `courier.push.apple.com`, port 5223/443):
+  every courier message (Connect, ConnectResponse, Filter with its topic hashes, KeepAlive, …)
+  with field names recovered from `apsd`. Such connections appear in a capture only when it was
+  made with the APNs mitmproxy addon, `ios_decoder/apns_mitm.py`; that one self-contained file is
+  both the addon (`mitmdump -s apns_mitm.py`) and the decoder used here (details in
+  `report_on_apple_apns/`).
 - **Ad telemetry**: iAd (`iadsdk`), and XP / AMP (`xp.apple.com`, `amp-api…`) with
   recursive expansion of nested base64 / JSON / gzip / protobuf.
 - **DNS-over-HTTPS** (`application/dns-message` + the `?dns=` GET form) → question +
