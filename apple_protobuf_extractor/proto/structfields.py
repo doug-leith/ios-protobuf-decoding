@@ -60,7 +60,7 @@ from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
-from proto.dispatch_eval import SELF, READER, _opaque
+from proto.eval_tokens import SELF, READER, opaque
 from proto.protocore import _SCALAR_ENC
 
 log = logging.getLogger(__name__)
@@ -254,7 +254,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
         return []
     try:
         flow = arm64_eval.Flow(ctx, list(insns))
-        region = flow.run_from(0, {'x0': _STRUCT_ARG, 'x1': _WRITER_ARG}, opaque=_opaque)
+        region = flow.run_from(0, {'x0': _STRUCT_ARG, 'x1': _WRITER_ARG}, opaque=opaque)
     except (NameError, ImportError):
         raise
     except Exception:
@@ -278,7 +278,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
         got = []
         for number_reg, value_reg in (('x2', 'x1'), ('x1', 'v0')):
             n = c.args.get(number_reg)
-            if n is not None and not _opaque(n):
+            if n is not None and not opaque(n):
                 member = _member_in(flow, insns, k, value_reg, member_at)
                 if member is not None:
                     got.append((member, n))

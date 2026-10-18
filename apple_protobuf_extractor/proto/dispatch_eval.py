@@ -54,18 +54,13 @@ from proto.arm64cfg import build_blocks, dominators, dominates, ivar_slot_loads,
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.arm64_operands import parse_mem
-from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
+from proto.callees import callee_name, stub_selector
+from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, field_value,
+                               ret_value, call_result)
 from proto import dispatch as D
 from proto.models import record_analysis_failure
 
 log = logging.getLogger(__name__)
-
-# Opaque tokens: above every image address, below 2^48, and outside the stack partition.
-_TOKEN_BASE = 0xE000_0000_0000
-SELF = _TOKEN_BASE
-READER = _TOKEN_BASE + 0x1000_0000
-_RET_BASE = _TOKEN_BASE + 0x2000_0000          # + 16 * insn index: x0 after that call
-_FIELD_BASE = _TOKEN_BASE + 0x3000_0000        # + offset: self->ivar at that byte offset
 
 _MAX_FIELD = 1 << 29                            # protobuf field numbers are 1 .. 2^29 - 1
 # [cap:INPUT-SANITY — verified 2026-10-18] how many calls deep from -readFrom: a dispatch core
@@ -81,20 +76,6 @@ _ARM_REACH = 0x40000
 _ARRAY_ENCS = ('@"NSMutableArray"', '@"NSArray"')
 
 
-def _opaque(v: Optional[int]) -> bool:
-    """SELF, READER, call results and self's ivar values are objects, not numbers."""
-    return v is not None and _TOKEN_BASE <= v < _FIELD_BASE + (1 << 28)
-
-
-def _field_value(obj: int, off: int) -> Optional[int]:
-    """``self->ivar`` at byte offset *off* (the array a reader appends to with addObject:)."""
-    return _FIELD_BASE + off if obj == SELF and 0 <= off < (1 << 24) else None
-
-
-def _ret_value(k: int) -> int:
-    return _RET_BASE + 16 * k
-
-
 def _selector_of(ctx, call) -> Optional[str]:
     """Selector a call sends: a ``_objc_msgSend$<sel>`` stub's, or -- for a call to the
     generic ``objc_msgSend`` a standalone binary imports by name -- the selector string x1
@@ -105,22 +86,12 @@ def _selector_of(ctx, call) -> Optional[str]:
     if sel is not None:
         return sel
     x1 = call.args.get('x1')
-    if x1 is not None and not _opaque(x1) and callee_name(ctx, call.target) == '_objc_msgSend':
+    if x1 is not None and not opaque(x1) and callee_name(ctx, call.target) == '_objc_msgSend':
         try:
             return ctx.read_cstring(x1)
         except (ValueError, KeyError, IndexError, UnicodeDecodeError):
             return None
     return None
-
-
-def _call_result(ctx):
-    """``call_result`` for :meth:`Flow.run_from` / :meth:`Flow.propagate`: a call to a runtime
-    function that returns its argument keeps x0; any other call's result is a fresh token."""
-    def result(k: int, target: Optional[int], x0: Optional[int]) -> Optional[int]:
-        if x0 is not None and _opaque(x0) and callee_name(ctx, target) in RETURNS_ARGUMENT:
-            return x0
-        return _ret_value(k)
-    return result
 
 
 @dataclass
@@ -181,7 +152,7 @@ def _known_entries(ctx, cls, core_index: Dict[int, str]) -> "D.FunctionEntries":
 def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
     """Name of the ObjC class whose ``class_t`` is at *va* (``class_t.data -> class_ro_t.name``),
     or None.  Callers accept it only when it is a known proto class."""
-    if va is None or not 0 < va < _TOKEN_BASE:
+    if va is None or not 0 < va < TOKEN_BASE:
         return None
     try:
         ro = ctx.read_ptr(va + CLASS_T_DATA) & FAST_DATA_MASK
@@ -315,7 +286,7 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
             return
         per_br = _seed_br_arms(ctx, insns)
         flow = Flow(ctx, insns, br_arms=per_br)
-        region = flow.run_from(0, regs, call_result=_call_result(ctx), field_value=_field_value, opaque=_opaque,
+        region = flow.run_from(0, regs, call_result=call_result(ctx), field_value=field_value, opaque=opaque,
                                object_escape=True, tail_targets=tails)
         # A core extracts a field number on a path from ITS OWN entry (the window can hold
         # the function laid out after it).
@@ -374,9 +345,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             if lsr_blk is None or lsr_blk not in idom:
                 continue
             slots_at: Dict[int, Dict[int, Tuple[int, int]]] = {}
-            base = flow.propagate(entry, [k], opaque=_opaque, object_escape=True,
-                                  slots_out=slots_at, call_result=_call_result(ctx),
-                                  field_value=_field_value).get(k)
+            base = flow.propagate(entry, [k], opaque=opaque, object_escape=True,
+                                  slots_out=slots_at, call_result=call_result(ctx),
+                                  field_value=field_value).get(k)
             if base is None:
                 continue                       # this lsr is unreachable from the entry
             base_slots = slots_at.get(k, {})
@@ -397,7 +368,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 continue
             default_n = max(cands) + 1
             run = lambda n, rejoin=frozenset(): flow.run_from(
-                k + 1, {**base, dest: n}, stop, call_result=_call_result(ctx), field_value=_field_value, opaque=_opaque,
+                k + 1, {**base, dest: n}, stop, call_result=call_result(ctx), field_value=field_value, opaque=opaque,
                 object_escape=True, slots=base_slots, rejoin=rejoin)
             regions = {default_n: run(default_n)}
             # A field's run stops where it rejoins the unknown-field region: from there on the
@@ -471,17 +442,17 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 for c in calls:
                     x0 = c.args.get('x0')
                     if _class_name_at(ctx, x0) in known:
-                        elems.add(_ret_value(c.k))
+                        elems.add(ret_value(c.k))
                     elif x0 in elems and (_selector_of(ctx, c) or '').startswith('init'):
-                        elems.add(_ret_value(c.k))
+                        elems.add(ret_value(c.k))
             if elems and fd.adder_ivar is None:
                 for c in calls:
                     recv = c.args.get('x0')
                     if not elems & {c.args.get('x1'), c.args.get('x2'), c.args.get('x3')}:
                         continue
-                    if recv is not None and _FIELD_BASE <= recv < _FIELD_BASE + (1 << 24):
+                    if recv is not None and FIELD_BASE <= recv < FIELD_BASE + (1 << 24):
                         # [self->_array addObject:element]: the array IS the ivar
-                        off = recv - _FIELD_BASE
+                        off = recv - FIELD_BASE
                         if off in array_offsets:
                             fd.adder, fd.adder_ivar = c.target, off_to_ivar.get(off)
                             break

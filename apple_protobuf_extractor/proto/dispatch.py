@@ -8,9 +8,8 @@ starts from:
   :class:`proto.arm64_eval.Flow` user seeds its graph with;
 * :func:`_find_field_count` -- the ``cmp wN,#N ; b.hi`` gate reader (enum diagnostics).
 
-Top-level imports are macho.* and the proto-class set only (never proto.extractor); the
-evaluator (:mod:`proto.arm64_eval`, :mod:`proto.dispatch_eval`, which imports this module) is
-imported inside the functions that run it.
+Never imports proto.extractor or proto.dispatch_eval (which imports this module); the
+evaluator (:mod:`proto.arm64_eval`) is imported inside the functions that run it.
 """
 from __future__ import annotations
 import bisect
@@ -24,6 +23,7 @@ from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
 from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
                                range_from_unsigned_gate)
 from proto.arm64cfg import dominators
+from proto.eval_tokens import SELF, READER, opaque
 from proto.arm64_operands import imm_operand, split_ops
 from proto.protoclass_set import _proto_class_set
 
@@ -53,7 +53,6 @@ def _find_readfrom_c_func(
     (a field-less filter's skip-everything helper) has none either.
     """
     from proto.arm64_eval import Flow
-    from proto.dispatch_eval import SELF, READER, _opaque
     method = cls.get_method("readFrom:")
     if method is None or method.imp == 0:
         return None
@@ -69,7 +68,7 @@ def _find_readfrom_c_func(
     insns = insns[:end + 1] if end is not None else insns
     if not insns:
         return None
-    region = Flow(ctx, insns).run_from(0, {'x0': SELF, 'x2': READER}, opaque=_opaque)
+    region = Flow(ctx, insns).run_from(0, {'x0': SELF, 'x2': READER}, opaque=opaque)
     if not region.calls:
         return None
     first = region.calls[0]

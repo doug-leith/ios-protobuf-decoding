@@ -28,7 +28,8 @@ from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs
 from proto.dictrep_flow import Flow
-from proto.dispatch_eval import SELF, _in_image_text, _opaque
+from proto.dispatch_eval import _in_image_text
+from proto.eval_tokens import SELF, opaque
 from proto.arm64cfg   import _next_imp
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
@@ -316,7 +317,7 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
         return None
     try:
         flow = Flow(ctx, insns[:end + 1])
-        region = flow.run_from(0, {'x0': SELF}, opaque=_opaque)
+        region = flow.run_from(0, {'x0': SELF}, opaque=opaque)
     except (NameError, ImportError):
         raise
     except Exception:
@@ -340,7 +341,7 @@ def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
     if not c.tail or c.args.get('x0') != SELF or not _in_image_text(ctx, c.target):
         return None
     x1 = c.args.get('x1')
-    if x1 is not None and not _opaque(x1):
+    if x1 is not None and not opaque(x1):
         return c.target, x1
     return c.target, (_ARG_UNTOUCHED if flow.entry_arg(c.k, 'x1') == 'x1' else None)
 
