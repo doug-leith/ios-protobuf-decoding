@@ -114,17 +114,16 @@ def _adder_array_ivar(
     the next method -- e.g. CoreParsec ``-[_CPVisibleResultsFeedback setGoTakeoverResult:]``
     into ``setUniqueIdsOfVisibleButtons:``, binding a singular field's setter to an array.
     """
-    import bisect
+    from proto.dispatch import function_entries
     if imp_va == 0 or not array_offsets:
         return None
     try:
         insns = disasm(ctx, imp_va, max_insns=_ADDER_MAX_INSNS, stop_at_ret=True)
     except Exception:
         return None
-    entries = sorted(getattr(ctx, "_function_entries", None) or ())
-    i = bisect.bisect_right(entries, imp_va)
-    if i < len(entries):
-        insns = [ins for ins in insns if ins.addr < entries[i]]
+    nxt = function_entries(ctx).next_after(imp_va)
+    if nxt is not None:
+        insns = [ins for ins in insns if ins.addr < nxt]
     adrp_page: Dict[str, int] = {}
     for ins in insns:
         if ins.mnemonic == 'adrp':

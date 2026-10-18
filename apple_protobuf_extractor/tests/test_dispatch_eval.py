@@ -460,7 +460,7 @@ class TestEvaluateClassMemo(unittest.TestCase):
         self.calls = []
         self._saved = E._known_entries, E.find_cores
         E._known_entries = lambda ctx, cls, idx: self.calls.append(len(idx)) or []
-        E.find_cores = lambda ctx, cls, entries: ([], [])
+        E.find_cores = lambda ctx, cls, entries, flows=None: ([], [])
 
     def tearDown(self):
         E._known_entries, E.find_cores = self._saved

@@ -278,6 +278,35 @@ def build_function_index(ctx: BinaryContext, cl: 'ClassList') -> None:
         ivar_slots.update(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
 
 
+class FunctionEntries(list):
+    """Sorted function-entry addresses with set membership (``members``) and the next entry
+    after an address (:meth:`next_after`): a function ends where the next one starts, and a
+    ``b`` to an entry is a tail call."""
+    __slots__ = ("members",)
+
+    def __init__(self, addrs=()):
+        super().__init__(sorted(set(addrs)))
+        self.members = frozenset(self)
+
+    def next_after(self, va: int) -> Optional[int]:
+        """The first entry above *va*, or None."""
+        import bisect
+        i = bisect.bisect_right(self, va)
+        return self[i] if i < len(self) else None
+
+
+def function_entries(ctx: BinaryContext) -> FunctionEntries:
+    """The image's function index (:func:`build_function_index`) as :class:`FunctionEntries`,
+    sorted once per extraction rather than by every caller (empty when the index is not built).
+    Rebuilt if the index has grown since."""
+    from macho.memory import _ctx_store
+    es = getattr(ctx, "_function_entries", None) or set()
+    memo = getattr(ctx, "_function_entries_sorted", None)
+    if memo is None or memo[0] is not es or memo[1] != len(es):
+        memo = _ctx_store(ctx, "_function_entries_sorted", (es, len(es), FunctionEntries(es)))
+    return memo[2]
+
+
 def _build_readfrom_core_index(
     ctx: BinaryContext,
     cl: 'ClassList',

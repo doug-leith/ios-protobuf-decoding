@@ -161,16 +161,23 @@ class ClassDispatch:
 
 # ── function bodies ─────────────────────────────────────────────────────────
 
-def _known_entries(ctx, cls, core_index: Dict[int, str]) -> List[int]:
-    """Sorted addresses known to start a function: every method IMP (recorded on *ctx* by
+def _known_entries(ctx, cls, core_index: Dict[int, str]) -> "D.FunctionEntries":
+    """Addresses known to start a function: every method IMP (recorded on *ctx* by
     :func:`proto.dispatch.build_function_index`), every ReadAllFrom core and *cls*'s own
     methods.  Functions do not overlap, so a function ends at the next one (the CFG-reachable
     end alone runs a tail ``b`` into the function it jumps to, e.g. a ``-readFrom:`` wrapper into
-    the engine laid out after it)."""
-    es = set(getattr(ctx, "_function_entries", None) or ())
-    es.update(core_index)
-    es.update(m.imp for m in cls.methods if m.imp)
-    return sorted(es)
+    the engine laid out after it).  The image-wide part (index and core index) is built once
+    and reused while both are unchanged; a class adds only methods the index does not hold."""
+    from macho.memory import _ctx_store
+    index = D.function_entries(ctx)
+    key = (id(index), id(core_index), len(core_index))
+    memo = getattr(ctx, "_known_entries_base", None)
+    if memo is None or memo[0] != key:
+        base = D.FunctionEntries(index.members.union(core_index)) if core_index else index
+        memo = _ctx_store(ctx, "_known_entries_base", (key, index, core_index, base))
+    base = memo[3]
+    extra = [m.imp for m in cls.methods if m.imp and m.imp not in base.members]
+    return D.FunctionEntries(base.members.union(extra)) if extra else base
 
 
 def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
@@ -234,6 +241,11 @@ def _seed_br_arms(ctx, insns) -> Dict[int, Set[int]]:
     return per_br
 
 
+def _as_entries(entries) -> "D.FunctionEntries":
+    """*entries* (any iterable of addresses, or None) as :class:`proto.dispatch.FunctionEntries`."""
+    return entries if isinstance(entries, D.FunctionEntries) else D.FunctionEntries(entries or ())
+
+
 # [cap:INPUT-SANITY] how far past its entry a function is looked for when no later function
 # entry is known (the largest GeoServices reader is ~5 KB; a runaway guard, not a window).
 _MAX_FUNC_BYTES = 0x10000
@@ -245,15 +257,13 @@ def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = 
     the dispatch would otherwise end the function), where a ``b`` to a known function entry is
     a tail call, and never past the next known function entry (*entries*).  *upto* extends it
     to cover arms found by evaluation."""
-    import bisect
     from proto.arm64cfg import build_blocks
+    entries = _as_entries(entries)
     hard_end = va + _MAX_FUNC_BYTES
-    tails: Set[int] = set()
-    if entries:
-        i = bisect.bisect_right(entries, va)
-        if i < len(entries):
-            hard_end = min(hard_end, entries[i])
-        tails = set(entries)
+    nxt = entries.next_after(va)
+    if nxt is not None:
+        hard_end = min(hard_end, nxt)
+    tails = entries.members
     try:
         insns = [i for i in disasm(ctx, va, max_insns=max(1, (hard_end - va) // 4),
                                    stop_at_ret=False) if va <= i.addr < hard_end]
@@ -323,17 +333,20 @@ def _in_image_text(ctx, va: Optional[int]) -> bool:
 
 # ── 1. which function dispatches ────────────────────────────────────────────
 
-def find_cores(ctx, cls, entries: Optional[List[int]] = None
+def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Dict[int, tuple]] = None
                ) -> Tuple[List[Tuple[int, Dict[str, int]]], List[str]]:
     """``([(core_va, entry_registers)], notes)``: the functions reached from ``-readFrom:`` by
-    calls handed this object and this reader that extract a field number."""
+    calls handed this object and this reader that extract a field number.  *flows*, when
+    given, receives ``{core_va: (insns, br_arms, Flow)}``: the core's first-round evaluation
+    setup, which :func:`_decode_core` would otherwise rebuild."""
     m = cls.get_method("readFrom:")
     notes: List[str] = []
     if m is None or not m.imp:
         return [], ["no readFrom:"]
     found: List[Tuple[int, Dict[str, int]]] = []
     seen: Set[int] = set()
-    tails = frozenset(entries or ())
+    entries = _as_entries(entries)
+    tails = entries.members
 
     def descend(va: int, regs: Dict[str, int], depth: int) -> None:
         if va in seen or depth > _DESCEND_DEPTH:
@@ -342,13 +355,16 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None
         insns = _function_insns(ctx, va, entries=entries)
         if not insns:
             return
-        flow = Flow(ctx, insns, br_arms=_seed_br_arms(ctx, insns))
+        per_br = _seed_br_arms(ctx, insns)
+        flow = Flow(ctx, insns, br_arms=per_br)
         region = flow.run_from(0, regs, call_result=_call_result(ctx), field_value=_field_value, opaque=_opaque,
                                object_escape=True, tail_targets=tails)
         # A core extracts a field number on a path from ITS OWN entry (the window can hold
         # the function laid out after it).
         if any(flow._block_of.get(k) in region.blocks for k, _d in _lsr3_sites(flow)):
             found.append((va, regs))
+            if flows is not None:
+                flows[va] = (insns, per_br, flow)
             return
         for c in region.calls:
             if c.args.get('x0') == SELF and _in_image_text(ctx, c.target):
@@ -363,7 +379,10 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None
 # ── 2./3. what runs for each field number ──────────────────────────────────
 
 def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict[int, str],
-                 out: ClassDispatch, entries: Optional[List[int]] = None) -> None:
+                 out: ClassDispatch, entries: Optional[List[int]] = None,
+                 first: Optional[tuple] = None) -> None:
+    """Run *cls*'s dispatch core at *core_va* for each field number into *out*.  *first* is
+    :func:`find_cores`' ``(insns, br_arms, Flow)`` for the core (round 0 needs exactly that)."""
     from proto.repeated import _adder_array_ivar
     array_offsets = frozenset(iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_ENCS)
     own_slots = frozenset(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
@@ -378,14 +397,17 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
     arms: Dict[int, Set[int]] = {}             # br address -> targets found by evaluation
     upto = 0
     for _round in range(_ARM_ROUNDS):
-        insns = _function_insns(ctx, core_va, upto, entries)
         # CFG completion, per br: its decoded table (as every Flow user), so a control ``br``
         # ahead of the lsr (has-bits bookkeeping, whose index the fixpoint cannot know) does
         # not cut the lsr off; targets found by evaluating a ``br`` under N are added on top.
-        br_arms: Dict[int, Set[int]] = _seed_br_arms(ctx, insns)
-        for b, a in arms.items():
-            br_arms.setdefault(b, set()).update(a)
-        flow = Flow(ctx, insns, br_arms=br_arms)
+        if _round == 0 and first is not None:
+            insns, br_arms, flow = first
+        else:
+            insns = _function_insns(ctx, core_va, upto, entries)
+            br_arms: Dict[int, Set[int]] = _seed_br_arms(ctx, insns)
+            for b, a in arms.items():
+                br_arms.setdefault(b, set()).update(a)
+            flow = Flow(ctx, insns, br_arms=br_arms)
         idom = dominators(flow.cfg)
         sites = _lsr3_sites(flow)
         results: List[Tuple[int, str, Dict[int, object], object]] = []
@@ -602,12 +624,13 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
         out.notes.append("function index not built (proto.dispatch.build_function_index): "
                          "function boundaries from the core index and the class's own methods only")
     entries = _known_entries(ctx, cls, core_index)
-    cores, notes = find_cores(ctx, cls, entries)
+    flows: Dict[int, tuple] = {}
+    cores, notes = find_cores(ctx, cls, entries, flows)
     out.notes.extend(notes)
     for core_va, entry in cores:
         out.cores.append(core_va)
         try:
-            _decode_core(ctx, core_va, entry, cls, core_index, out, entries)
+            _decode_core(ctx, core_va, entry, cls, core_index, out, entries, flows.get(core_va))
         except Exception as exc:                # prototype: report, don't hide
             out.notes.append(f"core {core_va:#x}: {type(exc).__name__}: {exc}")
     return out
