@@ -178,7 +178,7 @@ class TestBiasedMultiSegmentSwitch(unittest.TestCase):
         insns = disasm(ctx, 0x1000, max_insns=200, stop_at_ret=False)
         flow = Flow(ctx, insns)
         (k, off), = [(k, o) for k, o in flow.value_loads()]
-        self.assertEqual(sorted(flow.candidates(k, 'x8', 1 << 31)), [0, 16, 35, 36, 37])
+        self.assertEqual(sorted(flow.candidates(k, 'x8', 1 << 31).values), [0, 16, 35, 36, 37])
 
 
 class TestScalarShapes(unittest.TestCase):

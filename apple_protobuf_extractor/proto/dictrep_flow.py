@@ -77,9 +77,10 @@ class Flow(_EvalFlow):
         value's domain); *stop* holds the other fields' value loads, where a run has left this
         field's code."""
         domain = (0, 1 << (8 * size)) if size < 4 else (-(1 << 31), 1 << 31)   # int32 is signed
-        cands = self.candidates(k, dest, domain)
+        scan = self.candidates(k, dest, domain)
+        cands = scan.values
         problems: List[str] = []
-        if self._gate_capped:
+        if scan.gate_capped:
             problems.append(f"a table gate is wider than {_MAX_GATE_SPAN} values")
         probe = next((v for v in range(max(cands) + 1, domain[1]) if v not in cands), None)
         if probe is None:

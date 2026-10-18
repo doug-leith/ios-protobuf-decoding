@@ -1,7 +1,7 @@
 """
 proto/dispatch_eval.py -- readFrom: field dispatch decoded by evaluation -- and the parts of
 proto/arm64_eval.Flow it is built on (``run_from``, opaque values, the object-escape stack rule,
-per-``br`` arm edges, tail targets, the rejoin stop, ``candidates(intervals=)``).
+per-``br`` arm edges, tail targets, the rejoin stop, the gate intervals ``candidates()`` lists).
 
 Three layers:
 
@@ -195,10 +195,9 @@ class TestCandidateIntervals(unittest.TestCase):
         insns, lab = listing('lsr x1, x22, #3', 'sub w16, w1, #1', 'cmp w16, #9', 'b.hi @out',
                              'cmp x16, #9', 'csel x16, x16, xzr, ls',
                              'ldrsw x16, [x17, x16, lsl #2]', 'out:', 'ret')
-        ivs = []
-        cands = Flow(None, insns).candidates(0, 'x1', (1, 1 << 29), intervals=ivs)
-        self.assertIn((1, 10), ivs)
-        self.assertNotIn(5, cands)            # without the sink only the gate's end points
+        scan = Flow(None, insns).candidates(0, 'x1', (1, 1 << 29))
+        self.assertIn((1, 10), scan.intervals)
+        self.assertNotIn(5, scan.values)      # the values hold only the gate's end points
 
 
 class TestSelectorStubForms(unittest.TestCase):

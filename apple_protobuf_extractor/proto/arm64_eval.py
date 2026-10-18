@@ -302,6 +302,14 @@ class _Worklist:
         return bool(self._work)
 
 
+@dataclass
+class Candidates:
+    """What :meth:`Flow.candidates` read off the comparisons a loaded integer takes part in."""
+    values: Set[int]                                    # within the domain
+    intervals: List[Tuple[int, int]] = field(default_factory=list)   # every ordered gate met
+    gate_capped: bool = False          # a table gate was wider than _MAX_GATE_SPAN values
+
+
 class Flow:
     """CFG + reaching definitions + concrete evaluation for ONE function body."""
 
@@ -353,7 +361,6 @@ class Flow:
         self._solve()
         self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
         self._ivar_memo: Dict[int, Optional[int]] = {}
-        self._interval_sink: Optional[List[Tuple[int, int]]] = None
 
     # ── reaching definitions ────────────────────────────────────────────────
 
@@ -534,8 +541,7 @@ class Flow:
 
     # ── candidate values: the constants V is compared / indexed against ─────
 
-    def candidates(self, root: int, dest: str, domain,
-                   intervals: Optional[List[Tuple[int, int]]] = None) -> Set[int]:
+    def candidates(self, root: int, dest: str, domain) -> Candidates:
         """Values of the loaded integer worth evaluating, from the comparisons it takes part
         in.  Registers are tracked as ``V + b`` through ``mov`` / ``add|sub`` of an immediate
         or of a constant register; comparing such a register with *c* gives the point
@@ -544,15 +550,14 @@ class Flow:
         from the load and stops each path at its first call (where the name is consumed).
         *domain* is ``hi`` (values ``0 <= v < hi``) or ``(lo, hi)``: a 4-byte value is a signed
         int32, so an enum may start below zero (``add w8, w2, #1; cmp w8, #10`` is -1..8).
-        *intervals*, when given, receives the ``(lo, hi)`` of EVERY ordered gate met, whether or
-        not a table load then uses it (a gate whose index is clamped by a ``csel`` before the
-        load is not followed to the load)."""
-        cands: Set[int] = {0}
-        self._gate_capped = False        # set when a table gate was wider than _MAX_GATE_SPAN
-        self._interval_sink = intervals
+        The result also lists the ``(lo, hi)`` of EVERY ordered gate met, whether or not a
+        table load then uses it (a gate whose index is clamped by a ``csel`` before the load is
+        not followed to the load), and whether a table gate was too wide to expand."""
+        scan = Candidates({0})
+        cands = scan.values
         root_blk = self._block_of.get(root) if root >= 0 else self.cfg.entry
         if root_blk is None:
-            return cands
+            return scan
         entry: Dict[int, Dict[str, int]] = {}
         work: deque = deque()
 
@@ -572,7 +577,7 @@ class Flow:
             for k in range(lo, hi):
                 if self.insns[k].mnemonic in ('bl', 'blr'):
                     return False
-                self._candidate_step(cands, st, k)
+                self._candidate_step(scan, st, k)
             for succ in self.cfg.succ.get(blk, []):
                 push(succ, st)
             return True
@@ -582,13 +587,15 @@ class Flow:
             blk = work.popleft()
             run(blk, dict(entry[blk]), self._first_in_block[blk])
         lo, hi = domain if isinstance(domain, tuple) else (0, domain)
-        return {v for v in cands if lo <= v < hi}
+        scan.values = {v for v in cands if lo <= v < hi}
+        return scan
 
-    def _candidate_step(self, cands: Set[int], st: Dict[str, int], k: int) -> None:
+    def _candidate_step(self, scan: Candidates, st: Dict[str, int], k: int) -> None:
         """One instruction of the candidate scan.  *st* maps a register to its offset ``b`` in
         ``V + b``; it ALSO carries, per path, the interval of the last ordered gate on each
         offset (keys ``gate_lo:<b>`` / ``gate_hi:<b>``), so a table is expanded by ITS OWN
         gate and not by an unrelated compare of the same value met on another path."""
+        cands = scan.values
         ins = self.insns[k]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):
@@ -605,8 +612,7 @@ class Flow:
                     if cond in _ORDERED_CONDS:
                         lo, hi = sorted((-st[r], point))
                         st[f"gate_lo:{st[r]}"], st[f"gate_hi:{st[r]}"] = lo, hi   # keyed by the VALUE's offset: a register copy keeps it
-                        if self._interval_sink is not None:
-                            self._interval_sink.append((lo, hi))
+                        scan.intervals.append((lo, hi))
         elif mn in ('cbz', 'cbnz') and ops:
             r = _norm_reg(ops[0])
             if r in st:
@@ -620,7 +626,7 @@ class Flow:
                 if hi - lo <= _MAX_GATE_SPAN:
                     cands.update(range(lo, hi + 1))
                 else:
-                    self._gate_capped = True
+                    scan.gate_capped = True
         new: Optional[Tuple[str, int]] = None
         if mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
             rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])

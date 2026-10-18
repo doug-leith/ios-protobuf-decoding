@@ -388,9 +388,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 out.notes.append(f"lsr {flow.insns[k].addr:#x}: self not held, skipped")
                 continue
             stop = frozenset(b for b in flow.cfg.order if b in idom and dominates(idom, b, lsr_blk))
-            ivs: List[Tuple[int, int]] = []
-            cands = flow.candidates(k, dest, (1, _MAX_FIELD), intervals=ivs)
-            for lo, hi in ivs:
+            scan = flow.candidates(k, dest, (1, _MAX_FIELD))
+            cands = scan.values
+            for lo, hi in scan.intervals:
                 if hi - lo <= _MAX_GATE_SPAN:      # one imm12 gate's reach
                     cands.update(v for v in range(max(lo, 1), hi + 1) if v < _MAX_FIELD)
             if not cands:
