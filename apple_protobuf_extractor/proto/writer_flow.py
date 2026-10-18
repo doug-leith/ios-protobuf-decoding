@@ -41,7 +41,7 @@ from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import BinaryContext, _ctx_store
-from proto.arm64cfg import build_blocks, parse_adrp, split_ops
+from proto.arm64cfg import build_blocks_with_br_arms, parse_adrp, split_ops
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs
 from proto.dispatch_eval import _function_insns
 from proto.writeto import _image_text_range
@@ -249,14 +249,7 @@ class WriterFlow:
         if not insns:
             return None
         arms = _jump_table_arm_addrs(self.ctx, insns, per_br=True)
-        cfg = build_blocks(insns, {a for v in arms.values() for a in v})
-        for b in cfg.order:
-            last = cfg.blocks[b][-1]
-            if last.mnemonic == 'br':
-                for a in arms.get(last.addr, ()):
-                    ab = cfg.addr_to_block.get(a)
-                    if ab is not None and ab not in cfg.succ[b]:
-                        cfg.succ[b].append(ab)
+        cfg = build_blocks_with_br_arms(insns, arms)
         lo, hi = insns[0].addr, insns[-1].addr + 4
         res = _Result()
         states = {cfg.entry: _St(entry, sv={'sp': 0})}

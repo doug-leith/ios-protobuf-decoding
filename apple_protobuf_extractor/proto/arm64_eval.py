@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm
-from proto.arm64cfg import build_blocks, inject_arm_edges, parse_adrp, split_ops
+from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
+                            predecessors, reverse_postorder, split_ops)
 from macho.strings import read_cfstring_text
 from proto.arm64_operands import (
     CALLER_SAVED_GPRS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
@@ -329,15 +330,7 @@ class Flow:
         self.insns = insns
         self.addr_idx = {ins.addr: k for k, ins in enumerate(insns)}
         if br_arms is not None:
-            leaders = {a for arms in br_arms.values() for a in arms}
-            self.cfg = build_blocks(insns, leaders)
-            for b in self.cfg.order:
-                last = self.cfg.blocks[b][-1]
-                if last.mnemonic == 'br':
-                    for a in sorted(br_arms.get(last.addr, ())):
-                        ab = self.cfg.addr_to_block.get(a)
-                        if ab is not None and ab not in self.cfg.succ[b]:
-                            self.cfg.succ[b].append(ab)
+            self.cfg = build_blocks_with_br_arms(insns, br_arms)
         else:
             self.cfg = build_blocks(insns, ())
             inject_arm_edges(self.cfg, tuple(jump_table_arms))
@@ -370,23 +363,8 @@ class Flow:
         cfg = self.cfg
         if cfg.entry is None:
             return
-        preds: Dict[int, List[int]] = {b: [] for b in cfg.order}
-        for b in cfg.order:
-            for s in cfg.succ.get(b, []):
-                preds.setdefault(s, []).append(b)
-        post: List[int] = []
-        seen = {cfg.entry}
-        stack = [(cfg.entry, iter(cfg.succ.get(cfg.entry, [])))]
-        while stack:
-            node, it = stack[-1]
-            nxt = next((s for s in it if s not in seen), None)
-            if nxt is None:
-                post.append(node)
-                stack.pop()
-            else:
-                seen.add(nxt)
-                stack.append((nxt, iter(cfg.succ.get(nxt, []))))
-        rpo = list(reversed(post))
+        preds = predecessors(cfg)
+        rpo = reverse_postorder(cfg)
         entry_state = {r: frozenset((_ENTRY,)) for r in _REGS}
         out: Dict[int, Dict[str, FrozenSet[int]]] = {}
         changed = True

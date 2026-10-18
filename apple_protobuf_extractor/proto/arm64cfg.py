@@ -264,6 +264,20 @@ def build_blocks(insns, extra_leaders=()):
     return CFG(blocks, succ, addr_to_block, order)
 
 
+def build_blocks_with_br_arms(insns, br_arms):
+    """:func:`build_blocks` with each ``br``'s own jump-table arms (*br_arms*: ``{br address:
+    its arms}``) as block leaders and, in address order, as that ``br``'s successors only."""
+    cfg = build_blocks(insns, {a for arms in br_arms.values() for a in arms})
+    for b in cfg.order:
+        last = cfg.blocks[b][-1]
+        if last.mnemonic == 'br':
+            for a in sorted(br_arms.get(last.addr, ())):
+                ab = cfg.addr_to_block.get(a)
+                if ab is not None and ab not in cfg.succ[b]:
+                    cfg.succ[b].append(ab)
+    return cfg
+
+
 def inject_arm_edges(cfg, arm_addrs):
     """Add edges from each `br` block to every arm block (by arm ADDRESS), completing
     the CFG so dominators() reaches jump-table handlers."""
@@ -278,29 +292,41 @@ def inject_arm_edges(cfg, arm_addrs):
                     cfg.succ[b].append(ab)
 
 
-def dominators(cfg):
-    """Immediate-dominator map {block: idom} (Cooper-Harvey-Kennedy); entry→entry."""
-    if cfg.entry is None:
-        return {}
-    visited, post = set(), []
-    stack = [(cfg.entry, False)]
-    while stack:
-        n, done = stack.pop()
-        if done:
-            post.append(n); continue
-        if n in visited:
-            continue
-        visited.add(n)
-        stack.append((n, True))
-        for s in cfg.succ.get(n, []):
-            if s not in visited:
-                stack.append((s, False))
-    rpo = list(reversed(post))
-    idx = {b: i for i, b in enumerate(rpo)}
+def predecessors(cfg):
+    """``{block: [its predecessors]}`` for every block of *cfg*."""
     preds = {b: [] for b in cfg.order}
     for b in cfg.order:
         for s in cfg.succ.get(b, []):
             preds.setdefault(s, []).append(b)
+    return preds
+
+
+def reverse_postorder(cfg):
+    """The blocks reachable from ``cfg.entry``, in reverse postorder of a depth-first search."""
+    if cfg.entry is None:
+        return []
+    post = []
+    seen = {cfg.entry}
+    stack = [(cfg.entry, iter(cfg.succ.get(cfg.entry, [])))]
+    while stack:
+        node, it = stack[-1]
+        nxt = next((s for s in it if s not in seen), None)
+        if nxt is None:
+            post.append(node)
+            stack.pop()
+        else:
+            seen.add(nxt)
+            stack.append((nxt, iter(cfg.succ.get(nxt, []))))
+    return list(reversed(post))
+
+
+def dominators(cfg):
+    """Immediate-dominator map {block: idom} (Cooper-Harvey-Kennedy); entry→entry."""
+    if cfg.entry is None:
+        return {}
+    rpo = reverse_postorder(cfg)
+    idx = {b: i for i, b in enumerate(rpo)}
+    preds = predecessors(cfg)
     idom = {cfg.entry: cfg.entry}
 
     def inter(a, b):

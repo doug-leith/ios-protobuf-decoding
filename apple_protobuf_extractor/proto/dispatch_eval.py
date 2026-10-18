@@ -50,7 +50,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import _ctx_cache, _ctx_store
 from macho.classlist import class_name_at
-from proto.arm64cfg import build_blocks, dominators, dominates, ivar_slot_loads, split_ops
+from proto.arm64cfg import build_blocks_with_br_arms, dominators, dominates, ivar_slot_loads, split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.arm64_operands import parse_mem
@@ -196,8 +196,7 @@ def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = 
         return []
     if not insns:
         return []
-    per_br = _seed_br_arms(ctx, insns)
-    cfg = build_blocks(insns, {a for arms in per_br.values() for a in arms})
+    cfg = build_blocks_with_br_arms(insns, _seed_br_arms(ctx, insns))
     reached, work = set(), [cfg.entry]
     while work:
         b = work.pop()
@@ -205,12 +204,9 @@ def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = 
             continue
         reached.add(b)
         last = cfg.blocks[b][-1]
-        succ = list(cfg.succ.get(b, []))
         if last.mnemonic == 'b' and _parse_imm(last.op_str) in tails:
-            succ = []                                      # a tail call into another function
-        if last.mnemonic == 'br':
-            succ += [cfg.addr_to_block[a] for a in per_br.get(last.addr, ()) if a in cfg.addr_to_block]
-        work.extend(succ)
+            continue                                       # a tail call into another function
+        work.extend(cfg.succ.get(b, []))
     end = max(cfg.blocks[b][-1].addr for b in reached) + 4
     end = min(max(end, upto), hard_end)
     return [i for i in insns if i.addr < end]
