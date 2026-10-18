@@ -1,5 +1,5 @@
 """
-proto/dictrep_flow.py: the stack-slot model and the whole-function constant propagation
+proto/arm64_eval.py: the stack-slot model and the whole-function constant propagation
 (``Flow.propagate`` / ``Flow.flag_runs``) that read a dictionary key wherever the compiler put
 it -- chosen once before a loop by the JSON flag (``cmp w22,#0; csel x8,x9,x8,ne``), spilled to
 the frame and reloaded into x3 at the ``setObject:forKey:`` call (the real
@@ -15,7 +15,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from macho.disasm import Insn
-from proto.dictrep_flow import Flow, _STACK_TOP
+from proto.arm64_eval import Flow, _STACK_TOP
 
 PLAIN, JSON = 0x5040, 0x5060           # the two spellings' CFString addresses
 CALL = '#0x9000'                       # some callee outside the listing

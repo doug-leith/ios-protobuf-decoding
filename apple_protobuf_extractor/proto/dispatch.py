@@ -8,7 +8,7 @@ in :mod:`proto.dispatch_eval`):
   each proto class's ``-readFrom:`` tail-calls, indexed by address (an element core a parent's
   handler calls names the element class);
 * :func:`_jump_table_arm_addrs` -- decoded ``br`` jump tables, the CFG completion every
-  :class:`proto.dictrep_flow.Flow` user seeds its graph with;
+  :class:`proto.arm64_eval.Flow` user seeds its graph with;
 * :func:`_find_field_count` -- the ``cmp wN,#N ; b.hi`` gate reader (enum diagnostics).
 
 Imports only macho.* + arm64decode + protoclass_heuristic (never proto.extractor), so it stays
@@ -55,7 +55,7 @@ def _find_readfrom_c_func(
     first branch target was taken whatever it was, which put a runtime stub into the core
     index for every inline reader (37-40 classes per build, all named after the first).
     """
-    from proto.dictrep_flow import Flow
+    from proto.arm64_eval import Flow
     from proto.dispatch_eval import SELF, READER, _opaque
     method = cls.get_method("readFrom:")
     if method is None or method.imp == 0:

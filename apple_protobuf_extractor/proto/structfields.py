@@ -249,7 +249,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
     in address order; ``[]`` when it writes no member (not a struct writer).
 
     Decided by data flow, not by instruction windows.  The function is evaluated
-    (:meth:`proto.dictrep_flow.Flow.run_from`) with the struct and the writer as opaque
+    (:meth:`proto.arm64_eval.Flow.run_from`) with the struct and the writer as opaque
     tokens; a write is a call (or tail call) handed the writer in x0.  The AAPCS64 argument
     positions of ``PBDataWriterWrite*Field(writer, value, field#)`` then say where the rest
     is: an integer value in x1 with the field number in w2, a float/double value in v0 with
@@ -260,7 +260,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
     brk``), or setup instructions in any order, read the same.  A write whose value does not
     trace to a struct member is skipped here and the layout match (:func:`match_layout`)
     then rejects the struct as incomplete."""
-    from proto.dictrep_flow import Flow
+    from proto.arm64_eval import Flow
     insns = _writer_insns(ctx, entry)
     if not insns:
         return []
@@ -551,7 +551,7 @@ def _flow_for(ctx, insns: Sequence):
             arms = _jump_table_arm_addrs(ctx, list(insns))
         except Exception:                      # CFG completion only; the evaluation itself
             arms = ()                          # follows `br` targets and does not need it
-        hit = (insns, Flow(ctx, list(insns), arms))
+        hit = (insns, Flow(ctx, list(insns), jump_table_arms=arms))
         cache[key] = hit
     return hit[1]
 
@@ -613,7 +613,7 @@ def _member_in(flow, insns: Sequence, k: int, reg: str, member_at) -> Optional[i
     """The member offset *reg* holds before ``insns[k]``: every definition reaching it is a
     member load, directly or through value-preserving copies (``mov`` / ``fmov`` / ``fcvt``:
     a float member boxed as a double), of the same member."""
-    from proto.dictrep_flow import reg_name
+    from proto.arm64_operands import reg_name
     found = set()
     work, seen = [(k, reg)], set()
     while work:
@@ -663,7 +663,7 @@ _NO_KEY = object()
 
 def _call_key(ctx, runs, k: int):
     """The dictionary key of the ``setObject:forKey:`` call at ``insns[k]``: x3's value on every
-    flag run that reaches it (:meth:`proto.dictrep_flow.Flow.flag_runs`), a CFString
+    flag run that reaches it (:meth:`proto.arm64_eval.Flow.flag_runs`), a CFString
     identifier.  Two spellings across the flag values are resolved by :func:`_key_spelling`.
     Returns the key, ``None`` (an unresolvable spelling pair -- :data:`_CASE_TWINS` when the
     two differ only in case), or :data:`_NO_KEY` when x3 is not a constant identifier on some

@@ -1,6 +1,6 @@
 """
 proto/dispatch_eval.py -- readFrom: field dispatch decoded by evaluation -- and the parts of
-proto/dictrep_flow.Flow it is built on (``run_from``, opaque values, the object-escape stack rule,
+proto/arm64_eval.Flow it is built on (``run_from``, opaque values, the object-escape stack rule,
 per-``br`` arm edges, tail targets, the rejoin stop, ``candidates(intervals=)``).
 
 Three layers:
@@ -22,7 +22,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..'))
 
 from macho.disasm import Insn
-from proto.dictrep_flow import Flow, _STACK_TOP
+from proto.arm64_eval import Flow, _STACK_TOP
 from proto import dispatch_eval as E
 
 CALL, CALL2 = '#0x9000', '#0x9100'           # callees outside the listing
@@ -62,7 +62,7 @@ class TestRunFromThroughCalls(unittest.TestCase):
             'mov x0, x19',
             f'bl {CALL2}',
             'ret')
-        r = Flow(None, insns).run_from(0, {'x0': SELF}, ret_value=E._ret_value, opaque=E._opaque)
+        r = Flow(None, insns).run_from(0, {'x0': SELF}, call_result=lambda k, target, x0: E._ret_value(k), opaque=E._opaque)
         got = calls_by_target(r)
         self.assertEqual(got[0x9000].args['x0'], SELF)
         self.assertEqual(got[0x9100].args['x0'], SELF)            # callee-saved copy survived
@@ -119,7 +119,7 @@ class TestObjectEscape(unittest.TestCase):
 
     def x1_at_adder(self, object_escape):
         insns, _ = listing(*self.BODY)
-        r = Flow(None, insns).run_from(0, {}, ret_value=E._ret_value, opaque=E._opaque,
+        r = Flow(None, insns).run_from(0, {}, call_result=lambda k, target, x0: E._ret_value(k), opaque=E._opaque,
                                        object_escape=object_escape)
         return calls_by_target(r)[0x9100].args.get('x1')
 
@@ -153,7 +153,7 @@ class TestPerBrArms(unittest.TestCase):
         f = Flow(None, insns, br_arms={br_a: {lab['a1']}, br_b: {lab['b1']}})
         r = f.run_from(1, {})                 # start at table A's br
         self.assertEqual(set(calls_by_target(r)), {0x9000})
-        f2 = Flow(None, insns, jump_table_arms={lab['a1'], lab['b1']})
+        f2 = Flow(None, insns, jump_table_arms={lab['a1'], lab['b1']})   # every br, every arm
         self.assertEqual(set(calls_by_target(f2.run_from(1, {}))), {0x9000, 0x9100})
 
     def test_a_known_index_takes_one_arm_and_reports_the_target(self):

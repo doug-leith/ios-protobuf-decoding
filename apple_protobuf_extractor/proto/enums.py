@@ -433,7 +433,7 @@ def _harvest_dictrep(
     # The field's int is driven through the function's own code, value by value, to the
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.  This replaces the
     # earlier look-back-window passes (jump table / pointer table / compare chain).
-    flow = Flow(ctx, insns, _jump_table_arm_addrs(ctx, insns))
+    flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
     enums = flow.enum_maps({iv.offset for iv in cls.ivars}, wanted)
     return enums, flow.incomplete, flow.unevaluated
 
@@ -594,7 +594,7 @@ def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
         if body:
             insns = body
             truncated = _disasm_truncated(insns, _SPARSE_HARD_CAP)
-    flow = Flow(ctx, insns, _jump_table_arm_addrs(ctx, insns))
+    flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
     res = flow.analyse_root(-1, 'x2', 4, frozenset(), direct=True)
     problems = list(res.problems)
     if truncated:

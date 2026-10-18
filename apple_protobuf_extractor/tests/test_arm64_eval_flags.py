@@ -1,5 +1,5 @@
 """
-proto/dictrep_flow.py: the evaluator's condition flags and second operands.
+proto/arm64_eval.py: the evaluator's condition flags and second operands.
 
 A value the evaluator cannot compute must come out unknown, never wrong.  These cases were
 silently mis-evaluated (code review 2026-10-18):
@@ -18,8 +18,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from proto.dictrep_flow import Flow
-from tests.test_dictrep_flow_propagate import listing, at_mark
+from proto.arm64_eval import Flow
+from tests.test_arm64_eval_propagate import listing, at_mark
 
 CALL = '#0x9000'
 

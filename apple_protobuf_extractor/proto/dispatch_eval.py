@@ -18,7 +18,7 @@ the reader:
    constants it was handed (a data table chosen by a ``csel``) come along as values.
 2. **What runs for field N.**  The core is propagated from its entry to the ``lsr`` (the state
    there: self, reader, table, in whatever registers the core keeps them), then from just after
-   the ``lsr`` with Wf = N through calls (:meth:`proto.dictrep_flow.Flow.run_from`) until control
+   the ``lsr`` with Wf = N through calls (:meth:`proto.arm64_eval.Flow.run_from`) until control
    re-enters a block that dominates the ``lsr`` -- the next tag read.  Branches the analysis
    cannot decide (has-bits, wire type, error checks) are followed both ways; a jump-table
    ``br`` is decided by N itself.  Only the outermost ``lsr`` counts: one dominated by another
@@ -32,7 +32,7 @@ the reader:
    method IMP called directly, x1 = ``_cmd``; in x1 for an ``objc_direct`` C function), and its ivar is the array ivar whose offset
    variable it loads (:func:`proto.repeated._adder_array_ivar`).
 
-Stack slots use the object-escape rule (:class:`proto.dictrep_flow._Machine`): a callee handed a
+Stack slots use the object-escape rule (:class:`proto.arm64_eval._Machine`): a callee handed a
 frame address may write from it upward only, and does not keep it past its return.  An older
 toolchain spills the element object across such a call (``str x0,[sp,#8]`` ... ``add x1,sp,#0x60;
 bl`` ... ``ldr x1,[sp,#8]; bl adder``), which clearing every slot would lose.
@@ -52,7 +52,8 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.disasm import disasm, _parse_imm
 from proto.arm64cfg import dominators, dominates, ivar_slot_loads, split_ops
-from proto.dictrep_flow import Flow, _norm_reg
+from macho.disasm import _norm_reg
+from proto.arm64_eval import Flow
 from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
 from proto import dispatch as D
@@ -197,7 +198,7 @@ def _seed_br_arms(ctx, insns) -> Dict[int, Set[int]]:
     bounded by an ``and`` mask rather than a ``cmp`` gate (``and w8, w0, #7`` on the wire type)
     -- the targets the ``br`` takes for every value the mask lets through, found by running the
     straight-line code from the ``and`` to the ``br``."""
-    from proto.dictrep_flow import _Machine
+    from proto.arm64_eval import _Machine
     per_br = {b: set(a) for b, a in D._jump_table_arm_addrs(ctx, insns, per_br=True).items()}
     flow = None
     for kb, br in enumerate(insns):
