@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -712,13 +712,7 @@ class ProtoFile:
                 else:
                     first_msg = min(group, key=lambda t: t[1].name)[1]
                     new_name = f"{first_msg.name}{enum_name}"
-                    qualified = ProtoEnum(
-                        name=new_name,
-                        values=best.values,
-                        values_confirmed=best.values_confirmed,
-                        values_truncated=best.values_truncated,
-                    )
-                    result_enums.append(qualified)
+                    result_enums.append(replace(best, name=new_name))
                     for _, m in group:
                         field_renames.setdefault(m.class_name, {})[enum_name] = new_name
 
@@ -811,13 +805,7 @@ class ProtoFile:
             if new_name is None:
                 rebuilt.append(enum)
                 continue
-            rebuilt.append(ProtoEnum(
-                name=new_name,
-                values=enum.values,
-                values_confirmed=enum.values_confirmed,
-                values_truncated=enum.values_truncated,
-                collision_origin=enum.name,
-            ))
+            rebuilt.append(replace(enum, name=new_name, collision_origin=enum.name))
 
         # Patch every field across the file that referenced a renamed enum.
         for msg in self.messages:
@@ -899,13 +887,7 @@ class ProtoFile:
                 rebuilt.append(enum)
                 continue
 
-            rebuilt.append(ProtoEnum(
-                name=enum.name,
-                values=new_values,
-                values_confirmed=enum.values_confirmed,
-                values_truncated=enum.values_truncated,
-                collision_origin=enum.collision_origin,
-            ))
+            rebuilt.append(replace(enum, values=new_values))
 
         return rebuilt
 

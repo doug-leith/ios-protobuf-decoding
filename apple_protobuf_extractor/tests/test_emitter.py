@@ -1432,5 +1432,45 @@ class TestConfigurePrefixPackages(unittest.TestCase):
         self.assertEqual(package_for_class("applFoo"), "applfoo")
 
 
+
+# ── TestEnumRebuildKeepsIncompleteReason ──────────────────────────────────────
+
+class TestEnumRebuildKeepsIncompleteReason(unittest.TestCase):
+    """The emitter rebuilds an enum to split a name clash, rename it away from a message
+    name, or add a zero value; each rebuild keeps why its values may be incomplete."""
+
+    _REASON = "value 7 of the inlined converter could not be evaluated"
+
+    def _enum(self, name, values):
+        from proto.models import ProtoEnum, ProtoEnumValue
+        return ProtoEnum(name=name, values=[ProtoEnumValue(n, v) for n, v in values],
+                         values_truncated=True, incomplete_reason=self._REASON)
+
+    def _emit(self, msgs):
+        return ProtoFile("geo", "geo.proto", msgs, []).emit()
+
+    def test_zero_value_synthesis(self):
+        msg = _geo_msg("Foo")
+        msg.enums = [self._enum("FooKind", [("FOO_KIND_A", 1), ("FOO_KIND_B", 2)])]
+        out = self._emit([msg])
+        self.assertIn("FOO_KIND_UNSPECIFIED = 0", out)
+        self.assertIn(f"INCOMPLETE — {self._REASON}", out)
+
+    def test_message_name_collision_rename(self):
+        msg = _geo_msg("Foo")
+        msg.enums = [self._enum("Foo", [("FOO_ZERO", 0), ("FOO_A", 1)])]
+        out = self._emit([msg])
+        self.assertIn("enum FooEnum {", out)
+        self.assertIn(f"INCOMPLETE — {self._REASON}", out)
+
+    def test_incompatible_split(self):
+        a, b = _geo_msg("A"), _geo_msg("B")
+        a.enums = [self._enum("Kind", [("KIND_ZERO", 0), ("KIND_X", 1)])]
+        b.enums = [self._enum("Kind", [("KIND_ZERO", 0), ("KIND_Y", 1)])]
+        out = self._emit([a, b])
+        self.assertIn("enum BKind {", out)
+        self.assertEqual(out.count(f"INCOMPLETE — {self._REASON}"), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
