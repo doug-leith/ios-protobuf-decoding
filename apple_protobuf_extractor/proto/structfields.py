@@ -49,10 +49,13 @@ from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
+from proto.arm64_operands import CALLER_SAVED_GPRS, LOAD_BYTES
+from proto.callees import stub_selector
+from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
 from proto.dispatch import _jump_table_arm_addrs
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
-from proto.mapfields import _scratch_slot_of, _stub_selector
+from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
@@ -171,8 +174,7 @@ _WRITER_LOCAL_SPAN = 0x800
 # How many instructions back from a write call the value load may sit.
 _VALUE_LOAD_WINDOW = 12
 
-_LOAD_WIDTH_MNEMONICS = {'ldrb': 1, 'ldrh': 2, 'ldursb': 1, 'ldursh': 2, 'ldurb': 1, 'ldurh': 2,
-                         'ldrsb': 1, 'ldrsh': 2, 'ldrsw': 4, 'ldursw': 4}
+_LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
 _BRANCH_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
                                'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz'))
 
@@ -404,7 +406,7 @@ def _load_width(ins, mem) -> int:
     return 4 if mem[0][0] in 'wsf' else 8
 
 
-_CALLER_SAVED = [f'x{i}' for i in range(18)]
+_CALLER_SAVED = CALLER_SAVED_GPRS
 _LOAD_MNEMONICS = ('ldrsw', 'ldr', 'ldrb', 'ldrh', 'ldur')
 _NO_DEST_MNEMONICS = ('cmp', 'cmn', 'tst', 'tbz', 'tbnz', 'cbz', 'cbnz', 'b')
 
@@ -518,22 +520,10 @@ _IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
 _DICTREP_SELECTOR = "_dictionaryRepresentation:"
 
 
-def _cfstring_text(ctx, va: int) -> Optional[str]:
-    """The ASCII text of the ``CFString`` constant at *va* (``isa, flags, chars*, length``),
-    else ``None``."""
-    try:
-        chars, length = ctx.read_ptr(va + 16), ctx.read_u64(va + 24)
-        if not chars or not 0 < length <= 64:
-            return None
-        return ctx.read_bytes(chars, length).decode('ascii')
-    except Exception:
-        return None
-
-
 def _cfstring(ctx, va: int) -> Optional[str]:
     """The text of the ``CFString`` constant at *va* when it reads as an identifier — the only
     kind of key a generated dictionary representation uses — else ``None``."""
-    text = _cfstring_text(ctx, va)
+    text = read_cfstring_text(ctx, va)
     return text if text is not None and _IDENTIFIER.match(text) else None
 
 
@@ -582,15 +572,6 @@ _FP_BOXES = ("numberWithDouble:", "numberWithFloat:")
 _COPIES = ('mov', 'fmov', 'fcvt')
 
 
-def _call_selector(ctx, target: Optional[int]) -> Optional[str]:
-    """Selector of the objc-message stub a ``bl`` calls (``None``: not a message send),
-    memoised per target."""
-    cache = _ctx_cache(ctx, "_struct_call_selectors", dict)
-    if target not in cache:
-        cache[target] = _stub_selector(ctx, target)
-    return cache[target]
-
-
 def _boxed_member(ctx, flow, insns: Sequence, k: int, member_at) -> Optional[int]:
     """The member whose value the ``setObject:forKey:`` call at ``insns[k]`` files as a number,
     by use-def chain from its object argument x2: through ``mov`` copies to the result of a
@@ -617,7 +598,7 @@ def _boxed_member(ctx, flow, insns: Sequence, k: int, member_at) -> Optional[int
             continue
         if ins.mnemonic != 'bl' or reg != 'x0':
             return None
-        sel = _call_selector(ctx, _parse_imm(ins.op_str))
+        sel = stub_selector(ctx, _parse_imm(ins.op_str))
         if sel is not None:
             if not sel.startswith(_BOX_PREFIX):
                 return None
@@ -721,7 +702,7 @@ def _pair_members(ctx, insns: Sequence, member_at) -> Tuple[Dict[int, MemberDict
     instruction).  A member filed under two different keys keeps no name (nothing is guessed);
     a keyed call whose object traces to no member counts as unpaired."""
     calls = [k for k, ins in enumerate(insns) if ins.mnemonic == 'bl'
-             and _call_selector(ctx, _parse_imm(ins.op_str)) == _SET_FOR_KEY]
+             and stub_selector(ctx, _parse_imm(ins.op_str)) == _SET_FOR_KEY]
     if not calls:
         return {}, 0
     flow = _flow_for(ctx, insns)

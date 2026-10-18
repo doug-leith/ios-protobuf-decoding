@@ -15,6 +15,7 @@ import bisect
 from collections import deque
 
 from macho.disasm import find_adrp_add_target, _parse_imm, _norm_reg
+from proto.arm64_operands import split_ops, parse_mem  # noqa: F401  (re-export)
 
 
 TERMINALS = {'ret', 'retaa', 'retab', 'eret'}
@@ -39,27 +40,6 @@ def _is_cond(mn: str) -> bool:
 # and binding code stop re-implementing ad-hoc `op_str.split(',')` parses (each of
 # which only handled the forms it happened to need).
 
-def split_ops(op_str):
-    """Split an operand string on TOP-LEVEL commas (commas inside ``[...]`` stay
-    put), returning stripped, lowercased operand tokens.
-
-        'w1, [x20, x8]'   -> ['w1', '[x20, x8]']
-        'x8, x8, #0x200'  -> ['x8', 'x8', '#0x200']
-        'ret' / ''        -> []
-    """
-    out, depth, start = [], 0, 0
-    for i, ch in enumerate(op_str):
-        if ch == '[':
-            depth += 1
-        elif ch == ']':
-            depth -= 1
-        elif ch == ',' and depth == 0:
-            out.append(op_str[start:i].strip().lower())
-            start = i + 1
-    tail = op_str[start:].strip().lower()
-    if out or tail:
-        out.append(tail)
-    return out
 
 
 def dst_reg(op_str):
@@ -90,21 +70,10 @@ def mem_operand(op_str):
     to xN; ``disp``/``shift`` are ints.  Returns None if the second operand is not a
     ``[...]`` memory reference."""
     ops = split_ops(op_str)
-    if len(ops) < 2 or '[' not in ops[1] or ']' not in ops[1]:
+    pm = parse_mem(ops[1]) if len(ops) >= 2 else None
+    if pm is None:
         return None
-    value = ops[0]
-    inside = ops[1][ops[1].index('[') + 1:ops[1].index(']')]
-    parts = [p.strip() for p in inside.split(',')]
-    base = _norm_reg(parts[0])
-    index, disp, shift = None, 0, 0
-    if len(parts) >= 2:
-        if parts[1].startswith('#'):
-            disp = _parse_imm(parts[1]) or 0
-        else:
-            index = _norm_reg(parts[1])
-    if len(parts) >= 3 and '#' in parts[2]:                 # 'lsl #3' shift amount
-        shift = _parse_imm('#' + parts[2].split('#', 1)[1].strip()) or 0
-    return value, base, index, disp, shift
+    return ops[0], pm.base, pm.index, pm.disp, pm.shift
 
 
 def ivar_slot_loads(insns):

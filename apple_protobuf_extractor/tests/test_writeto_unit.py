@@ -472,19 +472,25 @@ class TestAccessorBinding(unittest.TestCase):
                        cstrs={0x5000: 'context'})
 
     def _patch_disasm(self):
+        import proto.callees as C
         mem, fd = asm(self._STUB, self._RETAIN)
-        orig = W.disasm
-        W.disasm = fd
+        orig = W.disasm, C.disasm
+        W.disasm = C.disasm = fd
         return orig
+
+    def _restore_disasm(self, orig):
+        import proto.callees as C
+        W.disasm, C.disasm = orig
 
     def test_selector_stub_name(self):
         ctx = self._ctx()
         orig = self._patch_disasm()
         try:
-            self.assertEqual(W._selector_stub_name(ctx, 0x9000), 'context')
-            self.assertIsNone(W._selector_stub_name(ctx, 0x9100))   # plain thunk
+            from proto.callees import stub_selector
+            self.assertEqual(stub_selector(ctx, 0x9000), 'context')
+            self.assertIsNone(stub_selector(ctx, 0x9100))   # plain thunk
         finally:
-            W.disasm = orig
+            self._restore_disasm(orig)
 
     def test_accessor_beats_stale_cont_off(self):
         # the message-write idiom: getter -> retain -> mov chain -> write.  cont_off
@@ -505,7 +511,7 @@ class TestAccessorBinding(unittest.TestCase):
                                     {0x40: '_stale', 0x18: '_context'},
                                     {'context': '_context'})
         finally:
-            W.disasm = orig
+            self._restore_disasm(orig)
         self.assertEqual((name, st), ('_context', 'ok-accessor'))
 
     def test_no_accessor_map_falls_through_to_cont_off(self):
@@ -522,7 +528,7 @@ class TestAccessorBinding(unittest.TestCase):
         try:
             name, st = W.bind_write(ctx, w, self.SELF, {}, {0x40: '_stale'}, None)
         finally:
-            W.disasm = orig
+            self._restore_disasm(orig)
         self.assertEqual((name, st), ('_stale', 'ok-repeated'))
 
 

@@ -202,7 +202,7 @@ class TestCandidateIntervals(unittest.TestCase):
 
 
 class TestSelectorStubForms(unittest.TestCase):
-    """repeated._msgsend_stub_selector, which the evaluator's adder / init tracking reads
+    """proto.callees.stub_selector, which the evaluator's adder / init tracking reads
     selectors with: the per-selector ``adrp x1; ldr x1,[x1,#o]`` stub, and the shared stub
     newer caches use (iOS 27 / macOS 27), ``adrp x1; add x1,x1,#o; b _objc_msgSend``."""
 
@@ -226,9 +226,9 @@ class TestSelectorStubForms(unittest.TestCase):
 
     def _sel(self, target_name):
         from unittest.mock import patch
-        from proto.repeated import _msgsend_stub_selector
+        from proto.callees import stub_selector
         with patch('proto.callees.callee_name', lambda ctx, va: target_name if va == self.TARGET else None):
-            return _msgsend_stub_selector(self._ctx(), self.STUB)
+            return stub_selector(self._ctx(), self.STUB)
 
     def test_shared_stub_names_its_selector(self):
         self.assertEqual(self._sel('_objc_msgSend'), 'addPredictedSpeed:')

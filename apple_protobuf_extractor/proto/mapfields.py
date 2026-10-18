@@ -49,12 +49,14 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from macho.memory import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import disasm, _parse_imm, _norm_reg
+from proto.arm64_operands import CALLER_SAVED_GPRS
+from proto.callees import stub_selector
 
 from proto.arm64cfg import (
     split_ops, dst_reg, mem_operand, _next_imp,
 )
 from proto.writeto import (
-    _writeto_field_number_before, _selector_stub_name,
+    _writeto_field_number_before,
     _addr_to_name, _NON_DEF_MNEMONICS,
 )
 from proto.write_helpers import (
@@ -137,7 +139,7 @@ class MapTypes:
 
 # ── Register / def-use helpers ────────────────────────────────────────────────
 
-_CALLER_SAVED = frozenset(f"x{i}" for i in range(0, 19))
+_CALLER_SAVED = frozenset(CALLER_SAVED_GPRS)
 
 
 def _reaching_def(insns: Sequence, i: int, reg: str) -> Optional[int]:
@@ -288,32 +290,6 @@ def _trace_ivar(ctx: BinaryContext, insns: Sequence, i: int, reg: str,
     return None
 
 
-def _stub_selector(ctx: BinaryContext, target: Optional[int]) -> Optional[str]:
-    """Selector an objc-message stub at *target* sends: the classic ``adrp x1 ; ldr x1,[x1,#o]
-    ; … ; br`` selector-reference stub (:func:`proto.writeto._selector_stub_name`), or the
-    newer toolchain's ``adrp x1 ; add x1,x1,#o ; b objc_msgSend`` form whose ``x1`` is the
-    selector string's own address."""
-    sel = _selector_stub_name(ctx, target)
-    if sel is not None or target is None:
-        return sel
-    try:
-        ins = disasm(ctx, target, 3, stop_at_ret=False)
-    except Exception:
-        return None
-    if len(ins) < 3 or ins[0].mnemonic != 'adrp' or ins[1].mnemonic != 'add' \
-            or ins[2].mnemonic != 'b':
-        return None
-    a, d = split_ops(ins[0].op_str), split_ops(ins[1].op_str)
-    if (len(a) != 2 or len(d) != 3 or a[0] != 'x1' or d[0] != 'x1' or d[1] != 'x1'
-            or not d[2].startswith('#')):
-        return None
-    page, imm = _parse_imm(a[1]), _parse_imm(d[2])
-    try:
-        return ctx.read_cstring(page + imm) if page is not None and imm is not None else None
-    except Exception:
-        return None
-
-
 def _trace_unbox_selector(ctx: BinaryContext, insns: Sequence, i: int) -> Optional[str]:
     """Selector of the objc call that produced the value passed in ``x1`` at the
     write-helper call ``insns[i]`` — the NSNumber unboxing step (``[v longLongValue]``)
@@ -326,7 +302,7 @@ def _trace_unbox_selector(ctx: BinaryContext, insns: Sequence, i: int) -> Option
             return None
         ins = insns[d]
         if ins.mnemonic == 'bl':
-            return _stub_selector(ctx, _parse_imm(ins.op_str)) if reg == 'x0' else None
+            return stub_selector(ctx, _parse_imm(ins.op_str)) if reg == 'x0' else None
         ops = split_ops(ins.op_str)
         if ins.mnemonic == 'mov' and len(ops) == 2 and _norm_reg(ops[1]):
             reg, j = _norm_reg(ops[1]), d
@@ -427,7 +403,7 @@ def scan_block_enumerated_maps(
     for i, ins in enumerate(insns):
         if ins.mnemonic != 'bl':
             continue
-        if _stub_selector(ctx, _parse_imm(ins.op_str)) != _ENUMERATE_SELECTOR:
+        if stub_selector(ctx, _parse_imm(ins.op_str)) != _ENUMERATE_SELECTOR:
             continue
         ivar = _trace_ivar(ctx, insns, i, 'x0', offset_to_name)
         d = _reaching_def(insns, i, 'x2')

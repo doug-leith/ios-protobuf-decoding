@@ -17,7 +17,7 @@ Each register and stack slot carries the set of origins its value may derive fro
 
 A call's inputs are what its callee reads.  Calls into the Objective-C runtime and the
 ProtocolBuffer runtime are named by their exported / imported ABI symbol
-(:func:`proto.callees.callee_name`) and have fixed contracts (:data:`_ARC`, :data:`_PB_WRITE`):
+(:func:`proto.callees.callee_name`) and have fixed contracts (:data:`proto.callees.RUNTIME_CONTRACTS`, :data:`_PB_WRITE`):
 ``objc_retain_x2`` reads x2 and returns it; ``PBDataWriterWriteInt32Field(writer, value,
 field)`` serialises x1.  Any other callee is assumed to read the AAPCS64 argument registers
 (x0-x8, v0-v7) -- for a function of the image itself (possibly a machine-outlined fragment
@@ -44,9 +44,9 @@ from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import BinaryContext, _ctx_cache, _ctx_store
 from proto.arm64cfg import build_blocks, parse_adrp, split_ops
-from proto.callees import callee_name
-from proto.dictrep_flow import _writes, reg_name, _parse_mem
-from proto.writeto import _selector_stub_name
+from proto.callees import callee_name, stub_selector, RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN
+from proto.arm64_operands import (writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
+                                  CALLER_SAVED_GPRS, CALLER_SAVED_FPRS)
 
 log = logging.getLogger(__name__)
 
@@ -56,17 +56,14 @@ _W, _S, _T = 'W', 'S', 'T'
 # AAPCS64 argument registers (x8: indirect result) and every register a callee could read.
 _ARGS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
 _ALL = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
-_CALLER_SAVED = (tuple(f"x{i}" for i in range(19)) + ("x30",)
-                 + tuple(f"v{i}" for i in range(8)) + tuple(f"v{i}" for i in range(16, 32)))
+_CALLER_SAVED = CALLER_SAVED_GPRS + CALLER_SAVED_FPRS
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
-_LOADS = frozenset(('ldr', 'ldrb', 'ldrh', 'ldrsw', 'ldrsb', 'ldrsh', 'ldur', 'ldurb', 'ldurh',
-                    'ldursw', 'ldursb', 'ldursh'))
+_LOADS = frozenset(LOAD_BYTES)
 _PAIR_LOADS = frozenset(('ldp', 'ldpsw', 'ldnp'))
-_STORES = frozenset(('str', 'strb', 'strh', 'stur', 'sturb', 'sturh'))
+_STORES = frozenset(STORE_BYTES)
 _PAIR_STORES = frozenset(('stp', 'stnp'))
 _COND = ('cbz', 'cbnz', 'tbz', 'tbnz')
 _RET = ('ret', 'retaa', 'retab')
-_REG_BYTES = {'x': 8, 'w': 4, 'd': 8, 's': 4, 'h': 2, 'b': 1, 'q': 16}
 
 # [cap:INPUT-SANITY] runaway backstops (a writeTo: settles in a few sweeps of its blocks).
 _MAX_BLOCK_VISITS = 50_000
@@ -75,28 +72,8 @@ _ENTRY_SCAN_INSNS = 64
 
 
 # ── ABI contracts ─────────────────────────────────────────────────────────────
-# (reads, returns) by exported symbol name.  ``returns`` is the register whose value the call
-# hands back in x0, or None (no data result: void / status / a class or bool).  Fixed by the
-# Objective-C runtime ABI: the compiler emits these calls by name in every binary.
-_ARC: Dict[str, Tuple[Tuple[str, ...], Optional[str]]] = {}
-for _n in range(29):
-    _ARC[f"_objc_retain_x{_n}"] = ((f"x{_n}",), f"x{_n}")
-    _ARC[f"_objc_release_x{_n}"] = ((f"x{_n}",), None)
-for _name in ("_objc_retain", "_objc_autorelease", "_objc_autoreleaseReturnValue",
-              "_objc_retainAutorelease", "_objc_retainAutoreleaseReturnValue",
-              "_objc_retainAutoreleasedReturnValue", "_objc_claimAutoreleasedReturnValue",
-              "_objc_unsafeClaimAutoreleasedReturnValue", "_objc_retain_autorelease",
-              "_objc_retainBlock"):
-    _ARC[_name] = (("x0",), "x0")
-for _name in ("_objc_release", "_objc_sync_enter", "_objc_sync_exit",
-              "_objc_enumerationMutation", "_os_unfair_lock_lock", "_os_unfair_lock_unlock",
-              "_os_unfair_lock_assert_owner", "_os_unfair_lock_assert_not_owner"):
-    _ARC[_name] = (("x0",), None)
-_ARC["_os_unfair_lock_lock_with_options"] = (("x0", "x1"), None)
-for _name in ("_objc_opt_class", "_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
-    _ARC[_name] = (("x0", "x1"), None)
-_NORETURN = frozenset(("___stack_chk_fail", "__Unwind_Resume", "_objc_exception_throw",
-                       "_abort", "___assert_rtn"))
+# The Objective-C runtime's are proto.callees.RUNTIME_CONTRACTS (imported as _ARC) and
+# NORETURN: (reads, returns) by exported symbol name, fixed by the runtime ABI.
 
 # PBDataWriter functions (ProtocolBuffer runtime ABI): (reads, serialised value register).
 # ``PBDataWriterWrite<T>Field(writer, value, field)``; the floating-point ones take the value
@@ -118,10 +95,6 @@ for _t in ("Submessage", "Subgroup"):
 # Message sends with a fixed contract (the PB protocol this tool decodes): ``[m writeTo:w]``
 # serialises the receiver into the writer it is handed; ``[w writeData:d]`` appends d.
 _SEND_SERIALISES = {"writeTo:": "x0", "writeData:": "x2"}
-
-
-def _reg_bytes(tok: str) -> int:
-    return _REG_BYTES.get(tok.strip()[:1].lower(), 8)
 
 
 def _regs(tokens: Iterable[str]) -> List[str]:
@@ -364,13 +337,13 @@ class WriterFlow:
 
     def _is_function(self, va: int) -> bool:
         return (va in self.entry_set or callee_name(self.ctx, va) is not None
-                or _selector_stub_name(self.ctx, va) is not None)
+                or stub_selector(self.ctx, va) is not None)
 
     # ── calls ────────────────────────────────────────────────────────────────
     def _call(self, st: _St, ins, mn: str, tgt: Optional[int], res: _Result, depth: int,
               top: int) -> bool:
         name = callee_name(self.ctx, tgt) if tgt is not None else None
-        sel = _selector_stub_name(self.ctx, tgt) if tgt is not None else None
+        sel = stub_selector(self.ctx, tgt) if tgt is not None else None
         if name in _NORETURN:
             return True
         contract = _ARC.get(name) if name else None
@@ -480,7 +453,7 @@ class WriterFlow:
                         read |= set(_regs(ops[:1])) - written
                     res = tuple(r for r in _ALL if r in read or r not in written)
                     break
-                dst = set(_writes(ins))
+                dst = set(writes(ins))
                 if mn in _STORES or mn in _PAIR_STORES or mn in ('cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'ccmp'):
                     src = set(_regs(ops))
                     if (mn in _STORES or mn in _PAIR_STORES) and '[sp' in ins.op_str:
@@ -513,7 +486,7 @@ class WriterFlow:
         return fa + disp, None
 
     def _exec(self, st: _St, ins, mn: str, ops: List[str], res: _Result) -> None:
-        dsts = [d for d in _writes(ins) if d != 'sp']
+        dsts = [d for d in writes(ins) if d != 'sp']
         if mn == 'adrp':
             pa = parse_adrp(ins.op_str)
             for d in dsts:
@@ -573,7 +546,7 @@ class WriterFlow:
 
     def _load(self, st: _St, ins, mn: str, ops: List[str], dsts: List[str]) -> None:
         mem = next((o for o in ops if '[' in o), None)
-        pm = _parse_mem(mem) if mem else None
+        pm = parse_mem(mem) if mem else None
         regs_out = [reg_name(o) for o in ops if '[' not in o and not o.strip().startswith('#')]
         regs_out = [r for r in regs_out if r]
         if pm is None:                               # PC-relative literal: ldr x, #addr
@@ -582,7 +555,7 @@ class WriterFlow:
                 st.kill(d, frozenset({('O', iv)}) if iv else E)
             return
         base, idx, disp = pm[0], pm[1], pm[2]
-        width = _reg_bytes(ops[0]) if ops else 8
+        width = reg_bytes(ops[0]) if ops else 8
         outs = regs_out[:2] if mn in _PAIR_LOADS else regs_out[:1]
         fa = self._frame_addr(st, base) if base else None
         if fa is not None and idx is None:
@@ -623,7 +596,7 @@ class WriterFlow:
 
     def _store(self, st: _St, ins, mn: str, ops: List[str], res: _Result) -> None:
         mem = next((o for o in ops if '[' in o), None)
-        pm = _parse_mem(mem) if mem else None
+        pm = parse_mem(mem) if mem else None
         srcs = [o for o in ops if '[' not in o and not o.strip().startswith('#')]
         if mn in _PAIR_STORES:
             srcs = srcs[:2]
@@ -636,7 +609,7 @@ class WriterFlow:
         if fa is not None and pm[1] is None:
             a, nb = self._access(st, mem, ops, base, fa, pm[2])
             for tok in srcs:
-                w = _reg_bytes(tok)
+                w = reg_bytes(tok)
                 r = reg_name(tok.strip())
                 v = (st.p(r) | (frozenset({'STK'}) if r in st.sv else E)) if r else E
                 st.frame_write(a, w, frozenset(v))

@@ -49,6 +49,7 @@ from proto.arm64cfg import (              # noqa: F401  (re-export)
     split_ops, dst_reg, mem_operand, parse_adrp,
 )
 
+from proto.callees import stub_selector
 import logging
 import re
 
@@ -668,56 +669,6 @@ def _trace_hoisted_self_value(ctx, pre, full_prefix, self_reg, base_regs, offset
 # the getter's own disassembly (it must load that ivar's offset), never a guess.
 
 
-def _selector_stub_name(ctx, target):
-    """Selector string of an objc selector-stub trampoline at *target*, or None.
-
-    The compiler emits one stub per selector:
-        adrp x1,#page ; ldr x1,[x1,#off] ; adrp x16,#p2 ; ldr x16,[x16,#o2] ; br x16
-    The pointer stored at ``page+off`` IS the uniqued SEL, whose value equals the
-    selector cstring address — so read it and return the string.  Newer caches (iOS 27)
-    share one stub per selector of the form ``adrp x1,#page ; add x1,x1,#off ;
-    b _objc_msgSend``, where x1 is the string itself.  Returns None for any `bl` target
-    that is neither shape (a normal call / ARC thunk)."""
-    if target is None:
-        return None
-    try:
-        ins = disasm(ctx, target, 6, stop_at_ret=False)
-    except Exception:
-        return None
-    if (len(ins) >= 3 and ins[0].mnemonic == 'adrp' and ins[1].mnemonic == 'add'
-            and ins[2].mnemonic == 'b'):
-        # The shared stub newer caches use (iOS 27): `adrp x1,#page ; add x1,x1,#off ;
-        # b _objc_msgSend` -- x1 is the selector string itself.  When the branch target is
-        # named (the cache's export trie / the binary's import), it must be objc_msgSend.
-        from proto.callees import callee_name
-        pa = parse_adrp(ins[0].op_str)
-        ops = split_ops(ins[1].op_str)
-        if (pa is None or pa[0] != 'x1' or len(ops) != 3 or _norm_reg(ops[0]) != 'x1'
-                or _norm_reg(ops[1]) != 'x1' or not ops[2].startswith('#')):
-            return None
-        target_name = callee_name(ctx, _parse_imm(ins[2].op_str))
-        if target_name is not None and target_name != '_objc_msgSend':
-            return None
-        try:
-            return ctx.read_cstring(pa[1] + _parse_imm(ops[2]))
-        except Exception:
-            return None
-    if len(ins) < 5 or ins[0].mnemonic != 'adrp' or ins[1].mnemonic != 'ldr':
-        return None
-    pa = parse_adrp(ins[0].op_str)
-    m = mem_operand(ins[1].op_str)
-    if pa is None or pa[0] != 'x1':
-        return None
-    if m is None or m[0] != 'x1' or m[1] != 'x1' or m[2] is not None:
-        return None
-    if not any(i.mnemonic == 'br' for i in ins):
-        return None
-    try:
-        return ctx.read_cstring(ctx.read_ptr(pa[1] + m[3]))
-    except Exception:
-        return None
-
-
 def _getter_loads_offset(ctx, imp, want_off, max_insns=24):
     """True if the getter method at *imp* loads the ivar at byte offset *want_off*
     from self (``ldr xD,[x0, xOff]`` with xOff an offset-global value, or the direct
@@ -792,7 +743,7 @@ def _trace_accessor_sourced_value(ctx, full_prefix, sel_to_ivar):
         if mn == 'bl':
             if cur != 'x0':
                 continue                           # call doesn't define our value reg
-            sel = _selector_stub_name(ctx, _parse_imm(ins.op_str))
+            sel = stub_selector(ctx, _parse_imm(ins.op_str))
             if sel is None:
                 cur = 'x0'                         # ARC passthrough (retain/autorelease)
                 continue
@@ -1006,7 +957,7 @@ def writeto_sent_selectors(ctx: BinaryContext, imp: int) -> Optional[frozenset]:
         return None
     if flags['truncated'] or flags['indirect_calls'] or flags['unexamined_thunks']:
         return None
-    sels = {_selector_stub_name(ctx, t) for t in flags['call_targets']}
+    sels = {stub_selector(ctx, t) for t in flags['call_targets']}
     selrefs = [s for (_seg, name), s in getattr(ctx, "_sections", {}).items()
                if name == "__objc_selrefs"]
     for slot in flags['x1_loads']:

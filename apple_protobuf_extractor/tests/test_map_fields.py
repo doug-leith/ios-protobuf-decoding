@@ -18,6 +18,7 @@ from pathlib import Path
 
 import proto.mapfields as M
 import proto.writeto as W
+import proto.callees as C
 import proto.extractor as E
 from macho.disasm import Insn
 from proto.emitter import build_proto_files, write_from_messages
@@ -70,7 +71,7 @@ def asm(*blocks):
 
 
 def selector_stub(base, sel_slot):
-    """The 5-insn objc selector-stub shape ``_selector_stub_name`` recognises."""
+    """The 5-insn objc selector-stub shape ``proto.callees.stub_selector`` recognises."""
     return (base, [('adrp', f'x1, #{sel_slot & ~0xfff:#x}'),
                    ('ldr', f'x1, [x1, #{sel_slot & 0xfff:#x}]'),
                    ('adrp', 'x16, #0x1000'), ('ldr', 'x16, [x16, #0x10]'),
@@ -78,10 +79,10 @@ def selector_stub(base, sel_slot):
 
 
 class _Patched(unittest.TestCase):
-    """Route ``disasm`` in both modules that read memory to a fake."""
+    """Route ``disasm`` in the modules that read memory to a fake."""
 
     def patch(self, fake):
-        for mod in (W, M):
+        for mod in (W, M, C):
             orig = mod.disasm
             mod.disasm = fake
             self.addCleanup(setattr, mod, 'disasm', orig)
@@ -357,9 +358,17 @@ class TestNewerToolchainBlockShape(_Patched):
                       cstrs={0x1f57cb020: M._ENUMERATE_SELECTOR})
         return ctx
 
+    MSGSEND = 0x1a0000800                  # _objc_msgSend in the cache
+
     def _stub(self):
         return (0x1a0013400, [('adrp', 'x1, #0x1f57cb000'), ('add', 'x1, x1, #0x20'),
-                              ('b', '#0x1a0000800')])
+                              ('b', f'#{self.MSGSEND:#x}')])
+
+    def patch(self, fake):
+        super().patch(fake)
+        orig = C.callee_name                 # the shared stub is a send only to a named objc_msgSend
+        C.callee_name = lambda ctx, va: '_objc_msgSend' if va == self.MSGSEND else orig(ctx, va)
+        self.addCleanup(setattr, C, 'callee_name', orig)
 
     def test_pac_signed_invoke_and_add_ldr_ivar_load_are_recovered(self):
         insns, fd = asm(_ARM64E_WRITETO, _ARM64E_INVOKE, self._stub())
@@ -373,8 +382,8 @@ class TestNewerToolchainBlockShape(_Patched):
     def test_new_shape_stub_selector_is_read_from_the_literal(self):
         insns, fd = asm(self._stub())
         self.patch(fd)
-        self.assertEqual(M._stub_selector(self._ctx(), 0x1a0013400), M._ENUMERATE_SELECTOR)
-        self.assertIsNone(M._stub_selector(self._ctx(), 0x1a0013410))   # unmapped target
+        self.assertEqual(C.stub_selector(self._ctx(), 0x1a0013400), M._ENUMERATE_SELECTOR)
+        self.assertIsNone(C.stub_selector(self._ctx(), 0x1a0013410))   # unmapped target
 
     def test_offset_variable_ignores_an_earlier_unrelated_adrp_add_on_the_same_register(self):
         # A function-wide prefix holds an UNRELATED `adrp x8 ; add x8,x8,#o` (a block

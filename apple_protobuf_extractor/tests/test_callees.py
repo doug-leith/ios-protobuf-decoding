@@ -1,9 +1,9 @@
 """proto/callees.py: callee naming must not hide wiring bugs.
 
 ``callee_name`` used to catch AttributeError, so a renamed or missing reader method turned
-into "no name", which in turn relaxed the objc_msgSend check in writeto._selector_stub_name
-(code review 2026-10-18).  A context that has no names still gets None; a broken reader
-raises.
+into "no name", which in turn relaxed the objc_msgSend check of the shared selector stub
+(:func:`proto.callees.stub_selector`; code review 2026-10-18).  A context that has no names
+still gets None; a broken reader raises.
 """
 import unittest
 

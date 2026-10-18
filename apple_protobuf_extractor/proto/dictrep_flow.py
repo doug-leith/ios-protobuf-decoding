@@ -36,6 +36,13 @@ from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm, _SOURCE_FIRST_MNEMONICS
 from proto.arm64cfg import build_blocks, inject_arm_edges, parse_adrp, split_ops
+from macho.strings import read_cfstring_text
+from proto.arm64_operands import (
+    CALLER_SAVED_GPRS, CALLER_SAVED_FPRS, NO_DEST, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
+    reg_bytes, reg_mask, reg_bits, reg_name, is_cond_branch, writeback_base, writes,
+    parse_mem, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
+    apply_shift, operand2,
+)
 
 log = logging.getLogger(__name__)
 
@@ -43,18 +50,7 @@ log = logging.getLogger(__name__)
 UNKNOWN_ENUM_FORMAT = "(unknown: %i)"
 
 _ENTRY = -1                                   # pseudo-definition: value on function entry
-_CALLER_SAVED = tuple(f"x{n}" for n in range(0, 19)) + ("x30",)
-# The SIMD/FP registers, named vN whatever the width (b/h/s/d/q/vN.T): tracked by the reaching
-# definitions only (a float/double argument rides in v0), never by value.  AAPCS64 preserves
-# v8-v15 (their low 64 bits, all a scalar uses) across a call.
-_FP_CALLER_SAVED = tuple(f"v{n}" for n in range(0, 8)) + tuple(f"v{n}" for n in range(16, 32))
 _REGS = tuple(f"x{n}" for n in range(0, 31)) + tuple(f"v{n}" for n in range(0, 32))
-_FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?$')
-# Mnemonics whose first operand is NOT a destination (and calls, handled separately).
-_NO_DEST = _SOURCE_FIRST_MNEMONICS | {
-    'b', 'bl', 'blr', 'br', 'nop', 'ccmp', 'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz', 'cmp', 'cmn', 'tst',
-    'prfm', 'dmb', 'dsb', 'isb', 'fcmp', 'fcmpe', 'fccmp', 'fccmpe',
-}
 _LOADS = {'ldr': None, 'ldrb': 1, 'ldrh': 2, 'ldrsw': 4, 'ldrsb': 1, 'ldrsh': 2}
 _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
 
@@ -63,12 +59,6 @@ _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
 # whose register then indexes a table is expanded to the whole interval.
 _MAX_GATE_SPAN = 1 << 12
 
-# The evaluator's loads and stores: bytes moved (None: the register's width) and whether a
-# load sign-extends.  ``_LOADS`` above is only the scaled forms the field roots are read with.
-_EXEC_LOADS = {**_LOADS, 'ldur': None, 'ldurb': 1, 'ldurh': 2, 'ldursw': 4, 'ldursb': 1, 'ldursh': 2}
-_SIGNED_LOADS = frozenset(('ldrsw', 'ldrsb', 'ldrsh', 'ldursw', 'ldursb', 'ldursh', 'ldpsw'))
-_STORES = {'str': None, 'stur': None, 'strb': 1, 'sturb': 1, 'strh': 2, 'sturh': 2}
-_REG_BYTES = {'x': 8, 'w': 4, 'd': 8, 's': 4, 'q': 16, 'h': 2, 'b': 1}
 
 # sp on entry to an evaluated function.  A stack address is then an ordinary integer that
 # arithmetic carries through ``sub sp`` / ``add x29, sp, #k`` / writeback, told apart from image
@@ -83,65 +73,6 @@ _FLAG_ARG_REGS = tuple(f"x{n}" for n in range(1, 8))
 
 def _is_stack(v: Optional[int]) -> bool:
     return v is not None and _STACK_TOP - _STACK_SPAN <= v < _STACK_TOP + _STACK_SPAN
-
-
-def _reg_bytes(tok: str) -> int:
-    return _REG_BYTES.get(tok.strip()[:1].lower(), 8)
-
-
-def _is_cond_branch(mn: str) -> bool:
-    return mn.startswith('b.')
-
-
-def _writeback_base(ops: List[str]) -> Optional[str]:
-    """Base register a pre-index (``[Rn, #imm]!``) or post-index (``[Rn], #imm``) memory
-    operand updates, else None."""
-    i = next((j for j, o in enumerate(ops) if o.startswith('[')), None)
-    if i is None:
-        return None
-    if ops[i].endswith('!') or (len(ops) > i + 1 and ops[i + 1].startswith('#')):
-        pm = _parse_mem(ops[i])
-        return pm[0] if pm else None
-    return None
-
-
-def reg_name(tok: str) -> Optional[str]:
-    """A register operand's name for the reaching definitions: ``xN`` for x/w registers (as
-    :func:`macho.disasm._norm_reg`), ``vN`` for an SIMD/FP register of any width."""
-    r = _norm_reg(tok)
-    if r is not None:
-        return r
-    m = _FP_REG.match(tok.strip().lower())
-    return f"v{m.group(1)}" if m and int(m.group(1)) < 32 else None
-
-
-def _writes(ins: Insn) -> List[str]:
-    """Registers (xN / vN form) *ins* overwrites."""
-    mn = ins.mnemonic
-    if mn in ('bl', 'blr'):
-        return list(_CALLER_SAVED + _FP_CALLER_SAVED)
-    if _is_cond_branch(mn):
-        return []
-    ops = split_ops(ins.op_str)
-    out = []
-    wb = _writeback_base(ops)
-    if wb is not None and wb not in ('xzr', 'sp'):
-        out.append(wb)
-    if mn in _NO_DEST:
-        return out
-    if ops:
-        r = reg_name(ops[0])
-        if r is not None and r != 'xzr' and r != 'sp':
-            out.append(r)
-    if mn in ('ldp', 'ldnp', 'ldpsw') and len(ops) > 1:
-        r = reg_name(ops[1])
-        if r is not None and r != 'xzr' and r != 'sp':
-            out.append(r)
-    return out
-
-
-def _mask(tok: str) -> int:
-    return 0xFFFFFFFF if tok.strip().lower().startswith('w') else 0xFFFFFFFFFFFFFFFF
 
 
 #: The condition flags N, Z, C, V (each 0 or 1), exactly as the instruction that set them left
@@ -283,7 +214,7 @@ class _Machine:
                 return None
         if self.opaque is not None and self.opaque(v):
             return None
-        return v & _mask(tok)
+        return v & reg_mask(tok)
 
     def copy_of(self, tok: str) -> Optional[int]:
         """The value a register copy (``mov Rd, Rn``) moves: as :meth:`get`, except that an
@@ -301,7 +232,7 @@ class _Machine:
             self.regs.pop(r, None)
             self.top.add(r)
             return
-        v &= _mask(tok)
+        v &= reg_mask(tok)
         self.regs[r] = v
         self.top.discard(r)
         if r not in _FRAME_REGS and _is_stack(v):
@@ -311,9 +242,9 @@ class _Machine:
     def call(self) -> None:
         """A call: the caller-saved registers and the flags are the callee's."""
         regs, top = self.regs, self.top
-        for r in _CALLER_SAVED:                 # canonical names: no _norm_reg round trip
+        for r in CALLER_SAVED_GPRS:                 # canonical names: no _norm_reg round trip
             regs.pop(r, None)
-        top.update(_CALLER_SAVED)
+        top.update(CALLER_SAVED_GPRS)
         self.flags = None
         self._clobber_slots()
 
@@ -386,7 +317,7 @@ class Flow:
             self._first_in_block[b] = self.addr_idx[body[0].addr]
             for ins in body:
                 self._block_of[self.addr_idx[ins.addr]] = b
-        self._wr: List[List[str]] = [_writes(i) for i in insns]       # registers each insn writes
+        self._wr: List[List[str]] = [writes(i) for i in insns]       # registers each insn writes
         self._gen: Dict[int, Dict[str, FrozenSet[int]]] = {}          # block -> last def of each reg
         for b in self.cfg.order:
             first = self._first_in_block[b]
@@ -500,29 +431,29 @@ class Flow:
         if mn in ('mov', 'movz') and len(ops) == 2:
             if ops[1].startswith('#'):
                 v = _parse_imm(ops[1])
-                return None if v is None else v & _mask(ops[0])
+                return None if v is None else v & reg_mask(ops[0])
             r = _norm_reg(ops[1])
             return self.const_before(d, r) if r else None
         if mn == 'movn' and len(ops) >= 2:
             v = _parse_imm(ops[1])
             sh = _parse_imm(ops[2]) if len(ops) > 2 else 0
-            return None if v is None else (~(v << (sh or 0))) & _mask(ops[0])
+            return None if v is None else (~(v << (sh or 0))) & reg_mask(ops[0])
         if mn == 'movk' and len(ops) >= 2:
             base = self.const_before(d, _norm_reg(ops[0]))
             v = _parse_imm(ops[1])
             sh = (_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0
             if base is None or v is None:
                 return None
-            return ((base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh)) & _mask(ops[0])
+            return ((base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh)) & reg_mask(ops[0])
         if mn in ('add', 'sub') and len(ops) in (3, 4):
             def getc(tok: str) -> Optional[int]:
                 r = _norm_reg(tok)
                 v = self.const_before(d, r) if r else None
-                return None if v is None else v & _mask(tok)
-            a, b = getc(ops[1]), _operand2(ops, 2, getc)
+                return None if v is None else v & reg_mask(tok)
+            a, b = getc(ops[1]), operand2(ops, 2, getc)
             if a is None or b is None:
                 return None
-            return (a + b if mn == 'add' else a - b) & _mask(ops[0])
+            return (a + b if mn == 'add' else a - b) & reg_mask(ops[0])
         return None
 
     # ── which ivar a load reads ─────────────────────────────────────────────
@@ -564,14 +495,14 @@ class Flow:
         elif mn == 'ldr' and len(ops) == 2 and ops[0].startswith('x'):
             # container deref (PBRepeated.list): a POINTER loaded from the ivar's own
             # storage, no index -- a value read out of an array is not an address
-            m = _mem_regs(ops[1])
+            m = mem_regs(ops[1])
             res = self.ivar_of_reg(d, m[0]) if m and m[0] and m[1] is None else None
         self._ivar_memo[d] = res
         return res
 
     def _mem_const_addr(self, k: int, mem: str) -> Optional[int]:
         """Address of ``[Rn, #imm]`` / ``[Rn]`` when Rn is a constant, else None."""
-        m = _mem_regs(mem)
+        m = mem_regs(mem)
         if not m or m[0] is None or m[1] is not None:
             return None
         base = self.const_before(k, m[0])
@@ -587,7 +518,7 @@ class Flow:
             ops = split_ops(ins.op_str)
             if len(ops) != 2:
                 continue
-            m = _mem_regs(ops[1])
+            m = mem_regs(ops[1])
             if not m or m[0] is None:
                 continue
             offs = {o for o in (self.ivar_of_reg(k, m[0]),
@@ -658,7 +589,7 @@ class Flow:
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):
             r = _norm_reg(ops[0])
             if r in st:
-                c = _imm_operand(ops, 1) if ops[1].startswith('#') else self._const_reg(k, ops[1])
+                c = imm_operand(ops, 1) if ops[1].startswith('#') else self._const_reg(k, ops[1])
                 if c is not None and mn == 'cmn':     # `cmn w2, #1` compares with -1
                     c = -c
                 if c is not None:
@@ -678,7 +609,7 @@ class Flow:
         elif mn in _LOADS and len(ops) == 2:
             # A table indexed by a gated register: every index the gate lets through is a
             # distinct case, so the whole interval (not just its end point) is a candidate.
-            pm = _parse_mem(ops[1])
+            pm = parse_mem(ops[1])
             if pm and pm[1] in st and f"gate_lo:{st[pm[1]]}" in st:
                 lo, hi = st[f"gate_lo:{st[pm[1]]}"], st[f"gate_hi:{st[pm[1]]}"]
                 if hi - lo <= _MAX_GATE_SPAN:
@@ -693,12 +624,12 @@ class Flow:
         elif mn in ('add', 'sub') and len(ops) >= 3:      # 4th operand: ``lsl #12`` of an immediate
             rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
             if rs in st and rd:
-                raw = _operand2(ops, 2, lambda tok: self._const_reg(k, tok))
+                raw = operand2(ops, 2, lambda tok: self._const_reg(k, tok))
                 c = raw if ops[2].startswith('#') or raw is None else \
-                    _signed(raw & _mask(ops[0]), ops[0])
+                    as_signed(raw & reg_mask(ops[0]), ops[0])
                 if c is not None:
                     new = (rd, st[rs] + (c if mn == 'add' else -c))
-        for r in _writes(ins):
+        for r in writes(ins):
             st.pop(r, None)
         if new is not None:
             st[new[0]] = new[1]
@@ -773,10 +704,10 @@ class Flow:
                 nxt = jump(target)
             elif mn == 'br' and len(ops) == 1:
                 nxt = jump(m.get(ops[0]))
-            elif _is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+            elif is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
                 taken, target = self._branch(m, ins)
                 if taken is None:
-                    if _is_cond_branch(mn):
+                    if is_cond_branch(mn):
                         raise _Abort(f"{mn} at {ins.addr:#x} tests flags the analysis cannot compute"
                                      if m.flags is None else f"unmodelled condition {mn} at {ins.addr:#x}")
                     nxt = self._skip_trap_branch(k, target, mn, ins)
@@ -791,7 +722,7 @@ class Flow:
         """``(taken, target)`` of a conditional branch under *m*; ``taken`` is None when the
         condition is not known."""
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        if _is_cond_branch(mn):
+        if is_cond_branch(mn):
             target = _parse_imm(ops[0]) if ops else None
             return (None if m.flags is None else _eval_cond(mn[2:], m.flags)), target
         if mn in ('cbz', 'cbnz') and len(ops) == 2:
@@ -809,9 +740,9 @@ class Flow:
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         get, put = m.get, m.put
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12`` / ``w9, lsl #2``
-            a, b = get(ops[0]), _operand2(ops, 1, get)
+            a, b = get(ops[0]), operand2(ops, 1, get)
             m.flags = None if a is None or b is None else \
-                (_nzcv_sub if mn == 'cmp' else _nzcv_add)(a, b, _bits(ops[0]))
+                (_nzcv_sub if mn == 'cmp' else _nzcv_add)(a, b, reg_bits(ops[0]))
         elif mn in ('ccmp', 'ccmn') and len(ops) == 4:     # ccmp a, b, #nzcv, cond
             c = None if m.flags is None else _eval_cond(ops[3], m.flags)
             if c is None:
@@ -820,7 +751,7 @@ class Flow:
                 a = get(ops[0])
                 b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
                 m.flags = None if a is None or b is None else \
-                    (_nzcv_sub if mn == 'ccmp' else _nzcv_add)(a, b, _bits(ops[0]))
+                    (_nzcv_sub if mn == 'ccmp' else _nzcv_add)(a, b, reg_bits(ops[0]))
             else:
                 lit = _parse_imm(ops[2])
                 m.flags = None if lit is None else \
@@ -839,7 +770,7 @@ class Flow:
             v = (parse_adrp(ins.op_str) or (None, None))[1] if mn == 'adrp' else _parse_imm(ops[1])
             put(ops[0], v)
         elif mn in ('add', 'sub') and len(ops) in (3, 4):
-            a, b = get(ops[1]), _operand2(ops, 2, get)
+            a, b = get(ops[1]), operand2(ops, 2, get)
             put(ops[0], None if a is None or b is None else (a + b if mn == 'add' else a - b))
         elif mn == 'csel' and len(ops) == 4:
             if m.flags is None:
@@ -847,36 +778,36 @@ class Flow:
             else:
                 c = _eval_cond(ops[3], m.flags)
                 put(ops[0], None if c is None else get(ops[1] if c else ops[2]))
-        elif mn in _SHIFTS and len(ops) == 3:
+        elif mn in SHIFT_MNEMONICS and len(ops) == 3:
             a = get(ops[1])
             n = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
-            put(ops[0], None if a is None or n is None else _shift(mn, a, n, ops[0]))
+            put(ops[0], None if a is None or n is None else shift_value(mn, a, n, ops[0]))
         elif mn in ('and', 'orr', 'eor', 'ands') and len(ops) in (3, 4):
             a = get(ops[1])
-            b = _parse_imm(ops[2]) if ops[2].startswith('#') else _operand2(ops, 2, get)
+            b = _parse_imm(ops[2]) if ops[2].startswith('#') else operand2(ops, 2, get)
             r = None if a is None or b is None else \
                 {'and': a & b, 'ands': a & b, 'orr': a | b, 'eor': a ^ b}[mn]
             put(ops[0], r)
             if mn == 'ands':
-                m.flags = None if r is None else _nzcv_logic(r, _bits(ops[0]))
+                m.flags = None if r is None else _nzcv_logic(r, reg_bits(ops[0]))
         elif mn == 'ubfx' and len(ops) == 4:
             a, lsb, width = get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
             put(ops[0], None if a is None or lsb is None or not width
                 else (a >> lsb) & ((1 << width) - 1))
         elif mn == 'tst' and len(ops) in (2, 3):     # tst a, b [, shift]: flags of a & b
             a = get(ops[0])
-            b = _parse_imm(ops[1]) if ops[1].startswith('#') else _operand2(ops, 1, get)
-            m.flags = None if a is None or b is None else _nzcv_logic(a & b, _bits(ops[0]))
+            b = _parse_imm(ops[1]) if ops[1].startswith('#') else operand2(ops, 1, get)
+            m.flags = None if a is None or b is None else _nzcv_logic(a & b, reg_bits(ops[0]))
         elif mn in ('subs', 'adds') and len(ops) in (3, 4):
-            a, b = get(ops[1]), _operand2(ops, 2, get)
+            a, b = get(ops[1]), operand2(ops, 2, get)
             if a is not None and b is not None:
-                bits = _bits(ops[0])
+                bits = reg_bits(ops[0])
                 m.flags = (_nzcv_sub if mn == 'subs' else _nzcv_add)(a, b, bits)
                 put(ops[0], a - b if mn == 'subs' else a + b)
             else:
                 m.flags = None
                 put(ops[0], None)
-        elif mn in _EXEC_LOADS and len(ops) in (2, 3):
+        elif mn in LOAD_BYTES and len(ops) in (2, 3):
             ft = (self._field_load(m, ops[1])
                   if len(ops) == 2 and mn == 'ldr' and ops[0].strip().lower().startswith('x')
                   else None)
@@ -884,25 +815,25 @@ class Flow:
                 put(ops[0], ft)
                 return
             addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
-            size = _EXEC_LOADS[mn] or _reg_bytes(ops[0])
-            put(ops[0], self._read(m, addr, size, mn in _SIGNED_LOADS))
+            size = LOAD_BYTES[mn] or reg_bytes(ops[0])
+            put(ops[0], self._read(m, addr, size, mn in SIGNED_LOADS))
         elif mn in ('ldp', 'ldpsw') and len(ops) in (3, 4):
             addr = self._access(m, ops[2], ops[3] if len(ops) == 4 else None)
-            size = 4 if mn == 'ldpsw' else _reg_bytes(ops[0])
+            size = 4 if mn == 'ldpsw' else reg_bytes(ops[0])
             put(ops[0], self._read(m, addr, size, mn == 'ldpsw'))
             put(ops[1], self._read(m, None if addr is None else addr + size, size, mn == 'ldpsw'))
-        elif mn in _STORES and len(ops) in (2, 3):
+        elif mn in STORE_BYTES and len(ops) in (2, 3):
             v = m.copy_of(ops[0])                   # a spill is a copy (opaque values survive)
             addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
-            m.store(addr, _STORES[mn] or _reg_bytes(ops[0]), v)
+            m.store(addr, STORE_BYTES[mn] or reg_bytes(ops[0]), v)
         elif mn == 'stp' and len(ops) in (3, 4):
             v0, v1 = m.copy_of(ops[0]), m.copy_of(ops[1])
             addr = self._access(m, ops[2], ops[3] if len(ops) == 4 else None)
-            size = _reg_bytes(ops[0])
+            size = reg_bytes(ops[0])
             m.store(addr, size, v0)
             m.store(None if addr is None else addr + size, size, v1)
         else:
-            for r in _writes(ins):
+            for r in writes(ins):
                 put(r, None)
             if mn in _FLAG_SETTERS:                 # an unmodelled flag-setter, or form of one
                 m.flags = None
@@ -912,7 +843,7 @@ class Flow:
         offset (``ldr x0, [x19, x8]`` with x19 = self and x8 an ivar offset), else None."""
         if m.field_value is None:
             return None
-        pm = _parse_mem(mem)
+        pm = parse_mem(mem)
         if pm is None or mem.endswith('!'):
             return None
         base, index, disp, ext, shift, idx_w = pm
@@ -935,7 +866,7 @@ class Flow:
     def _access(self, m: "_Machine", mem: str, post: Optional[str]) -> Optional[int]:
         """Address a memory operand accesses under *m* (None if unknown), applying a pre-index
         (``[Rn, #imm]!``) or post-index (``[Rn], #imm``) base update to *m*."""
-        pm = _parse_mem(mem)
+        pm = parse_mem(mem)
         if pm is None:
             return None
         base, index, disp, ext, shift, idx_w = pm
@@ -1058,7 +989,7 @@ class Flow:
             if v is not None:
                 m.put('x0', v)
         elif mn in ('b', 'br', 'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz') \
-                or _is_cond_branch(mn):
+                or is_cond_branch(mn):
             return
         else:
             self._exec(m, ins)
@@ -1264,8 +1195,7 @@ class Flow:
     def _text_at(self, va: int, direct: bool) -> Optional[str]:
         """The string constant at *va*: a CFString; with *direct*, also a plain C string in
         ``__TEXT,__cstring`` (not a selector name or any other pointer into the image)."""
-        from proto.enums import _read_cfstring_text
-        text = _read_cfstring_text(self.ctx, va)
+        text = read_cfstring_text(self.ctx, va)
         if text is not None or not direct:
             return text
         try:
@@ -1406,116 +1336,4 @@ def _is_enum_name(text: str) -> bool:
 
 # ── operand helpers ────────────────────────────────────────────────────────
 
-def _parse_mem(op: str):
-    """``[Rn, Rm{, ext #s}]`` / ``[Rn, #imm]`` -> (base, index, disp, ext, shift, index is w-reg)."""
-    if '[' not in op or ']' not in op:
-        return None
-    parts = [p.strip() for p in op[op.index('[') + 1: op.index(']')].split(',')]
-    base = _norm_reg(parts[0])
-    index, disp, ext, shift, idx_w = None, 0, None, 0, False
-    if len(parts) >= 2:
-        if parts[1].startswith('#'):
-            disp = _parse_imm(parts[1]) or 0
-        else:
-            index, idx_w = _norm_reg(parts[1]), parts[1].startswith('w')
-    if len(parts) >= 3:
-        ext = parts[2].split()[0]
-        shift = (_parse_imm(parts[2]) or 0) if '#' in parts[2] else 0
-    return base, index, disp, ext, shift, idx_w
 
-
-def _mem_regs(op: str):
-    """(base, index or None, displacement) of a memory operand, or None."""
-    pm = _parse_mem(op)
-    return None if pm is None else (pm[0], pm[1], pm[2])
-
-
-_SHIFTS = ('lsr', 'lsl', 'asr')
-
-
-def _shift(mn: str, a: int, n: int, dest_tok: str) -> int:
-    """``lsr`` / ``lsl`` / ``asr`` of *a* by *n*, in the destination's width."""
-    bits = 32 if dest_tok.strip().lower().startswith('w') else 64
-    n %= bits
-    a &= (1 << bits) - 1
-    if mn == 'lsl':
-        return a << n
-    if mn == 'lsr':
-        return a >> n
-    sa = a - (1 << bits) if a >> (bits - 1) else a
-    return sa >> n
-
-
-def _signed(v: Optional[int], tok: str) -> Optional[int]:
-    """*v*, a register's unsigned content, as the signed number it stands for (a bias
-    materialised as ``mov w9, #-0x3bc4`` reads back as 0xFFFFC43C)."""
-    if v is None:
-        return None
-    bits = 32 if tok.strip().lower().startswith('w') else 64
-    return v - (1 << bits) if v >> (bits - 1) else v
-
-
-def _imm_operand(ops: List[str], i: int) -> Optional[int]:
-    """The immediate at ``ops[i]`` including an optional ``lsl #12`` shift operand after it
-    (``sub w8, w2, #0x11, lsl #12`` is 0x11000)."""
-    v = _parse_imm(ops[i])
-    if v is None:
-        return None
-    if len(ops) > i + 1 and ops[i + 1].startswith('lsl'):
-        v <<= _parse_imm(ops[i + 1]) or 0
-    return v
-
-
-def _bits(tok: str) -> int:
-    """Width of register operand *tok*: 32 for a w register, else 64."""
-    return 32 if tok.strip().lower().startswith('w') else 64
-
-
-#: Extended-register operand forms: (source bits, sign-extends).
-_EXTENDS = {'uxtb': (8, False), 'uxth': (16, False), 'uxtw': (32, False), 'uxtx': (64, False),
-            'sxtb': (8, True), 'sxth': (16, True), 'sxtw': (32, True), 'sxtx': (64, True)}
-
-
-def _apply_shift(v: int, reg_tok: str, mod: str) -> Optional[int]:
-    """*v* (register *reg_tok*'s content) under a second-operand modifier: a shifted register
-    (``lsl``/``lsr``/``asr``/``ror #n``) or an extended register (``uxtb`` .. ``sxtx [#n]``).
-    None for a modifier this does not know, so the result is unknown rather than wrong."""
-    toks = mod.strip().lower().split(None, 1)
-    if not toks:
-        return v
-    kind = toks[0]
-    amt = 0
-    if len(toks) > 1:
-        amt = _parse_imm(toks[1].strip())
-        if amt is None:
-            return None
-    bits = _bits(reg_tok)
-    mask = (1 << bits) - 1
-    v &= mask
-    if kind == 'lsl':
-        return v << amt
-    if kind == 'lsr':
-        return v >> amt
-    if kind == 'asr':
-        return (v - (1 << bits) if v >> (bits - 1) else v) >> amt
-    if kind == 'ror':
-        amt %= bits
-        return ((v >> amt) | (v << (bits - amt))) & mask if amt else v
-    if kind in _EXTENDS:
-        width, signed = _EXTENDS[kind]
-        x = v & ((1 << width) - 1)
-        if signed and x >> (width - 1):
-            x -= 1 << width
-        return x << amt
-    return None
-
-
-def _operand2(ops: List[str], i: int, get) -> Optional[int]:
-    """Value of the flexible second operand at ``ops[i]``: an immediate (with an optional
-    ``lsl #12``) or a register read with *get*, shifted / extended by ``ops[i + 1]``."""
-    if ops[i].startswith('#'):
-        return _imm_operand(ops, i)
-    v = get(ops[i])
-    if v is None or len(ops) <= i + 1:
-        return v
-    return _apply_shift(v, ops[i], ops[i + 1])

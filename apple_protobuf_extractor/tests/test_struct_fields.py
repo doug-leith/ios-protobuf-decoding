@@ -82,9 +82,9 @@ class _SelectorsPatched(_Patched):
     """Also answers which selector each ``bl`` target sends (``None``: not a message send)."""
 
     def patch_selectors(self, selectors):
-        orig = SF._call_selector
-        SF._call_selector = lambda ctx, target: selectors.get(target)
-        self.addCleanup(setattr, SF, '_call_selector', orig)
+        orig = SF.stub_selector
+        SF.stub_selector = lambda ctx, target: selectors.get(target)
+        self.addCleanup(setattr, SF, 'stub_selector', orig)
 
 
 # The selector stubs the real GeoServices listings below call, as resolved in the cache (the
@@ -252,8 +252,15 @@ class _NoStringsMixin:
 
 
 class _CfCtx(_NoStringsMixin):
-    """A ctx exposing two CFString constants (``from``/``to``) the way the cache does."""
+    """A ctx exposing two key constants (``from``/``to``).  Like every test ctx here it has no
+    named sections, so a string constant is read as a direct C string at its address (the
+    storage a binary without ``__cfstring`` uses; macho.strings.read_cfstring_text)."""
     TEXT = {0x1d5fdaae0: (0x2000, b'from'), 0x1d5fdab00: (0x2010, b'to')}
+
+    def read_cstring(self, va, max_len=4096):
+        if va in self.TEXT:
+            return self.TEXT[va][1].decode()[:max_len]
+        raise ValueError(f"no string at {va:#x}")
 
     def read_ptr(self, va):
         return self.TEXT[va - 16][0]
@@ -641,11 +648,16 @@ class TestLiveInlineStructRecovery(unittest.TestCase):
 
 
 class _TextCtx(_NoStringsMixin):
-    """A ctx exposing the CFStrings in *texts* (``{cfstring VA: text}``) the way the cache does:
-    the constant's character pointer is ``0x100000 + its VA``."""
+    """A ctx exposing the string constants in *texts* (``{VA: text}``), read as direct C strings
+    (no named sections, as _CfCtx)."""
 
     def __init__(self, texts):
         self.texts = texts
+
+    def read_cstring(self, va, max_len=4096):
+        if va in self.texts:
+            return self.texts[va][:max_len]
+        raise ValueError(f"no string at {va:#x}")
 
     def read_ptr(self, va):
         return 0x100000 + (va - 16)
@@ -665,11 +677,11 @@ class TestEnumMemberEvidence(_SelectorsPatched):
     # ---- a struct member's name switch, read by proto.dictrep_flow ----------------------
 
     class _MemberCtx(FlowCtx):
-        """Assembled code plus a CFString key constant, as the cache lays them out."""
+        """Assembled code plus the key constant, a direct C string like the names (FlowCtx)."""
         def read_u64(self, va):
             return self.read_ptr(va)
 
-    KEY_VA, KEY_CHARS = 0x9000, 0x9100
+    KEY_VA = 0x9000
 
     def _member_run(self, switch, strings, *, member_off=0x10):
         # helper: setObject:forKey: (and, on the fallback path, the "(unknown: %i)" formatter);
@@ -680,11 +692,7 @@ class TestEnumMemberEvidence(_SelectorsPatched):
         words, labels = assemble(0x1000, code)
         self.patch_selectors({labels['helper']: 'setObject:forKey:', labels['box']: 'numberWithInt:'})
         ctx = self._MemberCtx(0x1000, words)
-        ctx.put_ptr(self.KEY_VA + 16, self.KEY_CHARS)
-        ctx.put_bytes(self.KEY_CHARS, b'kind')
-        ctx._m[self.KEY_VA + 24] = 4
-        ctx._m[self.KEY_VA + 28] = 0
-        ctx._strings = strings
+        ctx._strings = {**strings, self.KEY_VA: 'kind'}      # direct C strings (FlowCtx)
         order = disasm(ctx, 0x1000, max_insns=100, stop_at_ret=False)
         members, unpaired = SF._pair_members(
             ctx, order, lambda k: member_off if k == 0 else None)

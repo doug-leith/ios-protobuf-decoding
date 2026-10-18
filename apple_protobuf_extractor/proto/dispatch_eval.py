@@ -53,6 +53,8 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from macho.disasm import disasm, _parse_imm
 from proto.arm64cfg import dominators, dominates, ivar_slot_loads, split_ops
 from proto.dictrep_flow import Flow, _norm_reg
+from proto.arm64_operands import parse_mem
+from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
 from proto import dispatch as D
 
 log = logging.getLogger(__name__)
@@ -93,61 +95,17 @@ def _ret_value(k: int) -> int:
     return _RET_BASE + 16 * k
 
 
-# Objective-C runtime functions that return their (first) argument -- the ARC ABI's retain /
-# autorelease / return-value handshake.  Named only where the binary names its imports (a
-# standalone image's binds); a dyld cache resolves them away, and there its readers do not
-# retain self in the first place.
-_RETURNS_ARGUMENT = frozenset((
-    '_objc_retain', '_objc_retainAutorelease', '_objc_retainAutoreleasedReturnValue',
-    '_objc_claimAutoreleasedReturnValue', '_objc_unsafeClaimAutoreleasedReturnValue',
-    '_objc_retainAutoreleaseReturnValue', '_objc_autorelease', '_objc_autoreleaseReturnValue',
-))
-
-
-def _import_name(ctx, va: Optional[int]) -> Optional[str]:
-    """Symbol a call stub at *va* imports (``adrp x16; ldr x16,[x16,#o]; br x16`` -- or the
-    ``add`` + ``ldr [x17]`` + ``braa`` form -- through a GOT slot the binary binds by name), or
-    None.  Memoised on *ctx*."""
-    from macho.memory import _ctx_cache
-    from proto.arm64cfg import parse_adrp
-    memo = _ctx_cache(ctx, "_dispatch_eval_import_names", dict)
-    if va in memo:
-        return memo[va]
-    name = None
-    try:
-        ins = disasm(ctx, va, max_insns=4, stop_at_ret=False) if va else []
-        page = parse_adrp(ins[0].op_str) if ins and ins[0].mnemonic == 'adrp' else None
-        if page is not None:
-            reg, addr = page
-            for i in ins[1:]:
-                ops = split_ops(i.op_str)
-                if i.mnemonic == 'add' and len(ops) == 3 and _norm_reg(ops[1]) == reg:
-                    addr += int(ops[2].lstrip('#'), 0)
-                elif i.mnemonic == 'ldr' and len(ops) == 2 and '[' in ops[1]:
-                    inner = ops[1].strip('[]!').split(',')
-                    if _norm_reg(inner[0]) == reg:
-                        if len(inner) > 1:
-                            addr += int(inner[1].strip().lstrip('#'), 0)
-                        name = ctx.bind_name_for(addr)
-                    break
-    except Exception:
-        name = None
-    memo[va] = name
-    return name
-
-
 def _selector_of(ctx, call) -> Optional[str]:
     """Selector a call sends: a ``_objc_msgSend$<sel>`` stub's, or -- for a call to the
     generic ``objc_msgSend`` a standalone binary imports by name -- the selector string x1
     points at."""
-    from proto.repeated import _msgsend_stub_selector
     if call.target is None:
         return None
-    sel = _msgsend_stub_selector(ctx, call.target)
+    sel = stub_selector(ctx, call.target)
     if sel is not None:
         return sel
     x1 = call.args.get('x1')
-    if x1 is not None and not _opaque(x1) and _import_name(ctx, call.target) == '_objc_msgSend':
+    if x1 is not None and not _opaque(x1) and callee_name(ctx, call.target) == '_objc_msgSend':
         try:
             return ctx.read_cstring(x1)
         except (ValueError, KeyError, IndexError, UnicodeDecodeError):
@@ -159,7 +117,7 @@ def _call_result(ctx):
     """``call_result`` for :meth:`Flow.run_from` / :meth:`Flow.propagate`: a call to a runtime
     function that returns its argument keeps x0; any other call's result is a fresh token."""
     def result(k: int, target: Optional[int], x0: Optional[int]) -> Optional[int]:
-        if x0 is not None and _opaque(x0) and _import_name(ctx, target) in _RETURNS_ARGUMENT:
+        if x0 is not None and _opaque(x0) and callee_name(ctx, target) in RETURNS_ARGUMENT:
             return x0
         return _ret_value(k)
     return result
@@ -594,14 +552,12 @@ def _block_slot_loads(flow: Flow, blocks: Set[int]) -> Set[int]:
             if ins.mnemonic != 'ldrsw':
                 continue
             ops = split_ops(ins.op_str)
-            if len(ops) != 2 or not ops[1].startswith('['):
+            pm = parse_mem(ops[1]) if len(ops) == 2 else None
+            if pm is None or pm.index is not None:
                 continue
-            inner = [t.strip() for t in ops[1].strip('[]!').split(',')]
-            if len(inner) > 2 or (len(inner) == 2 and not inner[1].startswith('#')):
-                continue
-            page = flow.const_before(k, _norm_reg(inner[0]))
+            page = flow.const_before(k, pm.base)
             if page is not None:
-                out.add(page + (int(inner[1].lstrip('#'), 0) if len(inner) == 2 else 0))
+                out.add(page + pm.disp)
     return out
 
 

@@ -10,7 +10,7 @@ Two layers:
 * live regression tests against the GeoServices dyld-cache image and the standalone
   locationd binary (artifact-gated like the other live tests).
 
-Background (see report_on_apple_location_services/notes/codex_eval/
+Background (see ../report_on_apple_location_services/notes/codex_eval/
 extractor_networks_type_bug.md): a generated reader builds each repeated-message
 element with ``[[Element alloc] init]`` and appends it with the field's add-accessor,
 so the element class is a class-reference load right before the accessor call.  That

@@ -180,7 +180,8 @@ class TestIOS27SharedSelectorStub(unittest.TestCase):
         add_form = [t for t in flags["call_targets"]
                     if [i.mnemonic for i in disasm(ctx, t, 3, stop_at_ret=False)] == ["adrp", "add", "b"]]
         self.assertTrue(add_form)
-        sels = {W._selector_stub_name(ctx, t) for t in add_form}
+        from proto.callees import stub_selector
+        sels = {stub_selector(ctx, t) for t in add_form}
         self.assertNotIn(None, sels)
         self.assertIn("writeData:", sels)
 

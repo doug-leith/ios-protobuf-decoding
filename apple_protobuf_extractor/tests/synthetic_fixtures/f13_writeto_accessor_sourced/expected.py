@@ -14,7 +14,7 @@ call through objc_msgSend), not a direct `_context` ivar load — the only
 path that can bind this write back to the `_context` ivar (and so confirm
 its field number) is proto/writeto.py's accessor-sourced tier
 (_build_accessor_ivar_map + _trace_accessor_sourced_value +
-_selector_stub_name + _getter_loads_offset). Confirmed by instrumenting
+proto.callees.stub_selector + _getter_loads_offset). Confirmed by instrumenting
 bind_write directly before writing this file: the `context` field
 resolves with status exactly 'ok-accessor'.
 """
