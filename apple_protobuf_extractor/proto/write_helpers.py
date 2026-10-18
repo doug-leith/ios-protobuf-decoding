@@ -38,7 +38,7 @@ from proto.protocore import (
     _is_proto_flags_ivar, _type_from_enc, _INTERNAL_PB_IVARS,
 )
 
-from proto.protoclass_heuristic import _is_proto_class
+from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
 
@@ -76,9 +76,10 @@ def _identify_string_write_helpers(
     _ensure_writeto_indegree(ctx, cl)
 
     string_helpers: Set[int] = set()
+    proto_classes = _proto_class_set(ctx, cl)
 
     for cls in cl:
-        if cls.is_meta or not _is_proto_class(cls):
+        if cls.is_meta or cls.name not in proto_classes:
             continue
 
         # Quick check: does this class have any @"NSString" ivar?

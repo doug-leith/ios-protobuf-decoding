@@ -23,7 +23,6 @@ from macho.classlist import ObjcClass
 from macho.disasm   import disasm, Insn, find_adrp_add_target
 from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
                                range_from_unsigned_gate)
-from proto.protoclass_heuristic import _is_proto_class
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -319,11 +318,9 @@ def _build_readfrom_core_index(
     """
     index: Dict[int, str] = {}
     build_function_index(ctx, cl)
-    # The image's proto classes: the PBCodable superclass closure as well as the name
-    # heuristic (CoreParsec's ``_CP...`` classes are proto only through the closure).
     proto_classes = _proto_class_set(ctx, cl)
     for cls in cl:
-        if cls.is_meta or not (cls.name in proto_classes or _is_proto_class(cls)):
+        if cls.is_meta or cls.name not in proto_classes:
             continue
         core = _find_readfrom_c_func(ctx, cls)
         if core is None:
