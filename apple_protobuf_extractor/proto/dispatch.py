@@ -1,8 +1,5 @@
-"""proto/dispatch -- the readFrom: anchors the dispatch evaluator starts from.
-
-Carved from ``proto.extractor`` (#11 monolith split, step 3).  What is left here after the
-dispatch idioms were retired (2026-10-15; the field dispatch itself is decoded by evaluation
-in :mod:`proto.dispatch_eval`):
+"""proto/dispatch -- the readFrom: anchors the dispatch evaluator (:mod:`proto.dispatch_eval`)
+starts from:
 
 * :func:`_find_readfrom_c_func` / :func:`_build_readfrom_core_index` -- the ReadAllFrom core
   each proto class's ``-readFrom:`` tail-calls, indexed by address (an element core a parent's
@@ -11,27 +8,27 @@ in :mod:`proto.dispatch_eval`):
   :class:`proto.arm64_eval.Flow` user seeds its graph with;
 * :func:`_find_field_count` -- the ``cmp wN,#N ; b.hi`` gate reader (enum diagnostics).
 
-Top-level imports are macho.* and protoclass_heuristic only (never proto.extractor); the
+Top-level imports are macho.* and the proto-class set only (never proto.extractor); the
 evaluator (:mod:`proto.arm64_eval`, :mod:`proto.dispatch_eval`, which imports this module) is
 imported inside the functions that run it.
 """
 from __future__ import annotations
-import struct
+import bisect
 import logging
+import struct
 from typing import Dict, List, Optional
 
-from macho.memory    import BinaryContext, _ctx_cache
+from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ObjcClass
 from macho.disasm   import disasm, Insn, find_adrp_add_target
 from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
                                range_from_unsigned_gate)
 from proto.protoclass_heuristic import _is_proto_class
+from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
 
-# [cap:COSMETIC — verified 2026-06-09] The readFrom: wrapper's tail b/bl sits in the
-# first ~2 instructions, so this cap is a non-binding upper bound.  Raising ×8
-# (12→96) gave 0 descriptor diffs across all 3 artifacts.  Value is cosmetic.
+# [cap:COSMETIC — verified] the readFrom: wrapper's call is in its first two instructions (x8 changed nothing).
 _READFROM_MAX_INSNS = 12
 
 
@@ -52,9 +49,7 @@ def _find_readfrom_c_func(
     reader).  So an inline reader -- ``-readFrom:`` holding the dispatch itself, whose first
     call retains the reader -- has no C core (a parent cannot ``bl`` one; it messages
     ``readFrom:``), and a ``-readFrom:`` that hands only the reader to a shared function
-    (a field-less filter's skip-everything helper) has none either.  Before 2026-10-15 the
-    first branch target was taken whatever it was, which put a runtime stub into the core
-    index for every inline reader (37-40 classes per build, all named after the first).
+    (a field-less filter's skip-everything helper) has none either.
     """
     from proto.arm64_eval import Flow
     from proto.dispatch_eval import SELF, READER, _opaque
@@ -114,12 +109,6 @@ def _find_field_count(ctx: BinaryContext, func_va: int) -> int:
                     return range_from_unsigned_gate(cond, imm)
         va += 4
     return 0
-
-
-# `_try_pointer_table` (the C-ReadFrom pointer-table dispatch reader) was removed
-# 2026-06-15: it returned nothing on every supported artifact (1201 calls, 0
-# non-empty), so the writeTo CFG walk is the sole field-number source.  Its only
-# consumer was `extractor._confirm_field_numbers`.
 
 
 def _section_name(ctx: BinaryContext, va: int) -> Optional[str]:
@@ -294,7 +283,6 @@ class FunctionEntries(list):
 
     def next_after(self, va: int) -> Optional[int]:
         """The first entry above *va*, or None."""
-        import bisect
         i = bisect.bisect_right(self, va)
         return self[i] if i < len(self) else None
 
@@ -303,7 +291,6 @@ def function_entries(ctx: BinaryContext) -> FunctionEntries:
     """The image's function index (:func:`build_function_index`) as :class:`FunctionEntries`,
     sorted once per extraction rather than by every caller (empty when the index is not built).
     Rebuilt if the index has grown since."""
-    from macho.memory import _ctx_store
     es = getattr(ctx, "_function_entries", None) or set()
     memo = getattr(ctx, "_function_entries_sorted", None)
     if memo is None or memo[0] is not es or memo[1] != len(es):
@@ -328,11 +315,8 @@ def _build_readfrom_core_index(
 
     One pass over the classlist, threaded through to every :func:`extract_proto_message`
     call.  Two classes sharing one core would make the index name only the first; none do
-    (GeoServices: 1598 cores, all distinct, measured 2026-10-18).  The 38 shared addresses
-    once seen were the runtime stub an inline reader's first call went to, which
-    :func:`_find_readfrom_c_func` no longer takes for a core.
+    (GeoServices: 1598 cores, all distinct).
     """
-    from proto.protoclass_set import _proto_class_set
     index: Dict[int, str] = {}
     build_function_index(ctx, cl)
     # The image's proto classes: the PBCodable superclass closure as well as the name

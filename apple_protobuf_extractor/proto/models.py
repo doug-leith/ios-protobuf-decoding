@@ -139,7 +139,7 @@ class ProtoField:
                                     # an enum name ('FeedbackType')
     label:            FieldLabel
     type_class:       Optional[str] = None   # ObjC class name or "ENUM:<EnumName>"
-    number_confirmed: bool = False           # True  → dispatch-table derived
+    number_confirmed: bool = False           # True  → from the writeTo: walk
                                              # False → ivar-order estimate
     unresolved_type_class: Optional[str] = None
     # Set by proto.emitter.resolve_type_refs() when the ObjC class named in

@@ -14,25 +14,11 @@ set of methods:
         xyzType            (for repeated message-typed fields)
         pressureType, etc.
 
-Field names come straight from ObjC ivars; types are recovered from ObjC type
-encodings enriched by method-name patterns; field numbers are assigned in two ways:
-
-    Confirmed — when the ReadFrom function uses a pointer-table dispatch (entries in
-    __DATA_CONST/__objc_const that are ivar-offset pointers).  Table index i → field i+1.
-
-    Estimated — for byte-jump-table dispatch (entries in __TEXT/__const), where the
-    table maps to code handlers that are harder to trace statically.  In this case
-    we fall back to the declaration order of ivars in the classlist, which matches
-    proto field-number order for the vast majority of real proto definitions.
-
-Porting notes (files.zip compatibility)
------------------------------------------
-* ObjcIvar in this codebase does NOT have an offset_va field.  Pointer-table
-  matching is done by reading the ivar-offset variable's value (a 32-bit byte
-  offset) and comparing it to ivar.offset, which holds the same value.
-* Pointer tables live in __DATA_CONST/__objc_const (not __DATA_CONST/__const).
-* GeoServices has ivar-offset variables in both __DATA/__objc_ivar and
-  __DATA_DIRTY/__objc_ivar; both are checked.
+Field names come from the ObjC ivars and types from their type encodings, refined by the
+writeTo: writers (proto.write_helpers) and the readFrom: dispatch (proto.dispatch_eval).
+Field numbers are confirmed from the writeTo: walk (proto.writeto: the number each write
+passes); a field the walk does not bind gets the next free number in ivar order and is
+flagged "number estimated".
 
 Usage
 -----
@@ -66,8 +52,7 @@ from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
 from proto.models    import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics,
                              record_analysis_failure, record_failed_pass)
-from proto.writeto   import (_extract_writeto_field_numbers, build_writeto_indegree,
-                             writeto_sent_selectors)
+from proto.writeto   import _extract_writeto_field_numbers, writeto_sent_selectors
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
@@ -75,13 +60,13 @@ from proto.write_helpers import (
     _ensure_string_write_helpers,
 )
 from proto.protocore import (
-    _is_proto_flags_ivar, _is_real_field_ivar, _type_from_enc,
+    _is_real_field_ivar, _type_from_enc,
     _is_packed_list_enc, _field_label, _proto_name,
-    _REQUIRED_INSTANCE_METHODS, _INTERNAL_PB_IVARS, _SCALAR_ENC,
+    _REQUIRED_INSTANCE_METHODS, _SCALAR_ENC,
 )
 # Retired non-structural detectors — kept for investigation, fail the run if they
 # ever claim a class.  See proto/protoclass_heuristic.py.
-from proto.protoclass_heuristic import _is_proto_class, check_no_heuristic_detection, ProtoClassDetectionError, _SYSTEM_ROOT_NAMES
+from proto.protoclass_heuristic import _is_proto_class, check_no_heuristic_detection
 from proto.dispatch  import _build_readfrom_core_index
 from proto.repeated  import (
     _resolve_repeated_via_dispatch, _resolve_repeated_via_dispatch_ivars,
@@ -119,76 +104,6 @@ class SelectorsUnresolvedError(Exception):
     """
 
 
-# Enum-fallback debug instrumentation (Modes A/B/C, threaded from extract_all's
-# ``enum_debug_writer=`` kwarg) now lives in proto.enums_debug — see that
-# module's docstring for the full mode breakdown.
-
-
-# ── _dictionaryRepresentation: switch-table enum recovery ──────────────────────
-#
-# Some Apple proto enums have no ``xAsString:``/``StringAsX:`` companion selector
-# (e.g. ``GEOComponentType``, ``ComponentStatus``, ``CacheControlType`` on
-# ``GEOPDComponent``).  Their int→name map is instead embedded in the class's
-# ``-[Class _dictionaryRepresentation:]`` method, as one LLVM switch per enum
-# field::
-#
-#       ldrsw x8, [x.., #ivar_off_slot]   ; load this field's ivar byte offset
-#       ldr   w8, [xSELF, x8]             ; w8 = self->_<field>
-#       cmp   w8, #N                      ; bounds check (N = max value)
-#       b.hi  default
-#       adrp  x22, cfstring_<DEFAULT>     ; pre-load the default/UNKNOWN string
-#       add   x22, x22, #off
-#       adrp  x9,  switch_table           ; the jump table (16- or 8-bit entries)
-#       add   x9,  x9, #off
-#       adr   x10, case_base
-#       ldrh  w11, [x9, x8, lsl #1]       ; entry = table[value]   (ldrb for byte tables)
-#       add   x10, x10, x11, lsl #2       ; target = case_base + entry*4
-#       br    x10
-#     case_base+...:                       ; per-value block
-#       adrp  x22, cfstring_<NAME>         ; the value's name string
-#       add   x22, x22, #off
-#       b     merge
-#
-# The switch table is indexed directly by the enum value; gap values and value 0
-# route to the merge point and inherit the pre-loaded default string.  The table
-# base is the adrp+add target whose register also serves as the base of the
-# register-offset table load, and that load (decoded by :func:`_decode_ldr_reg_off`
-# on raw words) gives the entry width (ldrh→2, ldrb→1) and the value/index
-# register directly — no width guessing.  Strings are read via
-# :func:`_read_enum_string` (CFStringRef-aware).
-
-
-# Sentinel returned by _enum_name_from_pairs when no useful multi-word prefix
-# can be derived.  Using a NUL-prefixed string guarantees it can never collide
-# with a real CamelCase enum name.
-_ENUM_NAME_NO_PREFIX: str = "\x00"
-
-
-# ── readFrom: jump-table element-type dispatch ────────────────────────────────
-#
-# The element type of a ``repeated <message>`` field is the proto class whose
-# ReadAllFrom C-core the field's readFrom: dispatch arm ``bl``-calls.  We recover
-# it by decoding the field-dispatch jump table in the ReadSpecified core, walking
-# each tag's arm, and matching the arm's ``bl`` target against a per-binary index
-# of ``{ReadAllFrom vmaddr -> class name}``.  Identification is purely by
-# ADDRESS, so it works in cache-native mode where symbols are stripped.
-#
-# Dispatch shape (verified on _GEOPDComponentReadSpecified):
-#     lsr  Xt, Xtag, #3               ; field number = tag >> 3
-#     sub  Wi, Wt, #1                 ; idx = field# - 1
-#     cmp  Wi, #<count-1> ; b.hi …    ; field-count gate
-#     adr  Rbase, #ARM_BASE           ; arm region base
-#     ldrh Roff, [Rtab, Xi, lsl #1]   ; 16-bit offset table (Rtab = adrp+add base)
-#     add  Rbase, Rbase, Roff, lsl #2 ; arm = ARM_BASE + table16[idx]*4
-#     br   Rbase
-#
-# The arm64 mini-decoder used when capstone is absent does NOT decode ``adr``,
-# register-offset ``ldrh``, or shifted-register ``add``, so the cluster is read
-# from RAW WORDS (_decode_adr / _is_br_insn) and the table base is selected by
-# validation rather than by decoding the load — only the natively-decodable
-# ``adrp+add`` (table base) and ``bl`` scan rely on the Insn stream.
-
-
 # ── Metaclass lookup ───────────────────────────────────────────────────────────
 
 def _find_metaclass(
@@ -200,18 +115,6 @@ def _find_metaclass(
     except ValueError:
         return None
     return cl.by_vmaddr(raw_isa)
-
-
-# ── writeTo: field-number extraction ─────────────────────────────────────────
-# Carved out into proto/writeto.py (output-identical move).  Imported at the top
-# of this module as `_extract_writeto_field_numbers`; the budget constants and
-# `_writeto_field_number_before` live there too.
-
-
-# ── String write-helper identification + wire-type-family classification ──
-# Moved to proto/write_helpers.py (output-identical carve); imported above as
-# `_identify_string_write_helpers`, `_find_string_write_helper`,
-# `_classify_write_helper`.
 
 
 # Inline-comment text attached to a repeated field whose element type could not
@@ -285,11 +188,6 @@ def _embedded_struct_note(ivar: ObjcIvar, type_name: str,
         return (f"embedded fixed-struct '{sname}' emitted as bytes; element "
                 f"type/layout not modelled — see LIMITATIONS.md (2)")
     return None
-
-
-# _SYSTEM_ROOT_NAMES (the NSObject/NSProxy cluster-root guard) moved to
-# proto.protoclass_heuristic alongside the closure it guards; re-exported above for
-# existing call sites.
 
 
 # ── Helpers extracted from extract_proto_message ──────────────────────────────
@@ -384,16 +282,10 @@ def _confirm_field_numbers(
     )
 
 
-# `_ensure_writeto_indegree` moved to proto/write_helpers.py (imported above).
-
-
 # Sentinel default for the two field-typing pre-pass kwargs of
 # extract_proto_message: distinguishes "caller did not pass it → auto-build" from
 # an explicit empty/None value (a caller deliberately opting into the degraded path).
 _AUTO = object()
-
-
-# `_ensure_string_write_helpers` moved to proto/write_helpers.py (imported above).
 
 
 def _ensure_readfrom_core_index(ctx: BinaryContext, cl: ClassList) -> Dict[int, str]:
@@ -420,8 +312,7 @@ def _resolve_dispatch_context(
     readfrom_core_index: "Optional[Dict[int, str]]",
     field_ivars: List[ObjcIvar],
 ) -> "Tuple[Dict[int, str], Dict[str, Tuple[str, int]], bool]":
-    """Resolve the readFrom: dispatch context for repeated-<message> element typing.
-    Carved from :func:`extract_proto_message` (pre-loop phase). Returns:
+    """Resolve the readFrom: dispatch context for repeated-<message> element typing:
 
       * ``dispatch_elements`` — ``{field_number: element_class}``: the class each field's
         readFrom: handler builds (:mod:`proto.dispatch_eval`; keyed by NUMBER).
@@ -677,13 +568,10 @@ def _writeto_self_load_offset(ctx: BinaryContext, insns) -> Optional[int]:
 
 
 # ── extract_proto_message per-field helpers ───────────────────────────────────
-# These three were carved out of extract_proto_message's per-field loop so each
-# field-typing concern is a named, separately-testable unit; the loop reads as a
-# short pipeline.  All are behaviour-preserving (byte-identical emitted output).
 
 def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_writes=None,
                           owner=""):
-    """TODO #38/#44: refine the canonical int default to its true wire form.
+    """Refine the canonical int default to its true wire form.
 
     The ivar @encode only records storage width, so int32/uint32/sint32/[s]fixed32
     collapse to int32; the field's writeTo: helper VA selects the wire form.  Refine
@@ -759,7 +647,7 @@ def _qualify_field_enum(type_name, type_class, cls, pfx):
 def _resolve_repeated_element_type(
     ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
     *, dispatch_elements, dispatch_unambiguous, dispatch_ivars,
-    instance_method_names, metaclass, string_helper, wt_helpers,
+    metaclass, string_helper, wt_helpers,
 ):
     """Resolve a repeated field's element type (dispatch-first, then heuristic).
 
@@ -795,8 +683,7 @@ def _resolve_repeated_element_type(
         _disp = dispatch_ivars[ivar.name][0]
 
     _rr = _resolve_repeated_field_type(
-        ivar, pname, instance_method_names, metaclass, cl, ctx,
-        string_helper, wt_helpers,
+        ivar, pname, metaclass, cl, ctx, string_helper, wt_helpers,
     )
     if _disp is not None and not _rr.abi_confirmed:
         return _disp, _disp, None
@@ -853,7 +740,8 @@ def extract_proto_message(
     # that pass a class not present in ``cl`` (e.g. synthetic unit tests).
     # Output-neutral for real extraction: when ``cls in cl`` and
     # ``_is_proto_class(cls)`` is true, ``cls.name`` is already in the set.
-    if cls.name not in _proto_class_set(ctx, cl) and not _is_proto_class(cls):
+    _proto_class_names = _proto_class_set(ctx, cl)
+    if cls.name not in _proto_class_names and not _is_proto_class(cls):
         return None
 
     # Ensure the writeTo CFG-walk pre-pass is available (extract_all builds it once;
@@ -891,7 +779,7 @@ def extract_proto_message(
     #   va_cluster: the heuristic-seeded VA-cluster closure (anchor 2) claimed it
     #   and the name walk (anchor 1) did not.
     _class_detected_by_heuristic = (
-        cls.name not in _proto_class_set(ctx, cl)
+        cls.name not in _proto_class_names
         or cls.name in (getattr(ctx, "_proto_class_heuristic_only", None) or frozenset()))
     _class_detected_by_va_cluster = cls.name in (
         getattr(ctx, "_proto_class_cluster_only", None) or frozenset())
@@ -963,7 +851,7 @@ def extract_proto_message(
 
     # One vote per field for "which wire kind does this write helper encode" — the
     # binary-wide table :func:`_finalize_map_fields` reads to type map keys/values.
-    record_helper_votes(ctx, field_ivars, _wt_helpers, _proto_class_set(ctx, cl))
+    record_helper_votes(ctx, field_ivars, _wt_helpers, _proto_class_names)
 
     # ── Principled repeated-<message> element types (readFrom: dispatch) ───────
     dispatch_elements, dispatch_ivars, _dispatch_unambiguous = _resolve_dispatch_context(
@@ -991,23 +879,8 @@ def extract_proto_message(
         type_name, _int_decided = _refine_int_wire_form(ctx, type_name, type_class, ivar,
                                                         _wt_helpers, _walk_writes, owner=cls.name)
 
-        # ── Mode A enum-fallback debug ────────────────────────────────────────
-        # Fires when: (a) --cache path (instance_method_names non-empty), (b)
-        # the ivar has a scalar type encoding that *could* be an enum, (c) no
-        # ENUM: tag was set by _type_from_enc, AND — critically — (d) the
-        # xAsString:/StringAsX: selector DOES exist somewhere in the binary's
-        # own __objc_methname section.
-        #
-        # Condition (d) is the key filter: it restricts records to cases where
-        # there is positive evidence that an enum method exists but was NOT
-        # detected for this class.  Without this gate the hook would fire for
-        # every legitimate non-enum int field (ttl, startIndex, componentId,
-        # …) producing thousands of noise records.
-        #
-        # When (d) is False the field is genuinely not an enum — no record needed.
-        # When (d) is True the field SHOULD be an enum and the record explains why
-        # it wasn't: wrong class (method is on a different class), partially
-        # resolved method list, naming mismatch, etc.
+        # Mode A enum-fallback debug: an untagged int field whose xAsString: selector exists
+        # somewhere in the image (evidence of an enum this class's methods did not show).
         if (_dbg is not None
                 and instance_method_names               # --cache path
                 and ivar.type_enc in _SCALAR_ENC        # integer-typed ivar
@@ -1043,7 +916,6 @@ def extract_proto_message(
             dispatch_elements=dispatch_elements,
             dispatch_unambiguous=_dispatch_unambiguous,
             dispatch_ivars=dispatch_ivars,
-            instance_method_names=instance_method_names,
             metaclass=metaclass,
             string_helper=_string_helper, wt_helpers=_wt_helpers,
         )
@@ -1128,7 +1000,6 @@ def extract_proto_message(
     # message or Foundation type — bare protocols and internal helper classes (locks,
     # KVO trampolines) that may not be real wire fields.  We keep them and flag them
     # so the reader decides (see :func:`_unresolved_object_field_note`).
-    _proto_class_names = _proto_class_set(ctx, cl)
     for f in fields:
         if not f.type_inference_note:
             _note = _unresolved_object_field_note(f, _ivar_enc_by_pname,
@@ -1319,36 +1190,16 @@ def extract_all(
         getattr(ctx, "_proto_class_cluster_only", None) or frozenset(),
         source=getattr(ctx, "source_name", None) or "<binary>")
 
-    # Pre-pass: build the binary-wide branch-indegree map + method-IMP set that the
-    # writeTo: CFG-walk decoder needs, and thread them onto ctx so each per-class
-    # _extract_writeto_field_numbers call (incl. the string-helper pre-pass below)
-    # can run the walk.  Built ONCE here — building it per class would be O(n^2).
-    try:
-        _wt_indeg, _wt_foreign = build_writeto_indegree(ctx, cl)
-        _ctx_store(ctx, "_writeto_indeg", _wt_indeg)
-        _ctx_store(ctx, "_writeto_foreign_imps", _wt_foreign)
-        log.debug("writeTo indegree pre-pass: %d branch targets, %d method IMPs",
-                  len(_wt_indeg), len(_wt_foreign))
-    except (NameError, ImportError):
-        raise
-    except Exception as exc:
-        record_failed_pass(ctx, "writeTo indegree", exc,
-                           "the writeTo: walk is off: field numbers are ivar-order estimates")
-
-    # Pre-pass: find the string write-helper VA(s) from any class that has
-    # a confirmed singular @"NSString" ivar with a write-helper.  All proto
-    # classes in one binary share the same write helpers so one example
-    # suffices; we stop the scan as soon as we have a result.
-    string_write_helpers: FrozenSet[int] = frozenset(
-        _identify_string_write_helpers(ctx, cl)
-    )
-    log.debug("String write helpers identified: %s",
-              [hex(h) for h in string_write_helpers])
-
-    # Pre-pass: build the {ReadAllFrom vmaddr -> class name} index that drives
-    # the principled repeated-<message> element-type resolver.
-    readfrom_core_index: Dict[int, str] = _ctx_store(ctx, "_readfrom_core_index",
-                                                     _build_readfrom_core_index(ctx, cl))
+    # Image-wide pre-passes, built once here (per class would be O(n^2)); a failure is
+    # recorded in the run diagnostics and the run continues without it.
+    #  * the branch-indegree map + method-IMP set the writeTo: walk needs;
+    #  * the string write helper(s), from a class with a confirmed NSString ivar;
+    #  * the {ReadAllFrom vmaddr -> class name} index the readFrom: evaluator names
+    #    element classes by.
+    _ensure_writeto_indegree(ctx, cl)
+    string_write_helpers: FrozenSet[int] = _ensure_string_write_helpers(ctx, cl)
+    log.debug("String write helpers identified: %s", [hex(h) for h in string_write_helpers])
+    readfrom_core_index: Dict[int, str] = _ensure_readfrom_core_index(ctx, cl)
     log.debug("readFrom core index: %d classes", len(readfrom_core_index))
 
     messages: List[ProtoMessage] = []
@@ -1408,12 +1259,7 @@ def is_proto_class(cls: ObjcClass) -> bool:
     return _is_proto_class(cls)
 
 
-# Public API + the few extractor-local helpers callers/tests still reach for here.
-# The 24 private helpers that the #11 split moved into macho/arm64decode.py and
-# proto/{protocore,dispatch,repeated,config,enums,writeto}.py were dropped from
-# __all__ — tests now import them from their real home modules. (The re-import
-# back-compat shim above is retained while a few external consumers — the dev
-# scripts — still import moved symbols via proto.extractor.)
+# Public API, plus the extractor-local helpers callers and tests use.
 __all__ = [
     "extract_all",
     "extract_proto_message",
@@ -1426,5 +1272,4 @@ __all__ = [
     "SelectorsUnresolvedError",
     "_identify_string_write_helpers",
     "_find_string_write_helper",
-    "_ENUM_NAME_NO_PREFIX",
 ]

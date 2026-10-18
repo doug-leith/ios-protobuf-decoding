@@ -111,7 +111,7 @@ class TestRepeatedElementPrecedence(unittest.TestCase):
                 None, None, ivar, 'items', FieldLabel.REPEATED, 'NSMutableArray',
                 'NSMutableArray', 1, True,
                 dispatch_elements={}, dispatch_unambiguous=False,
-                dispatch_ivars=dispatch_ivars or {}, instance_method_names=set(),
+                dispatch_ivars=dispatch_ivars or {},
                 metaclass=None, string_helper=STR_HELPER, wt_helpers={})
 
     def test_dispatch_ivar_supplies_the_element(self):

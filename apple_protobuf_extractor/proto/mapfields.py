@@ -65,6 +65,7 @@ from proto.write_helpers import (
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
+from proto.dispatch_eval import evaluate_class
 
 log = logging.getLogger(__name__)
 
@@ -568,7 +569,6 @@ def readfrom_value_classes(
     and every proto class it allocates (:mod:`proto.dispatch_eval`, which runs the dispatch
     with the field number set to *number*).  ``None`` when the dispatch, or a handler for that
     number, can't be found (the caller then reports the value class as unrecovered)."""
-    from proto.dispatch_eval import evaluate_class
     ev = evaluate_class(ctx, cls, core_index or {})   # an empty index still names allocated classes
     fd = ev.fields.get(number)
     if fd is None:

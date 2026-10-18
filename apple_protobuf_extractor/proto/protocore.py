@@ -208,8 +208,6 @@ def _type_from_enc(
         cls_name = m.group(1)
         if cls_name in _CLASS_TO_PROTO:
             return (_CLASS_TO_PROTO[cls_name], None)
-        if cls_name in ("NSArray", "NSMutableArray"):
-            return (cls_name, cls_name)
         return (cls_name, cls_name)
 
     if type_enc == "@":

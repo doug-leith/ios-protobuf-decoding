@@ -1,15 +1,9 @@
 """proto/arm64cfg.py — shared arm64 control-flow / operand-parsing helpers.
 
-Pure, serializer-agnostic primitives lifted out of ``proto/writeto.py`` so both the
-writeTo: field-number walk and the readFrom: CFG/dominator resolver can share one
-copy instead of duplicating the parsing/register/extent logic.
-
-Imports only from ``macho.*`` (keeps the existing ``proto → macho`` direction — no
-import cycle).  These helpers carry NO writeTo: or readFrom: meaning; they operate on
-already-decoded ``macho.disasm.Insn`` objects and operand strings.  ``proto/writeto.py``
-re-imports every name below so its own callers and ``tests/test_writeto_walk_coverage.py``
-(``import proto.writeto as W``) keep working unchanged — Tier 1 is a pure code move with
-a provably empty golden diff.
+Pure, serializer-agnostic primitives shared by the writeTo: field-number walk and the
+evaluator (:mod:`proto.arm64_eval`): basic blocks, dominators, the lazy block walk, and
+operand helpers.  They carry no writeTo: or readFrom: meaning and operate on decoded
+``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
 """
 import bisect
 from collections import deque
@@ -357,9 +351,7 @@ def dominates(idom, a, b):
 # function" ahead of time. LazyWalk is the alternative this requires: it
 # discovers and disassembles blocks ONE AT A TIME, only once a branch has
 # already proven they are reachable, so it never reads past what it has
-# structurally justified visiting. This is a named extraction of the worklist
-# bookkeeping proto/writeto.py's writeto_walk always used, not a behavior
-# change.
+# structurally justified visiting.
 
 
 class LazyWalk:

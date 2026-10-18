@@ -3,46 +3,43 @@
 The extraction path's readFrom: reader: :mod:`proto.repeated` takes repeated-message element
 classes and their array ivars from it, :mod:`proto.mapfields` a map's value classes.
 
-The question the dispatch idioms answer by shape -- "for field N, which handler runs, which
-element class does it build, and which ivar does it append to" -- is answered here by running
-the reader:
+For field N: which handler runs, which element class it builds, and which ivar it appends
+to.  Answered by running the reader:
 
-1. **Which function dispatches** (replaces the wrapper scan and every ownership signal).
-   ``-[Cls readFrom:]`` is entered with x0 = SELF and x2 = READER, two opaque tokens.  A call is
-   followed only when it is handed THIS object (x0 = SELF; ``objc_retain`` and the ARC
-   return-value handshake return their argument), so a nested element's reader -- handed a
-   freshly allocated object -- is never mistaken for ours, whatever the toolchain's call-site
-   shape.  (The reader itself is not required: readers retain it first and use the
-   retain's result, which the analysis cannot equate with READER without the runtime's names.)  The first function so
+1. **Which function dispatches.**  ``-[Cls readFrom:]`` is entered with x0 = SELF and x2 =
+   READER, two opaque tokens.  A call is followed only when it is handed THIS object (x0 =
+   SELF; ``objc_retain`` and the ARC return-value handshake return their argument), so a
+   nested element's reader -- handed a freshly allocated object -- is never mistaken for
+   ours.  (The reader itself is not required: readers retain it and use the retain's result,
+   which cannot be equated with READER without the runtime's names.)  The first function so
    reached that extracts a field number (``lsr Wf, Wtag, #3``) is the dispatch core; the
    constants it was handed (a data table chosen by a ``csel``) come along as values.
-2. **What runs for field N.**  The core is propagated from its entry to the ``lsr`` (the state
-   there: self, reader, table, in whatever registers the core keeps them), then from just after
-   the ``lsr`` with Wf = N through calls (:meth:`proto.arm64_eval.Flow.run_from`) until control
-   re-enters a block that dominates the ``lsr`` -- the next tag read.  Branches the analysis
-   cannot decide (has-bits, wire type, error checks) are followed both ways; a jump-table
-   ``br`` is decided by N itself.  Only the outermost ``lsr`` counts: one dominated by another
-   is a nested message's or a map entry's reader inlined into an outer field's handler.  N's handler is what N reaches and an unknown field number
-   (one past every value the code compares with) does not.
-3. **What the handler does**, read off call arguments, not idioms: the element core is a call
-   into a known ``ReadAllFrom`` core handed an object other than self / the reader (its x0 is
-   the element object); the element class is any known proto class whose ``class_t`` address is an argument
-   (``objc_alloc`` / ``objc_opt_new``, however the address was formed -- classref ``ldr`` or
-   direct ``adrp+add``); the adder is a call handed x0 = SELF and that element object (in x2 for a
-   method IMP called directly, x1 = ``_cmd``; in x1 for an ``objc_direct`` C function), and its ivar is the array ivar whose offset
-   variable it loads (:func:`proto.repeated._adder_array_ivar`).
+2. **What runs for field N.**  The core is propagated from its entry to the ``lsr``, then run
+   from just after it with Wf = N, through calls (:meth:`proto.arm64_eval.Flow.run_from`),
+   until control re-enters a block that dominates the ``lsr`` -- the next tag read.  Branches
+   the analysis cannot decide (has-bits, wire type, error checks) are followed both ways; a
+   jump-table ``br`` is decided by N.  Only the outermost ``lsr`` counts: one dominated by
+   another is a nested message's or a map entry's reader inlined into a handler.  N's handler
+   is what N reaches and an unknown field number (one past every compared value) does not.
+3. **What the handler does**, read off call arguments: the element core is a call into a
+   known ``ReadAllFrom`` core handed an object other than self / the reader; the element
+   class is any known proto class whose ``class_t`` address is an argument (``objc_alloc`` /
+   ``objc_opt_new``, however the address was formed); the adder is a call handed x0 = SELF
+   and that element object (in x2 for a method IMP, x1 = ``_cmd``; in x1 for an
+   ``objc_direct`` C function), and its ivar is the array ivar whose offset variable it loads
+   (:func:`proto.repeated._adder_array_ivar`).
 
-Stack slots use the object-escape rule (:class:`proto.arm64_eval._Machine`): a callee handed a
-frame address may write from it upward only, and does not keep it past its return.  An older
-toolchain spills the element object across such a call (``str x0,[sp,#8]`` ... ``add x1,sp,#0x60;
-bl`` ... ``ldr x1,[sp,#8]; bl adder``), which clearing every slot would lose.
+Stack slots use the object-escape rule (:class:`proto.arm64_eval._Machine`): a callee handed
+a frame address may write from it upward only, and does not keep it past its return.  An
+older toolchain spills the element object across such a call (``str x0,[sp,#8]`` ... ``add
+x1,sp,#0x60; bl`` ... ``ldr x1,[sp,#8]; bl adder``), which clearing every slot would lose.
 
-Candidate field numbers come from :meth:`Flow.candidates` (every compare point and every ordered
-gate's interval).  Jump-table arms the CFG lacks are found by evaluating the ``br`` under each N;
-the CFG is rebuilt with them and the run repeated.  The CFG is still SEEDED with the decoded
-jump tables (:func:`proto.dispatch._jump_table_arm_addrs`, as every Flow user): a control ``br``
-ahead of the ``lsr`` (has-bits bookkeeping) has an index the fixpoint cannot know, and without
-its arms the ``lsr`` is unreachable.
+Candidate field numbers come from :meth:`Flow.candidates` (every compare point and every
+ordered gate's interval).  Jump-table arms the CFG lacks are found by evaluating the ``br``
+under each N; the CFG is rebuilt with them and the run repeated.  The CFG is seeded with the
+decoded jump tables (:func:`proto.dispatch._jump_table_arm_addrs`): a control ``br`` ahead of
+the ``lsr`` (has-bits bookkeeping) has an index the fixpoint cannot know, and without its arms
+the ``lsr`` is unreachable.
 """
 from __future__ import annotations
 
@@ -50,10 +47,12 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from macho.disasm import disasm, _parse_imm
-from proto.arm64cfg import dominators, dominates, ivar_slot_loads, split_ops
-from macho.disasm import _norm_reg
-from proto.arm64_eval import Flow, _MAX_GATE_SPAN
+from macho.disasm import disasm, _norm_reg, _parse_imm
+from macho.memory import _ctx_cache, _ctx_store
+from macho.objc_abi import CLASS_T_DATA, CLASS_RO_NAME, FAST_DATA_MASK
+from proto.arm64cfg import build_blocks, dominators, dominates, ivar_slot_loads, split_ops
+from proto.arm64_eval import Flow, _Machine, _MAX_GATE_SPAN
+from proto.repeated import _adder_array_ivar
 from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
 from proto import dispatch as D
@@ -168,7 +167,6 @@ def _known_entries(ctx, cls, core_index: Dict[int, str]) -> "D.FunctionEntries":
     end alone runs a tail ``b`` into the function it jumps to, e.g. a ``-readFrom:`` wrapper into
     the engine laid out after it).  The image-wide part (index and core index) is built once
     and reused while both are unchanged; a class adds only methods the index does not hold."""
-    from macho.memory import _ctx_store
     index = D.function_entries(ctx)
     key = (id(index), id(core_index), len(core_index))
     memo = getattr(ctx, "_known_entries_base", None)
@@ -183,7 +181,6 @@ def _known_entries(ctx, cls, core_index: Dict[int, str]) -> "D.FunctionEntries":
 def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
     """Name of the ObjC class whose ``class_t`` is at *va* (``class_t.data -> class_ro_t.name``),
     or None.  Callers accept it only when it is a known proto class."""
-    from macho.objc_abi import CLASS_T_DATA, CLASS_RO_NAME, FAST_DATA_MASK
     if va is None or not 0 < va < _TOKEN_BASE:
         return None
     try:
@@ -205,7 +202,6 @@ def _seed_br_arms(ctx, insns) -> Dict[int, Set[int]]:
     bounded by an ``and`` mask rather than a ``cmp`` gate (``and w8, w0, #7`` on the wire type)
     -- the targets the ``br`` takes for every value the mask lets through, found by running the
     straight-line code from the ``and`` to the ``br``."""
-    from proto.arm64_eval import _Machine
     per_br = {b: set(a) for b, a in D._jump_table_arm_addrs(ctx, insns, per_br=True).items()}
     flow = None
     for kb, br in enumerate(insns):
@@ -257,7 +253,6 @@ def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = 
     the dispatch would otherwise end the function), where a ``b`` to a known function entry is
     a tail call, and never past the next known function entry (*entries*).  *upto* extends it
     to cover arms found by evaluation."""
-    from proto.arm64cfg import build_blocks
     entries = _as_entries(entries)
     hard_end = va + _MAX_FUNC_BYTES
     nxt = entries.next_after(va)
@@ -385,7 +380,6 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                  first: Optional[tuple] = None) -> None:
     """Run *cls*'s dispatch core at *core_va* for each field number into *out*.  *first* is
     :func:`find_cores`' ``(insns, br_arms, Flow)`` for the core (round 0 needs exactly that)."""
-    from proto.repeated import _adder_array_ivar
     array_offsets = frozenset(iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_ENCS)
     own_slots = frozenset(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
     own_imps = frozenset(mm.imp for mm in cls.methods if mm.imp)
@@ -554,7 +548,6 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
 
 def _slots_loaded(ctx, va: Optional[int]) -> FrozenSet[int]:
     """The ivar-offset-variable addresses the function at *va* loads (``adrp`` + ``ldrsw``)."""
-    from macho.memory import _ctx_cache
     if va is None:
         return frozenset()
     memo = _ctx_cache(ctx, "_dispatch_eval_slot_loads", dict)
@@ -613,7 +606,6 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
     result depends on *core_index*, so it is memoised only for the image's own index (the
     one cached on *ctx* as ``_readfrom_core_index``) and for an empty one; any other index
     is evaluated afresh."""
-    from macho.memory import _ctx_cache
     if not core_index:
         key = (cls.vmaddr, "empty")
     elif core_index is getattr(ctx, "_readfrom_core_index", None):

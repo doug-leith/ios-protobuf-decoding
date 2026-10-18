@@ -12,12 +12,11 @@ evaluation with a model of the registers, the NZCV flags and the stack slots.
 
 It knows nothing of protobufs.  Its users: the enum recovery (:mod:`proto.dictrep_flow`), the
 struct decoder (:mod:`proto.structfields`), the readFrom: dispatch evaluator
-(:mod:`proto.dispatch_eval`).  Split out of proto/dictrep_flow.py (code review 2026-10-18).
+(:mod:`proto.dispatch_eval`).
 """
 from __future__ import annotations
 
 import logging
-import re
 from collections import deque
 from itertools import product
 from dataclasses import dataclass, field
@@ -137,7 +136,7 @@ class _Machine:
     *object_escape* narrows what an escaped stack address exposes: a callee (or a store through
     an unknown pointer) is handed a pointer to an object and may write from it upward, never
     below it, so only the slots at or above the LOWEST escaped address are cleared
-    (*escape_lo*).  Off by default: then every slot is cleared, as before."""
+    (*escape_lo*).  Off by default: then every slot is cleared."""
 
     def __init__(self, regs: Dict[str, int], fallback=None, opaque=None,
                  object_escape: bool = False, field_value=None):
@@ -317,7 +316,7 @@ class Flow:
           over-approximation: its candidate scan must reach the gates of the nested tables of a
           segmented switch, which hang off arms the per-``br`` decoding does not attribute
           (per-``br`` arms there lose cases such as iPhone 8
-          AnalyticsPipelineStateData restoreUiTarget 1501-1504; measured 2026-10-18)."""
+          AnalyticsPipelineStateData restoreUiTarget 1501-1504)."""
         self.ctx = ctx
         self.insns = insns
         self.addr_idx = {ins.addr: k for k, ins in enumerate(insns)}
@@ -1180,10 +1179,3 @@ class Flow:
             return self.ctx.read_cstring(va, max_len=128)
         except (ValueError, KeyError, UnicodeDecodeError, AttributeError):
             return None
-
-    # ── the enum maps of the function ───────────────────────────────────────
-
-
-# ── operand helpers ────────────────────────────────────────────────────────
-
-

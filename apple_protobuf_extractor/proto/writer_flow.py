@@ -42,6 +42,9 @@ from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import BinaryContext, _ctx_store
 from proto.arm64cfg import build_blocks, parse_adrp, split_ops
+from proto.dispatch import FunctionEntries, _jump_table_arm_addrs
+from proto.dispatch_eval import _function_insns
+from proto.writeto import _image_text_range
 from proto.callees import callee_name, stub_selector, RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN
 from proto.arm64_operands import (writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   CALLER_SAVED_GPRS, CALLER_SAVED_FPRS)
@@ -195,15 +198,14 @@ class WriterFlow:
 
     def __init__(self, ctx: BinaryContext, cl: ClassList):
         self.ctx, self.cl = ctx, cl
-        self.entries = sorted({m.imp for c in cl for m in c.methods if m.imp})
-        self.entry_set = frozenset(self.entries)
+        self.entries = FunctionEntries(m.imp for c in cl for m in c.methods if m.imp)
+        self.entry_set = self.entries.members
         self._live_memo: Dict[int, Tuple[str, ...]] = {}
         self._summary_memo: Dict[int, FrozenSet] = {}
         self.cls: Optional[ObjcClass] = None
         self.own_imps: Dict[int, str] = {}
         self.slot_to_ivar: Dict[int, str] = {}
         self.off_to_ivar: Dict[int, str] = {}
-        from proto.writeto import _image_text_range
         self.text = _image_text_range(ctx)
 
     # ── public entry ─────────────────────────────────────────────────────────
@@ -239,16 +241,14 @@ class WriterFlow:
 
     # ── function body ────────────────────────────────────────────────────────
     def _insns(self, va: int):
-        from proto.dispatch_eval import _function_insns
         return _function_insns(self.ctx, va, entries=self.entries)
 
     def _run(self, imp: int, entry: Dict[str, FrozenSet], depth: int, top: int
              ) -> Optional[_Result]:
-        from proto import dispatch as D
         insns = self._insns(imp)
         if not insns:
             return None
-        arms = D._jump_table_arm_addrs(self.ctx, insns, per_br=True)
+        arms = _jump_table_arm_addrs(self.ctx, insns, per_br=True)
         cfg = build_blocks(insns, {a for v in arms.values() for a in v})
         for b in cfg.order:
             last = cfg.blocks[b][-1]
@@ -299,7 +299,7 @@ class WriterFlow:
                 if out_of_window and not self._is_function(tgt):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
                     return True
-                if self._call(st, ins, mn, tgt, res, depth, top):
+                if self._call(st, tgt, res, depth, top):
                     return True                      # no-return callee
                 if mn == 'b':
                     res.ret |= st.p('x0') | st.p('v0')
@@ -338,8 +338,7 @@ class WriterFlow:
                 or stub_selector(self.ctx, va) is not None)
 
     # ── calls ────────────────────────────────────────────────────────────────
-    def _call(self, st: _St, ins, mn: str, tgt: Optional[int], res: _Result, depth: int,
-              top: int) -> bool:
+    def _call(self, st: _St, tgt: Optional[int], res: _Result, depth: int, top: int) -> bool:
         name = callee_name(self.ctx, tgt) if tgt is not None else None
         sel = stub_selector(self.ctx, tgt) if tgt is not None else None
         if name in _NORETURN:
@@ -474,8 +473,7 @@ class WriterFlow:
         return st.sv.get(base)
 
     @staticmethod
-    def _access(st: _St, mem: str, ops: List[str], base: str, fa: int, disp: int
-                ) -> Tuple[int, Optional[int]]:
+    def _access(mem: str, ops: List[str], fa: int, disp: int) -> Tuple[int, Optional[int]]:
         """``(address accessed, new base value or None)`` for a frame access: pre-index
         ``[b, #d]!`` uses and keeps b+d; post-index ``[b], #d`` uses b and then adds d."""
         if mem.rstrip().endswith('!'):
@@ -518,7 +516,7 @@ class WriterFlow:
             st.sv[d] = st.sv.get('sp', 0)
             return
         if mn in _LOADS or mn in _PAIR_LOADS:
-            self._load(st, ins, mn, ops, dsts)
+            self._load(st, mn, ops, dsts)
             return
         if mn in _STORES or mn in _PAIR_STORES:
             self._store(st, ins, mn, ops, res)
@@ -544,7 +542,7 @@ class WriterFlow:
             if s in st.cv:
                 st.cv[dsts[0]] = st.cv[s]
 
-    def _load(self, st: _St, ins, mn: str, ops: List[str], dsts: List[str]) -> None:
+    def _load(self, st: _St, mn: str, ops: List[str], dsts: List[str]) -> None:
         mem = next((o for o in ops if '[' in o), None)
         pm = parse_mem(mem) if mem else None
         regs_out = [reg_name(o) for o in ops if '[' not in o and not o.strip().startswith('#')]
@@ -559,7 +557,7 @@ class WriterFlow:
         outs = regs_out[:2] if mn in _PAIR_LOADS else regs_out[:1]
         fa = self._frame_addr(st, base) if base else None
         if fa is not None and idx is None:
-            a0, nb = self._access(st, mem, ops, base, fa, disp)
+            a0, nb = self._access(mem, ops, fa, disp)
             vals = [st.frame_read(a0 + width * i, width) for i in range(len(outs))]
             for d in dsts:
                 st.kill(d)
@@ -607,7 +605,7 @@ class WriterFlow:
         base = pm[0]
         fa = self._frame_addr(st, base) if base else None
         if fa is not None and pm[1] is None:
-            a, nb = self._access(st, mem, ops, base, fa, pm[2])
+            a, nb = self._access(mem, ops, fa, pm[2])
             for tok in srcs:
                 w = reg_bytes(tok)
                 r = reg_name(tok.strip())

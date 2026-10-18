@@ -359,20 +359,20 @@ class TestInlineStructWrites(_Patched):
         insns, br, layout, var = self._bracket(
             _SESSIONID_WRITETO, '{GEOSessionID="_high"Q"_low"Q}', 0x1e1dd6328)
         self.assertEqual((br.number, br.callees), (10, ()))
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(insns, br, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {8: 1, 0: 2})
 
     def test_array_members_including_out_of_line_ones_are_found(self):
         insns, br, layout, var = self._bracket(
             _GENERICTILE_WRITETO, '^{GEOGenericTile=IIi{?=b1b1b1}}', 0x1e1ddfbe4)
         self.assertEqual(br.number, 4)
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(insns, br, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 3, 8: 1, 4: 2})
 
     def test_wrong_offset_variable_binds_nothing(self):
         insns, br, layout, _ = self._bracket(
             _SESSIONID_WRITETO, '{GEOSessionID="_high"Q"_low"Q}', 0x1e1dd6328)
-        self.assertEqual(SF.decode_inline_writes(None, insns, br, lambda a: a == 0xdead0000, layout), [])
+        self.assertEqual(SF.decode_inline_writes(insns, br, lambda a: a == 0xdead0000, layout), [])
 
 
 # Real listing: the loop in -[GEOCoarseLocationRing _dictionaryRepresentation:] that builds one
@@ -1004,7 +1004,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
         loads = SF.track_struct_loads(insns, max(br.region), var, True, window=set(br.region))
         # the array-pointer load through &self->_points is not a member; the two element loads are
         self.assertEqual(sorted(loads.values()), [(0, 4), (4, 4)])
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(insns, br, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 1, 4: 2})
 
     def test_a_by_value_struct_through_add_is_still_the_struct(self):
@@ -1034,12 +1034,11 @@ class TestDictrepBodyOfAStrippedMethod(_Patched):
 
     def setUp(self):
         import proto.enums as EN
-        import proto.dispatch_eval as DE
-        orig_d, orig_t = EN.disasm, DE._in_image_text
+        orig_d, orig_t = EN.disasm, EN._in_image_text
         self.addCleanup(setattr, EN, 'disasm', orig_d)
-        self.addCleanup(setattr, DE, '_in_image_text', orig_t)
-        self.EN, self.DE = EN, DE
-        DE._in_image_text = lambda ctx, va: va is not None and 0x2000 <= va < 0x3000
+        self.addCleanup(setattr, EN, '_in_image_text', orig_t)
+        self.EN = EN
+        EN._in_image_text = lambda ctx, va: va is not None and 0x2000 <= va < 0x3000
 
     def find(self, cls, *blocks):
         _, fake = asm(*blocks)

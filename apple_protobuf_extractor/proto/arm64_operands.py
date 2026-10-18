@@ -2,9 +2,9 @@
 memory operands, the flexible second operand (shifted / extended register or immediate), which
 registers an instruction writes, and the AAPCS64 caller-saved sets.
 
-These carry no protobuf meaning.  They are shared by the evaluator (:mod:`proto.dictrep_flow`),
+These carry no protobuf meaning.  They are shared by the evaluator (:mod:`proto.arm64_eval`),
 the writer-provenance flow (:mod:`proto.writer_flow`), the struct and map decoders and the
-readFrom: dispatch, which each used to keep their own copy (code review 2026-10-18)."""
+readFrom: dispatch."""
 from __future__ import annotations
 
 import re
@@ -82,7 +82,7 @@ NO_DEST = _SOURCE_FIRST_MNEMONICS | {
 
 
 # The evaluator's loads and stores: bytes moved (None: the register's width) and whether a
-# load sign-extends.  ``_LOADS`` above is only the scaled forms the field roots are read with.
+# load sign-extends.
 LOAD_BYTES = {'ldr': None, 'ldrb': 1, 'ldrh': 2, 'ldrsw': 4, 'ldrsb': 1, 'ldrsh': 2,
                'ldur': None, 'ldurb': 1, 'ldurh': 2, 'ldursw': 4, 'ldursb': 1, 'ldursh': 2}
 

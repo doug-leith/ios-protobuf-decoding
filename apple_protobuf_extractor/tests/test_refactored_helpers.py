@@ -118,7 +118,6 @@ class TestResolveRepeatedFieldType(unittest.TestCase):
                    return_value=(resolved_type, element_unresolved)):
             return self._fn(
                 ivar, pname,
-                instance_method_names=set(),
                 metaclass=None, cl=_empty_cl(), ctx=self.ctx,
                 string_helper=string_helper,
                 wt_helpers=wt_helpers or {},

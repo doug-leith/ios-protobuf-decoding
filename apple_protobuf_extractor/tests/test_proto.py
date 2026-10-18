@@ -1197,9 +1197,9 @@ class TestRepeatedElementTypeSelector(unittest.TestCase):
         method: no name guess -> 'bytes'."""
         from proto.repeated import _repeated_element_type
         ivar = ObjcIvar(name="_mapsResults", type_enc='@"NSArray"', offset=8, size=8)
-        self.assertEqual(_repeated_element_type(ivar, set(), metaclass=None), "bytes")
+        self.assertEqual(_repeated_element_type(ivar, metaclass=None), "bytes")
         self.assertEqual(
-            _repeated_element_type(ivar, set(), metaclass=self._meta("otherType")), "bytes")
+            _repeated_element_type(ivar, metaclass=self._meta("otherType")), "bytes")
 
     def test_signature_has_no_classlist_parameter(self):
         """The classlist was only needed by the removed name-suffix matcher."""
@@ -1211,14 +1211,14 @@ class TestRepeatedElementTypeSelector(unittest.TestCase):
         from proto.repeated import _repeated_element_type
         ivar = ObjcIvar(name="_values", type_enc='@"NSArray"', offset=8, size=8)
         self.assertEqual(
-            _repeated_element_type(ivar, set(), metaclass=self._meta("valuesType")),
+            _repeated_element_type(ivar, metaclass=self._meta("valuesType")),
             "valuesType")
 
     def test_singular_selector_form_is_found(self):
         from proto.repeated import _repeated_element_type
         ivar = ObjcIvar(name="_mapsResults", type_enc='@"NSArray"', offset=8, size=8)
         self.assertEqual(
-            _repeated_element_type(ivar, set(), metaclass=self._meta("mapsResultType")),
+            _repeated_element_type(ivar, metaclass=self._meta("mapsResultType")),
             "mapsResultType")
 
 

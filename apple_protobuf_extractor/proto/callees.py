@@ -14,9 +14,8 @@ rely on them the way it relies on the ``writeTo:`` selector.
 
 A function of the image itself (not exported) has no name here: None.
 
-This module is the one owner of call naming; the writeTo: walk, the writer flow, the map and
-struct decoders and the readFrom: evaluator each used to keep their own copy, with different
-rules for the same stub shape (code review 2026-10-18).
+This module is the one owner of call naming (the writeTo: walk, the writer flow, the map and
+struct decoders and the readFrom: evaluator use it).
 """
 from __future__ import annotations
 

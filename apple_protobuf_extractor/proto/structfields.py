@@ -49,7 +49,8 @@ from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
-from proto.arm64_operands import CALLER_SAVED_GPRS, LOAD_BYTES
+from proto.arm64_operands import CALLER_SAVED_GPRS, LOAD_BYTES, reg_name
+from proto import arm64_eval, dictrep_flow
 from proto.callees import stub_selector
 from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
@@ -264,12 +265,11 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
     brk``), or setup instructions in any order, read the same.  A write whose value does not
     trace to a struct member is skipped here and the layout match (:func:`match_layout`)
     then rejects the struct as incomplete."""
-    from proto.arm64_eval import Flow
     insns = _writer_insns(ctx, entry)
     if not insns:
         return []
     try:
-        flow = Flow(ctx, list(insns))
+        flow = arm64_eval.Flow(ctx, list(insns))
         region = flow.run_from(0, {'x0': _STRUCT_ARG, 'x1': _WRITER_ARG}, opaque=_opaque)
     except (NameError, ImportError):
         raise
@@ -497,7 +497,7 @@ def track_struct_loads(insns: Sequence, last: int, is_ivar_offset, is_array: boo
     return out
 
 
-def decode_inline_writes(ctx, insns: Sequence, bracket: Bracket, is_ivar_offset,
+def decode_inline_writes(insns: Sequence, bracket: Bracket, is_ivar_offset,
                          layout: StructLayout) -> List[MemberWrite]:
     """The member writes of a struct the compiler serialised INLINE in the owner's ``writeTo:``
     (no struct-writer function): between the begin/end marks each member is
@@ -548,7 +548,6 @@ class MemberDict:
 
 def _flow_for(ctx, insns: Sequence):
     """The :class:`Flow` of *insns* (memoised per list: one owner's members share it)."""
-    from proto.dictrep_flow import Flow
     cache = _ctx_cache(ctx, "_member_flows", dict)
     key = id(insns)
     hit = cache.get(key)
@@ -559,7 +558,7 @@ def _flow_for(ctx, insns: Sequence):
             raise
         except Exception:                      # CFG completion only; the evaluation itself
             arms = ()                          # follows `br` targets and does not need it
-        hit = (insns, Flow(ctx, list(insns), jump_table_arms=arms))
+        hit = (insns, dictrep_flow.Flow(ctx, list(insns), jump_table_arms=arms))
         cache[key] = hit
     return hit[1]
 
@@ -621,7 +620,6 @@ def _member_in(flow, insns: Sequence, k: int, reg: str, member_at) -> Optional[i
     """The member offset *reg* holds before ``insns[k]``: every definition reaching it is a
     member load, directly or through value-preserving copies (``mov`` / ``fmov`` / ``fcvt``:
     a float member boxed as a double), of the same member."""
-    from proto.arm64_operands import reg_name
     found = set()
     work, seen = [(k, reg)], set()
     while work:
@@ -896,7 +894,7 @@ def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorte
         if numbers is not None:
             return numbers, {w.offset: w.helper for w in writes}
     if br.writes:                                                       # serialised inline
-        writes = decode_inline_writes(ctx, insns, br, _ivar_offset_test(ctx, site), layout)
+        writes = decode_inline_writes(insns, br, _ivar_offset_test(ctx, site), layout)
         numbers = match_layout(layout, writes) if writes else None
         if numbers is not None:
             return numbers, {w.offset: w.helper for w in writes}

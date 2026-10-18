@@ -14,24 +14,12 @@ from macho.classlist import ClassList, ObjcClass
 from proto.protoclass_heuristic import _is_proto_class, va_cluster_closure
 
 
-# ── Forward-scan proto-class detection (TODO #46) ─────────────────────────────
-# Apple's generated proto message classes all descend from PBCodable (RPC
-# request/response messages via PBRequest/PBResponse).  That superclass link is
-# GROUND TRUTH — stronger than the per-class metadata heuristic (_is_proto_class),
-# which keys on a class's OWN has-bits ivar / _reader+_readerLock / readFrom:+
-# writeTo: method score and so MISSES metadata-sparse subclasses.  Recover the full
-# set with two complementary, value-independent anchors, SEEDED + sanity-checked by
-# the heuristic (so a heuristic hit is never dropped):
-#   (1) NAME-anchor (cache frameworks): walk each class's superclass chain via
-#       read_ptr (which decodes the chained-fixup pointer and reads cross-image into
-#       ProtocolBuffer.framework) until a class named PBCodable/PBRequest/… — the
-#       name IS the runtime base contract.  Catches cross-image-parented subclasses.
-#   (2) VA-cluster (all modes incl. standalone binaries, where cross-image names do
-#       NOT resolve): the non-local superclass VAs shared by heuristic-confirmed
-#       proto classes ARE the PB-root VAs (raw bind ordinals in binary mode); every
-#       class transitively subclassing one is proto.  The heuristic seeds the roots.
-# Verified: GeoServices 1637→1642 (+5 metadata-sparse subclasses), CLP 84=84,
-# locationd 65=65 (binary mode → VA-cluster only).  See TODO #46.
+# Apple's generated proto message classes all descend from PBCodable (RPC messages via
+# PBRequest / PBResponse).  The superclass chain is walked by read_ptr (cross-image into
+# ProtocolBuffer.framework in a cache; through the bind's import name in a standalone
+# binary) until a class with one of these names: the structural anchor.  The VA-cluster
+# closure and the per-class score are computed only to fail the run if either claims a
+# class the anchor does not (proto.protoclass_heuristic).
 _PB_ROOT_NAMES: FrozenSet[str] = frozenset(
     {"PBCodable", "PBRequest", "PBResponse", "PBMessage"})
 

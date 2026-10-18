@@ -10,21 +10,17 @@ extractor re-imports the surface.
 from __future__ import annotations
 import logging
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Optional, Set, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from macho.memory    import BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm    import disasm, _norm_reg
-from proto.arm64cfg  import parse_adrp, mem_operand
+from proto.arm64cfg  import ivar_slot_loads, mem_operand, parse_adrp
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
 log = logging.getLogger(__name__)
 
-def _repeated_element_type(
-    ivar: ObjcIvar,
-    instance_methods: Set[str],
-    metaclass: Optional[ObjcClass],
-) -> str:
+def _repeated_element_type(ivar: ObjcIvar, metaclass: Optional[ObjcClass]) -> str:
     """
     For a repeated field, find the selector of the ``+[Cls xyzType]`` metaclass method
     that names the element type, or ``"bytes"`` when there is none.
@@ -33,17 +29,7 @@ def _repeated_element_type(
     ``[GEOPDMapsResult class]``; the field name is depluralised (``mapsResults`` ->
     ``mapsResult``) and ``Type`` appended to form the candidate selector.  The class
     itself is read out of the method's IMP by :func:`_resolve_repeated_type`, so only the
-    SELECTOR is chosen here.
-
-    There is deliberately NO fallback that guesses the element class from the field
-    name (the former "Strategy 2": strip the plural ``-s``, capitalise, accept a unique
-    classlist name ending with the result).  It typed fields wrongly --
-    ``GEOPDSSearchEvChargingParameters.networks`` (a repeated string) became
-    ``GEOLogMsgEventNetwork`` and ``TRANSITPbLocationFingerprintsV1`` took the sibling
-    class -- and everything it resolved is now recovered from the binary:
-    the readFrom: dispatch / adder->ivar lever (``_resolve_repeated_via_dispatch_ivars``),
-    the write helper (string), or the inline-struct encoding.  A field none of them resolves stays
-    the honest ``repeated bytes`` (flagged by the caller).
+    SELECTOR is chosen here.  The element class is never guessed from the field name.
     """
     pname = _proto_name(ivar.name)
     singular = pname.rstrip("s") if pname.endswith("s") else pname
@@ -58,26 +44,9 @@ def _repeated_element_type(
     return "bytes"
 
 
-#
-# [cap:INPUT-SANITY] _ADDER_MAX_INSNS bounds the disasm of an _addNoFlags<X>:
-#   accessor body.  It used to be [cap:AFFECTS-OUTPUT] at 40 — a deliberately tiny
-#   window that confined the adder→ivar lever to the FIRST ivar-slot load (raising it
-#   reached a later confounding array-offset load and dropped the binding, e.g.
-#   GEOPDPlaceCollection.mediaLinks -> bytes at >=100).  `_adder_array_ivar` now takes
-#   the FIRST array-offset load structurally (the accessor loads its own backing array
-#   before any confounder), so the OUTPUT no longer depends on this value: it is just a
-#   generous runaway guard for a pathological / tail-called accessor with no `ret`.
-_ADDER_MAX_INSNS    = 256    # runaway guard only; first-match returns well before this
-
-
-# ObjC type encodings for the NSArray-backed ivar of a repeated field.  Used by
-# the adder→ivar lever to pick the backing array ivar an add-accessor appends to
-# (excluding the flags/has-bits struct ivar the same accessor also touches).
-# The readFrom: dispatch idioms that used to live here and in proto.dispatch -- jump-table
-# cluster decoding, the clamped-gate matcher, compare-chain dominance attribution, the
-# wrapper->core scan with its ownership signals, the arm walkers, the class-reference windows
-# -- were retired 2026-10-15 for proto.dispatch_eval, which runs the dispatch for each field
-# number instead of matching its shape.
+# [cap:INPUT-SANITY] a runaway guard on the disassembly of an _addNoFlags<X>: accessor body:
+# _adder_array_ivar takes the first array-offset load, well before this.
+_ADDER_MAX_INSNS    = 256
 
 
 def _adder_array_ivar(
@@ -103,8 +72,7 @@ def _adder_array_ivar(
     is its OWN backing array (an ``-_addNoFlags<X>:`` accessor loads the array it
     appends to before any other ivar), so taking the first match binds the right
     ivar and stops before any later confounding array-offset load.  ``None`` if the
-    accessor references no array offset.  This first-match rule is what makes the
-    result independent of ``_ADDER_MAX_INSNS`` (now only a runaway guard).
+    accessor references no array offset.
 
     The scan ends at the next known function entry (every method IMP and ReadAllFrom
     core, stamped on *ctx* by :func:`proto.dispatch._build_readfrom_core_index`): a
@@ -124,28 +92,15 @@ def _adder_array_ivar(
     nxt = function_entries(ctx).next_after(imp_va)
     if nxt is not None:
         insns = [ins for ins in insns if ins.addr < nxt]
-    adrp_page: Dict[str, int] = {}
-    for ins in insns:
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None:
-                adrp_page[pa[0]] = pa[1]
+    for _k, slot_va in ivar_slot_loads(insns):
+        try:
+            val = int.from_bytes(ctx.read_bytes(slot_va, 4), 'little')
+        except (NameError, ImportError):
+            raise
+        except Exception:
             continue
-        # The ivar-offset load is a sign-extending word load (offsets are 32-bit);
-        # a 64-bit `ldr` here is a pointer/singleton load, not an ivar offset.
-        if ins.mnemonic == 'ldrsw':
-            mo = mem_operand(ins.op_str)        # immediate/no-offset form only
-            if mo is None or mo[2] is not None or mo[1] not in adrp_page:
-                continue
-            slot_va = adrp_page[mo[1]] + mo[3]
-            try:
-                val = int.from_bytes(ctx.read_bytes(slot_va, 4), 'little')
-            except (NameError, ImportError):
-                raise
-            except Exception:
-                continue
-            if val in array_offsets:
-                return val          # first array-offset load = the accessor's own ivar
+        if val in array_offsets:
+            return val          # first array-offset load = the accessor's own ivar
     return None
 
 
@@ -313,20 +268,8 @@ def _resolve_repeated_type(type_sel: str, metaclass: Optional[ObjcClass],
             # Resolved (incl. a genuine NSData → "bytes"), so NOT element_unresolved.
             return (_CLASS_TO_PROTO.get(cls_name, cls_name), False)
 
-    # IMP resolution failed (rare: the +xyzType method exists but its body
-    # couldn't be disassembled).  Fall back to the SAFE "bytes" rather than
-    # guessing the element class by name suffix.
-    #
-    # A name-suffix guess HERE was removed 2026-06-09: it was unguarded (first
-    # class whose name ended with the field-name suffix won — no uniqueness
-    # check) and unflagged (emitted as if it were a principled, confirmed type),
-    # so it could silently install a wrong message type.  It fired 0x on every
-    # supported artifact (IMP resolution always succeeds when the method exists),
-    # so deleting it is output-identical there.  "bytes" is wire-honest, and the
-    # give-up is surfaced via element_unresolved → the caller attaches
-    # `_ELEMENT_UNRESOLVED_NOTE` so the degradation is visible.  (The guarded,
-    # flagged name-suffix matcher that used to live in `_repeated_element_type` was
-    # removed too -- see that function's docstring.)
+    # IMP resolution failed (the +xyzType method exists but its body could not be read):
+    # "bytes", flagged by the caller as an unresolved element.
     return ("bytes", True)
 
 
@@ -335,20 +278,16 @@ class _RepeatedTypeResult:
     """Return value of :func:`_resolve_repeated_field_type`."""
     type_name:        str
     type_class:       Optional[str]
-    abi_confirmed:    bool = False   # True → element type is ABI ground truth (a
-                                     # distinct write-helper / +xyzType→NSString), so
-                                     # it must NOT be overridden by a number-keyed
-                                     # readFrom-dispatch hit (which can only be an
-                                     # ordinal collision against it).  Set only on the
-                                     # `string` outcomes; see the disp-vs-dispatch
-                                     # tie-break in extractor.extract_proto_message.
-    element_unresolved: bool = False # True → `bytes` is a give-up fallback (the
+    # the element type is ABI ground truth (the string write helper): a number-keyed
+    # readFrom: dispatch hit must not override it
+    abi_confirmed:    bool = False
+    # `bytes` is a give-up fallback: the caller flags the field
+    element_unresolved: bool = False
 
 
 def _resolve_repeated_field_type(
     ivar: ObjcIvar,
     pname: str,
-    instance_method_names: Set[str],
     metaclass: Optional[ObjcClass],
     cl: ClassList,
     ctx: BinaryContext,
@@ -362,13 +301,7 @@ def _resolve_repeated_field_type(
     1. **Write-helper string check** (ABI evidence, checked FIRST): if the ivar's
        write-helper address matches the binary-wide string write-helper, the field
        is definitively ``"string"`` -- the NSString writer is never used for a
-       message element.  This outranks every class-naming path below, so a
-       name-based guess (Strategy 2) can no longer turn a string into a message
-       (``GEOPDSSearchEvChargingParameters.networks`` was typed
-       ``GEOLogMsgEventNetwork`` because the check only ran once a guess had
-       failed).  Previously also needed when no ``+versionDomainType``-style
-       method exists (``GEOPDComponent.versionDomains``) or the method returns
-       the external NSString (``GEOPDPlaceResponse.displayLanguages``).
+       message element, so it outranks the class-naming path below.
 
     2. The ``+[Cls xyzType]`` metaclass method via :func:`_repeated_element_type` +
        :func:`_resolve_repeated_type` (the class is read out of the method's IMP).
@@ -377,13 +310,6 @@ def _resolve_repeated_field_type(
     3. Otherwise the field stays as ``"bytes"`` (the safe fallback), flagged by the
        caller as an unresolved element; the caller's readFrom: dispatch / adder->ivar
        lever may still supply the class first.
-
-    The former name-suffix guess (Strategy 2) and the pool-suffix refinement (an
-    exact suffix match against the pool of all ``+xyzType`` classes, applied on top of
-    the resolved class) are gone: the refinement never fired on any iPhone 8 image and
-    rewrote one iOS 27 resolver answer wrongly (``GEOSpokenGuidance.announcements``;
-    masked by the structural lever, so deleting it changed no emitted field).  The older
-    Pass A / Pass B name-overlap fallbacks were removed 2026-06-08 (zero fields).
     """
     # ABI evidence first: the string write helper is never used for a message
     # element, so it decides the kind before any class-naming path runs.
@@ -393,7 +319,7 @@ def _resolve_repeated_field_type(
         return _RepeatedTypeResult(type_name="string", type_class=None,
                                    abi_confirmed=True)
 
-    type_sel = _repeated_element_type(ivar, instance_method_names, metaclass)
+    type_sel = _repeated_element_type(ivar, metaclass)
     resolved, elem_unresolved = _resolve_repeated_type(type_sel, metaclass, cl, ctx=ctx)
 
     if resolved != "bytes":

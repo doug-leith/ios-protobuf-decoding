@@ -1,18 +1,11 @@
 """proto/writeto.py — writeTo: field-number extraction.
 
-This module owns the one concern of recovering confirmed protobuf field numbers
-from a class's ``-[Cls writeTo:]`` serializer body, carved out of the
-``proto.extractor`` monolith as a self-contained unit.
-
-It imports only from ``macho.*`` (never from ``proto.extractor``), so it can be
-imported by the extractor with no import cycle.  ``proto.extractor`` re-imports
-``_extract_writeto_field_numbers`` into its own namespace, so every existing
-caller (``proto.extractor._extract_writeto_field_numbers`` and the test imports)
-keeps working unchanged.
+Recovers confirmed protobuf field numbers from a class's ``-[Cls writeTo:]`` serializer
+body.  Imports only ``macho.*`` and the shared ``proto.arm64*`` helpers (never
+``proto.extractor``).
 
 The decoder is the **CFG walk** (``_walk_field_numbers`` + ``writeto_walk`` +
-binding), productionised from the ``wt_reader.py`` prototype: a sound reachability
-walk over ``-[Cls writeTo:]``'s basic blocks that binds each field-write to its
+binding): a sound reachability walk over ``-[Cls writeTo:]``'s basic blocks that binds each field-write to its
 container ivar by tracing the value/offset registers.  It yields both the confirmed
 ``{ivar: field_number}`` map and ``_out_helpers`` (the per-ivar write-helper address
 used downstream to tell ``repeated string`` from ``repeated message/bytes``).
@@ -21,12 +14,7 @@ The walk only runs when the binary-wide branch-indegree pre-pass has been thread
 onto ``ctx`` by ``extract_all`` (see ``build_writeto_indegree``); a bare call with
 no pre-pass (e.g. a direct unit test) returns ``{}`` (no decode, fail-safe).
 
-HISTORY: a linear forward-scan decoder (``_forward_scan_field_numbers``) and its
-instruction budget (``_WRITETO_MAX_INSNS`` / ``_WRITETO_INSNS_PER_FIELD`` /
-``_writeto_insn_budget``) ran first, then merged under the walk during the writeTo
-swap.  Both the forward scan and
-its ``[cap:AFFECTS-OUTPUT]`` budgets were deleted in Phase B8 once the walk owned
-every binding and the per-ivar ``_out_helpers``.  The walk binds nothing for a map
+The walk binds nothing for a map
 field written inside an ``enumerateKeysAndObjectsUsingBlock:`` block (the number lives in
 the block's invoke function — 5 GeoServices ivars); :mod:`proto.mapfields` recovers
 those from the block, and any it cannot degrade to a flagged ivar-order estimate —
@@ -42,7 +30,7 @@ from macho.disasm import disasm, find_mov_imm, _parse_imm, _norm_reg
 # writeto_walk's own callers and tests/test_writeto_walk_coverage.py
 # (`import proto.writeto as W`) keep working unchanged — a pure code move.
 from proto.arm64cfg import (              # noqa: F401  (re-export)
-    TERMINALS, CONDITIONALS, _CALLEE_SAVED, _LAST_METHOD_SPAN,
+    TERMINALS, _CALLEE_SAVED,
     _is_cond, _parse_load, _same_reg, _adrp_page, _resolve_offset_addr,
     _cond_target, _next_imp, LazyWalk,
     split_ops, dst_reg, mem_operand, parse_adrp,
@@ -126,35 +114,13 @@ def _writeto_field_number_before(insns: List, idx: int) -> Optional[int]:
     if j < 0:
         return None
     if skipped:
-        # Tail-call epilogue-hoisted case: unchanged, single-instruction
-        # check only. The widened scan below is for a DIFFERENT scenario
-        # (a plain bl call's own two argument-setup movs getting scheduled
-        # in swapped order) and must not extend the epilogue-skip's own
-        # deliberate 6-instruction bound (test_skip_bounded_does_not_run_off
-        # relies on a mov placed beyond that bound coming back None).
+        # Tail-call epilogue-hoisted case: the one instruction only (the epilogue skip keeps
+        # its own 6-instruction bound).
         return _field_number_imm([insns[j]], insns, idx)
-    # Plain (non-tail-call) case: `insns[j]` (== insns[idx-1]) is checked
-    # FIRST (k=j below) -- unchanged from before this loop existed, so every
-    # previously-matching case (the whole real corpus, plus every existing
-    # fixture) resolves identically. Only if that alone doesn't carry the
-    # immediate does this look a SHORT bounded distance further back: an
-    # independent-instruction-scheduling toolchain (confirmed under Xcode
-    # 8/11's older scheduler) can place one unrelated argument-setup
-    # instruction between the two movs that feed a call (`mov w2,#N; mov
-    # x0,<writer>; bl`, vs the reference toolchain's `mov x0,<writer>; mov
-    # w2,#N; bl` -- interchangeable, no data dependency between them, so
-    # nothing stops a scheduler choosing either order).
-    #
-    # Stops at ANY `bl` encountered during the scan, INCLUDING at `j` itself
-    # (not just k != j): this function is also called on a plain
-    # unconditional `b` by classify_b_target, to test whether that `b` is
-    # itself a tail-call write. When `insns[j]` is a `bl` there, it's the
-    # PRECEDING, unrelated call's own -- e.g. `mov w2,#1; bl f; b target`,
-    # where `j` lands on `bl f`. Widening the search there would walk PAST
-    # that bl and pick up its stale `mov w2,#1`, wrongly attributing field 1
-    # to the `b` as well. So a `bl` at ANY position -- not just past `j` --
-    # means "no field-number immediate precedes this site", same as the
-    # original single-instruction check already correctly returned.
+    # A plain call: insns[j] first, then up to two more back -- an older scheduler can put
+    # one unrelated argument setup between the call's two movs (`mov w2,#N; mov x0,<writer>;
+    # bl`).  Any `bl` on the way, insns[j] included, ends the search: it is a preceding
+    # call's (`mov w2,#1; bl f; b target`), and its `mov w2` is not this site's number.
     for k in range(j, max(-1, j - 3), -1):
         if insns[k].mnemonic == 'bl':
             break

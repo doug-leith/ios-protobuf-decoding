@@ -28,6 +28,7 @@ from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs
 from proto.dictrep_flow import Flow
+from proto.dispatch_eval import SELF, _in_image_text, _opaque
 from proto.arm64cfg   import _next_imp
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
@@ -165,10 +166,7 @@ def _disasm_truncated(insns: List[Insn], cap: int) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Sparse-enum harvesters — three independent passes over the same disassembly,
-# each adding (value, name) pairs via the shared ``add`` callback.  Carved out of
-# _extract_jumptable_enum_values (output-identical) so each LLVM lowering of a
-# sparse xAsString: method is a self-contained, separately-testable unit.
+# Function bodies of the enum methods (xAsString:, _dictionaryRepresentation:)
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -302,7 +300,6 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     or its first unconditional terminator, whichever comes first, with x0 = self (an opaque
     token), and the Flow it ran in.  ``None`` when the method is absent, cannot be
     evaluated, or makes no call there."""
-    from proto.dispatch_eval import SELF, _opaque
     m = cls.get_method(selector)
     if m is None or m.imp == 0:
         return None
@@ -336,7 +333,6 @@ def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
     a tail call handed self, into this image's ``__text``.  *x1* is its constant value at the
     call, :data:`_ARG_UNTOUCHED` if it still holds its entry value (reaching definitions),
     else ``None``.  ``None`` for any other opening."""
-    from proto.dispatch_eval import SELF, _opaque, _in_image_text
     first = _wrapper_first_call(ctx, cls, selector)
     if first is None:
         return None
@@ -716,12 +712,14 @@ def _collect_enum_definitions(
 ) -> List[ProtoEnum]:
     """Extract :class:`ProtoEnum` definitions for all ``ENUM:``-tagged fields.
 
-    Two sub-phases, executed in order:
+    In order:
 
     **Phase 1 — shared-cache methname scan** (only when *instance_method_names*
     is empty):  Scan ``__objc_methname`` for ``xAsString:``/``StringAsX:``
     patterns for each ``int32``/``uint32`` field that has no ``ENUM:`` tag yet.
     Matching fields are tagged with ``ENUM:<qualified>``.
+
+    **Phase 1.5 — _dictionaryRepresentation: enums** for int fields with no xAsString:.
 
     **Phase 2 — enum extraction loop**:  For each ``ENUM:``-tagged field, find
     and extract the ``xAsString:`` method implementation.  On success a
@@ -754,7 +752,6 @@ def _collect_enum_definitions(
                 elif _dbg_w is not None:
                     _emit_mode_b_debug(ctx, cls, fld, st, _dbg_w)
 
-    # ── Phase 2: enum extraction loop ────────────────────────────────────────
     enums: List[ProtoEnum] = []
     seen_enum_names: Set[str] = set()
 
