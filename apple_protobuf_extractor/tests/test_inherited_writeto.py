@@ -45,7 +45,7 @@ class TestInheritedWriteToOwner(unittest.TestCase):
         cl, child, parent = _family()
         owner, m = self._owner(cl, child)
         self.assertIs(owner, parent)
-        m.assert_called_once_with(None, 0x1000)       # the PARENT's writeTo: is examined
+        m.assert_called_once_with(None, 0x1000, "GEOParent")   # the PARENT's writeTo: is examined
 
     def test_class_with_its_own_writeto_is_not_affected(self):
         cl, _child, parent = _family()
@@ -150,7 +150,7 @@ class TestInheritedWriteToLive(unittest.TestCase):
     def test_inherited_writeto_sends_none_of_the_subclass_selectors(self):
         from proto.writeto import writeto_sent_selectors
         parent = self.cl.find("GEOComposedWaypoint")
-        sent = writeto_sent_selectors(self.ctx, parent.get_method("writeTo:").imp)
+        sent = writeto_sent_selectors(self.ctx, parent.get_method("writeTo:").imp, parent.name)
         self.assertIsNotNone(sent)
         self.assertIn("readAll:", sent)             # [self readAll:NO] in the prologue
         child = {m.name for m in self.cl.find("GEOComposedWaypointEVStop").methods}

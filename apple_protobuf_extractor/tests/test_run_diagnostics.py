@@ -221,6 +221,20 @@ class TestEnumValueNameDisclosure(unittest.TestCase):
         self.assertIn('identically', by[2].comment)
 
 
+@unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
+class TestWalkFailureIsRecorded(unittest.TestCase):
+
+    def test_a_writeto_walk_that_raises_is_an_analysis_failure(self):
+        import proto.writeto as W
+        ctx, st, cl = _load()
+        with mock.patch.object(W, 'writeto_walk', side_effect=RuntimeError('boom')):
+            extract_all(ctx, st, cl)
+        failures = get_diagnostics(ctx).analysis_failures
+        self.assertTrue(failures)
+        self.assertTrue(all(a == 'writeTo: walk' and d == 'RuntimeError: boom'
+                            for _c, a, d in failures), failures)
+
+
 class TestForeignRuntimeFailuresAreNotSilent(unittest.TestCase):
 
     def test_cpp_collection_failure_is_recorded_and_warned(self):

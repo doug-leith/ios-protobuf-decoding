@@ -14,6 +14,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.memory import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass
+from proto.models import record_failed_pass
 from proto.protoclass_set import _resolve_class_name_at
 from serializers.protobufc_detect import ProtobufCDescriptors, find_protobufc_descriptors
 
@@ -286,7 +287,8 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("protobuf-c detection failed: %s", exc)
+        record_failed_pass(ctx, "protobuf-c detection", exc,
+                           "protobuf-c message descriptors are not reported")
         pbc = None
     if pbc:
         detected.append(

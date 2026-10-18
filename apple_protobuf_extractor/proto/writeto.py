@@ -38,10 +38,8 @@ from proto.arm64cfg import (              # noqa: F401  (re-export)
 )
 
 from proto.callees import stub_selector
-import logging
+from proto.models import record_analysis_failure
 import re
-
-log = logging.getLogger(__name__)
 
 
 # Function-epilogue instructions the compiler may hoist between the field-number
@@ -868,12 +866,13 @@ def _extract_writeto_field_numbers(
     except (NameError, ImportError):
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
-        # Bad binary input → per-class fail-safe (flagged ivar-order estimate).
-        log.debug("writeTo walk failed for %s: %s", getattr(cls, "name", "?"), exc)
+        # Bad binary input → per-class fail-safe (flagged ivar-order estimate), reported.
+        record_analysis_failure(ctx, getattr(cls, "name", "?"), "writeTo: walk",
+                                f"{type(exc).__name__}: {exc}")
         return WalkBindings()
 
 
-def writeto_sent_selectors(ctx: BinaryContext, imp: int) -> Optional[frozenset]:
+def writeto_sent_selectors(ctx: BinaryContext, imp: int, cls_name: str) -> Optional[frozenset]:
     """Every selector the ``writeTo:`` at *imp* sends, or None when that cannot be told.
 
     Read off the code the CFG walk visits: a ``bl`` / tail-``b`` to an
@@ -892,7 +891,7 @@ def writeto_sent_selectors(ctx: BinaryContext, imp: int) -> Optional[frozenset]:
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        log.debug("writeTo walk failed at %#x: %s", imp, exc)
+        record_analysis_failure(ctx, cls_name, "writeTo: walk", f"{type(exc).__name__}: {exc}")
         return None
     if flags['truncated'] or flags['indirect_calls'] or flags['unexamined_thunks']:
         return None
