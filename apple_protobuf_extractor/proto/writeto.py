@@ -312,12 +312,16 @@ def _make_write(n, addr, block, guard, cont_off, pre, srcblk, srck, base_regs, h
                 helper_va=helper_va, bracket=False, elem_helper_vas=[])
 
 
-def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
-                 self_reg=None, base_regs=None):
+# [cap:INPUT-SANITY] runaway backstops for the writeTo: walk, not tuned values: instructions
+# disassembled per block and blocks visited.
+_WALK_BLOCK_INSNS = 400
+_WALK_MAX_BLOCKS = 2000
+
+
+def writeto_walk(ctx, imp, foreign_imps, indeg, self_reg=None):
     """Sound CFG walk from imp.  Returns (writes, flags) where writes is a list of
     dicts {n, write_addr, block, guard, cont_off, pre} in discovery order.
 
-    [cap:INPUT-SANITY] blk_cap/max_blocks are runaway backstops, not tuned values.
     See wt_reader.py for the full contract (SOUND; COMPLETE for has-bit dispatch;
     KNOWN inline-submessage over-collection that the binding phase drops).
 
@@ -327,12 +331,11 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
     writeTo: bodies can be outlined past other functions' boundaries).  This
     function owns only the per-instruction value/offset tracing and field-write
     recording; LazyWalk owns the worklist / visited / known-leader bookkeeping."""
-    base_regs = base_regs or {}     # honour the None default before snapshotting it
     walker = LazyWalk(
         ctx, imp,
-        lambda c, a: disasm(c, a, max_insns=blk_cap, stop_at_ret=False),
-        initial_state=(imp, None, dict(base_regs), ()),   # (guard, cont_off, base, brackets)
-        max_blocks=max_blocks,
+        lambda c, a: disasm(c, a, max_insns=_WALK_BLOCK_INSNS, stop_at_ret=False),
+        initial_state=(imp, None, {}, ()),   # (guard, cont_off, base, brackets)
+        max_blocks=_WALK_MAX_BLOCKS,
     )
     text_range = _image_text_range(ctx)
     writes = []
@@ -379,21 +382,17 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                 # execution never falls through one — without this stop the walk read on
                 # into the NEXT method's body and could take its writes for this one's.
                 break
-            # Maintain the LIVE ivar-offset-table base registers (`cur_base`).
-            # This is the SOLE source of base tracking (TODO #59: detect_context no
-            # longer seeds bases — its capped prologue scan was redundant with this).
-            # It captures bases that are (a) set up anywhere in the body (incl. after
-            # the readAll:/lock prologue, the old detect_context cap's blind spot) or
-            # (b) `adrp`-only (the page is the base and the offset-load supplies the
-            # displacement).  It can also be RE-LOADED mid-body to a different table
-            # (x22 0x780 -> 0x784).  Track all of this here, scoped to callee-saved
-            # GPRs (the regs that survive the calls and hold a persistent base):
+            # Maintain the LIVE ivar-offset-table base registers (`cur_base`), the
+            # walk's only base tracking.  It captures bases that are (a) set up anywhere
+            # in the body (incl. after the readAll:/lock prologue) or (b) `adrp`-only
+            # (the page is the base and the offset-load supplies the displacement).  A
+            # base can also be RE-LOADED mid-body to a different table (x22 0x780 ->
+            # 0x784).  Scoped to callee-saved GPRs (the regs that survive the calls and
+            # hold a persistent base):
             #   adrp xR,#page            -> cur_base[xR] = page  (adrp-only base)
             #   add  xR,xR,#imm          -> cur_base[xR] = page + imm  (refine)
             #   any other write of xR    -> drop xR (no longer a table base, e.g.
-            #                               `mov x22, x0`) UNLESS it was a stable
-            #                               prologue capture (base_regs), which the
-            #                               re-load case legitimately overwrites.
+            #                               `mov x22, x0`).
             if mn == 'adrp':
                 pa = parse_adrp(ins.op_str)
                 if pa is not None and pa[0] in _CALLEE_SAVED:
@@ -412,7 +411,7 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                         'ldrsb', 'ldp'):
                 # destination clobber: a base reg overwritten with a non-table value.
                 _dst = dst_reg(ins.op_str)
-                if _dst in cur_base and _dst not in base_regs:
+                if _dst in cur_base:
                     cur_base.pop(_dst, None); adrp_pg.pop(_dst, None)
             # Track the enum-loop CONTAINER offset, threaded into the loop body.
             if self_reg is not None and mn == 'ldr':
@@ -519,7 +518,7 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
                 break                       # unconditional: no fall-through
             # any other insn: keep decoding this block
         else:
-            # ran to blk_cap with no terminal/branch -> continue linearly
+            # ran to _WALK_BLOCK_INSNS with no terminal/branch -> continue linearly
             walker.push_continue(blk[-1].addr + 4, (cur_guard, cur_off, dict(cur_base),
                                                  brackets))
     return writes, dict(truncated=walker.truncated, blocks=walker.blocks_seen,
@@ -529,43 +528,23 @@ def writeto_walk(ctx, imp, foreign_imps, indeg, blk_cap=400, max_blocks=2000,
 
 
 def detect_context(ctx, imp, max_insns=40):
-    """From the prologue: the self register (dest of `mov xR, x0` before the first
-    bl).  Returns ``(self_reg, {})`` — the second element (the ivar-offset-table
-    base registers) is now ALWAYS EMPTY (TODO #59, see below).
+    """The self register of the writeTo: at *imp*: the destination of a ``mov xR, x0`` before
+    the first ``bl``, else ``x0``.  Per the arm64 ABI self arrives in x0 and many writeTo:
+    bodies use it directly (``add x20, x0, x8`` for the container) without copying it; self is
+    live in x0 until the first field op, and the walk's offset tracking matches both x0 and
+    the moved register.
 
-    The self register DEFAULTS to ``x0``: per the arm64 ABI self arrives in x0 and
-    many writeTo: bodies use it directly (``add x20, x0, x8`` for the container)
-    without ever copying it to a callee-saved register — in which case there is no
-    ``mov xR, x0`` to find.  Returning x0 (rather than None) keeps the walk's
-    offset tracking enabled for those functions; the tracking already matches both
-    x0 and the moved register, and self is live in x0 until the first field op, so
-    this is safe (measured: +10 recovered bindings, 0 conflicts/losses across the
-    three corpora).  When self IS copied (`mov xR, x0` before the first bl), that
-    callee-saved register is used instead.
-
-    TODO #59 — the prologue base-register SEED is removed.  It used to scan for
-    ``adrp+add`` into a callee-saved reg, capped at the first ``max_insns`` insns
-    (the old ``[cap:AFFECTS-OUTPUT]`` — a base set up past the cap, e.g. the
-    sorted-dictionary path, was missed).  That seed is REDUNDANT: :func:`writeto_walk`
-    re-discovers every ivar-offset-table base LIVE per block (its ``cur_base``
-    tracking handles adrp-only bases, mid-body setup, re-loads and clobbers), so
-    returning empty bases is byte-identical on every artifact (verified 0-diff on
-    GeoServices / CoreLocationProtobuf / NewsTransport, and the golden snapshot).
-    Dropping it deletes the only output-affecting cap here.
-
-    [cap:INPUT-SANITY] max_insns bounds the self-register prologue disasm window;
-    the scan stops at the first ``bl`` regardless, so this is a runaway backstop,
-    not an output-deciding bound."""
+    [cap:INPUT-SANITY] max_insns bounds the prologue disasm; the scan stops at the first
+    ``bl`` regardless, so this is a runaway backstop, not an output-deciding bound."""
     insns = disasm(ctx, imp, max_insns=max_insns, stop_at_ret=False)
-    self_reg = None
     for ins in insns:
         if ins.mnemonic == 'bl':
             break
         if ins.mnemonic == 'mov':
             p = split_ops(ins.op_str)
             if len(p) == 2 and _norm_reg(p[1]) == 'x0':
-                self_reg = _norm_reg(p[0]); break
-    return (self_reg or 'x0'), {}
+                return _norm_reg(p[0]) or 'x0'
+    return 'x0'
 
 
 def _addr_to_name(ctx, addr, offset_to_name):
@@ -829,18 +808,16 @@ def _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps,
                       if iv.offset != 0 and iv.name}
     if not offset_to_name:
         return {}
-    self_reg, base_regs = detect_context(ctx, m.imp)
+    self_reg = detect_context(ctx, m.imp)
     # Confirmed {getter_selector: ivar} for object/message fields — they serialize
     # via their property getter, so the walk binds the getter call back to the ivar.
     sel_to_ivar = _build_accessor_ivar_map(ctx, cls, field_ivars)
-    writes, _flags = writeto_walk(ctx, m.imp, foreign_imps - {m.imp}, indeg,
-                                  self_reg=self_reg, base_regs=base_regs)
+    writes, _flags = writeto_walk(ctx, m.imp, foreign_imps - {m.imp}, indeg, self_reg=self_reg)
     bound: Dict[str, int] = {}
     for w in writes:                 # discovery order: container field wins (first)
-        # use the live ivar-offset-table base captured at this write (handles a base
-        # register reloaded mid-writeTo:), falling back to the prologue capture.
-        name, _st = bind_write(ctx, w, self_reg, w.get('base_regs') or base_regs,
-                               offset_to_name, sel_to_ivar)
+        # the live ivar-offset-table bases captured at this write (a base register can be
+        # reloaded mid-writeTo:)
+        name, _st = bind_write(ctx, w, self_reg, w['base_regs'], offset_to_name, sel_to_ivar)
         if name is not None and name not in bound:
             bound[name] = w['n']
             if _out_helpers is not None and w.get('helper_va') is not None:
@@ -852,8 +829,7 @@ def _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps,
     # the walk did NOT already bind to a legal number qualify.
     if _out_zero_fields is not None:
         for zw in _flags.get('zero_writes', ()):
-            name, _st = bind_write(ctx, zw, self_reg, zw.get('base_regs') or base_regs,
-                                   offset_to_name, sel_to_ivar)
+            name, _st = bind_write(ctx, zw, self_reg, zw['base_regs'], offset_to_name, sel_to_ivar)
             if name is not None and name not in bound:
                 _out_zero_fields.add(name)
     return bound

@@ -388,21 +388,11 @@ class TestDetectContext(unittest.TestCase):
             W.disasm = orig
 
     def test_self_from_mov(self):
-        self_reg, _ = self._run(('mov', 'x20, x0'), ('bl', '#0x9000'))
-        self.assertEqual(self_reg, 'x20')
+        self.assertEqual(self._run(('mov', 'x20, x0'), ('bl', '#0x9000')), 'x20')
 
     def test_self_defaults_to_x0(self):
         # no `mov xR, x0` before the first bl -> self stays x0 (ABI arg reg).
-        self_reg, _ = self._run(('stp', 'x22, x21, [sp, #-0x30]!'), ('bl', '#0x9000'))
-        self.assertEqual(self_reg, 'x0')
-
-    def test_base_regs_always_empty(self):
-        # TODO #59: the prologue base-register seed was removed (redundant with the
-        # walk's live cur_base tracking).  detect_context returns NO bases even when
-        # an adrp+add into a callee-saved reg is present in the prologue.
-        _, base = self._run(('mov', 'x20, x0'), ('adrp', 'x21, #0x10000'),
-                            ('add', 'x21, x21, #0x200'), ('bl', '#0x9000'))
-        self.assertEqual(base, {})
+        self.assertEqual(self._run(('stp', 'x22, x21, [sp, #-0x30]!'), ('bl', '#0x9000')), 'x0')
 
 
 class TestBindWrite(unittest.TestCase):
