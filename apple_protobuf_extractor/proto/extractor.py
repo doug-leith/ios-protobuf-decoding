@@ -241,13 +241,11 @@ def _confirm_field_numbers(
     # discarded a sub-threshold walk WHOLESALE and dropped sound confirmations to
     # ivar-order estimates, e.g. GEOLPRRoot {_regions:1} -> regions 2.)  Always
     # collect wt_helpers too — needed for repeated string vs bytes/message.
-    wt_helpers: Dict[str, int] = {}
-    wt_zero: Set[str] = set()       # ivars written with a literal field# 0 (#52)
-    wt_writes: Dict[str, dict] = {}  # raw walk write events (map-entry analysis, #41)
-    confirmed_numbers = _extract_writeto_field_numbers(ctx, cls, field_ivars,
-                                                       _out_helpers=wt_helpers,
-                                                       _out_zero_fields=wt_zero,
-                                                       _out_writes=wt_writes)
+    walk = _extract_writeto_field_numbers(ctx, cls, field_ivars)
+    confirmed_numbers = walk.numbers
+    wt_helpers = walk.helpers
+    wt_zero = walk.zero_fields      # ivars written with a literal field# 0 (#52)
+    wt_writes = walk.writes         # raw walk write events (map-entry analysis, #41)
     if confirmed_numbers:
         log.debug("%s: %d field number(s) from writeTo: walk",
                   cls.name, len(confirmed_numbers))

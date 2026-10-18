@@ -92,8 +92,7 @@ def _identify_string_write_helpers(
         # matching works (writeTo: uses the same ivar-offset variables).
         all_field_ivars = [iv for iv in cls.ivars if not _is_proto_flags_ivar(iv)
                            and iv.name and iv.name not in _INTERNAL_PB_IVARS]
-        helpers: Dict[str, int] = {}
-        _extract_writeto_field_numbers(ctx, cls, all_field_ivars, _out_helpers=helpers)
+        helpers = _extract_writeto_field_numbers(ctx, cls, all_field_ivars).helpers
 
         for iv in str_ivars:
             h = helpers.get(iv.name)
@@ -295,7 +294,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     ``int32``/``uint32``/``sint32``/``[s]fixed32`` all collapse to the canonical
     ``int32`` default (:func:`proto.protocore._type_from_enc`).  The **helper** a
     field's ``writeTo:`` calls selects the actual wire form, and the writeTo CFG
-    walk already captures it per ivar (``_out_helpers``) — so this is a cheap
+    walk already captures it per ivar (``WalkBindings.helpers``) — so this is a cheap
     post-pass, mirroring the string-helper reclassification
     (:func:`_find_string_write_helper`).
 

@@ -6,13 +6,13 @@ body.  Imports only ``macho.*`` and the shared ``proto.arm64*`` helpers (never
 
 The decoder is the **CFG walk** (``_walk_field_numbers`` + ``writeto_walk`` +
 binding): a sound reachability walk over ``-[Cls writeTo:]``'s basic blocks that binds each field-write to its
-container ivar by tracing the value/offset registers.  It yields both the confirmed
-``{ivar: field_number}`` map and ``_out_helpers`` (the per-ivar write-helper address
-used downstream to tell ``repeated string`` from ``repeated message/bytes``).
+container ivar by tracing the value/offset registers.  Its :class:`WalkBindings` hold the
+confirmed ``{ivar: field_number}`` map and the per-ivar write-helper address (used
+downstream to tell ``repeated string`` from ``repeated message/bytes``).
 
 The walk only runs when the binary-wide branch-indegree pre-pass has been threaded
 onto ``ctx`` by ``extract_all`` (see ``build_writeto_indegree``); a bare call with
-no pre-pass (e.g. a direct unit test) returns ``{}`` (no decode, fail-safe).
+no pre-pass (e.g. a direct unit test) binds nothing (no decode, fail-safe).
 
 The walk binds nothing for a map
 field written inside an ``enumerateKeysAndObjectsUsingBlock:`` block (the number lives in
@@ -20,6 +20,7 @@ the block's invoke function — 5 GeoServices ivars); :mod:`proto.mapfields` rec
 those from the block, and any it cannot degrade to a flagged ivar-order estimate —
 fail-safe, never a confident error.
 """
+from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
 from macho.memory import BinaryContext, _is_in_any_section
@@ -788,75 +789,69 @@ def build_writeto_indegree(ctx: BinaryContext,
     return indeg, foreign_imps
 
 
-def _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps,
-                        _out_helpers=None, _out_zero_fields=None,
-                        _out_writes=None) -> Dict[str, int]:
-    """CFG-walk ``{ivar_name: field_number}`` for *cls*.  ``field_ivars`` is the
-    caller's already-filtered real-field ivar list (so no internal/has-bit ivar can
-    be bound); ``indeg``/``foreign_imps`` come from :func:`build_writeto_indegree`.
+@dataclass
+class WalkBindings:
+    """What the writeTo: CFG walk bound for one class, per ivar name."""
+    numbers: Dict[str, int] = field(default_factory=dict)    # the field number written
+    helpers: Dict[str, int] = field(default_factory=dict)    # the write helper's VA
+    writes: Dict[str, dict] = field(default_factory=dict)    # the raw walk write event
+    zero_fields: Set[str] = field(default_factory=set)       # written with field# 0 only (#52)
 
-    If ``_out_helpers`` is not None it is populated with ``{ivar_name: helper_va}``
-    (the field-write ``bl`` target) for every bound field — the same per-ivar
-    write-helper address the forward scan captures, so the walk can serve as the
-    sole ``_out_helpers`` source once the forward scan is retired (B8).  Likewise
-    ``_out_writes`` receives ``{ivar_name: write_event}`` (the raw walk record, with its
-    source block) — what :mod:`proto.mapfields` reads to analyse an inline map loop."""
+
+def _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps) -> WalkBindings:
+    """CFG-walk bindings for *cls*.  ``field_ivars`` is the caller's already-filtered
+    real-field ivar list (so no internal/has-bit ivar can be bound); ``indeg``/``foreign_imps``
+    come from :func:`build_writeto_indegree`.
+
+    For every bound field: its number, the field-write ``bl`` target (``helpers``, which tells
+    repeated string from bytes / message), and the raw walk record with its source block
+    (``writes``, which :mod:`proto.mapfields` reads to analyse an inline map loop)."""
+    out = WalkBindings()
     m = cls.get_method("writeTo:")
     if m is None or m.imp == 0:
-        return {}
+        return out
     offset_to_name = {iv.offset: iv.name for iv in field_ivars
                       if iv.offset != 0 and iv.name}
     if not offset_to_name:
-        return {}
+        return out
     self_reg = detect_context(ctx, m.imp)
     # Confirmed {getter_selector: ivar} for object/message fields — they serialize
     # via their property getter, so the walk binds the getter call back to the ivar.
     sel_to_ivar = _build_accessor_ivar_map(ctx, cls, field_ivars)
     writes, _flags = writeto_walk(ctx, m.imp, foreign_imps - {m.imp}, indeg, self_reg=self_reg)
-    bound: Dict[str, int] = {}
     for w in writes:                 # discovery order: container field wins (first)
         # the live ivar-offset-table bases captured at this write (a base register can be
         # reloaded mid-writeTo:)
         name, _st = bind_write(ctx, w, self_reg, w['base_regs'], offset_to_name, sel_to_ivar)
-        if name is not None and name not in bound:
-            bound[name] = w['n']
-            if _out_helpers is not None and w.get('helper_va') is not None:
-                _out_helpers[name] = w['helper_va']
-            if _out_writes is not None:
-                _out_writes[name] = w
+        if name is not None and name not in out.numbers:
+            out.numbers[name] = w['n']
+            if w.get('helper_va') is not None:
+                out.helpers[name] = w['helper_va']
+            out.writes[name] = w
     # Apple 0-based fields (field# 0, illegal in proto): bind them to their ivar so
     # the caller can flag the estimate as NOT wire-accurate (TODO #52).  Only ivars
     # the walk did NOT already bind to a legal number qualify.
-    if _out_zero_fields is not None:
-        for zw in _flags.get('zero_writes', ()):
-            name, _st = bind_write(ctx, zw, self_reg, zw['base_regs'], offset_to_name, sel_to_ivar)
-            if name is not None and name not in bound:
-                _out_zero_fields.add(name)
-    return bound
+    for zw in _flags.get('zero_writes', ()):
+        name, _st = bind_write(ctx, zw, self_reg, zw['base_regs'], offset_to_name, sel_to_ivar)
+        if name is not None and name not in out.numbers:
+            out.zero_fields.add(name)
+    return out
 
 
 def _extract_writeto_field_numbers(
     ctx: BinaryContext,
     cls: ObjcClass,
     field_ivars: List[ObjcIvar],
-    _out_helpers: Optional[Dict[str, int]] = None,
-    _out_zero_fields: Optional[Set[str]] = None,
-    _out_writes: Optional[Dict[str, dict]] = None,
-) -> Dict[str, int]:
-    """Confirmed ``{ivar_name: field_number}`` from -[Cls writeTo:], via the CFG
-    walk (:func:`_walk_field_numbers`).
+) -> WalkBindings:
+    """The writeTo: CFG walk's bindings for *cls* (:func:`_walk_field_numbers`).
 
     The walk is the sole decoder (Phase B8): it binds each field-write to its
     container ivar by tracing the value/offset registers, and is sound — every
     binding is value-traced, never positional.  It only runs when ``extract_all``
     has threaded the binary-wide branch-indegree pre-pass onto ``ctx``
     (``ctx._writeto_indeg`` / ``ctx._writeto_foreign_imps``).  A bare call without
-    that pre-pass (e.g. a direct unit test, or ``ctx is None``) returns ``{}`` —
+    that pre-pass (e.g. a direct unit test, or ``ctx is None``) binds nothing —
     no decode, fail-safe; the caller then falls back to its own estimate.
-
-    ``_out_helpers`` (per-ivar write-helper VA, used downstream to tell
-    ``repeated string`` from ``repeated bytes``/``message``) is populated by the
-    walk for every ivar it binds.
 
     For the GEOLPR/GEOPublisher classes whose map fields are written inside an
     ``enumerateKeysAndObjectsUsingBlock:`` block (the field number lives in the block's
@@ -867,18 +862,15 @@ def _extract_writeto_field_numbers(
     indeg = getattr(ctx, "_writeto_indeg", None)
     foreign_imps = getattr(ctx, "_writeto_foreign_imps", None)
     if indeg is None or foreign_imps is None:
-        return {}
+        return WalkBindings()
     try:
-        return _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps,
-                                   _out_helpers=_out_helpers,
-                                   _out_zero_fields=_out_zero_fields,
-                                   _out_writes=_out_writes)
+        return _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps)
     except (NameError, ImportError):
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
         # Bad binary input → per-class fail-safe (flagged ivar-order estimate).
         log.debug("writeTo walk failed for %s: %s", getattr(cls, "name", "?"), exc)
-        return {}
+        return WalkBindings()
 
 
 def writeto_sent_selectors(ctx: BinaryContext, imp: int) -> Optional[frozenset]:

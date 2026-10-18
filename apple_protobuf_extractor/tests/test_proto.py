@@ -1095,8 +1095,8 @@ class TestRepeatedStringReclassification(unittest.TestCase):
 
     def test_extract_writeto_collects_helper_addresses(self):
         """
-        _extract_writeto_field_numbers with _out_helpers must populate the
-        helpers dict with at least the field numbers that are confirmed.
+        _extract_writeto_field_numbers must populate its
+        helpers with at least the field numbers that are confirmed.
         This is a structural test using a minimal mock — the helper addresses
         themselves are arbitrary, but the keys must match the confirmed fields.
         """
@@ -1110,12 +1110,12 @@ class TestRepeatedStringReclassification(unittest.TestCase):
             instance_size=32,
         )
         ivars = [ObjcIvar(name="_x", type_enc="i", offset=8, size=4)]
-        helpers: dict = {}
         # Pass a None context — the function handles it gracefully via try/except
         try:
-            result = _extract_writeto_field_numbers(None, cls, ivars, _out_helpers=helpers)
+            walk = _extract_writeto_field_numbers(None, cls, ivars)
+            result, helpers = walk.numbers, walk.helpers
         except Exception:
-            result = {}
+            result, helpers = {}, {}
         # Invariant: every key in helpers must also appear in result
         for k in helpers:
             self.assertIn(k, result,

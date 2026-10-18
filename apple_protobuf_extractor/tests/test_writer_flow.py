@@ -70,7 +70,7 @@ def _walk_confirmed(ctx, cl, cls):
     names = {m.name for m in cls.methods if m.name}
     fivars = [iv for iv in cls.ivars if _is_real_field_ivar(iv, names)]
     indeg, foreign = W.build_writeto_indegree(ctx, cl)
-    return set(W._walk_field_numbers(ctx, cls, fivars, indeg, foreign))
+    return set(W._walk_field_numbers(ctx, cls, fivars, indeg, foreign).numbers)
 
 
 @unittest.skipUnless(_HAVE, "iPhone 8 dyld cache not available")

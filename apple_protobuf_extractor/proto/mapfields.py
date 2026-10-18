@@ -529,9 +529,9 @@ def record_helper_votes(
     proto_classes: FrozenSet[str],
 ) -> None:
     """Accumulate, on *ctx*, one vote per field ``{canonical write helper → wire kind of
-    the ivar that uses it}``.  Called per class by ``extract_proto_message`` with the
-    ``_out_helpers`` the CFG walk already produced (no extra analysis), so by the end of
-    ``extract_all`` the table covers every class in the binary."""
+    the ivar that uses it}``.  Called per class by ``extract_proto_message`` with the write
+    helpers the CFG walk already bound (``WalkBindings.helpers``; no extra analysis), so by
+    the end of ``extract_all`` the table covers every class in the binary."""
     votes = _ctx_cache(ctx, "_helper_votes", dict)
     for iv in field_ivars:
         va = helpers.get(iv.name)

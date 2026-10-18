@@ -58,7 +58,7 @@ def _walk_bindings(ctx, cl):
         fi = _field_ivars(cls)
         if m is None or m.imp == 0 or not fi:
             continue
-        walk = W._walk_field_numbers(ctx, cls, fi, indeg, foreign)
+        walk = W._walk_field_numbers(ctx, cls, fi, indeg, foreign).numbers
         for ivar, num in walk.items():
             out[f"{cls.name}.{ivar}"] = num
     return out
@@ -140,7 +140,7 @@ class TestAccessorSourcedBinding(unittest.TestCase):
         if cls is None:
             self.skipTest("_CPUsageEnvelope not present")
         indeg, foreign = W.build_writeto_indegree(ctx, cl)
-        walk = W._walk_field_numbers(ctx, cls, _field_ivars(cls), indeg, foreign)
+        walk = W._walk_field_numbers(ctx, cls, _field_ivars(cls), indeg, foreign).numbers
         # The accessor-sourced message fields and (regression guard) the scalars.
         self.assertEqual(walk.get("_context"), 14)              # was estimated 6
         self.assertEqual(walk.get("_usageSinceLookback"), 1)
