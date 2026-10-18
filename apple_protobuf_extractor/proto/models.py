@@ -340,11 +340,18 @@ class ExtractionDiagnostics:
     # _dictionaryRepresentation: switches over a field's value that could not be evaluated
     # while the field stays an untyped int (it may be an enum): (class, field, reason)
     unevaluated_switches: List[Tuple[str, str, str]] = field(default_factory=list)
+    # image-wide pre-passes that raised: the run went on without them, so every class lost
+    # what they provide: (pass, error, consequence)
+    failed_passes: List[Tuple[str, str, str]] = field(default_factory=list)
+    # per-class analyses that raised or did not settle; the fields they would have typed are
+    # emitted flagged: (class, analysis, detail)
+    analysis_failures: List[Tuple[str, str, str]] = field(default_factory=list)
 
     @property
     def n_errors(self) -> int:
-        """Failures that drop output (as opposed to fields merely left undecided)."""
-        return len(self.failed_classes) + len(self.foreign_errors)
+        """Failures that drop or degrade output run-wide (as opposed to fields left
+        undecided and flagged)."""
+        return len(self.failed_classes) + len(self.foreign_errors) + len(self.failed_passes)
 
 
 def get_diagnostics(ctx) -> ExtractionDiagnostics:
@@ -353,9 +360,27 @@ def get_diagnostics(ctx) -> ExtractionDiagnostics:
     return _ctx_cache(ctx, "_diagnostics", ExtractionDiagnostics)
 
 
+def record_failed_pass(ctx, name: str, exc: Exception, consequence: str) -> None:
+    """An image-wide pre-pass *name* raised *exc*; the run continues with *consequence*."""
+    import logging
+    err = f"{type(exc).__name__}: {exc}"
+    get_diagnostics(ctx).failed_passes.append((name, err, consequence))
+    logging.getLogger(__name__).warning("%s pre-pass FAILED (%s); %s", name, err, consequence)
+
+
+def record_analysis_failure(ctx, cls_name: str, analysis: str, detail: str) -> None:
+    """*analysis* of class *cls_name* raised or did not settle (*detail*); recorded once."""
+    entry = (cls_name, analysis, detail)
+    failures = get_diagnostics(ctx).analysis_failures
+    if entry not in failures:
+        failures.append(entry)
+
+
 __all__ = [
     "ExtractionDiagnostics",
     "get_diagnostics",
+    "record_failed_pass",
+    "record_analysis_failure",
     "FieldLabel",
     "ProtoField",
     "ProtoMessage",

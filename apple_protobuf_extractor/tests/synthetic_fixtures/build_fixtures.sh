@@ -434,4 +434,13 @@ if want f28_enum_dictrep_biased; then
         f28_enum_dictrep_biased/fixture.m
 fi
 
+if want f29_writer_import_names; then
+    # int encodings read from the NAMES of the ProtocolBuffer.framework writers a standalone
+    # binary imports (PBDataWriterWrite<Type>Field), plus a helper whose name shows none and
+    # two ivar types that name no wire type: those fields are flagged.  Plain compiled code.
+    build_fixture f29_writer_import_names \
+        -o f29_writer_import_names/testwn \
+        f29_writer_import_names/fixture.m
+fi
+
 echo "Done."

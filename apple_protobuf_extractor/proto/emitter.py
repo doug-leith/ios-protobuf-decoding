@@ -141,8 +141,9 @@ _KNOWN_SCALAR_TYPES: frozenset = frozenset({
     "string", "bytes",
 })
 
-#: ObjC Foundation container / root classes whose proto equivalent is "bytes".
-#: These are silently converted — no unresolved_type_class annotation.
+#: ObjC Foundation container / root classes whose proto equivalent is "bytes": converted
+#: without an unresolved_type_class annotation (the fields that need one -- an unresolved
+#: map, or a type naming no wire type such as NSNumber -- are noted at extraction).
 _OBJC_BUILTINS: frozenset = frozenset({
     "NSArray", "NSMutableArray",
     "NSDictionary", "NSMutableDictionary",
@@ -249,11 +250,9 @@ def resolve_type_refs(messages: List[ProtoMessage]) -> None:
                 continue  # enum field — type_name is already the enum name
 
             if fld.type_class in _OBJC_BUILTINS:
-                # Silently convert: NSArray, NSData, etc. → bytes.
-                # NOTE: NSDictionary/NSMutableDictionary map fields whose K/V types
-                # were not recovered (proto.mapfields) land here too; they are flagged
-                # at extraction (_MAP_FIELD_NOTE / _MAP_UNRESOLVED_NOTE) — see
-                # LIMITATIONS.md (1), to-do #41.
+                # NSArray, NSData, etc. → bytes.  Unresolved maps and NSNumber / NSValue /
+                # NSObject fields are flagged at extraction (_MAP_FIELD_NOTE,
+                # _OPAQUE_OBJECT_NOTE); see LIMITATIONS.md (1).
                 fld.type_name = "bytes"
                 continue
 
@@ -1353,10 +1352,14 @@ def print_summary(
         if diagnostics.unevaluated_switches:
             print(row("  enum switches not evaluated", len(diagnostics.unevaluated_switches)),
                   file=file)
+        if diagnostics.analysis_failures:
+            print(row("  class analyses failed", len(diagnostics.analysis_failures)), file=file)
         if diagnostics.failed_classes:
             print(row("!! classes FAILED (missing)", len(diagnostics.failed_classes)), file=file)
         if diagnostics.foreign_errors:
             print(row("!! foreign runtime errors", len(diagnostics.foreign_errors)), file=file)
+        if diagnostics.failed_passes:
+            print(row("!! pre-passes FAILED", len(diagnostics.failed_passes)), file=file)
     print(f"├{sep}┤", file=file)
     print(row("Output files", stats["files"]),                            file=file)
     for pf in proto_files:
@@ -1384,7 +1387,18 @@ def print_summary(
             file=sys.stderr,
         )
 
+    if diagnostics is not None and diagnostics.analysis_failures:
+        fails = diagnostics.analysis_failures
+        print(f"\nwarning: {len(fails)} class analysis(es) failed; the fields they would have "
+              f"typed are emitted flagged:", file=sys.stderr)
+        for cls_name, analysis, detail in fails[:10]:
+            print(f"  {cls_name}: {analysis}: {detail}", file=sys.stderr)
+        if len(fails) > 10:
+            print(f"  … and {len(fails) - 10} more (run with -v)", file=sys.stderr)
+
     if diagnostics is not None and diagnostics.n_errors:
+        for name, err, consequence in diagnostics.failed_passes:
+            print(f"\nerror: the {name} pre-pass failed ({err}); {consequence}", file=sys.stderr)
         if diagnostics.failed_classes:
             print(f"\nerror: {len(diagnostics.failed_classes)} class(es) failed to extract and are "
                   f"MISSING from the output:", file=sys.stderr)

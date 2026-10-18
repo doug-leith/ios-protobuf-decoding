@@ -55,6 +55,8 @@ def _resolve_class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:
         name = ctx.read_cstring(ctx.read_ptr(data + 24))  # class_ro_t.name
         if name:
             return name
+    except (NameError, ImportError):
+        raise
     except Exception:
         pass
     sym = ctx.import_name_for_bind(va)
@@ -104,6 +106,8 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                     return True
                 try:
                     cur = ctx.read_ptr(cur + 8)            # next superclass
+                except (NameError, ImportError):
+                    raise
                 except Exception:
                     return False
             return False

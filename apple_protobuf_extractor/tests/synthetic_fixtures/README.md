@@ -446,6 +446,15 @@ f28_enum_dictrep_biased/    `_field_routes_through_xasstring`: a 1-based,
                              bias).  REAL COMPILED CODE, plain build.
                              Differential-checked: with the pool-based gate
                              TestBuildType is 0..2
+f29_writer_import_names/    int encodings from the NAMES of the
+                             ProtocolBuffer.framework writers a standalone
+                             binary imports (`PBDataWriterWrite<Type>Field`,
+                             declared in the shim under those names): all ten
+                             int writers, plus a shim helper whose name shows
+                             no encoding (flagged) and NSNumber / bare `id`
+                             ivars (flagged: no wire type).  REAL COMPILED
+                             CODE, plain build.  Differential-checked: without
+                             the name reading the test fails.
 ```
 
 f1-f5 each isolate ONE recovery mechanism in a minimal toy message (1-6

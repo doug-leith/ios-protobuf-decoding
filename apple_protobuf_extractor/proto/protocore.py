@@ -152,16 +152,11 @@ def _is_real_field_ivar(ivar: ObjcIvar, method_names: Set[str]) -> bool:
 #   - plain varint  (int32 / uint32 / enum / bool)  -> one helper  [the ambiguous case]
 #   - ZIGZAG varint (sint32 / sint64)               -> a DISTINCT helper  -> RECOVERABLE
 #   - fixed-width   (fixed*/sfixed*)                -> their own helpers  -> RECOVERABLE
-# So sint and the fixed* family are recoverable from the helper address the writeTo CFG-
-# walk already reads.  **sint32/sint64 AND fixed32/fixed64 ARE now mapped** (TODO #38/#44):
-# the field's write helper is classified by :func:`proto.extractor._classify_write_helper`
-# and promotes the canonical int default — a zigzag-varint encoder (``lsl (w|x)1,#1`` on
-# the value arg) → sint32/sint64; a fixed tag-builder (``mov w_,#5/#1 ; bfi w_,w<field>,
-# #3,#0x1d`` — the wire-type immediate) → fixed32/fixed64 — applied in extract_proto_message
-# right after this function.  The genuinely irrecoverable cases stay: int32 vs uint32 (same
-# plain-varint helper; sole tie-breaker is ivar 'i' vs 'I', and Apple often uses 'i'
-# regardless) and the SIGN half of fixed32 vs sfixed32 (wire-identical) — taken from the
-# same ivar 'i'/'I' sign as int/uint, at the same confidence.  NOTE the
+# The field's write helper is classified by :func:`proto.write_helpers._classify_write_helper`
+# (its code, or a standalone binary's import name) and refines the default in
+# extract_proto_message: sint32/sint64, fixed32/fixed64, and int32 vs uint32 (how the plain
+# varint helper widens its value).  The SIGN half of fixed32 vs sfixed32 (wire-identical)
+# comes from the ivar 'i'/'I'; a field whose writer shows no encoding is flagged.  NOTE the
 # inverse is also true: a reference declaring `sint` for a field the binary writes with
 # the PLAIN helper is a REFERENCE error — the helper is the wire ground truth (observed:
 # GEOMapServiceTraits.sequence_number, plain ac30, ref wrongly says sint32).

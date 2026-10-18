@@ -540,7 +540,10 @@ def record_helper_votes(
         if kind is None:
             continue
         if kind in ("int32", "int64", "uint32", "uint64"):
-            kind = _refine_scalar_by_family(kind, _classify_write_helper(ctx, va))
+            fam = _classify_write_helper(ctx, va)
+            if fam == "unknown":
+                continue                    # the writer shows no encoding: no vote
+            kind = _refine_scalar_by_family(kind, fam)
         votes.setdefault(_canonical_helper(ctx, va), Counter())[kind] += 1
 
 

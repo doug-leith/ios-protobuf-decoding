@@ -329,6 +329,8 @@ def extract_cpp_protos_from_ctx(ctx) -> List[FileProto]:
         s = ctx.section(seg, sec)
         try:
             data = ctx.read_bytes(s.vmaddr, s.vmsize)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
         for _off, blob in find_descriptor_blobs(data):

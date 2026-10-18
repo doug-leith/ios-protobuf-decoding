@@ -70,6 +70,7 @@ _FIXTURES = [
     ("f25_newer_dispatch_engine", "testnde_e"),
     ("f27_compare_tree_engine_no_guard", "testgr"),
     ("f27_compare_tree_engine_no_guard", "testgr_e"),
+    ("f29_writer_import_names", "testwn"),
 ]
 
 
@@ -148,6 +149,13 @@ class TestSyntheticFixtures(unittest.TestCase):
                     self.assertEqual(
                         got.type_class, want["type_class"],
                         f"{fixture_dir}.{msg_name}.{fname}: type_class")
+                if "note" in want:      # the field's inline `//` note: a substring, or None
+                    if want["note"] is None:
+                        self.assertFalse(got.type_inference_note,
+                                         f"{fixture_dir}.{msg_name}.{fname}: unexpected note")
+                    else:
+                        self.assertIn(want["note"], got.type_inference_note or "",
+                                      f"{fixture_dir}.{msg_name}.{fname}: note")
 
             # ── Enum value-table checks (optional: only fixtures with an
             # ENUM:-tagged field carry an "enums" key) ──────────────────────

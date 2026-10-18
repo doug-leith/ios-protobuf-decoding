@@ -79,9 +79,11 @@ the output package name), `--no-cross-image` (see below), `--verbose`, `--versio
 - **Every uncertain field is flagged** with an inline `//` comment (an estimated
   number, or a repeated element that fell back to `bytes`). A field with no comment
   was confirmed from the code.
-- **int32 vs uint32 (and int64/uint64) is not recoverable** — both compile to the
-  same ivar + wire encoding; the tool emits a canonical default. `sint*`, `fixed*`,
-  `sfixed*` (distinct wire encodings/helpers) *are* distinguished.
+- **Integer encodings come from the field's writer**: `sint*`, `fixed*` / `sfixed*` and
+  int32 vs uint32 are read from the writeTo: write helper's code, or, in a standalone
+  binary, from the name of the ProtocolBuffer.framework writer it imports. int64 vs uint64
+  is wire-identical and follows the storage type, as does the sign of `fixed` vs `sfixed`.
+  A field whose writer shows no encoding is flagged.
 - **Names are ObjC-derived** (ivar / class names); usually but not always identical
   to the original `.proto`.
 - **Message types defined in other cache images are pulled in** (`--framework` mode).

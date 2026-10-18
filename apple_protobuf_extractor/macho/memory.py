@@ -907,6 +907,8 @@ class BinaryContext:
                         imports.append(
                             blob[abs_name_off:end_b].decode('utf-8', errors='replace')
                         )
+                    except (NameError, ImportError):
+                        raise
                     except Exception:
                         imports.append('')
                 else:

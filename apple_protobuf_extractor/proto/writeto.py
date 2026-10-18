@@ -610,6 +610,8 @@ def _addr_to_name(ctx, addr, offset_to_name):
         return None
     try:
         return offset_to_name.get(ctx.read_u32(addr))
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
 
@@ -676,6 +678,8 @@ def _getter_loads_offset(ctx, imp, want_off, max_insns=24):
     accessor and the oneof getter, which loads the discriminator then the ivar)."""
     try:
         insns = disasm(ctx, imp, max_insns=max_insns, stop_at_ret=True)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return False
     base = {}
@@ -696,6 +700,8 @@ def _getter_loads_offset(ctx, imp, want_off, max_insns=24):
                     try:
                         if ctx.read_u32(off_addr) == want_off:
                             return True
+                    except (NameError, ImportError):
+                        raise
                     except Exception:
                         pass
             elif m[3] == want_off:                       # direct [x0, #want_off]
@@ -963,6 +969,8 @@ def writeto_sent_selectors(ctx: BinaryContext, imp: int) -> Optional[frozenset]:
         if _is_in_any_section(slot, selrefs):
             try:
                 sels.add(ctx.read_cstring(ctx.read_ptr(slot)))
+            except (NameError, ImportError):
+                raise
             except Exception:
                 return None             # a selector slot we cannot read: cannot tell
     sels.discard(None)

@@ -76,3 +76,43 @@ uint32_t PBReadTag(PBDataReader *reader) {
 void PBHandleUnknownField(id self, uint32_t field) {
     (void)self; (void)field;
 }
+
+void PBDataWriterWriteInt32Field(PBDataWriter *writer, int32_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteUint32Field(PBDataWriter *writer, uint32_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteSint32Field(PBDataWriter *writer, int32_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteSint64Field(PBDataWriter *writer, int64_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteFixed32Field(PBDataWriter *writer, uint32_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteSfixed32Field(PBDataWriter *writer, int32_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteFixed64Field(PBDataWriter *writer, uint64_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteSfixed64Field(PBDataWriter *writer, int64_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteInt64Field(PBDataWriter *writer, int64_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}
+
+void PBDataWriterWriteUint64Field(PBDataWriter *writer, uint64_t value, uint32_t tag) {
+    (void)writer; (void)value; (void)tag;
+}

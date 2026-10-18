@@ -75,6 +75,8 @@ class ProtobufCDescriptors:
 def _read_name(ctx, addr: int):
     try:
         name = ctx.read_cstring(ctx.read_ptr(addr + _NAME_OFF), _MAX_NAME)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     return name if _NAME_RE.match(name) else None
@@ -84,6 +86,8 @@ def _valid_count(ctx, addr: int, n_off: int, ptr_off: int) -> bool:
     try:
         n = ctx.read_u32(addr + n_off)
         return n <= _MAX_ENTRIES and (n == 0 or ctx.read_ptr(addr + ptr_off) != 0)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return False
 
@@ -109,6 +113,8 @@ def protobufc_symbols(ctx) -> List[str]:
     if reader is not None and getattr(ctx, "is_cache_backed", False):
         try:
             names = reader.image_symbol_addrs(ctx.image_base, _SYMBOL_TOKEN).keys()
+        except (NameError, ImportError):
+            raise
         except Exception as exc:
             log.debug("protobuf-c symbol scan failed: %s", exc)
             return []
@@ -131,6 +137,8 @@ def find_protobufc_descriptors(ctx) -> ProtobufCDescriptors:
                 continue
             try:
                 data = ctx.read_bytes(sec.vmaddr, sec.vmsize)
+            except (NameError, ImportError):
+                raise
             except Exception as exc:
                 log.debug("protobuf-c scan: cannot read %s,%s: %s", seg.name, sec.name, exc)
                 continue

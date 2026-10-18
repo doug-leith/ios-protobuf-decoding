@@ -105,6 +105,8 @@ def _relptr(ctx, va):
 def _cstr(ctx, va):
     try:
         return ctx.read_cstring(va, 256)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
 
@@ -112,6 +114,8 @@ def _cstr(ctx, va):
 def _desc_name(ctx, desc):
     try:
         return _cstr(ctx, _relptr(ctx, desc + 0x08))
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
 
@@ -119,6 +123,8 @@ def _desc_name(ctx, desc):
 def _desc_kind(ctx, desc):
     try:
         return _u32(ctx, desc) & 0x1F
+    except (NameError, ImportError):
+        raise
     except Exception:
         return -1
 
@@ -270,12 +276,16 @@ def _resolve_symbolic(ctx, va):
     # descriptor — a REBASE to a local type, or a BIND to an external one.
     try:
         raw = struct.unpack("<Q", ctx.read_bytes(ptr_site, 8))[0]
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     # local rebase: try the decoded pointer, then a manual low-32 + image_base.
     name = None
     try:
         name = _local_type_ref(ctx, ctx.read_ptr(ptr_site))
+    except (NameError, ImportError):
+        raise
     except Exception:
         pass
     if not name:
@@ -285,6 +295,8 @@ def _resolve_symbolic(ctx, va):
     # external bind: demangle the import symbol name.
     try:
         return _type_from_bind(ctx.import_name_for_bind(raw))
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
 
@@ -308,6 +320,8 @@ def local_enum_names(ctx):
     out = set()
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
+    except (NameError, ImportError):
+        raise
     except Exception:
         return out
     for i in range(sec.vmsize // 4):
@@ -320,6 +334,8 @@ def local_enum_names(ctx):
                 q = _qualified_name(ctx, desc)
                 if q:
                     out.add(q)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
     return out
@@ -340,6 +356,8 @@ def decode_mangled(ctx, va):
     where label is '', 'repeated', or 'map'.  Returns (None, '') if undecodable."""
     try:
         head = ctx.read_bytes(va, 1)[0]
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None, ""
     if head in (1, 2):
@@ -351,6 +369,8 @@ def decode_mangled(ctx, va):
     # prefix would otherwise be missed (e.g. `Say<symref>G` -> repeated <message>).
     try:
         raw = ctx.read_bytes(va, 3)
+    except (NameError, ImportError):
+        raise
     except Exception:
         raw = b""
 
@@ -419,6 +439,8 @@ def _read_field_types(ctx, desc):
     try:
         nfields = _u32(ctx, fd + 0x0C)
         recsize = _u16(ctx, fd + 0x0A) or 12
+    except (NameError, ImportError):
+        raise
     except Exception:
         return {}, set()
     fields: Dict[str, str] = {}
@@ -465,6 +487,8 @@ def _qualified_name(ctx, desc) -> Optional[str]:
                 if nm:
                     names.append(nm)
             cur = _parent_desc(ctx, cur)
+        except (NameError, ImportError):
+            raise
         except Exception:
             break                        # bad parent pointer: degrade to what we have
     return ".".join(reversed(names)) if names else None
@@ -500,6 +524,8 @@ def _collect_field_types_ex(ctx):
     message via the descriptor parent chain (#60)."""
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
+    except (NameError, ImportError):
+        raise
     except Exception:
         return {}, {}, set()
     out: Dict[str, Dict[str, str]] = {}
@@ -534,6 +560,8 @@ def _collect_field_types_ex(ctx):
                 out.setdefault(key, {}).update(fields)
             if inc:
                 incomplete.setdefault(key, set()).update(inc)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
     return out, incomplete, structs - set(out)

@@ -213,6 +213,8 @@ def _read(ctx, va, length) -> Optional[bytes]:
         return None
     try:
         return ctx.read_bytes(va, length)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
 

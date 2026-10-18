@@ -57,6 +57,7 @@ from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
 from proto import dispatch as D
+from proto.models import record_analysis_failure
 
 log = logging.getLogger(__name__)
 
@@ -461,7 +462,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             arms.setdefault(b, set()).update(ts)
             upto = max([upto] + [t + 4 for t in ts if t >= end])
     else:
-        out.notes.append(f"core {core_va:#x}: arms still being discovered after {_ARM_ROUNDS} rounds")
+        detail = f"core {core_va:#x}: arms still being discovered after {_ARM_ROUNDS} rounds"
+        out.notes.append(detail)
+        record_analysis_failure(ctx, cls.name, "readFrom: dispatch", detail)
 
     def dispatches(regions, default_n) -> bool:
         d = regions[default_n].blocks
@@ -636,6 +639,8 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
             _decode_core(ctx, core_va, entry, cls, core_index, out, entries, flows.get(core_va))
         except (NameError, ImportError):
             raise
-        except Exception as exc:                # report, don't hide
-            out.notes.append(f"core {core_va:#x}: {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            detail = f"core {core_va:#x}: {type(exc).__name__}: {exc}"
+            out.notes.append(detail)
+            record_analysis_failure(ctx, cls.name, "readFrom: dispatch", detail)
     return out

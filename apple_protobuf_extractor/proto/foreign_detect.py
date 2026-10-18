@@ -172,7 +172,15 @@ def _cpp_protobuf_symbol_names(ctx: BinaryContext):
         try:
             return list(reader.image_symbol_addrs(
                 ctx.image_base, _CPP_PROTOBUF_TOKEN).keys())
-        except Exception:
+        except (NameError, ImportError):
+            raise
+        except Exception as exc:
+            # unread symbols: a C++ runtime in this image would go undetected
+            from proto.models import get_diagnostics
+            get_diagnostics(ctx).foreign_errors.append(
+                ("C++ libprotobuf", f"symbol read: {type(exc).__name__}: {exc}"))
+            log.warning("C++ libprotobuf detection FAILED reading the image's symbols (%s: %s)",
+                        type(exc).__name__, exc)
             return []
     return ctx.iter_symbol_names()
 

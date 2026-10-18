@@ -131,6 +131,8 @@ def _gather_type_compatible_methods(
             else:
                 entry["pairs_count"]   = 0
                 entry["sample_values"] = []
+        except (NameError, ImportError):
+            raise
         except Exception as exc:
             entry["extraction_error"] = str(exc)
         results.append(entry)   # inside the loop
@@ -240,6 +242,8 @@ def _emit_mode_c_debug(ctx: BinaryContext, cls: ObjcClass, fld: ProtoField,
                     )
                 ),
             })
+        except (NameError, ImportError):
+            raise
         except Exception as _ce:
             candidates_info.append({"imp": f"0x{mc.imp:x}", "error": str(_ce)})
     if not candidates_info:

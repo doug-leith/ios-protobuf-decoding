@@ -58,6 +58,7 @@ in LIMITATIONS.md (10) / to-do #63a/#63b/#66/#67/#68/#70.
 """
 from __future__ import annotations
 
+import logging
 import re
 import struct
 from dataclasses import dataclass, field
@@ -68,6 +69,8 @@ from macho.disasm import disasm
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, decode_namemap_bytecode)
+
+log = logging.getLogger(__name__)
 
 # Max proto field number (29-bit) and a sane name-length ceiling — used to
 # validate candidate (number, name, len) triples when scanning static blobs.
@@ -138,6 +141,8 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
         try:
             return reader.image_symbol_addrs(
                 ctx.image_base, _NAMEMAP_MARKER, "13decodeMessage")
+        except (NameError, ImportError):
+            raise
         except Exception:
             return {}
 
@@ -280,6 +285,8 @@ def _cstr(ctx: BinaryContext, va: int) -> Optional[str]:
     for cand in (va, va & 0x7FFFFFFFF):
         try:
             s = ctx.read_cstring(cand, _MAX_NAME_LEN + 16)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
         if s and all(32 <= ord(c) < 127 for c in s):
@@ -367,6 +374,8 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
     filter rejects keeps scanning into the NEXT type's data and returns its cases."""
     try:
         count = struct.unpack_from("<Q", ctx.read_bytes(blob_va, 0x20), 0x10)[0]
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     if not (0 < count < 4096):
@@ -377,6 +386,8 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
         try:
             buf = ctx.read_bytes(blob_va, step)
             break
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
     if not buf:
@@ -702,6 +713,8 @@ def _walk_namemap_builder_hop(ctx: BinaryContext, va: int,
     loses them."""
     try:
         body = disasm(ctx, va, max_insns=600, stop_at_ret=True)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return []
     got = _walk_namemap_builder(ctx, body, enum)
@@ -715,6 +728,8 @@ def _walk_namemap_builder_hop(ctx: BinaryContext, va: int,
                 return []
             try:
                 inner = disasm(ctx, t, max_insns=600, stop_at_ret=True)
+            except (NameError, ImportError):
+                raise
             except Exception:
                 return []
             return _walk_namemap_builder(ctx, setup + inner, enum)
@@ -798,6 +813,8 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     for t in targets:
         try:
             body = disasm(ctx, t, max_insns=400, stop_at_ret=True)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
         got = _walk_namemap_builder(ctx, body, enum)
@@ -807,6 +824,8 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
             for ct in _closure_arg_targets(ctx, body):
                 try:
                     inner = disasm(ctx, ct, max_insns=400, stop_at_ret=True)
+                except (NameError, ImportError):
+                    raise
                 except Exception:
                     got = []
                     continue
@@ -840,6 +859,8 @@ def _single_entry_stub(ctx: BinaryContext, va: int) -> List[SwiftField]:
     when the length matches the name's cstring."""
     try:
         insns = disasm(ctx, va, max_insns=16, stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return []
     page: Dict[str, int] = {}
@@ -913,6 +934,8 @@ def _decode_message_numbers(ctx: BinaryContext, decode_va: int) -> List[int]:
     nums: List[int] = []
     try:
         insns = disasm(ctx, decode_va, max_insns=400, stop_at_ret=True)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return nums
     for ins in insns:
@@ -940,6 +963,8 @@ def _traverse_field_numbers(ctx: BinaryContext, traverse_va: int) -> List[int]:
     """
     try:
         insns = disasm(ctx, traverse_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return []
     nums: List[int] = []
@@ -1092,6 +1117,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     and there is no ``decodeMessage`` to cross-check or single-field default."""
     try:
         insns = disasm(ctx, init_va, max_insns=64, stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return [], "none"
 
@@ -1114,6 +1141,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     if not stub:
         try:
             full = disasm(ctx, init_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
+        except (NameError, ImportError):
+            raise
         except Exception:
             full = insns
         got = _walk_inline_closure(ctx, full, enum)
@@ -1158,6 +1187,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             try:
                 lit = bytecode_literal_from_getter(
                     ctx, disasm(ctx, t, max_insns=16, stop_at_ret=False), enum=enum)
+            except (NameError, ImportError):
+                raise
             except Exception:
                 lit = None
             dec = decode_namemap_bytecode(lit, enum=enum) if lit else None
@@ -1188,6 +1219,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             if t is not None and t != init_va and abs(t - init_va) < 0x8000:
                 try:
                     got = _walk_inline_closure(ctx, disasm(ctx, t, max_insns=600, stop_at_ret=True), enum)
+                except (NameError, ImportError):
+                    raise
                 except Exception:
                     got = []
                 if got:
@@ -1197,6 +1230,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
                 # B — single-field tail-call inside the followed closure.
                 try:
                     cl = disasm(ctx, t, max_insns=40, stop_at_ret=False)
+                except (NameError, ImportError):
+                    raise
                 except Exception:
                     cl = []
                 got = _single_field_tail_call(ctx, cl, decode_va, traverse_va)
@@ -1301,7 +1336,14 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
     try:
         from serializers import swift_type_recovery
         by_type, incomplete, fieldless = swift_type_recovery._collect_field_types_ex(ctx)
-    except Exception:
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        from proto.models import get_diagnostics
+        get_diagnostics(ctx).foreign_errors.append(
+            ("swift-protobuf", f"field types: {type(exc).__name__}: {exc}"))
+        log.warning("swift-protobuf field-type recovery FAILED (%s: %s); field types missing",
+                    type(exc).__name__, exc)
         return
     for m in msgs:
         if m.shape in _REFLECTION_CONFIRMED_SHAPES and m.fields:

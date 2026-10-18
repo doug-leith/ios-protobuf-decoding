@@ -130,14 +130,15 @@ class TestClassifyWriteHelperOffline(unittest.TestCase):
         body = _enc_mov(19, 0) + _enc_lsl(23, 1, 1, sf=1) + _enc_ret()
         self.assertEqual(self._classify(body), 'sint64')
 
-    def test_plain_value_passthrough_is_plain(self):
-        body = _enc_mov(20, 1) + _enc_ret()           # value unmodified
-        self.assertEqual(self._classify(body), 'plain')
+    def test_value_passthrough_without_a_tag_build_is_unknown(self):
+        body = _enc_mov(20, 1) + _enc_ret()           # value unmodified, no tag built
+        self.assertEqual(self._classify(body), 'unknown')
 
-    def test_lsl_on_non_value_reg_is_plain(self):
-        # A shift of a register that is NOT the value arg (w1/x1) is not zigzag.
+    def test_lsl_on_non_value_reg_is_not_zigzag(self):
+        # A shift of a register that is NOT the value arg (w1/x1) is not zigzag (and with
+        # no tag build after it, nothing shows the encoding).
         body = _enc_lsl(8, 9, 1, sf=0) + _enc_ret()
-        self.assertEqual(self._classify(body), 'plain')
+        self.assertEqual(self._classify(body), 'unknown')
 
     def test_fixed32_tag_wire_type_5(self):
         # tag = (field<<3)|5  → 32-bit fixed.  bfi sits ~28 insns in on the real
@@ -251,18 +252,17 @@ class TestClassifyWriteHelperOffline(unittest.TestCase):
         self.assertEqual(WH._classify_write_helper(ctx, self.TGT), 'sint32')
 
     def test_falsy_helper_va_short_circuits_before_disasm(self):
-        # test_none_helper_is_plain (below) can't discriminate the explicit
-        # `if not helper_va: return "plain"` guard: `disasm(ctx, None, ...)` raises
-        # inside the try block, and the surrounding `except Exception: fam="plain"`
-        # ALSO falls back to "plain" regardless of the guard. Use helper_va=0 (also
-        # falsy -- a real "no helper resolved" value) over a ctx region that WOULD
-        # disassemble successfully to a zigzag shift if the guard didn't short-circuit
-        # first, so only the explicit guard -- not the except -- is what's protective.
+        # helper_va 0 ("no helper resolved") over a region that WOULD disassemble to a
+        # zigzag shift: only the explicit guard, not the except, gives "unknown" here.
         ctx = _RegionCtx({0: _enc_lsl(8, 1, 1, sf=0) + _enc_ret()})
-        self.assertEqual(WH._classify_write_helper(ctx, 0), 'plain')
+        self.assertEqual(WH._classify_write_helper(ctx, 0), 'unknown')
 
-    def test_none_helper_is_plain(self):
-        self.assertEqual(WH._classify_write_helper(_RegionCtx({}), None), 'plain')
+    def test_none_helper_is_unknown(self):
+        self.assertEqual(WH._classify_write_helper(_RegionCtx({}), None), 'unknown')
+
+    def test_a_helper_with_no_tag_build_is_unknown_not_plain(self):
+        # neither a zigzag shift, a wire-type bfi nor the plain tag shift: nothing decided it
+        self.assertEqual(self._classify(_enc_movz(9, 5) + _enc_ret()), 'unknown')
 
 
 # ── Live cache assertions (the helper VA is the wire contract → ground truth) ──

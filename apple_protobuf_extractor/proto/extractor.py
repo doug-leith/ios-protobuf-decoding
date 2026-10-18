@@ -64,13 +64,14 @@ from macho.memory    import BinaryContext, _ctx_cache, _ctx_store, reset_ctx_cac
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
-from proto.models    import FieldLabel, ProtoField, ProtoMessage, get_diagnostics
+from proto.models    import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics,
+                             record_analysis_failure, record_failed_pass)
 from proto.writeto   import (_extract_writeto_field_numbers, build_writeto_indegree,
                              writeto_sent_selectors)
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
-    _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree,
+    _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree, INT_ENCODING_NOTE,
     _ensure_string_write_helpers,
 )
 from proto.protocore import (
@@ -241,6 +242,19 @@ _MAP_OBJC_CLASSES = MAP_OBJC_CLASSES
 # and cannot be emitted, so the tool estimates the lowest legal number — but that
 # number is NOT what's on the wire.  When the writeTo: walk saw a literal-0 write
 # for an ESTIMATED field, say so explicitly.  See LIMITATIONS.md (4), to-do #52.
+#: Object ivar types that name no wire type: the field is emitted as bytes.
+_OPAQUE_OBJECT_TYPES = frozenset({"NSNumber", "NSValue", "NSObject"})
+_OPAQUE_OBJECT_NOTE = ("ivar type {enc} names no wire type; emitted as bytes")
+
+
+def _opaque_object_note(ivar: ObjcIvar, type_class: Optional[str]) -> Optional[str]:
+    """The note for a field whose ivar is a bare object (``@``) or a Foundation type that
+    names no wire type (``NSNumber`` / ``NSValue`` / ``NSObject``), which emits as bytes."""
+    if ivar.type_enc == "@" or type_class in _OPAQUE_OBJECT_TYPES:
+        return _OPAQUE_OBJECT_NOTE.format(enc=ivar.type_enc or "@")
+    return None
+
+
 _FIELD_ZERO_NOTE = (
     "wire field number is 0 (Apple 0-based; illegal in .proto) — this estimated "
     "number will NOT match live traffic; see LIMITATIONS.md (4)"
@@ -391,8 +405,11 @@ def _ensure_readfrom_core_index(ctx: BinaryContext, cl: ClassList) -> Dict[int, 
         return cached
     try:
         index = _build_readfrom_core_index(ctx, cl)
+    except (NameError, ImportError):
+        raise
     except Exception as exc:
-        log.debug("readFrom-core-index lazy pre-pass failed (%s)", exc)
+        record_failed_pass(ctx, "readFrom core index", exc,
+                           "repeated-message element types are not recovered from readFrom:")
         index = {}
     _ctx_store(ctx, "_readfrom_core_index", index)
     return index
@@ -420,12 +437,18 @@ def _resolve_dispatch_context(
     if readfrom_core_index:
         try:
             dispatch_elements = _resolve_repeated_via_dispatch(ctx, cls, readfrom_core_index)
+        except (NameError, ImportError):
+            raise
         except Exception as exc:
-            log.debug("dispatch element resolve failed for %s: %s", cls.name, exc)
+            record_analysis_failure(ctx, cls.name, "readFrom: dispatch (element classes)",
+                                    f"{type(exc).__name__}: {exc}")
         try:
             dispatch_ivars = _resolve_repeated_via_dispatch_ivars(ctx, cls, readfrom_core_index)
+        except (NameError, ImportError):
+            raise
         except Exception as exc:
-            log.debug("dispatch ivar resolve failed for %s: %s", cls.name, exc)
+            record_analysis_failure(ctx, cls.name, "readFrom: dispatch (element ivars)",
+                                    f"{type(exc).__name__}: {exc}")
     _n_real_fields = sum(1 for _iv in field_ivars if _proto_name(_iv.name))
     unambiguous = (_n_real_fields == 1 and len(dispatch_elements) == 1)
     return dispatch_elements, dispatch_ivars, unambiguous
@@ -682,18 +705,20 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_wri
       only when every element writer in the bracket agrees on one family; none found
       → unchanged.
 
-    Returns the (possibly refined) ``type_name``; unchanged for non-int types."""
+    Returns ``(type_name, decided)``: the (possibly refined) type, and False when the field
+    is a scalar int whose writer shows no encoding (``"unknown"``, or packed element writers
+    that disagree) -- int / sint / fixed are then not told apart and the field is flagged.
+    Non-int types are unchanged and decided."""
     if type_class is not None or type_name not in ("int32", "int64", "uint32", "uint64"):
-        return type_name
+        return type_name, True
     w = (walk_writes or {}).get(ivar.name) or {}
     if not w.get('bracket'):
-        return _refine_scalar_by_family(
-            type_name, _classify_write_helper(ctx, wt_helpers.get(ivar.name)),
-            f"{owner}.{ivar.name}")
-    fams = {_classify_write_helper(ctx, va) for va in w.get('elem_helper_vas', ())}
-    if len(fams) == 1:
-        return _refine_scalar_by_family(type_name, fams.pop(), f"{owner}.{ivar.name}")
-    return type_name
+        fams = {_classify_write_helper(ctx, wt_helpers.get(ivar.name))}
+    else:
+        fams = {_classify_write_helper(ctx, va) for va in w.get('elem_helper_vas', ())}
+    if len(fams) != 1 or "unknown" in fams:
+        return type_name, False
+    return _refine_scalar_by_family(type_name, fams.pop(), f"{owner}.{ivar.name}"), True
 
 
 def _repeated_encoding(ivar, walk_writes):
@@ -963,8 +988,8 @@ def extract_proto_message(
 
         # TODO #38/#44: refine the canonical int default to its true wire form
         # (sint*/[s]fixed*) from the field's writeTo: helper VA.
-        type_name = _refine_int_wire_form(ctx, type_name, type_class, ivar, _wt_helpers,
-                                          _walk_writes, owner=cls.name)
+        type_name, _int_decided = _refine_int_wire_form(ctx, type_name, type_class, ivar,
+                                                        _wt_helpers, _walk_writes, owner=cls.name)
 
         # ── Mode A enum-fallback debug ────────────────────────────────────────
         # Fires when: (a) --cache path (instance_method_names non-empty), (b)
@@ -1045,6 +1070,10 @@ def extract_proto_message(
         # the degradation is visible (see LIMITATIONS.md (2)).
         if not _type_note:
             _type_note = _embedded_struct_note(ivar, type_name, type_class)
+        if not _type_note and not _int_decided:
+            _type_note = INT_ENCODING_NOTE
+        if not _type_note:
+            _type_note = _opaque_object_note(ivar, type_class)
 
         # Inline C-struct sub-message (by value or an array of them): remember the
         # begin-mark the walk bound to it, so :func:`finalize_struct_fields` can read the
@@ -1300,9 +1329,11 @@ def extract_all(
         _ctx_store(ctx, "_writeto_foreign_imps", _wt_foreign)
         log.debug("writeTo indegree pre-pass: %d branch targets, %d method IMPs",
                   len(_wt_indeg), len(_wt_foreign))
+    except (NameError, ImportError):
+        raise
     except Exception as exc:
-        log.debug("writeTo indegree pre-pass failed (%s); CFG walk disabled, "
-                  "writeTo field numbers fall back to ivar-order estimates", exc)
+        record_failed_pass(ctx, "writeTo indegree", exc,
+                           "the writeTo: walk is off: field numbers are ivar-order estimates")
 
     # Pre-pass: find the string write-helper VA(s) from any class that has
     # a confirmed singular @"NSString" ivar with a write-helper.  All proto
@@ -1338,6 +1369,8 @@ def extract_all(
             # are never raised by binary-data processing, only by broken code.
             # (ProtoClassDetectionError cannot reach here: the whole-image verdict is
             # rendered by the pre-pass above, before this loop starts.)
+            raise
+        except (NameError, ImportError):
             raise
         except Exception as exc:
             # One bad class must not abort the whole run, but a failure here is

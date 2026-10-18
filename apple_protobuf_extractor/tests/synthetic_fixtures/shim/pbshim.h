@@ -43,3 +43,16 @@ extern void PBWriteDoubleField(PBDataWriter *writer, double value, uint32_t tag)
 extern void PBWriteBytesField(PBDataWriter *writer, id value, uint32_t tag);
 extern void PBWritePackedInt64Field(PBDataWriter *writer, int64_t *list, uint32_t tag);
 extern void PBWritePackedFloatField(PBDataWriter *writer, float *list, uint32_t tag);
+
+// ProtocolBuffer.framework's own field writers, under their real names (f29): a standalone
+// binary imports them by name, and the name is the wire encoding.
+extern void PBDataWriterWriteInt32Field(PBDataWriter *writer, int32_t value, uint32_t tag);
+extern void PBDataWriterWriteUint32Field(PBDataWriter *writer, uint32_t value, uint32_t tag);
+extern void PBDataWriterWriteSint32Field(PBDataWriter *writer, int32_t value, uint32_t tag);
+extern void PBDataWriterWriteSint64Field(PBDataWriter *writer, int64_t value, uint32_t tag);
+extern void PBDataWriterWriteFixed32Field(PBDataWriter *writer, uint32_t value, uint32_t tag);
+extern void PBDataWriterWriteSfixed32Field(PBDataWriter *writer, int32_t value, uint32_t tag);
+extern void PBDataWriterWriteFixed64Field(PBDataWriter *writer, uint64_t value, uint32_t tag);
+extern void PBDataWriterWriteSfixed64Field(PBDataWriter *writer, int64_t value, uint32_t tag);
+extern void PBDataWriterWriteInt64Field(PBDataWriter *writer, int64_t value, uint32_t tag);
+extern void PBDataWriterWriteUint64Field(PBDataWriter *writer, uint64_t value, uint32_t tag);

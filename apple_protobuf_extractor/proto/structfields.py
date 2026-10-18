@@ -58,7 +58,7 @@ from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_va
 from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import _writeto_field_number_before
-from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
+from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.dispatch_eval import SELF, READER, _opaque
 from proto.protocore import _SCALAR_ENC
 
@@ -1074,12 +1074,16 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
         fields, enums = [], []
         for m in layout.members:
             base = _SCALAR_ENC[m.code]
-            ptype = _refine_scalar_by_family(base, next(iter(families[m.offset])))
+            fam = next(iter(families[m.offset]))
+            ptype = _refine_scalar_by_family(base, fam)
             fname = keyed.get(m.offset)
+            note = None if fname else _MEMBER_NAME_MISSING
+            if note is None and fam == "unknown" and base in ("int32", "int64", "uint32", "uint64"):
+                note = INT_ENCODING_NOTE
             fld = ProtoField(
                 name=fname or f"field{number_of[m.offset]}", number=number_of[m.offset],
                 type_name=ptype, label=FieldLabel.OPTIONAL, number_confirmed=True,
-                type_inference_note=None if fname else _MEMBER_NAME_MISSING)
+                type_inference_note=note)
             if m.offset in enum_pairs and ptype in ("int32", "uint32"):
                 pairs = enum_pairs[m.offset]
                 if pairs:

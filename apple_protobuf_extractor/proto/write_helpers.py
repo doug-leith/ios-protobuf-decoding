@@ -32,6 +32,8 @@ from macho.disasm    import disasm, find_adrp_add_target, _parse_imm, _first_reg
 
 from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegree
 from proto.arm64cfg  import split_ops
+from proto.callees   import import_name
+from proto.models    import record_failed_pass
 from proto.protocore import (
     _is_proto_flags_ivar, _type_from_enc, _INTERNAL_PB_IVARS,
 )
@@ -155,9 +157,8 @@ _BLOCK_END_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa
 # (TODO #59).  The wire-type family is decided STRUCTURALLY at the helper's tag-build
 # instruction (sint value-shift `lsl #1`, fixed `mov #wt`+`bfi #3`, or the plain varint
 # tag `lsl <field#>,#3`), every one of which lands within ~30 insns; the scan stops the
-# moment it classifies.  A helper with no recognized tag-build falls through to "plain"
-# — the safe no-refinement default — so this bound never decides the output, it only
-# stops a pathological non-terminating scan.
+# moment it classifies.  A helper with no recognized tag-build is "unknown" (the field is
+# flagged), so this bound cannot silently decide the output.
 _HELPER_FAMILY_MAX_INSNS = 48
 
 
@@ -183,6 +184,8 @@ def _resolve_stub_island(ctx: BinaryContext, helper_va: int) -> Optional[int]:
     """
     try:
         stub = disasm(ctx, helper_va, max_insns=_STUB_ISLAND_INSNS, stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     if (len(stub) < _STUB_ISLAND_INSNS
@@ -257,12 +260,35 @@ def _helper_real_target(ctx: BinaryContext, helper_va: int) -> int:
     return target
 
 
+#: The note on an int field whose writer shows no encoding (family ``"unknown"``).
+INT_ENCODING_NOTE = "integer encoding not confirmed (int / sint / fixed not told apart)"
+
+#: ProtocolBuffer.framework's field writers, by the wire-type family each encodes (the int
+#: ones; the others leave the type alone).  A standalone binary calls them through import
+#: stubs, which name them.
+_WRITER_FAMILY = {
+    "Int32": "int32", "Uint32": "uint32", "Sint32": "sint32", "Sint64": "sint64",
+    "Fixed32": "fixed32", "Sfixed32": "fixed32", "Fixed64": "fixed64", "Sfixed64": "fixed64",
+    "Int64": "plain", "Uint64": "plain",
+}
+
+
+def _family_from_import(ctx: BinaryContext, va: int) -> Optional[str]:
+    """The family of the ``_PBDataWriterWrite<Type>Field`` writer the import stub at *va*
+    calls, by its bound name; None when *va* is not such a stub."""
+    name = import_name(ctx, va) or ""
+    if name.startswith("_PBDataWriterWrite") and name.endswith("Field"):
+        return _WRITER_FAMILY.get(name[len("_PBDataWriterWrite"):-len("Field")], "plain")
+    return None
+
+
 def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     """Classify a ``writeTo:`` field-write helper by the proto *wire-type family* it
     encodes: ``"sint32"``, ``"sint64"``, ``"fixed32"``, ``"fixed64"``, ``"int32"`` /
     ``"uint32"`` (a plain varint of a 32-bit value, by how it is widened -- see
-    :func:`_varint32_value_extension`), or ``"plain"`` (64-bit varint / bool /
-    length-delim / unrecognised — no refinement).
+    :func:`_varint32_value_extension`), ``"plain"`` (a varint read as such, or a
+    non-int writer: no refinement), or ``"unknown"`` (no helper, or one whose encoding
+    neither its code nor its import name shows: the field is flagged).
 
     Why this exists (TODO #38/#44): ivar ``@encode`` only records storage width, so
     ``int32``/``uint32``/``sint32``/``[s]fixed32`` all collapse to the canonical
@@ -295,18 +321,22 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
       so fixed32/fixed64 here always means an integer field — sfixed vs. fixed
       is then picked from the ivar sign, exactly like int32↔uint32.
 
-    Returns ``"plain"`` for anything unrecognised (safe no-op).  Cache-native only: in standalone ``--binary``
-    mode the stub's cross-image target can't be followed, so the field keeps
-    its canonical int default (unrefined, never wrong).  Memoised on ``ctx``."""
+    In standalone ``--binary`` mode the helper is an import stub into ProtocolBuffer.framework,
+    whose code is not in the binary; the stub's bound name names the writer
+    (:func:`_family_from_import`).  Memoised on ``ctx``."""
     if not helper_va:
-        return "plain"
+        return "unknown"
     cache = _ctx_cache(ctx, "_writeto_helper_family", dict)
     if helper_va in cache:
         return cache[helper_va]
 
-    fam = "plain"
+    fam = "unknown"
     try:
         target = _helper_real_target(ctx, helper_va)
+        named = _family_from_import(ctx, target)
+        if named is not None:
+            cache[helper_va] = named
+            return named
         # The family is decided at the helper's TAG-BUILD instruction (#59): whichever
         # of {sint value-shift, fixed bfi, plain varint tag} appears first wins, and we
         # STOP there — no scan budget decides the answer.  The field# is the 3rd arg
@@ -364,6 +394,8 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
                     # mov Rd, #imm  — remember; may be a fixed tag wire-type constant.
                     try:
                         movs[ops[0]] = _parse_imm(ops[1])
+                    except (NameError, ImportError):
+                        raise
                     except Exception:
                         pass
             # bfi <Rd>, <field-reg>, #3, #0x1d  — tag = (field << 3) | wt, wt in Rd.
@@ -375,6 +407,11 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
                 if wt == 1:
                     fam = "fixed64"
                     break
+                if wt in (0, 2):
+                    fam = "plain"      # a varint or length-delimited tag: no int refinement
+                    break
+        if fam == "unknown" and tag_shift_seen:
+            fam = "plain"              # the plain varint tag build, with no wire-type bfi after it
         if fam == "plain":
             # A plain varint helper: the signedness of a 32-bit value is in how it is
             # widened to the 64-bit varint (sxtw = int32, 32-bit mov = uint32).
@@ -382,10 +419,9 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     except (NameError, ImportError):
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
-        # Bad/odd binary input → safe `plain` default, but log so a real logic
-        # bug here (mislabelling sint/fixed as plain varint) is at least traceable.
+        # Unreadable helper: its fields are flagged as an unconfirmed integer encoding.
         log.debug("write-helper classify failed at 0x%x: %s", helper_va or 0, exc)
-        fam = "plain"
+        fam = "unknown"
     cache[helper_va] = fam
     return fam
 
@@ -443,9 +479,11 @@ def _ensure_writeto_indegree(ctx: BinaryContext, cl: ClassList) -> None:
         indeg, foreign = build_writeto_indegree(ctx, cl)
         _ctx_store(ctx, "_writeto_indeg", indeg)
         _ctx_store(ctx, "_writeto_foreign_imps", foreign)
+    except (NameError, ImportError):
+        raise
     except Exception as exc:
-        log.debug("writeTo indegree lazy pre-pass failed (%s); CFG walk disabled "
-                  "for this call", exc)
+        record_failed_pass(ctx, "writeTo indegree", exc,
+                           "the writeTo: walk is off: field numbers are ivar-order estimates")
 
 
 def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSet[int]":
@@ -461,8 +499,11 @@ def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSe
         return cached
     try:
         helpers = frozenset(_identify_string_write_helpers(ctx, cl))
+    except (NameError, ImportError):
+        raise
     except Exception as exc:
-        log.debug("string-write-helper lazy pre-pass failed (%s)", exc)
+        record_failed_pass(ctx, "string write helper", exc,
+                           "repeated string fields are not told from repeated bytes")
         helpers = frozenset()
     _ctx_store(ctx, "_string_write_helpers", helpers)
     return helpers

@@ -19,7 +19,7 @@ from proto.extractor import _repeated_encoding
 from proto.emitter import build_proto_files
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from tests.test_writeto_helper_family import (
-    _RegionCtx, _enc_adrp, _enc_add, _enc_br, _enc_mov, _enc_ret)
+    _RegionCtx, _enc_adrp, _enc_add, _enc_br, _enc_lsl, _enc_mov, _enc_ret)
 
 
 def _enc_mov_w(rd, rm):               # MOV Wd,Wm == ORR Wd,WZR,Wm (zero-extends)
@@ -43,6 +43,8 @@ class TestVarint32SignednessOffline(unittest.TestCase):
     TGT = 0x1a0002000
 
     def _classify(self, body):
+        # every plain varint helper builds its tag first: field# (x2 -> x21) << 3
+        body = _enc_mov(21, 2) + _enc_lsl(10, 21, 3, sf=0) + body
         d = (self.TGT & ~0xFFF) - (self.STUB & ~0xFFF)
         stub = _enc_adrp(16, d >> 12) + _enc_add(16, 16, self.TGT & 0xFFF) + _enc_br(16)
         return WH._classify_write_helper(_RegionCtx({self.STUB: stub, self.TGT: body}),
