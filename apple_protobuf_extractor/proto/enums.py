@@ -29,7 +29,7 @@ from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs
 from proto.dictrep_flow import Flow
 from proto.dispatch_eval import _in_image_text
-from proto.eval_tokens import SELF, opaque
+from proto.eval_tokens import SELF, OPAQUE, opaque
 from proto.arm64cfg   import _next_imp
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
@@ -317,7 +317,7 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
         return None
     try:
         flow = Flow(ctx, insns[:end + 1])
-        region = flow.run_from(0, {'x0': SELF}, opaque=opaque)
+        region = flow.run_from(0, {'x0': SELF}, objects=OPAQUE)
     except (NameError, ImportError):
         raise
     except Exception:

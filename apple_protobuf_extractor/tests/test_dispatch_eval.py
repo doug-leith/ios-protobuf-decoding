@@ -22,12 +22,13 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..'))
 
 from macho.disasm import Insn
-from proto.arm64_eval import Flow, _STACK_TOP
+from proto.arm64_eval import Flow, Objects, _STACK_TOP
 from proto import dispatch_eval as E
 from proto import eval_tokens as T
 
 CALL, CALL2 = '#0x9000', '#0x9100'           # callees outside the listing
 SELF = T.SELF
+_RETURNS = Objects(opaque=T.opaque, call_result=lambda k, target, x0: T.ret_value(k))
 
 
 def listing(*lines, base=0x1000):
@@ -63,7 +64,7 @@ class TestRunFromThroughCalls(unittest.TestCase):
             'mov x0, x19',
             f'bl {CALL2}',
             'ret')
-        r = Flow(None, insns).run_from(0, {'x0': SELF}, call_result=lambda k, target, x0: T.ret_value(k), opaque=T.opaque)
+        r = Flow(None, insns).run_from(0, {'x0': SELF}, objects=_RETURNS)
         got = calls_by_target(r)
         self.assertEqual(got[0x9000].args['x0'], SELF)
         self.assertEqual(got[0x9100].args['x0'], SELF)            # callee-saved copy survived
@@ -80,7 +81,7 @@ class TestRunFromThroughCalls(unittest.TestCase):
         insns, _ = listing(
             'mov w8, #1', 'cbz w8, @skip', f'bl {CALL}',
             'skip:', 'cbz x0, @other', f'bl {CALL2}', 'other:', 'ret')
-        r = Flow(None, insns).run_from(0, {'x0': SELF}, opaque=T.opaque)
+        r = Flow(None, insns).run_from(0, {'x0': SELF}, objects=T.OPAQUE)
         self.assertEqual(set(calls_by_target(r)), {0x9000, 0x9100})   # x0 opaque: both sides
         insns2, _ = listing('mov w8, #0', 'cbz w8, @skip', f'bl {CALL}', 'skip:', 'ret')
         self.assertEqual(calls_by_target(Flow(None, insns2).run_from(0, {})), {})
@@ -91,7 +92,7 @@ class TestOpaqueValues(unittest.TestCase):
 
     def run_x1(self, *body):
         insns, _ = listing(*body, f'bl {CALL}', 'ret')
-        r = Flow(None, insns).run_from(0, {'x0': SELF}, opaque=T.opaque)
+        r = Flow(None, insns).run_from(0, {'x0': SELF}, objects=T.OPAQUE)
         return calls_by_target(r)[0x9000].args.get('x1')
 
     def test_a_64_bit_copy_carries_it(self):
@@ -120,8 +121,9 @@ class TestObjectEscape(unittest.TestCase):
 
     def x1_at_adder(self, object_escape):
         insns, _ = listing(*self.BODY)
-        r = Flow(None, insns).run_from(0, {}, call_result=lambda k, target, x0: T.ret_value(k), opaque=T.opaque,
-                                       object_escape=object_escape)
+        r = Flow(None, insns).run_from(
+            0, {}, objects=Objects(opaque=T.opaque, call_result=_RETURNS.call_result,
+                                   object_escape=object_escape))
         return calls_by_target(r)[0x9100].args.get('x1')
 
     def test_a_slot_below_the_escaped_address_survives(self):
@@ -134,7 +136,7 @@ class TestObjectEscape(unittest.TestCase):
         insns, _ = listing('sub sp, sp, #0x80', 'mov x8, #5', 'str x8, [sp, #0x68]',
                            'add x1, sp, #0x60', f'bl {CALL}', 'ldr x1, [sp, #0x68]',
                            f'bl {CALL2}', 'ret')
-        r = Flow(None, insns).run_from(0, {}, object_escape=True)
+        r = Flow(None, insns).run_from(0, {}, objects=Objects(object_escape=True))
         self.assertNotIn('x1', calls_by_target(r)[0x9100].args)
 
 
@@ -174,7 +176,7 @@ class TestTailTargetsAndRejoin(unittest.TestCase):
 
     def test_a_branch_to_a_known_function_entry_is_a_tail_call(self):
         insns, lab = listing('mov x1, x2', 'b @next', 'next:', f'bl {CALL}', 'ret')
-        r = Flow(None, insns).run_from(0, {'x2': SELF}, opaque=T.opaque,
+        r = Flow(None, insns).run_from(0, {'x2': SELF}, objects=T.OPAQUE,
                                        tail_targets=frozenset({lab['next']}))
         (c,) = r.calls
         self.assertTrue(c.tail)

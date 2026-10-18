@@ -24,7 +24,7 @@ from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
 from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
                                range_from_unsigned_gate)
 from proto.arm64cfg import dominators
-from proto.eval_tokens import SELF, READER, opaque
+from proto.eval_tokens import SELF, READER, OPAQUE
 from proto.arm64_operands import NO_DEST, imm_operand, is_cond_branch, split_ops
 from proto.protoclass_set import _proto_class_set
 
@@ -69,7 +69,7 @@ def _find_readfrom_c_func(
     insns = insns[:end + 1] if end is not None else insns
     if not insns:
         return None
-    region = Flow(ctx, insns).run_from(0, {'x0': SELF, 'x2': READER}, opaque=opaque)
+    region = Flow(ctx, insns).run_from(0, {'x0': SELF, 'x2': READER}, objects=OPAQUE)
     if not region.calls:
         return None
     first = region.calls[0]

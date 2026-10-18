@@ -55,8 +55,8 @@ from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector
-from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, field_value,
-                               ret_value, call_result)
+from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, ret_value,
+                               object_model)
 from proto import dispatch as D
 from proto.models import record_analysis_failure
 
@@ -268,6 +268,7 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
     seen: Set[int] = set()
     entries = _as_entries(entries)
     tails = entries.members
+    objs = object_model(ctx)
 
     def descend(va: int, regs: Dict[str, int], depth: int) -> None:
         if va in seen or depth > _DESCEND_DEPTH:
@@ -278,8 +279,7 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
             return
         per_br = _seed_br_arms(ctx, insns)
         flow = D.decoded_flow(ctx, insns)
-        region = flow.run_from(0, regs, call_result=call_result(ctx), field_value=field_value, opaque=opaque,
-                               object_escape=True, tail_targets=tails)
+        region = flow.run_from(0, regs, objects=objs, tail_targets=tails)
         # A core extracts a field number on a path from ITS OWN entry (the window can hold
         # the function laid out after it).
         if any(flow._block_of.get(k) in region.blocks for k, _d in _lsr3_sites(flow)):
@@ -313,6 +313,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
     # class set when extraction has computed it (proto.protoclass_set caches it on ctx); a
     # message class whose readFrom: does not resolve to a core of its own is still one.
     known = set(core_index.values()) | set(getattr(ctx, "_proto_class_names_cache", None) or ())
+    objs = object_model(ctx)
 
     arms: Dict[int, Set[int]] = {}             # br address -> targets found by evaluation
     upto = 0
@@ -337,9 +338,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             if lsr_blk is None or lsr_blk not in idom:
                 continue
             slots_at: Dict[int, Dict[int, Tuple[int, int]]] = {}
-            base = flow.propagate(entry, [k], opaque=opaque, object_escape=True,
-                                  slots_out=slots_at, call_result=call_result(ctx),
-                                  field_value=field_value).get(k)
+            base = flow.propagate(entry, [k], objects=objs, slots_out=slots_at).get(k)
             if base is None:
                 continue                       # this lsr is unreachable from the entry
             base_slots = slots_at.get(k, {})
@@ -360,8 +359,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 continue
             default_n = max(cands) + 1
             run = lambda n, rejoin=frozenset(): flow.run_from(
-                k + 1, {**base, dest: n}, stop, call_result=call_result(ctx), field_value=field_value, opaque=opaque,
-                object_escape=True, slots=base_slots, rejoin=rejoin)
+                k + 1, {**base, dest: n}, stop, objects=objs, slots=base_slots, rejoin=rejoin)
             regions = {default_n: run(default_n)}
             # A field's run stops where it rejoins the unknown-field region: from there on the
             # code is every field's (and is subtracted below anyway).

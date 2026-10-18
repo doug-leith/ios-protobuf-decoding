@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from proto.arm64_eval import Objects
 from proto.callees import callee_name, RETURNS_ARGUMENT
 
 # Above every image address, below 2^48, and outside the stack partition.
@@ -44,3 +45,14 @@ def call_result(ctx):
             return x0
         return ret_value(k)
     return result
+
+
+#: Runs that only need to tell the tokens from numbers.
+OPAQUE = Objects(opaque=opaque)
+
+
+def object_model(ctx) -> Objects:
+    """The full object model of the readFrom: dispatch evaluator: tokens, ``self->ivar``
+    values, call results, and the object-escape stack rule."""
+    return Objects(opaque=opaque, field_value=field_value, call_result=call_result(ctx),
+                   object_escape=True)

@@ -20,7 +20,7 @@ import logging
 from collections import deque
 from itertools import product
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
@@ -244,6 +244,27 @@ class _Machine:
             del self.slots[a]
         if v is not None:
             self.slots[addr] = (size, v & ((1 << (8 * size)) - 1))
+
+
+@dataclass(frozen=True)
+class Objects:
+    """How a run (:meth:`Flow.run_from`, :meth:`Flow.propagate`) treats the objects it cannot
+    see into -- all optional: *opaque*, *field_value* and *object_escape* as in
+    :class:`_Machine`; *call_result(k, target, x0_before)*, the value of x0 after the call at
+    ``insns[k]`` (None: unknown) -- e.g. *x0_before* for a runtime function that returns its
+    argument (``objc_retain``), or an opaque token naming that call's result, so it can be
+    followed to later arguments."""
+    opaque: Optional[Callable[[Optional[int]], bool]] = None
+    field_value: Optional[Callable[[int, int], Optional[int]]] = None
+    call_result: Optional[Callable[[int, Optional[int], Optional[int]], Optional[int]]] = None
+    object_escape: bool = False
+
+    def machine(self, regs: Dict[str, int]) -> "_Machine":
+        return _Machine(regs, opaque=self.opaque, object_escape=self.object_escape,
+                        field_value=self.field_value)
+
+
+NO_OBJECTS = Objects()
 
 
 @dataclass
@@ -944,10 +965,9 @@ class Flow:
 
     # ── constant propagation over the whole function ────────────────────────
 
-    def propagate(self, entry: Dict[str, int], at: Iterable[int], opaque=None,
-                  object_escape: bool = False,
-                  slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None,
-                  call_result=None, field_value=None) -> Dict[int, Dict[str, int]]:
+    def propagate(self, entry: Dict[str, int], at: Iterable[int], objects: Objects = NO_OBJECTS,
+                  slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None
+                  ) -> Dict[int, Dict[str, int]]:
         """``{k: {register: value}}``: the registers known before each ``insns[k]`` in *at*
         when the function is entered with *entry* (say a flag argument's value) and sp at
         the frame's top; an index missing from the result is unreachable under *entry*.
@@ -957,13 +977,13 @@ class Flow:
         or the flags is known at a block iff every path into it that can execute agrees.  A
         branch whose condition is known follows only the side taken, so code that depends on
         *entry* is resolved the same way whether it was compiled to a ``csel`` or a branch.
-        *opaque*, *object_escape*: see :class:`_Machine`; *slots_out*, when given, receives the
-        stack slots known before each ``insns[k]`` in *at*; *call_result*: see :meth:`run_from`."""
+        *objects*: see :class:`Objects`; *slots_out*, when given, receives the stack slots known
+        before each ``insns[k]`` in *at*."""
         cfg = self.cfg
         want = set(at)
         if cfg.entry is None:
             return {}
-        start = _Machine(entry, opaque=opaque, object_escape=object_escape, field_value=field_value)
+        start = objects.machine(entry)
         start.put('sp', _STACK_TOP)
         wl = _Worklist()
         wl.push(cfg.entry, start)
@@ -972,7 +992,7 @@ class Flow:
             st = wl.states[blk].copy()
             first = self._first_in_block[blk]
             for k in range(first, first + len(cfg.blocks[blk])):
-                self._propagate_step(st, k, call_result)
+                self._propagate_step(st, k, objects.call_result)
             for succ in self._live_successors(blk, st):
                 wl.push(succ, st)
         out: Dict[int, Dict[str, int]] = {}
@@ -984,7 +1004,7 @@ class Flow:
                     out[k] = dict(st.regs)
                     if slots_out is not None:
                         slots_out[k] = dict(st.slots)
-                self._propagate_step(st, k, call_result)
+                self._propagate_step(st, k, objects.call_result)
         return out
 
     def _propagate_step(self, m: "_Machine", k: int, call_result=None) -> None:
@@ -1025,11 +1045,10 @@ class Flow:
         return [b] if b in succ else []
 
     def run_from(self, k0: int, regs: Dict[str, int], stop: FrozenSet[int] = frozenset(),
-                 opaque=None, object_escape: bool = False,
+                 objects: Objects = NO_OBJECTS,
                  slots: Optional[Dict[int, Tuple[int, int]]] = None,
                  tail_targets: FrozenSet[int] = frozenset(),
-                 rejoin: FrozenSet[int] = frozenset(), call_result=None,
-                 field_value=None) -> "Region":
+                 rejoin: FrozenSet[int] = frozenset()) -> "Region":
         """Run from ``insns[k0]`` with *regs* known (nothing else is) to every block it can
         reach without entering a block in *stop*, through calls, and record each call.
 
@@ -1041,13 +1060,9 @@ class Flow:
         slots.
         The result lists every call (``bl`` / ``blr`` / a ``b`` out of the function) with the
         argument registers x0-x7 known at it (opaque values included, see :class:`_Machine`),
-        and the blocks reached in first-visit order.  *object_escape*: see :class:`_Machine`;
+        and the blocks reached in first-visit order.  *objects*: see :class:`Objects`;
         *slots*: stack slots known at ``insns[k0]``.  A ``b`` to an address in *tail_targets*
         (known function entries) is a tail call even when that address lies in the window.
-        *call_result(k, target, x0_before)*, when given, is the value of x0 after the call at
-        ``insns[k]`` (None: unknown) -- e.g. *x0_before* for a runtime function that returns its
-        argument (``objc_retain``), or an opaque token naming that call's result, so it can be
-        followed to later arguments.
         *rejoin*: a path that has left this set of blocks stops when it enters it again (e.g. the
         blocks an unknown field number reaches: after a field's own handler, everything from
         there on is common to every field)."""
@@ -1077,7 +1092,8 @@ class Flow:
                     x0 = st.copy_of('x0')
                     target = (m_get_target(st, ins) if mn == 'blr' else _parse_imm(ins.op_str))
                     st.call()
-                    v = call_result(k, target, x0) if call_result is not None else None
+                    cr = objects.call_result
+                    v = cr(k, target, x0) if cr is not None else None
                     if v is not None:
                         st.put('x0', v)
             else:
@@ -1106,7 +1122,7 @@ class Flow:
                     region.br_targets.add((last.addr, v))
 
         # The partial first block runs once; its successors seed the fixpoint.
-        st0 = _Machine(regs, opaque=opaque, object_escape=object_escape, field_value=field_value)
+        st0 = objects.machine(regs)
         if 'sp' not in regs:
             st0.put('sp', _STACK_TOP)
         if slots:
