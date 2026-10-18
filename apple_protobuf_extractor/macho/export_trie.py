@@ -11,7 +11,7 @@ which is where callers branch to.
 """
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Iterator, Optional, Tuple
 
 EXPORT_SYMBOL_FLAGS_REEXPORT = 0x08
 EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER = 0x10
@@ -21,13 +21,12 @@ EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER = 0x10
 _MAX_NODES = 2_000_000
 
 
-def decode_export_trie(data: bytes) -> Dict[str, Tuple[int, int]]:
-    """``{symbol name: (flags, image offset)}`` for every non-re-export symbol in *data*.
-
-    *data* is the trie's bytes (offset 0 = root).  Malformed nodes are skipped rather than
-    raising, so a damaged trie yields the symbols it can still name."""
+def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
+    """``(symbol name, flags, image offset or None)`` for every terminal node of the trie in
+    *data* (offset 0 = root), depth-first; a re-export has no offset of its own (None).
+    Malformed nodes are skipped rather than raising, so a damaged trie yields the symbols it
+    can still name."""
     end = len(data)
-    out: Dict[str, Tuple[int, int]] = {}
 
     def uleb(p: int) -> Tuple[int, int]:
         res = shift = 0
@@ -52,9 +51,8 @@ def decode_export_trie(data: bytes) -> Dict[str, Tuple[int, int]]:
         term_size, p = uleb(node)
         if term_size:
             flags, q = uleb(p)
-            if not flags & EXPORT_SYMBOL_FLAGS_REEXPORT:
-                offset, _q = uleb(q)
-                out[prefix] = (flags, offset)
+            offset = None if flags & EXPORT_SYMBOL_FLAGS_REEXPORT else uleb(q)[0]
+            yield prefix, flags, offset
         p += term_size
         if p >= end:
             continue
@@ -67,4 +65,8 @@ def decode_export_trie(data: bytes) -> Dict[str, Tuple[int, int]]:
             edge = data[p:z].decode("utf-8", errors="replace")
             child, p = uleb(z + 1)
             stack.append((child, prefix + edge))
-    return out
+
+
+def decode_export_trie(data: bytes) -> Dict[str, Tuple[int, int]]:
+    """``{symbol name: (flags, image offset)}`` for every non-re-export symbol in *data*."""
+    return {name: (flags, off) for name, flags, off in iter_export_trie(data) if off is not None}

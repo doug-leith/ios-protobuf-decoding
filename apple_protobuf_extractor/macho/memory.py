@@ -717,8 +717,9 @@ class BinaryContext:
         protocol-conformance descriptors that never appear in the nlist table).
 
         Binary mode only — reads straight from ``_data`` at the linkedit file
-        offsets.  Cache images keep their symbols in the shared LINKEDIT, which
-        the vmaddr-only cache reader cannot address, so this is a no-op there.
+        offsets; a no-op for a cache image (whose exports
+        :meth:`macho.dyld_cache.DyldCacheReader.image_exports` reads from the
+        cache's shared LINKEDIT).
         Names are returned raw (mangled), e.g. the Swift conformance descriptor
         ``_$s14bookdatastored15PBPropertyValueV21InternalSwiftProtobuf7MessageAAMc``
         or the C++ ``__ZN6google8protobuf11MessageLite…``; callers pattern-match.
@@ -748,55 +749,15 @@ class BinaryContext:
         yield from self._iter_export_trie_names()
 
     def _iter_export_trie_names(self) -> Iterator[str]:
-        """DFS the dyld export trie, yielding each exported symbol name."""
+        """Every name in the binary's dyld export trie (re-exports included), depth-first."""
+        from .export_trie import iter_export_trie
         if not self._export_trie or not self._data:
             return
         base, size = self._export_trie
-        data = self._data
-        end = min(base + size, len(data))
-        if base <= 0 or base >= len(data):
+        if base <= 0 or base >= len(self._data):
             return
-
-        def _uleb(p: int) -> Tuple[int, int]:
-            result = shift = 0
-            while p < end:
-                b = data[p]; p += 1
-                result |= (b & 0x7F) << shift
-                if not (b & 0x80):
-                    break
-                shift += 7
-                if shift > 63:
-                    break
-            return result, p
-
-        # (node_file_offset, accumulated_name) — iterative DFS with a visit cap.
-        stack = [(base, "")]
-        seen = set()
-        steps = 0
-        while stack and steps < 1_000_000:
-            steps += 1
-            node, prefix = stack.pop()
-            if node < base or node >= end or node in seen:
-                continue
-            seen.add(node)
-            p = node
-            term_size, p = _uleb(p)
-            if term_size:
-                yield prefix            # this node terminates an exported symbol
-            children_at = p + term_size
-            if children_at >= end:
-                continue
-            nchild = data[children_at]
-            p = children_at + 1
-            for _ in range(nchild):
-                s_start = p
-                z = data.find(b'\x00', p, end)
-                if z < 0:
-                    p = end
-                    break
-                edge = data[s_start:z].decode('utf-8', errors='replace')
-                child_off, p = _uleb(z + 1)
-                stack.append((base + child_off, prefix + edge))
+        for name, _flags, _off in iter_export_trie(self._data[base:min(base + size, len(self._data))]):
+            yield name
 
     def find_cstring_in_section(
         self, segname: str, sectname: str, target: str

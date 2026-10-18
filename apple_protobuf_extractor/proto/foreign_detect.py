@@ -123,8 +123,8 @@ def swift_protobuf_messages(
     protocol, recovered from the export-trie conformance descriptors.
 
     Returns ``(message_types, enum_types, modules)``.  Binary mode only — relies on
-    ``ctx.iter_symbol_names()`` (the dyld export trie), which is empty for cache
-    images, so this returns empty there (no false negatives that matter: the user
+    ``ctx.iter_symbol_names()`` (nlist names and the dyld export trie), which is
+    empty for cache images, so this returns empty there (no false negatives that matter: the user
     can point the tool at the standalone binary)."""
     msgs: Set[str] = set()
     enums: Set[str] = set()

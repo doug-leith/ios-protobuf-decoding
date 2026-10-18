@@ -40,6 +40,7 @@ class FakeCache:
     load-command methods are DyldCacheReader's own."""
 
     image_containing = DyldCacheReader.image_containing
+    _segment_at = DyldCacheReader._segment_at
     image_dependencies = DyldCacheReader.image_dependencies
 
     def __init__(self):

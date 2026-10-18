@@ -38,6 +38,7 @@ import sys
 import warnings
 from typing import Dict, List, Optional, Set, Tuple
 
+from .memory import LC_DYLD_EXPORTS_TRIE, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_SEGMENT_64
 from .local_symbols import (
     load_image_local_symbols,
     load_image_symbol_addrs,
@@ -192,12 +193,8 @@ _HDR_IMG_TEXT_OFF   = 0x88
 _HDR_IMG_TEXT_CNT   = 0x90
 _MAX_IMAGES         = 65536    # sanity cap on imagesTextCount
 
-# Mach-O constants for image_sections() load-command walker
+# Mach-O constants for the image load-command walker (the LC_* command types are memory.py's)
 _MH_MAGIC_64        = 0xFEEDFACF  # little-endian 64-bit mach-o magic
-_LC_SEGMENT_64_CMD  = 0x19        # load command type for 64-bit segments
-_LC_DYLD_INFO        = 0x22        # dyld info (its export range is a trie)
-_LC_DYLD_INFO_ONLY   = 0x80000022
-_LC_DYLD_EXPORTS_TRIE = 0x80000033
 # load commands naming a dylib the image links (dylib_command: name offset at +8)
 _LC_LINKED_DYLIBS = frozenset((
     0x0C,          # LC_LOAD_DYLIB
@@ -907,7 +904,10 @@ class DyldCacheReader:
         """
         if not self._img_text_off or not self._img_text_cnt:
             return []
-        return list(self._iter_images())
+        memo = self.__dict__.get('_images_memo')
+        if memo is None:
+            memo = self._images_memo = list(self._iter_images())
+        return list(memo)
 
     def _iter_images(self):
         """Yield ``(load_vmaddr, path_str)`` for every imagesText entry."""
@@ -1070,41 +1070,10 @@ class DyldCacheReader:
         Obtain *mach_header_va* from :meth:`find_image_header` for a named
         framework, or supply an address found via another mechanism.
         """
-        # ── Step 1: read the 32-byte mach-o header ──────────────────────────
-        hdr_bytes = self.read_raw(mach_header_va, 32)
-        if not hdr_bytes or len(hdr_bytes) < 32:
-            return {}
-
-        magic = struct.unpack_from('<I', hdr_bytes, 0)[0]
-        if magic != _MH_MAGIC_64:
-            return {}
-
-        ncmds      = struct.unpack_from('<I', hdr_bytes, 16)[0]
-        sizeofcmds = struct.unpack_from('<I', hdr_bytes, 20)[0]
-
-        if ncmds == 0 or sizeofcmds < 8 or sizeofcmds > _MAX_SIZEOFCMDS:
-            return {}
-
-        # ── Step 2: read the load-command bytes ─────────────────────────────
-        # Load commands live immediately after the 32-byte header and are
-        # entirely within the __TEXT segment, well under any mapping boundary.
-        lc_data = self.read_raw(mach_header_va + 32, sizeofcmds)
-        if not lc_data:
-            return {}
-
-        # ── Step 3: walk load commands, collect LC_SEGMENT_64 entries ───────
         result: Dict[str, Tuple[int, int]] = {}
-        pos = 0
-        for _ in range(ncmds):
-            if pos + 8 > len(lc_data):
-                break
-            cmd, cmdsize = struct.unpack_from('<II', lc_data, pos)
-            if cmdsize < 8:
-                break
-            if cmd == _LC_SEGMENT_64_CMD:
-                result.update(_parse_segment64_lc(lc_data, pos))
-            pos += cmdsize
-
+        for cmd, body in self._image_load_commands(mach_header_va):
+            if cmd == LC_SEGMENT_64:
+                result.update(_parse_segment64_lc(body, 0))
         return result
 
     def _image_load_commands(self, mach_header_va: int) -> List[Tuple[int, bytes]]:
@@ -1144,13 +1113,13 @@ class DyldCacheReader:
         from .export_trie import decode_export_trie
         linkedit = trie = None
         for cmd, body in self._image_load_commands(mach_header_va):
-            if cmd == _LC_SEGMENT_64_CMD and len(body) >= 56 \
+            if cmd == LC_SEGMENT_64 and len(body) >= 56 \
                     and body[8:24].rstrip(b'\x00') == b'__LINKEDIT':
                 vmaddr, _vmsize, fileoff = struct.unpack_from('<QQQ', body, 24)
                 linkedit = (vmaddr, fileoff)
-            elif cmd == _LC_DYLD_EXPORTS_TRIE and len(body) >= 16:
+            elif cmd == LC_DYLD_EXPORTS_TRIE and len(body) >= 16:
                 trie = struct.unpack_from('<II', body, 8)
-            elif cmd in (_LC_DYLD_INFO, _LC_DYLD_INFO_ONLY) and len(body) >= 48 and trie is None:
+            elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and len(body) >= 48 and trie is None:
                 trie = struct.unpack_from('<II', body, 40)
         out: Dict[str, int] = {}
         if linkedit is not None and trie is not None and trie[1]:
@@ -1167,21 +1136,11 @@ class DyldCacheReader:
         The image is the one whose ``__TEXT`` segment holds *vmaddr*; its exports are read
         once (:meth:`image_exports`).  Lets a caller name a direct call into another image
         (``bl`` to libobjc's ``objc_retain_x2``), which the cache links without stubs."""
-        text = self.__dict__.get('_image_text_ranges')
-        if text is None:
-            text = []
-            for mh, _path in self.list_images():
-                bounds = self.image_sections(mh).get('__TEXT')
-                if bounds:
-                    text.append((bounds[0], bounds[1], mh))
-            text.sort()
-            self._image_text_ranges = text
-            self._image_text_starts = [t[0] for t in text]
-        i = bisect.bisect_right(self._image_text_starts, vmaddr) - 1
-        if i < 0 or not text[i][0] <= vmaddr < text[i][1]:
+        hit = self._segment_at(vmaddr, '__TEXT')
+        if hit is None:
             return None
         names = self.__dict__.setdefault('_export_names_by_addr', {})
-        mh = text[i][2]
+        mh = hit[2]
         if mh not in names:
             by_addr: Dict[int, str] = {}
             for name, va in sorted(self.image_exports(mh).items()):
@@ -1195,20 +1154,28 @@ class DyldCacheReader:
         the address, not a choice: following a pointer the cache builder bound (a class
         reference to another image's ``class_t``) and asking this names the image that
         defines the target.  The segment table is built once, on first use."""
-        segs = self.__dict__.get('_image_segment_ranges')
-        if segs is None:
+        hit = self._segment_at(vmaddr)
+        return None if hit is None else (hit[2], hit[3])
+
+    def _segment_at(self, vmaddr: int, segname: Optional[str] = None
+                    ) -> Optional[Tuple[int, int, int, str, str]]:
+        """``(start, end, mach_header vmaddr, path, segment name)`` of the image segment holding
+        *vmaddr* (only segments named *segname*, when given), or None.  One table of every
+        image's segments, built on first use (images' segments do not overlap)."""
+        tables = self.__dict__.setdefault('_segment_tables', {})
+        if segname not in tables:
             segs = []
             for mh, path in self.list_images():
                 for key, (start, end) in self.image_sections(mh).items():
-                    if '/' not in key:                  # a segment, not a section
-                        segs.append((start, end, mh, path))
+                    if '/' not in key and (segname is None or key == segname):
+                        segs.append((start, end, mh, path, key))
             segs.sort()
-            self._image_segment_ranges = segs
-            self._image_segment_starts = [r[0] for r in segs]
-        i = bisect.bisect_right(self._image_segment_starts, vmaddr) - 1
+            tables[segname] = (segs, [r[0] for r in segs])
+        segs, starts = tables[segname]
+        i = bisect.bisect_right(starts, vmaddr) - 1
         if i < 0 or not segs[i][0] <= vmaddr < segs[i][1]:
             return None
-        return segs[i][2], segs[i][3]
+        return segs[i]
 
     def image_dependencies(self, mach_header_va: int) -> List[str]:
         """Install names of the dylibs the image at *mach_header_va* links
