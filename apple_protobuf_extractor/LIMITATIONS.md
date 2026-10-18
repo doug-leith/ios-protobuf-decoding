@@ -347,14 +347,13 @@ and the guess was wrong where it could be checked:
 
 1. the field's `writeTo:` helper — the NSString helper is checked first and decides `repeated
    string` (`_resolve_repeated_field_type`);
-2. the readFrom: dispatch / adder->ivar lever (`ReadAllFrom` cores in the dispatch arms);
-3. the **element class-reference lever** (`_resolve_repeated_via_classrefs`): the reader loads the
-   element class (`[[Element alloc] init]`) right before calling the field's add-accessor — a direct
-   `bl`, or an `_objc_msgSend$<selector>` stub for old-style classes — applied only to fields written
-   by the message write helper;
-4. the inline-C-struct encoding (`GEORPFeatureHandle.styleAttributes` is now the named struct
+2. the readFrom: dispatch / adder->ivar lever (`proto/dispatch_eval.py`): the element class the
+   field's handler allocates (`[[Element alloc] init]`) and hands to the add-accessor, read from
+   the call arguments (a method, an `objc_direct` C function or an `_objc_msgSend$<selector>`
+   stub alike);
+3. the inline-C-struct encoding (`GEORPFeatureHandle.styleAttributes` is now the named struct
    message `RPFeatureHandleStyleAttribute`);
-5. otherwise the honest `repeated bytes` plus the "element type could not be determined" flag.
+4. otherwise the honest `repeated bytes` plus the "element type could not be determined" flag.
 
 Effect on the iPhone 8 artifacts: GeoServices 18 of 8048 fields changed (2 string fixes, 16 formerly
 unresolved `repeated bytes` now typed, e.g. `GEOPDTileList.tiles` -> `GEOTileCoordinate`), locationd 2

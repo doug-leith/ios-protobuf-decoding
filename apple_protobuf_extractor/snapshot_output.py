@@ -86,9 +86,6 @@ def capture(path):
             print(f"  {label}: SKIPPED (not found)")
             continue
         ctx, st, cl = loaded
-        for attr in ("_dispatch_arms_cache", "_wrapper_cluster_cache"):
-            if hasattr(ctx, attr):
-                delattr(ctx, attr)
         msgs = E.extract_all(ctx, st, cl)
         snap[label] = _snap_messages(msgs)
         print(f"  {label}: {len(snap[label])} fields")

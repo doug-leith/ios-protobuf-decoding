@@ -265,6 +265,19 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
     return by_br if per_br else arms
 
 
+def build_function_index(ctx: BinaryContext, cl: 'ClassList') -> None:
+    """Record on *ctx* every method IMP of the image (``_function_entries``) and every ivar's
+    offset-variable address (``_ivar_offset_slots``).  The readFrom: evaluator
+    (:mod:`proto.dispatch_eval`) uses the IMPs, with the ReadAllFrom cores, as function
+    boundaries and tail-call targets, and the slots to tell this class's ivars from others'.
+    Built once per extraction; :func:`_build_readfrom_core_index` calls it."""
+    entries = _ctx_cache(ctx, "_function_entries", set)
+    ivar_slots = _ctx_cache(ctx, "_ivar_offset_slots", set)
+    for cls in cl:
+        entries.update(m.imp for m in cls.methods if m.imp)
+        ivar_slots.update(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
+
+
 def _build_readfrom_core_index(
     ctx: BinaryContext,
     cl: 'ClassList',
@@ -301,16 +314,11 @@ def _build_readfrom_core_index(
     """
     from proto.protoclass_set import _proto_class_set
     index: Dict[int, str] = {}
-    # Every method IMP starts a function: the readFrom: evaluator (proto.dispatch_eval) uses
-    # these, with the cores below, as function boundaries and tail-call targets.
-    entries = _ctx_cache(ctx, "_function_entries", set)
-    ivar_slots = _ctx_cache(ctx, "_ivar_offset_slots", set)       # every class's, ditto
+    build_function_index(ctx, cl)
     # The image's proto classes: the PBCodable superclass closure as well as the name
     # heuristic (CoreParsec's ``_CP...`` classes are proto only through the closure).
     proto_classes = _proto_class_set(ctx, cl)
     for cls in cl:
-        entries.update(m.imp for m in cls.methods if m.imp)
-        ivar_slots.update(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
         if cls.is_meta or not (cls.name in proto_classes or _is_proto_class(cls)):
             continue
         core = _find_readfrom_c_func(ctx, cls)

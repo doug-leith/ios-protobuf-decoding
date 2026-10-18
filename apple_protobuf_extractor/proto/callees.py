@@ -30,18 +30,19 @@ def callee_name(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
         return memo[va]
     name: Optional[str] = None
     try:
-        if ctx.is_cache_backed:
-            from proto.write_helpers import _helper_real_target   # (import cycle via writeto)
-            reader = ctx._cache_reader
-            name = reader.export_name_at(va)
-            if name is None:
-                real = _helper_real_target(ctx, va)
-                if real != va:
-                    name = reader.export_name_at(real)
+        if getattr(ctx, "is_cache_backed", False):
+            reader = getattr(ctx, "_cache_reader", None)
+            if reader is not None:                   # (a cache context always has one)
+                from proto.write_helpers import _helper_real_target   # (import cycle via writeto)
+                name = reader.export_name_at(va)
+                if name is None:
+                    real = _helper_real_target(ctx, va)
+                    if real != va:
+                        name = reader.export_name_at(real)
         else:
             from proto.dispatch_eval import _import_name
             name = _import_name(ctx, va)
-    except (ValueError, KeyError, IndexError, AttributeError):
-        name = None                                  # no names available for this context
+    except (ValueError, KeyError, IndexError):
+        name = None                                  # unreadable bytes at va: no name
     memo[va] = name
     return name

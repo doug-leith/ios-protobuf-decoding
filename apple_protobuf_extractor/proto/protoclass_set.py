@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, FrozenSet, Optional, Set
 
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcClass
 from proto.protoclass_heuristic import _is_proto_class, va_cluster_closure
 
@@ -137,10 +137,7 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
             parent = by_va[sv].name if sv in by_va else _name(sv)
             if parent and parent not in _PB_ROOT_NAMES:
                 inherits[c.name] = parent
-        try:
-            ctx._proto_inherits = inherits
-        except Exception:
-            pass
+        _ctx_store(ctx, "_proto_inherits", inherits)
         # Classes the pure name/bind walk (anchor 1) did NOT independently reach,
         # split by WHICH non-structural path claimed them.  Both are ERRORS, not
         # footnotes: anchor 1 alone reproduces the full set on every corpus ever
@@ -155,11 +152,8 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         #     set solely because the per-class _is_proto_class score seeded it.
         _cluster_only = frozenset(anchor2_names - anchor1_names)
         _heuristic_only = frozenset(proto - anchor1_names - anchor2_names)
-        try:
-            ctx._proto_class_cluster_only = _cluster_only
-            ctx._proto_class_heuristic_only = _heuristic_only
-        except Exception:
-            pass
+        _ctx_store(ctx, "_proto_class_cluster_only", _cluster_only)
+        _ctx_store(ctx, "_proto_class_heuristic_only", _heuristic_only)
         return frozenset(proto)
 
     return _ctx_cache(ctx, "_proto_class_names_cache", _build)

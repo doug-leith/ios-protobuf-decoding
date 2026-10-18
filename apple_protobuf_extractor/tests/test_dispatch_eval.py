@@ -444,5 +444,48 @@ class TestIPhone8CoreParsec(_Live):
         self.assertEqual(ev.ivars(), {'_results': ('_CPSearchResultForFeedback', 2)})
 
 
+class TestEvaluateClassMemo(unittest.TestCase):
+    """The evaluation depends on the core index, so it is memoised only for the image's own
+    index (cached on ctx as _readfrom_core_index) and for an empty one (code review
+    2026-10-18: it used to be keyed by class alone, so a {} call could serve a later call
+    with the real index)."""
+
+    class _Ctx:
+        pass
+
+    class _Cls:
+        name, vmaddr, methods = 'GEOX', 0x1000, []
+
+    def setUp(self):
+        self.calls = []
+        self._saved = E._known_entries, E.find_cores
+        E._known_entries = lambda ctx, cls, idx: self.calls.append(len(idx)) or []
+        E.find_cores = lambda ctx, cls, entries: ([], [])
+
+    def tearDown(self):
+        E._known_entries, E.find_cores = self._saved
+
+    def test_empty_index_is_memoised(self):
+        ctx = self._Ctx()
+        a, b = E.evaluate_class(ctx, self._Cls, {}), E.evaluate_class(ctx, self._Cls, {})
+        self.assertIs(a, b)
+        self.assertEqual(self.calls, [0])
+
+    def test_image_index_is_memoised_separately_from_empty(self):
+        ctx = self._Ctx()
+        ctx._readfrom_core_index = {0x2000: 'GEOY'}
+        empty = E.evaluate_class(ctx, self._Cls, {})
+        image = E.evaluate_class(ctx, self._Cls, ctx._readfrom_core_index)
+        self.assertIsNot(empty, image)
+        self.assertIs(E.evaluate_class(ctx, self._Cls, ctx._readfrom_core_index), image)
+        self.assertEqual(self.calls, [0, 1])
+
+    def test_other_index_is_not_memoised(self):
+        ctx = self._Ctx()
+        E.evaluate_class(ctx, self._Cls, {0x2000: 'GEOY'})
+        E.evaluate_class(ctx, self._Cls, {0x3000: 'GEOZ'})
+        self.assertEqual(self.calls, [1, 1])
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional, Set
 
-from macho.memory    import BinaryContext, _ctx_cache
+from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcIvar
 from macho.disasm    import disasm, find_adrp_add_target, _parse_imm, _first_reg
 
@@ -102,74 +102,6 @@ def _identify_string_write_helpers(
             return string_helpers
 
     return string_helpers
-
-
-def _identify_message_write_helper(ctx: BinaryContext, cl: 'ClassList') -> Optional[int]:
-    """Binary-wide pre-pass: the write-helper VA used for a singular proto-MESSAGE
-    ivar (``@"<proto class>"``), or None.
-
-    The counterpart of :func:`_identify_string_write_helpers`: a message-typed ivar's
-    ``writeTo:`` call goes through the one message helper that every message field in
-    the binary shares (GeoServices: 1965 of 1965 singular message ivars use the same
-    helper; the string and bytes helpers are different).  Knowing it lets a caller tell
-    a field written as a sub-message from one written as bytes or a string -- e.g. to
-    accept an element class recovered from a class-reference only for message-written
-    fields.  Stops at the first class that yields a helper."""
-    _ensure_writeto_indegree(ctx, cl)
-    for cls in cl:
-        if cls.is_meta or not _is_proto_class(cls):
-            continue
-        cands = []
-        for iv in cls.ivars:
-            enc = iv.type_enc or ""
-            if iv.name and enc.startswith('@"') and enc.endswith('"'):
-                target = cl.find(enc[2:-1])
-                if target is not None and not target.is_meta and _is_proto_class(target):
-                    cands.append(iv)
-        if not cands:
-            continue
-        all_field_ivars = [iv for iv in cls.ivars if not _is_proto_flags_ivar(iv)
-                           and iv.name and iv.name not in _INTERNAL_PB_IVARS]
-        helpers: Dict[str, int] = {}
-        _extract_writeto_field_numbers(ctx, cls, all_field_ivars, _out_helpers=helpers)
-        for iv in cands:
-            h = helpers.get(iv.name)
-            if h:
-                return h
-    return None
-
-
-def _ensure_message_write_helper(ctx: BinaryContext, cl: 'ClassList') -> Optional[int]:
-    """Lazily build + cache :func:`_identify_message_write_helper` on ``ctx`` (same
-    contract as :func:`_ensure_string_write_helpers`; a built-but-empty result is
-    cached as ``(None,)`` and not retried)."""
-    cached = getattr(ctx, "_message_write_helper", None)
-    if cached is not None:
-        return cached[0]
-    try:
-        helper = _identify_message_write_helper(ctx, cl)
-    except Exception as exc:
-        log.debug("message-write-helper lazy pre-pass failed (%s)", exc)
-        helper = None
-    try:
-        ctx._message_write_helper = (helper,)
-    except Exception:
-        pass
-    return helper
-
-
-def _same_write_helper(ctx: BinaryContext, a: Optional[int], b: Optional[int]) -> bool:
-    """True iff *a* and *b* are the same write helper: equal addresses, or equal real
-    targets (a per-callsite stub island has a different VA at every call site but one
-    shared target, see :func:`_helper_real_target`).  False if either is unknown."""
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    try:
-        return _helper_real_target(ctx, a) == _helper_real_target(ctx, b)
-    except Exception:
-        return False
 
 
 def _find_string_write_helper(
@@ -509,8 +441,8 @@ def _ensure_writeto_indegree(ctx: BinaryContext, cl: ClassList) -> None:
         return
     try:
         indeg, foreign = build_writeto_indegree(ctx, cl)
-        ctx._writeto_indeg = indeg
-        ctx._writeto_foreign_imps = foreign
+        _ctx_store(ctx, "_writeto_indeg", indeg)
+        _ctx_store(ctx, "_writeto_foreign_imps", foreign)
     except Exception as exc:
         log.debug("writeTo indegree lazy pre-pass failed (%s); CFG walk disabled "
                   "for this call", exc)
@@ -532,8 +464,5 @@ def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSe
     except Exception as exc:
         log.debug("string-write-helper lazy pre-pass failed (%s)", exc)
         helpers = frozenset()
-    try:
-        ctx._string_write_helpers = helpers
-    except Exception:
-        pass
+    _ctx_store(ctx, "_string_write_helpers", helpers)
     return helpers

@@ -1,13 +1,14 @@
 """
-tests/test_repeated_element_types.py -- the element class-reference lever for
-repeated-message fields (proto.repeated._resolve_repeated_via_classrefs) and the
+tests/test_repeated_element_types.py -- element types of repeated-message fields:
+the precedence in proto.extractor._resolve_repeated_element_type (the readFrom:
+evaluator's adder->ivar result, outranked by an ABI-confirmed string writer) and the
 string-writer-first rule of _resolve_repeated_field_type.
 
 Two layers:
 
-* synthetic unit tests of the window scanner / resolver (no artifacts needed);
-* live regression + calibration tests against the GeoServices dyld-cache image
-  and the standalone locationd binary (artifact-gated like the other live tests).
+* synthetic unit tests of the precedence (no artifacts needed);
+* live regression tests against the GeoServices dyld-cache image and the standalone
+  locationd binary (artifact-gated like the other live tests).
 
 Background (see report_on_apple_location_services/notes/codex_eval/
 extractor_networks_type_bug.md): a generated reader builds each repeated-message
@@ -87,86 +88,45 @@ def _bl(addr, target):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# The class-reference lever's write-helper guard (proto.extractor).  The lever itself
-# is the dispatch evaluator's adder->ivar result now (tests/test_dispatch_eval.py); the
-# window-pairing implementation these sections tested was retired 2026-10-15.
+# Precedence in proto.extractor._resolve_repeated_element_type.  The element class comes
+# from the readFrom: evaluator's adder->ivar result (tests/test_dispatch_eval.py); the
+# separate class-reference lever and its write-helper guard were deleted 2026-10-18, as
+# that lever returned exactly the evaluator's result.
 # ══════════════════════════════════════════════════════════════════════════════
 
-MSG_HELPER, BYTES_HELPER, STR_HELPER = 0xAC24, 0xABAC, 0xAC18
+STR_HELPER = 0xAC18
 
 
-class TestClassrefLeverGuard(unittest.TestCase):
-    """GEODirectionsRequest.trafficApiResponses is a genuine ``repeated bytes`` field
-    (bytes writer) but its reader sits next to a singular GEORouteAttributes field, so
-    a class reference is in the window.  The lever result must only be applied to a
-    field the MESSAGE helper writes."""
+class TestRepeatedElementPrecedence(unittest.TestCase):
 
-    def _call(self, *, helper, classref=True, dispatch_ivars=None, message_helper=MSG_HELPER,
-              rr=None):
+    def _call(self, *, dispatch_ivars=None, rr=None):
         import proto.extractor as X
         from proto.repeated import _RepeatedTypeResult
         from proto.models import FieldLabel
         ivar = ObjcIvar(name='_items', type_enc='@"NSMutableArray"', offset=8, size=8)
         rr = rr or _RepeatedTypeResult(type_name='bytes', type_class=None,
                                        element_unresolved=True)
-        with patch.object(X, '_resolve_repeated_field_type', return_value=rr), \
-             patch('proto.write_helpers._helper_real_target', side_effect=lambda c, v: v):
+        with patch.object(X, '_resolve_repeated_field_type', return_value=rr):
             return X._resolve_repeated_element_type(
                 None, None, ivar, 'items', FieldLabel.REPEATED, 'NSMutableArray',
                 'NSMutableArray', 1, True,
                 dispatch_elements={}, dispatch_unambiguous=False,
                 dispatch_ivars=dispatch_ivars or {}, instance_method_names=set(),
-                metaclass=None, string_helper=STR_HELPER,
-                wt_helpers={'_items': helper} if helper is not None else {},
-                classref_ivars={'_items': ('GEOElem', 0)} if classref else {},
-                message_helper=message_helper)
+                metaclass=None, string_helper=STR_HELPER, wt_helpers={})
 
-    def test_applied_when_written_by_message_helper(self):
-        self.assertEqual(self._call(helper=MSG_HELPER), ('GEOElem', 'GEOElem', None))
-
-    def test_not_applied_to_bytes_written_field(self):
-        tn, tc, note = self._call(helper=BYTES_HELPER)
-        self.assertEqual((tn, tc), ('bytes', None))
-
-    def test_not_applied_when_field_writer_unknown(self):
-        self.assertEqual(self._call(helper=None)[0], 'bytes')
-
-    def test_not_applied_when_message_helper_unknown(self):
-        self.assertEqual(self._call(helper=MSG_HELPER, message_helper=None)[0], 'bytes')
-
-    def test_string_writer_outranks_lever(self):
-        from proto.repeated import _RepeatedTypeResult
-        rr = _RepeatedTypeResult(type_name='string', type_class=None, abi_confirmed=True)
-        self.assertEqual(self._call(helper=MSG_HELPER, rr=rr)[0], 'string')
-
-    def test_dispatch_lever_outranks_classref_lever(self):
-        out = self._call(helper=MSG_HELPER, dispatch_ivars={'_items': ('GEOFromDispatch', 3)})
+    def test_dispatch_ivar_supplies_the_element(self):
+        out = self._call(dispatch_ivars={'_items': ('GEOFromDispatch', 3)})
         self.assertEqual(out[0], 'GEOFromDispatch')
 
+    def test_no_dispatch_result_stays_bytes(self):
+        self.assertEqual(self._call()[0], 'bytes')
 
-class TestSameWriteHelper(unittest.TestCase):
-
-    def setUp(self):
-        from proto.write_helpers import _same_write_helper
-        self.fn = _same_write_helper
-
-    def test_equal_addresses(self):
-        self.assertTrue(self.fn(None, 0x1000, 0x1000))
-
-    def test_unknown_is_never_same(self):
-        self.assertFalse(self.fn(None, None, 0x1000))
-        self.assertFalse(self.fn(None, 0x1000, None))
-        self.assertFalse(self.fn(None, None, None))
-
-    def test_different_stubs_with_same_real_target(self):
-        # per-callsite stub islands: different VAs, one shared target
-        with patch('proto.write_helpers._helper_real_target', return_value=0x9999):
-            self.assertTrue(self.fn(None, 0x1000, 0x2000))
-
-    def test_different_real_targets(self):
-        with patch('proto.write_helpers._helper_real_target',
-                   side_effect=lambda c, v: v):
-            self.assertFalse(self.fn(None, 0x1000, 0x2000))
+    def test_string_writer_outranks_dispatch(self):
+        # an ABI-confirmed element type (a distinct string write helper) is never overridden
+        from proto.repeated import _RepeatedTypeResult
+        rr = _RepeatedTypeResult(type_name='string', type_class=None, abi_confirmed=True)
+        out = self._call(dispatch_ivars={'_items': ('GEOFromDispatch', 3)}, rr=rr)
+        self.assertEqual(out[0], 'string')
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -250,35 +210,6 @@ class TestGeoServicesRepeatedElementTypes(unittest.TestCase):
                 if f.type_name == 'bytes' and f.type_inference_note
                 and 'PairList' in m.class_name]
         self.assertEqual(left, [])
-
-    # -- calibration gate: lever vs the structural dispatch lever --------------
-
-    def test_lever_agrees_with_dispatch_lever_wherever_both_resolve(self):
-        """The class-ref lever must reproduce the (independent) adder->ivar /
-        ReadAllFrom-core lever exactly on the fields both resolve.  Prototype
-        calibration: 516/516 agreed, 0 disagreed."""
-        from proto.dispatch import _build_readfrom_core_index
-        from proto.repeated import (_resolve_repeated_via_classrefs,
-                                    _resolve_repeated_via_dispatch_ivars)
-        core_index = _build_readfrom_core_index(self.ctx, self.cl)
-        agree, disagree = 0, []
-        for m in self.msgs.values():
-            c = self.cl.find(m.class_name)
-            if c is None:
-                continue
-            ref = _resolve_repeated_via_dispatch_ivars(self.ctx, c, core_index)
-            if not ref:
-                continue
-            got = _resolve_repeated_via_classrefs(self.ctx, c, self.cl, core_index)
-            for ivn, (elem, _fn) in ref.items():
-                if ivn in got:
-                    if got[ivn][0] == elem:
-                        agree += 1
-                    else:
-                        disagree.append((m.class_name, ivn, elem, got[ivn][0]))
-        self.assertEqual(disagree, [])
-        self.assertGreaterEqual(agree, 400,
-                                'calibration set unexpectedly small -- gate is vacuous')
 
 
 @unittest.skipUnless(os.path.isfile(_LOCATIOND), 'locationd binary not found')

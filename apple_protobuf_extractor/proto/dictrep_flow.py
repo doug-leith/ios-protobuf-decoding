@@ -144,21 +144,54 @@ def _mask(tok: str) -> int:
     return 0xFFFFFFFF if tok.strip().lower().startswith('w') else 0xFFFFFFFFFFFFFFFF
 
 
-def _eval_cond(cond: str, flags: Tuple[int, int, int]) -> Optional[bool]:
-    """Truth of *cond* after ``cmp a, b`` (flags = (a, b, bit width))."""
-    a, b, width = flags
-    m = (1 << width) - 1
+#: The condition flags N, Z, C, V (each 0 or 1), exactly as the instruction that set them left
+#: them.  A literal ``#nzcv`` (``ccmp``) and the C = V = 0 of ``tst``/``ands`` are expressible.
+Nzcv = Tuple[int, int, int, int]
+
+
+def _nzcv_sub(a: int, b: int, bits: int) -> Nzcv:
+    """Flags of ``a - b`` (``cmp``, ``subs``, ``ccmp``)."""
+    m = (1 << bits) - 1
     ua, ub = a & m, b & m
-    sign = 1 << (width - 1)
-    sa, sb = (ua - (1 << width) if ua & sign else ua), (ub - (1 << width) if ub & sign else ub)
+    r = (ua - ub) & m
+    return (r >> (bits - 1), int(r == 0), int(ua >= ub), ((ua ^ ub) & (ua ^ r)) >> (bits - 1) & 1)
+
+
+def _nzcv_add(a: int, b: int, bits: int) -> Nzcv:
+    """Flags of ``a + b`` (``cmn``, ``adds``, ``ccmn``)."""
+    m = (1 << bits) - 1
+    ua, ub = a & m, b & m
+    r = (ua + ub) & m
+    return (r >> (bits - 1), int(r == 0), int(ua + ub > m), (~(ua ^ ub) & (ua ^ r)) >> (bits - 1) & 1)
+
+
+def _nzcv_logic(r: int, bits: int) -> Nzcv:
+    """Flags of a logical result (``tst``, ``ands``, ``bics``): C = V = 0."""
+    r &= (1 << bits) - 1
+    return (r >> (bits - 1), int(r == 0), 0, 0)
+
+
+def _eval_cond(cond: str, flags: Nzcv) -> Optional[bool]:
+    """Truth of condition code *cond* under *flags*; None for an unknown code."""
+    n, z, c, v = flags
     table = {
-        'eq': ua == ub, 'ne': ua != ub,
-        'hs': ua >= ub, 'cs': ua >= ub, 'lo': ua < ub, 'cc': ua < ub,
-        'hi': ua > ub, 'ls': ua <= ub,
-        'ge': sa >= sb, 'lt': sa < sb, 'gt': sa > sb, 'le': sa <= sb,
-        'mi': sa - sb < 0, 'pl': sa - sb >= 0,
+        'eq': z, 'ne': not z, 'hs': c, 'cs': c, 'lo': not c, 'cc': not c,
+        'mi': n, 'pl': not n, 'vs': v, 'vc': not v,
+        'hi': c and not z, 'ls': not c or z,
+        'ge': n == v, 'lt': n != v, 'gt': not z and n == v, 'le': z or n != v,
+        'al': True, 'nv': True,
     }
-    return table.get(cond)
+    r = table.get(cond)
+    return None if r is None else bool(r)
+
+
+#: Instructions that set the condition flags.  Any of them the evaluator does not model (or
+#: models only in some operand forms) makes the flags unknown, so a later branch on them is
+#: undecided rather than decided on an earlier comparison's flags.
+_FLAG_SETTERS = frozenset((
+    'cmp', 'cmn', 'tst', 'ccmp', 'ccmn', 'adds', 'subs', 'ands', 'bics', 'adcs', 'sbcs',
+    'negs', 'ngcs', 'fcmp', 'fcmpe', 'fccmp', 'fccmpe', 'setf8', 'setf16', 'rmif', 'cfinv',
+    'axflag', 'xaflag', 'msr'))
 
 
 class _Abort(Exception):
@@ -199,7 +232,7 @@ class _Machine:
         self.slots: Dict[int, Tuple[int, int]] = {}
         self.escaped = False
         self.escape_lo: Optional[int] = None
-        self.flags: Optional[Tuple[int, int, int]] = None
+        self.flags: Optional[Nzcv] = None
 
     def copy(self) -> "_Machine":
         m = _Machine(self.regs, self.fallback, self.opaque, self.object_escape, self.field_value)
@@ -481,17 +514,13 @@ class Flow:
             if base is None or v is None:
                 return None
             return ((base & ~(0xFFFF << sh)) | ((v & 0xFFFF) << sh)) & _mask(ops[0])
-        if mn in ('add', 'sub') and len(ops) >= 3:
-            rn = _norm_reg(ops[1])
-            a = self.const_before(d, rn) if rn else None
-            if a is None:
-                return None
-            if ops[2].startswith('#'):
-                b = _imm_operand(ops, 2)
-            else:
-                rm = _norm_reg(ops[2])
-                b = self.const_before(d, rm) if rm else None
-            if b is None:
+        if mn in ('add', 'sub') and len(ops) in (3, 4):
+            def getc(tok: str) -> Optional[int]:
+                r = _norm_reg(tok)
+                v = self.const_before(d, r) if r else None
+                return None if v is None else v & _mask(tok)
+            a, b = getc(ops[1]), _operand2(ops, 2, getc)
+            if a is None or b is None:
                 return None
             return (a + b if mn == 'add' else a - b) & _mask(ops[0])
         return None
@@ -664,8 +693,9 @@ class Flow:
         elif mn in ('add', 'sub') and len(ops) >= 3:      # 4th operand: ``lsl #12`` of an immediate
             rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
             if rs in st and rd:
-                c = (_imm_operand(ops, 2) if ops[2].startswith('#')
-                     else _signed(self._const_reg(k, ops[2]), ops[2]))
+                raw = _operand2(ops, 2, lambda tok: self._const_reg(k, tok))
+                c = raw if ops[2].startswith('#') or raw is None else \
+                    _signed(raw & _mask(ops[0]), ops[0])
                 if c is not None:
                     new = (rd, st[rs] + (c if mn == 'add' else -c))
         for r in _writes(ins):
@@ -778,13 +808,23 @@ class Flow:
         Anything not modelled makes the registers it writes unknown."""
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         get, put = m.get, m.put
-        if mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12``
-            a = get(ops[0])
-            b = _imm_operand(ops, 1) if ops[1].startswith('#') else get(ops[1])
-            if b is not None and mn == 'cmn':       # flags of a + b, as `adds` below
-                b = -b
-            m.flags = (a, b, 32 if ops[0].startswith('w') else 64) \
-                if a is not None and b is not None else None
+        if mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12`` / ``w9, lsl #2``
+            a, b = get(ops[0]), _operand2(ops, 1, get)
+            m.flags = None if a is None or b is None else \
+                (_nzcv_sub if mn == 'cmp' else _nzcv_add)(a, b, _bits(ops[0]))
+        elif mn in ('ccmp', 'ccmn') and len(ops) == 4:     # ccmp a, b, #nzcv, cond
+            c = None if m.flags is None else _eval_cond(ops[3], m.flags)
+            if c is None:
+                m.flags = None
+            elif c:
+                a = get(ops[0])
+                b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
+                m.flags = None if a is None or b is None else \
+                    (_nzcv_sub if mn == 'ccmp' else _nzcv_add)(a, b, _bits(ops[0]))
+            else:
+                lit = _parse_imm(ops[2])
+                m.flags = None if lit is None else \
+                    ((lit >> 3) & 1, (lit >> 2) & 1, (lit >> 1) & 1, lit & 1)
         elif mn in ('mov', 'movz') and len(ops) == 2:
             put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else m.copy_of(ops[1]))
         elif mn == 'movn' and len(ops) >= 2:
@@ -798,14 +838,8 @@ class Flow:
         elif mn in ('adrp', 'adr') and len(ops) == 2:
             v = (parse_adrp(ins.op_str) or (None, None))[1] if mn == 'adrp' else _parse_imm(ops[1])
             put(ops[0], v)
-        elif mn in ('add', 'sub') and len(ops) >= 3:
-            a = get(ops[1])
-            if ops[2].startswith('#'):
-                b = _imm_operand(ops, 2)
-            else:
-                b = get(ops[2])
-                if b is not None and len(ops) > 3:
-                    b = _shifted(b, ops[3])
+        elif mn in ('add', 'sub') and len(ops) in (3, 4):
+            a, b = get(ops[1]), _operand2(ops, 2, get)
             put(ops[0], None if a is None or b is None else (a + b if mn == 'add' else a - b))
         elif mn == 'csel' and len(ops) == 4:
             if m.flags is None:
@@ -817,28 +851,27 @@ class Flow:
             a = get(ops[1])
             n = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
             put(ops[0], None if a is None or n is None else _shift(mn, a, n, ops[0]))
-        elif mn in ('and', 'orr', 'eor') and len(ops) >= 3:
+        elif mn in ('and', 'orr', 'eor', 'ands') and len(ops) in (3, 4):
             a = get(ops[1])
-            b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
-            if b is not None and len(ops) > 3 and not ops[2].startswith('#'):
-                b = _shifted(b, ops[3])
-            put(ops[0], None if a is None or b is None
-                else {'and': a & b, 'orr': a | b, 'eor': a ^ b}[mn])
+            b = _parse_imm(ops[2]) if ops[2].startswith('#') else _operand2(ops, 2, get)
+            r = None if a is None or b is None else \
+                {'and': a & b, 'ands': a & b, 'orr': a | b, 'eor': a ^ b}[mn]
+            put(ops[0], r)
+            if mn == 'ands':
+                m.flags = None if r is None else _nzcv_logic(r, _bits(ops[0]))
         elif mn == 'ubfx' and len(ops) == 4:
             a, lsb, width = get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
             put(ops[0], None if a is None or lsb is None or not width
                 else (a >> lsb) & ((1 << width) - 1))
-        elif mn == 'tst' and len(ops) == 2:          # Z <=> (a & b) == 0
+        elif mn == 'tst' and len(ops) in (2, 3):     # tst a, b [, shift]: flags of a & b
             a = get(ops[0])
-            b = _parse_imm(ops[1]) if ops[1].startswith('#') else get(ops[1])
-            m.flags = ((a & b), 0, 32 if ops[0].startswith('w') else 64) \
-                if a is not None and b is not None else None
-        elif mn in ('subs', 'adds') and len(ops) == 3:
-            a = get(ops[1])
-            b = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
+            b = _parse_imm(ops[1]) if ops[1].startswith('#') else _operand2(ops, 1, get)
+            m.flags = None if a is None or b is None else _nzcv_logic(a & b, _bits(ops[0]))
+        elif mn in ('subs', 'adds') and len(ops) in (3, 4):
+            a, b = get(ops[1]), _operand2(ops, 2, get)
             if a is not None and b is not None:
-                width = 32 if ops[0].startswith('w') else 64
-                m.flags = (a, b if mn == 'subs' else -b, width)
+                bits = _bits(ops[0])
+                m.flags = (_nzcv_sub if mn == 'subs' else _nzcv_add)(a, b, bits)
                 put(ops[0], a - b if mn == 'subs' else a + b)
             else:
                 m.flags = None
@@ -871,6 +904,8 @@ class Flow:
         else:
             for r in _writes(ins):
                 put(r, None)
+            if mn in _FLAG_SETTERS:                 # an unmodelled flag-setter, or form of one
+                m.flags = None
 
     def _field_load(self, m: "_Machine", mem: str) -> Optional[int]:
         """``m.field_value(object, offset)`` for a 64-bit load from an opaque object at a known
@@ -1431,7 +1466,56 @@ def _imm_operand(ops: List[str], i: int) -> Optional[int]:
     return v
 
 
-def _shifted(v: int, op: str) -> int:
-    """Apply a shifted-register operand (``lsl #n``) to *v*."""
-    toks = op.split()
-    return (v << (_parse_imm(op) or 0)) if toks and toks[0] == 'lsl' else v
+def _bits(tok: str) -> int:
+    """Width of register operand *tok*: 32 for a w register, else 64."""
+    return 32 if tok.strip().lower().startswith('w') else 64
+
+
+#: Extended-register operand forms: (source bits, sign-extends).
+_EXTENDS = {'uxtb': (8, False), 'uxth': (16, False), 'uxtw': (32, False), 'uxtx': (64, False),
+            'sxtb': (8, True), 'sxth': (16, True), 'sxtw': (32, True), 'sxtx': (64, True)}
+
+
+def _apply_shift(v: int, reg_tok: str, mod: str) -> Optional[int]:
+    """*v* (register *reg_tok*'s content) under a second-operand modifier: a shifted register
+    (``lsl``/``lsr``/``asr``/``ror #n``) or an extended register (``uxtb`` .. ``sxtx [#n]``).
+    None for a modifier this does not know, so the result is unknown rather than wrong."""
+    toks = mod.strip().lower().split(None, 1)
+    if not toks:
+        return v
+    kind = toks[0]
+    amt = 0
+    if len(toks) > 1:
+        amt = _parse_imm(toks[1].strip())
+        if amt is None:
+            return None
+    bits = _bits(reg_tok)
+    mask = (1 << bits) - 1
+    v &= mask
+    if kind == 'lsl':
+        return v << amt
+    if kind == 'lsr':
+        return v >> amt
+    if kind == 'asr':
+        return (v - (1 << bits) if v >> (bits - 1) else v) >> amt
+    if kind == 'ror':
+        amt %= bits
+        return ((v >> amt) | (v << (bits - amt))) & mask if amt else v
+    if kind in _EXTENDS:
+        width, signed = _EXTENDS[kind]
+        x = v & ((1 << width) - 1)
+        if signed and x >> (width - 1):
+            x -= 1 << width
+        return x << amt
+    return None
+
+
+def _operand2(ops: List[str], i: int, get) -> Optional[int]:
+    """Value of the flexible second operand at ``ops[i]``: an immediate (with an optional
+    ``lsl #12``) or a register read with *get*, shifted / extended by ``ops[i + 1]``."""
+    if ops[i].startswith('#'):
+        return _imm_operand(ops, i)
+    v = get(ops[i])
+    if v is None or len(ops) <= i + 1:
+        return v
+    return _apply_shift(v, ops[i], ops[i + 1])

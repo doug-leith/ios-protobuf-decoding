@@ -60,7 +60,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 # Direct internal dependencies.  proto.extractor is no longer a re-export facade:
 # each consumer imports the symbol it needs from the module that defines it
 # (proto.protocore / dispatch / repeated / enums / writeto / config, macho.*).
-from macho.memory    import BinaryContext, _ctx_cache
+from macho.memory    import BinaryContext, _ctx_cache, _ctx_store, reset_ctx_caches
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
@@ -71,7 +71,7 @@ from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
     _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree,
-    _ensure_string_write_helpers, _ensure_message_write_helper, _same_write_helper,
+    _ensure_string_write_helpers,
 )
 from proto.protocore import (
     _is_proto_flags_ivar, _is_real_field_ivar, _type_from_enc,
@@ -84,7 +84,7 @@ from proto.protoclass_heuristic import _is_proto_class, check_no_heuristic_detec
 from proto.dispatch  import _build_readfrom_core_index
 from proto.repeated  import (
     _resolve_repeated_via_dispatch, _resolve_repeated_via_dispatch_ivars,
-    _resolve_repeated_field_type, _resolve_repeated_via_classrefs,
+    _resolve_repeated_field_type,
 )
 from proto.structfields import finalize_struct_fields, record_struct_site
 from proto.mapfields import (
@@ -394,10 +394,7 @@ def _ensure_readfrom_core_index(ctx: BinaryContext, cl: ClassList) -> Dict[int, 
     except Exception as exc:
         log.debug("readFrom-core-index lazy pre-pass failed (%s)", exc)
         index = {}
-    try:
-        ctx._readfrom_core_index = index
-    except Exception:
-        pass
+    _ctx_store(ctx, "_readfrom_core_index", index)
     return index
 
 
@@ -432,23 +429,6 @@ def _resolve_dispatch_context(
     _n_real_fields = sum(1 for _iv in field_ivars if _proto_name(_iv.name))
     unambiguous = (_n_real_fields == 1 and len(dispatch_elements) == 1)
     return dispatch_elements, dispatch_ivars, unambiguous
-
-
-def _resolve_classref_context(
-    ctx: BinaryContext, cls: ObjcClass, cl: ClassList,
-    readfrom_core_index: "Optional[Dict[int, str]]",
-) -> "Dict[str, Tuple[str, int]]":
-    """``{ivar_name: (element_class, field_number)}`` from the element class-reference
-    lever (:func:`proto.repeated._resolve_repeated_via_classrefs`).  Kept apart from
-    the dispatch context because its result is only trustworthy for a field whose
-    writeTo: helper is the MESSAGE helper (see :func:`_resolve_repeated_element_type`):
-    the lever reads a class reference near the add-accessor call, which a neighbouring
-    singular field can also provide for a repeated bytes/string field."""
-    try:
-        return _resolve_repeated_via_classrefs(ctx, cls, cl, readfrom_core_index or {})
-    except Exception as exc:
-        log.debug("class-ref ivar resolve failed for %s: %s", cls.name, exc)
-        return {}
 
 
 def _is_backing_store_phantom(
@@ -544,6 +524,8 @@ def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
       * every method name on *cls* and on the classes between it and the ancestor
         resolved, so that "no ``writeTo:``" is a fact rather than an unresolved name;
       * the ancestor in this image, with its ``writeTo:`` (else: cannot tell); and
+      * no ``readFrom:`` on *cls* or an intermediate class (a message the client only reads
+        is defined by what its own ``readFrom:`` reads); and
       * that ``writeTo:`` sending no selector *cls* or an intermediate class implements
         (:func:`proto.writeto.writeto_sent_selectors`; None there -- a truncated walk,
         an indirect call, an unentered thunk -- is "cannot tell").
@@ -554,12 +536,20 @@ def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
     if cls.get_method("writeTo:") is not None:
         return None
     below: Set[str] = set()
+    seen: Set[int] = set()
     cur = cls
     while True:
+        if cur.vmaddr in seen:                       # a malformed superclass cycle
+            return None
+        seen.add(cur.vmaddr)
         if any(m.name is None for m in cur.methods):
             return None
         if cur is not cls and cur.get_method("writeTo:") is not None:
             break
+        if cur.get_method("readFrom:") is not None:
+            # A message the client only reads is defined by its readFrom:, which may read
+            # fields the inherited writeTo: never writes: cannot tell.
+            return None
         below.update(m.name for m in cur.methods)
         parent = cl.find(cur.superclass_name) if cur.superclass_name else None
         if parent is None:
@@ -745,7 +735,6 @@ def _resolve_repeated_element_type(
     ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
     *, dispatch_elements, dispatch_unambiguous, dispatch_ivars,
     instance_method_names, metaclass, string_helper, wt_helpers,
-    classref_ivars=None, message_helper=None,
 ):
     """Resolve a repeated field's element type (dispatch-first, then heuristic).
 
@@ -779,12 +768,6 @@ def _resolve_repeated_element_type(
         _disp = next(iter(dispatch_elements.values()))
     if _disp is None and ivar.name in dispatch_ivars:
         _disp = dispatch_ivars[ivar.name][0]
-    if (_disp is None and classref_ivars and ivar.name in classref_ivars
-            and _same_write_helper(ctx, wt_helpers.get(ivar.name), message_helper)):
-        # Element class from the reader's class-reference load next to the
-        # add-accessor call, applied only to a field written by the message helper
-        # (a repeated bytes/string field can have an unrelated class ref nearby).
-        _disp = classref_ivars[ivar.name][0]
 
     _rr = _resolve_repeated_field_type(
         ivar, pname, instance_method_names, metaclass, cl, ctx,
@@ -858,7 +841,6 @@ def extract_proto_message(
         string_write_helpers = _ensure_string_write_helpers(ctx, cl)
     if readfrom_core_index is _AUTO:
         readfrom_core_index = _ensure_readfrom_core_index(ctx, cl)
-    _message_helper = _ensure_message_write_helper(ctx, cl)
 
     # Resolve the two threaded knobs: prefixes default to the canonical set; the
     # enum-debug writer is simply absent (a no-op) when the caller passes none.
@@ -961,7 +943,6 @@ def extract_proto_message(
     # ── Principled repeated-<message> element types (readFrom: dispatch) ───────
     dispatch_elements, dispatch_ivars, _dispatch_unambiguous = _resolve_dispatch_context(
         ctx, cls, readfrom_core_index, field_ivars)
-    _classref_ivars = _resolve_classref_context(ctx, cls, cl, readfrom_core_index)
 
     # ── Build ProtoField list ─────────────────────────────────────────────────
     # Build a set of field numbers already taken by confirmed fields so that
@@ -1040,7 +1021,6 @@ def extract_proto_message(
             instance_method_names=instance_method_names,
             metaclass=metaclass,
             string_helper=_string_helper, wt_helpers=_wt_helpers,
-            classref_ivars=_classref_ivars, message_helper=_message_helper,
         )
 
         # protobuf map<> field: remember its entry writer for the post-extraction
@@ -1286,22 +1266,10 @@ def extract_all(
     _check_selectors_resolved(ctx, cl)
     _warn_if_foreign_protobuf(ctx, cl)
 
-    # Reset per-extraction memoisation caches so a BinaryContext reused across
-    # two extractions cannot serve stale cluster/dispatch results.  These attrs
-    # are declared on BinaryContext; setattr is guarded for any context-like
-    # object that does not allow attribute assignment.
-    for _cache_attr in ("_wrapper_cluster_cache", "_dispatch_arms_cache",
-                        "_writeto_indeg", "_writeto_foreign_imps",
-                        "_string_write_helpers", "_message_write_helper", "_readfrom_core_index",
-                        "_dictrep_truncated_classes", "_proto_class_names_cache",
-                        "_proto_inherits", "_proto_class_heuristic_only",
-                        "_proto_class_cluster_only", "_helper_votes",
-                        "_helper_canon", "_map_writers", "_struct_sites",
-                        "_dictrep_names", "_diagnostics"):
-        try:
-            setattr(ctx, _cache_attr, None)
-        except Exception:
-            pass
+    # Reset every per-extraction memoisation cache (each one registers itself when it is
+    # created: macho.memory._ctx_cache / _ctx_store), so a BinaryContext reused across two
+    # extractions cannot serve stale results.
+    reset_ctx_caches(ctx)
 
     # Resolve the proto-class set ONCE, up front (memoised on ctx, so the per-class
     # calls below reuse it), then render the structural-detection verdict for the
@@ -1328,8 +1296,8 @@ def extract_all(
     # can run the walk.  Built ONCE here — building it per class would be O(n^2).
     try:
         _wt_indeg, _wt_foreign = build_writeto_indegree(ctx, cl)
-        ctx._writeto_indeg = _wt_indeg
-        ctx._writeto_foreign_imps = _wt_foreign
+        _ctx_store(ctx, "_writeto_indeg", _wt_indeg)
+        _ctx_store(ctx, "_writeto_foreign_imps", _wt_foreign)
         log.debug("writeTo indegree pre-pass: %d branch targets, %d method IMPs",
                   len(_wt_indeg), len(_wt_foreign))
     except Exception as exc:
@@ -1348,7 +1316,8 @@ def extract_all(
 
     # Pre-pass: build the {ReadAllFrom vmaddr -> class name} index that drives
     # the principled repeated-<message> element-type resolver.
-    readfrom_core_index: Dict[int, str] = _build_readfrom_core_index(ctx, cl)
+    readfrom_core_index: Dict[int, str] = _ctx_store(ctx, "_readfrom_core_index",
+                                                     _build_readfrom_core_index(ctx, cl))
     log.debug("readFrom core index: %d classes", len(readfrom_core_index))
 
     messages: List[ProtoMessage] = []

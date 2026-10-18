@@ -42,7 +42,7 @@ from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import BinaryContext, _ctx_cache, _ctx_store
 from proto.arm64cfg import build_blocks, parse_adrp, split_ops
 from proto.callees import callee_name
 from proto.dictrep_flow import _writes, reg_name, _parse_mem
@@ -657,7 +657,7 @@ def writer_reachable_ivars(ctx: BinaryContext, cl: ClassList, cls: ObjcClass
     wf = getattr(ctx, "_writer_flow", None)
     if wf is None or wf.cl is not cl:
         wf = WriterFlow(ctx, cl)
-        ctx._writer_flow = wf
+        _ctx_store(ctx, "_writer_flow", wf)
     try:
         return wf.reachable_ivars(cls)
     except (NameError, ImportError):

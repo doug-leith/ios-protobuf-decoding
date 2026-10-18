@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from macho.memory     import BinaryContext, _ctx_cache
+from macho.memory     import BinaryContext, _ctx_cache, _ctx_store
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from macho.disasm     import disasm, Insn, _parse_imm
@@ -403,7 +403,7 @@ def _dictrep_body(ctx: BinaryContext, imp: int) -> Optional[List[Insn]]:
     memo = getattr(ctx, "_dictrep_imps_sorted", None)
     if memo is None or memo[0] is not imps:
         memo = (imps, sorted(imps))
-        ctx._dictrep_imps_sorted = memo
+        _ctx_store(ctx, "_dictrep_imps_sorted", memo)
     end = _next_imp(memo[1], imp)
     return disasm(ctx, imp, max_insns=max(1, (end - imp) // 4), stop_at_ret=False)
 

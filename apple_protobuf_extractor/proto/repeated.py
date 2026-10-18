@@ -42,8 +42,7 @@ def _repeated_element_type(
     ``GEOLogMsgEventNetwork`` and ``TRANSITPbLocationFingerprintsV1`` took the sibling
     class -- and everything it resolved is now recovered from the binary:
     the readFrom: dispatch / adder->ivar lever (``_resolve_repeated_via_dispatch_ivars``),
-    the element class-reference lever (``_resolve_repeated_via_classrefs``), the write
-    helper (string), or the inline-struct encoding.  A field none of them resolves stays
+    the write helper (string), or the inline-struct encoding.  A field none of them resolves stays
     the honest ``repeated bytes`` (flagged by the caller).
     """
     pname = _proto_name(ivar.name)
@@ -219,29 +218,6 @@ def _msgsend_stub_selector(ctx: BinaryContext, va: int) -> Optional[str]:
     cache[va] = sel
     return sel
 
-
-def _resolve_repeated_via_classrefs(
-    ctx: BinaryContext,
-    cls: ObjcClass,
-    cl: ClassList,
-    core_index: Dict[int, str],
-) -> Dict[str, Tuple[str, int]]:
-    """Bind ``{ivar_name: (element_class, field_number)}`` from the element class a field's
-    readFrom: handler allocates and appends -- for readers that call no ``<Class>ReadAllFrom``
-    core (small inline readers, ``objc_msgSend``-ing ones).  The evaluator
-    (:mod:`proto.dispatch_eval`) reads both the allocated class and the append from each
-    handler's call arguments, so this is its adder->ivar result, kept as a separate entry
-    point because the caller applies it only to a field written by the MESSAGE write helper.
-
-    (The former lever paired the class references seen since the previous adder call with
-    each adder call site in instruction order.  Measured 2026-10-15 against the evaluator over
-    every class of three builds: it bound nothing the golden schema confirms that the evaluator
-    misses, and its 3 iPhone 8 extras were all wrong -- string/bytes fields next to a message
-    field -- held back only by that write-helper guard.)"""
-    if not core_index:
-        return {}
-    from proto.dispatch_eval import evaluate_class
-    return evaluate_class(ctx, cls, core_index).ivars()
 
 def _resolve_repeated_via_dispatch(
     ctx: BinaryContext,
@@ -451,7 +427,7 @@ def _resolve_repeated_field_type(
 
     3. Otherwise the field stays as ``"bytes"`` (the safe fallback), flagged by the
        caller as an unresolved element; the caller's readFrom: dispatch / adder->ivar
-       lever and element class-reference lever may still supply the class first.
+       lever may still supply the class first.
 
     The former name-suffix guess (Strategy 2) and the pool-suffix refinement (an
     exact suffix match against the pool of all ``+xyzType`` classes, applied on top of

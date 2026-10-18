@@ -173,15 +173,46 @@ def _ctx_cache(ctx, attr, factory):
     Uses ``is None`` (not truthiness) so an already-cached EMPTY container is returned
     rather than rebuilt.  If *ctx* rejects attribute assignment (e.g. a ``__slots__``
     or read-only stub), the freshly built value is returned UNCACHED so the caller
-    still works — just without cross-call memoisation."""
+    still works — just without cross-call memoisation.
+
+    *attr* is registered as a per-extraction cache (:func:`reset_ctx_caches`)."""
+    _CTX_CACHE_ATTRS.add(attr)
     val = getattr(ctx, attr, None)
     if val is None:
         val = factory()
         try:
             setattr(ctx, attr, val)
-        except Exception:
+        except (AttributeError, TypeError):
             pass
     return val
+
+
+#: Every attribute a module has memoised per-extraction state under on a context, recorded
+#: when the cache is created (:func:`_ctx_cache`, :func:`_ctx_store`), so
+#: :func:`reset_ctx_caches` clears all of them without a hand-kept list that falls behind
+#: the code.  A cache never created in this process needs no reset.
+_CTX_CACHE_ATTRS: set = set()
+
+
+def _ctx_store(ctx, attr, value):
+    """Store *value* as the per-extraction cache *attr* on *ctx* (for caches built in one
+    piece rather than through :func:`_ctx_cache`) and register *attr* for reset."""
+    _CTX_CACHE_ATTRS.add(attr)
+    try:
+        setattr(ctx, attr, value)
+    except (AttributeError, TypeError):
+        pass
+    return value
+
+
+def reset_ctx_caches(ctx) -> None:
+    """Clear every registered per-extraction cache on *ctx*, so a context reused for a second
+    extraction cannot serve results memoised by the first."""
+    for attr in sorted(_CTX_CACHE_ATTRS):
+        try:
+            setattr(ctx, attr, None)
+        except (AttributeError, TypeError):
+            pass
 
 
 # ─── BinaryContext ────────────────────────────────────────────────────────────
@@ -224,13 +255,10 @@ class BinaryContext:
         # symtab.  Binary mode only; None in cache mode.
         self._export_trie: Optional[Tuple[int, int]] = None
 
-        # Per-extraction memoisation caches owned by proto.extractor.  Declared
-        # here (rather than monkey-patched lazily) so the attribute is a single,
-        # discoverable source of truth.  proto.extractor.extract_all() resets
-        # these at the start of every run, so reusing one BinaryContext across
-        # multiple extractions cannot leak stale results.  None == empty.
-        self._wrapper_cluster_cache: Optional[dict] = None
-        self._dispatch_arms_cache:   Optional[dict] = None
+        # Per-extraction memoisation caches owned by proto.*, declared here so the
+        # attributes are discoverable.  proto.extractor.extract_all() clears every
+        # registered cache at the start of a run (reset_ctx_caches), so reusing one
+        # BinaryContext across extractions cannot leak stale results.  None == empty.
         # Names of classes whose -[cls _dictionaryRepresentation:] disassembly hit
         # the _DICTREP_MAX_INSNS budget, so dictRep enum recovery may be incomplete;
         # surfaced as ProtoMessage.enum_recovery_truncated.  None == empty.
@@ -243,9 +271,6 @@ class BinaryContext:
         # extract_proto_message callers (extract_all builds + passes them directly).
         # None == not yet built; an empty set/dict is a valid built result.
         self._string_write_helpers:  Optional[frozenset] = None
-        # (helper_va_or_None,) once built; None == not yet built (see
-        # proto.write_helpers._ensure_message_write_helper).
-        self._message_write_helper:  Optional[tuple] = None
         self._readfrom_core_index:   Optional[dict] = None
 
         (_, cputype, cpusubtype, _filetype,

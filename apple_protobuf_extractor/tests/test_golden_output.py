@@ -118,15 +118,10 @@ for _label, _loader in _ARTIFACTS:
     setattr(TestGoldenOutput, f"test_golden_{_label}",
             _make_test(_label, _loader))
 
-# NOTE (mutation-testing audit, c7b5994): test_golden_CoreLocationProtobuf was
-# flagged as unable to discriminate c7b5994's BinaryContext cache-reset fix
-# (_wrapper_cluster_cache/_dispatch_arms_cache) because each generated golden
-# test here loads a FRESH context and calls extract_all() exactly once -- the
-# reset fix only matters when one context is reused across two extract_all
-# calls. Verified: tests/test_extract_cache_reset.py::TestExtractAllResetsCaches
-# ::test_stale_caches_are_reset does exactly that (stale cache manually seeded,
-# one ctx, extract_all() called, caches asserted reset) -- so no change needed
-# here; the mechanism has real coverage elsewhere.
+# NOTE: each generated golden test here loads a FRESH context and calls extract_all()
+# exactly once, so it cannot discriminate the per-extraction cache reset (which only
+# matters when one context is reused across two extract_all calls).  That mechanism is
+# covered by tests/test_extract_cache_reset.py (registry, reset, and no direct ctx stores).
 
 
 if __name__ == "__main__":

@@ -203,8 +203,8 @@ class ClassDispatch:
 # ── function bodies ─────────────────────────────────────────────────────────
 
 def _known_entries(ctx, cls, core_index: Dict[int, str]) -> List[int]:
-    """Sorted addresses known to start a function: every method IMP (stamped on *ctx* by
-    :func:`proto.dispatch._build_readfrom_core_index`), every ReadAllFrom core and *cls*'s own
+    """Sorted addresses known to start a function: every method IMP (recorded on *ctx* by
+    :func:`proto.dispatch.build_function_index`), every ReadAllFrom core and *cls*'s own
     methods.  Functions do not overlap, so a function ends at the next one (the CFG-reachable
     end alone runs a tail ``b`` into the function it jumps to, e.g. a ``-readFrom:`` wrapper into
     the engine laid out after it)."""
@@ -624,13 +624,26 @@ def _writes_foreign_object(ctx, flow: Flow, blocks: Set[int], calls, own_slots: 
 
 def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
     """Decode *cls*'s readFrom: dispatch (see the module docstring).  Memoised per class on
-    *ctx*: the element-by-number and element-by-ivar consumers share one evaluation."""
+    *ctx*: the element-by-number and element-by-ivar consumers share one evaluation.  The
+    result depends on *core_index*, so it is memoised only for the image's own index (the
+    one cached on *ctx* as ``_readfrom_core_index``) and for an empty one; any other index
+    is evaluated afresh."""
     from macho.memory import _ctx_cache
+    if not core_index:
+        key = (cls.vmaddr, "empty")
+    elif core_index is getattr(ctx, "_readfrom_core_index", None):
+        key = (cls.vmaddr, "image")
+    else:
+        key = None
     memo = _ctx_cache(ctx, "_dispatch_eval_cache", dict)
-    if cls.vmaddr in memo:
-        return memo[cls.vmaddr]
+    if key is not None and key in memo:
+        return memo[key]
     out = ClassDispatch(cls.name)
-    memo[cls.vmaddr] = out
+    if key is not None:
+        memo[key] = out
+    if getattr(ctx, "_function_entries", None) is None:
+        out.notes.append("function index not built (proto.dispatch.build_function_index): "
+                         "function boundaries from the core index and the class's own methods only")
     entries = _known_entries(ctx, cls, core_index)
     cores, notes = find_cores(ctx, cls, entries)
     out.notes.extend(notes)

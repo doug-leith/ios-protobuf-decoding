@@ -78,6 +78,21 @@ class TestInheritedWriteToOwner(unittest.TestCase):
         cl, child, _ = _family()
         self.assertIsNone(self._owner(cl, child, None)[0])
 
+    def test_own_readfrom_cannot_tell(self):
+        # A message the client only reads is defined by its readFrom:, not by the inherited
+        # writeTo:; a class that overrides readFrom: may read fields its parent never writes.
+        cl, child, _ = _family(child_methods=(("name", 0x3000), ("readFrom:", 0x3100)))
+        self.assertIsNone(self._owner(cl, child)[0])
+
+    def test_readfrom_on_intermediate_class_cannot_tell(self):
+        cl, child, _ = _family(mid=(("readFrom:", 0x2800),))
+        self.assertIsNone(self._owner(cl, child)[0])
+
+    def test_superclass_cycle_terminates(self):
+        a = _cls(0x100, "GEOA", 0x200, "GEOB", [("name", 0x3000)])
+        b = _cls(0x200, "GEOB", 0x100, "GEOA", [("other", 0x3100)])
+        self.assertIsNone(self._owner(ClassList([a, b]), a)[0])
+
 
 class TestSerialisedByEmission(unittest.TestCase):
     def _render(self, msg):
