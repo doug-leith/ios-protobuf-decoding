@@ -508,17 +508,13 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
 
 
 def _slots_loaded(ctx, va: Optional[int]) -> FrozenSet[int]:
-    """The ivar-offset-variable addresses the function at *va* loads (``adrp`` + ``ldrsw``)."""
+    """The ivar-offset-variable addresses the function at *va* loads (``adrp`` + ``ldrsw``),
+    over its whole body (:func:`_function_insns`, bounded by the image's function index)."""
     if va is None:
         return frozenset()
     memo = _ctx_cache(ctx, "_dispatch_eval_slot_loads", dict)
     if va not in memo:
-        try:
-            ins = disasm(ctx, va, max_insns=256, stop_at_ret=True)
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            ins = []
+        ins = _function_insns(ctx, va, entries=D.function_entries(ctx))
         memo[va] = frozenset(sl for _i, sl in ivar_slot_loads(ins))
     return memo[va]
 

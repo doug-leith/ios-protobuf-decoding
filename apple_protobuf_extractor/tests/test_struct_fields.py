@@ -359,20 +359,38 @@ class TestInlineStructWrites(_Patched):
         insns, br, layout, var = self._bracket(
             _SESSIONID_WRITETO, '{GEOSessionID="_high"Q"_low"Q}', 0x1e1dd6328)
         self.assertEqual((br.number, br.callees), (10, ()))
-        w = SF.decode_inline_writes(insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {8: 1, 0: 2})
 
     def test_array_members_including_out_of_line_ones_are_found(self):
         insns, br, layout, var = self._bracket(
             _GENERICTILE_WRITETO, '^{GEOGenericTile=IIi{?=b1b1b1}}', 0x1e1ddfbe4)
         self.assertEqual(br.number, 4)
-        w = SF.decode_inline_writes(insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 3, 8: 1, 4: 2})
+
+    def test_a_double_member_is_traced_by_data_flow_not_by_distance(self):
+        # The double is loaded into a callee-saved register long before its write and copied
+        # into d0 just ahead of it (number in w1, value in v0): reaching definitions through
+        # the fmov find the member however far back the load sits.
+        listing = (0x1000, [
+            ('str', 'xzr, [sp, #0x48]'), ('add', 'x1, sp, #0x48'), ('mov', 'x0, x19'),
+            ('mov', 'w2, #0xa'), ('bl', '#0x18dbdab88'),
+            ('adrp', 'x8, #0x1e1dd6000'), ('ldrsw', 'x8, [x8, #0x328]'), ('add', 'x23, x21, x8'),
+            ('ldr', 'd8, [x23]'), *[('add', 'x9, x9, #1')] * 12, ('fmov', 'd0, d8'),
+            ('mov', 'x0, x19'), ('mov', 'w1, #1'), ('bl', '#0x18dbdac40'),
+            ('ldr', 'w1, [x23, #8]'), ('mov', 'x0, x19'), ('mov', 'w2, #2'), ('bl', '#0x18dbdac3c'),
+            ('add', 'x1, sp, #0x48'), ('mov', 'x0, x19'), ('bl', '#0x18dbdab94'), ('ret', '')])
+        insns, br, layout, var = self._bracket(listing, '{GEOFix="_lat"d"_n"i}', 0x1e1dd6328)
+        self.assertEqual(br.number, 10)
+        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        self.assertEqual(SF.match_layout(layout, w), {0: 1, 8: 2})
 
     def test_wrong_offset_variable_binds_nothing(self):
         insns, br, layout, _ = self._bracket(
             _SESSIONID_WRITETO, '{GEOSessionID="_high"Q"_low"Q}', 0x1e1dd6328)
-        self.assertEqual(SF.decode_inline_writes(insns, br, lambda a: a == 0xdead0000, layout), [])
+        self.assertEqual(
+            SF.decode_inline_writes(None, insns, br, lambda a: a == 0xdead0000, layout), [])
 
 
 # Real listing: the loop in -[GEOCoarseLocationRing _dictionaryRepresentation:] that builds one
@@ -1004,7 +1022,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
         loads = SF.track_struct_loads(insns, max(br.region), var, True, window=set(br.region))
         # the array-pointer load through &self->_points is not a member; the two element loads are
         self.assertEqual(sorted(loads.values()), [(0, 4), (4, 4)])
-        w = SF.decode_inline_writes(insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 1, 4: 2})
 
     def test_a_by_value_struct_through_add_is_still_the_struct(self):

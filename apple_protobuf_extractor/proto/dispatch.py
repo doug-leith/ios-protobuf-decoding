@@ -223,6 +223,21 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
     return set().union(*by_br.values())
 
 
+def listing_flow(ctx: BinaryContext, insns: List["Insn"]):
+    """The :class:`proto.arm64_eval.Flow` of an instruction listing, each ``br`` reaching its
+    own decoded table (:func:`_jump_table_arm_addrs`).  Memoised per list on *ctx*; built
+    afresh (and with no tables, which need the image) when *ctx* is None."""
+    from proto.arm64_eval import Flow
+    if ctx is None:
+        return Flow(None, list(insns), br_arms={})
+    cache = _ctx_cache(ctx, "_listing_flows", dict)
+    hit = cache.get(id(insns))
+    if hit is None or hit[0] is not insns:
+        hit = (insns, Flow(ctx, list(insns), br_arms=_jump_table_arm_addrs(ctx, insns, per_br=True)))
+        cache[id(insns)] = hit
+    return hit[1]
+
+
 def build_function_index(ctx: BinaryContext, cl: 'ClassList') -> None:
     """Record on *ctx* every method IMP of the image (``_function_entries``) and every ivar's
     offset-variable address (``_ivar_offset_slots``).  The readFrom: evaluator

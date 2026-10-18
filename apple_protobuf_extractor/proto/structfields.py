@@ -54,7 +54,7 @@ from proto import arm64_eval, dictrep_flow
 from proto.callees import stub_selector
 from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
-from proto.dispatch import _jump_table_arm_addrs
+from proto.dispatch import _jump_table_arm_addrs, listing_flow
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
@@ -171,11 +171,10 @@ _WRITER_MAX_BLOCKS = 64
 _WRITER_BLOCK_INSNS = 128
 # [cap:INPUT-SANITY — verified 2026-10-18] How far (bytes) a local branch may reach from the
 # writer's entry and still be a block of the same function rather than a tail call into
-# another one, and how many instructions back from a write call the value load may sit.
-# Raising them x4 (0x800 -> 0x2000, 12 -> 48) changed no output on any of the 12
+# another one.  Raising it x4 (0x800 -> 0x2000) changed no output on any of the 12
 # ios_decoder/protos targets or iOS 27 / macOS 27 GeoServices.
 _WRITER_LOCAL_SPAN = 0x800
-_VALUE_LOAD_WINDOW = 12
+
 
 _LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
 _BRANCH_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
@@ -228,20 +227,6 @@ def _writer_insns(ctx, entry: int) -> List:
                     work.append(t)
                 break
     return [out[a] for a in sorted(out)]
-
-
-def _dest_kind(ins) -> Optional[str]:
-    """Which argument register an instruction defines: ``'int'`` for x1/w1, ``'fp'`` for
-    d0/s0 (a floating-point value argument), else None."""
-    ops = split_ops(ins.op_str)
-    if not ops or ins.mnemonic.startswith('st') or ins.mnemonic in ('cmp', 'cmn', 'tst'):
-        return None
-    d = ops[0]
-    if d in ('x1', 'w1'):
-        return 'int'
-    if d in ('d0', 's0') or d.startswith('v0.'):
-        return 'fp'
-    return None
 
 
 # The serialiser's two arguments as opaque tokens for the evaluation (any two values the
@@ -497,26 +482,27 @@ def track_struct_loads(insns: Sequence, last: int, is_ivar_offset, is_array: boo
     return out
 
 
-def decode_inline_writes(insns: Sequence, bracket: Bracket, is_ivar_offset,
+def decode_inline_writes(ctx, insns: Sequence, bracket: Bracket, is_ivar_offset,
                          layout: StructLayout) -> List[MemberWrite]:
     """The member writes of a struct the compiler serialised INLINE in the owner's ``writeTo:``
     (no struct-writer function): between the begin/end marks each member is
     ``load [struct + offset] ; write(field#)``, the struct located through the ivar's offset
-    variable (:func:`track_struct_loads`).  Only loads that resolve to a struct member count;
-    a write fed by anything else is skipped and the layout match (:func:`match_layout`)
-    rejects an incomplete struct."""
+    variable (:func:`track_struct_loads`).  As in :func:`decode_struct_writer`, the AAPCS64
+    argument positions say where the value is -- x1 with the field number in w2, or v0 with it
+    in w1 -- and it must trace, by reaching definitions through copies (:func:`_member_in`), to
+    one member load.  A write fed by anything else is skipped and the layout match
+    (:func:`match_layout`) rejects an incomplete struct."""
     loads = track_struct_loads(insns, max(bracket.region), is_ivar_offset, layout.is_array,
                                window=set(bracket.region))
+    flow = listing_flow(ctx, insns)
     out: List[MemberWrite] = []
     for k, n, helper in bracket.writes:
-        fp = any(i2.mnemonic in ('mov', 'movz') and i2.op_str.startswith('w1,')
-                 for i2 in insns[max(k - 6, 0):k])
-        want = 'fp' if fp else 'int'
-        for j in range(k - 1, max(k - _VALUE_LOAD_WINDOW, -1), -1):
-            if _dest_kind(insns[j]) == want:
-                if j in loads:
-                    out.append(MemberWrite(loads[j][0], n, helper, loads[j][1]))
-                break
+        got = [m for number_reg, value_reg in (('x2', 'x1'), ('x1', 'v0'))
+               if flow.const_before(k, number_reg) == n
+               and (m := _member_in(flow, insns, k, value_reg, loads.get)) is not None]
+        if len(got) == 1:
+            (offset, width), = got
+            out.append(MemberWrite(offset, n, helper, width))
     return out
 
 
@@ -894,7 +880,7 @@ def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorte
         if numbers is not None:
             return numbers, {w.offset: w.helper for w in writes}
     if br.writes:                                                       # serialised inline
-        writes = decode_inline_writes(insns, br, _ivar_offset_test(ctx, site), layout)
+        writes = decode_inline_writes(ctx, insns, br, _ivar_offset_test(ctx, site), layout)
         numbers = match_layout(layout, writes) if writes else None
         if numbers is not None:
             return numbers, {w.offset: w.helper for w in writes}
