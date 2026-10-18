@@ -114,8 +114,8 @@ grepped out and parsed — that contract is preserved from the original addon.
   every courier message (Connect, ConnectResponse, Filter with its topic hashes, KeepAlive, …)
   with field names recovered from `apsd`. Such connections appear in a capture only when it was
   made with the APNs mitmproxy addon, `ios_decoder/apns_mitm.py`; that one self-contained file is
-  both the addon (`mitmdump -s apns_mitm.py`) and the decoder used here (details in
-  `report_on_apple_apns/`).
+  both the addon (`mitmdump -s apns_mitm.py`) and the decoder used here; its docstring
+  (`python ios_decoder/apns_mitm.py --help`) explains the capture setup.
 - **Ad telemetry**: iAd (`iadsdk`), and XP / AMP (`xp.apple.com`, `amp-api…`) with
   recursive expansion of nested base64 / JSON / gzip / protobuf.
 - **DNS-over-HTTPS** (`application/dns-message` + the `?dns=` GET form) → question +

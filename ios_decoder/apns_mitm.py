@@ -35,11 +35,15 @@ What the addon does
   mitmproxy's default 600 s idle timeout closes it just before the first one.  The addon raises
   tcp_timeout to 3600 s unless it was set explicitly.
 * apns_redact (default on) shortens byte values in the console log only.
-* Instead of --ssl-insecure, --set ssl_verify_upstream_trusted_ca=BUNDLE.pem with certifi plus
-  Apple Root CA (make_upstream_bundle.py) keeps upstream certificate checks on.
+* Instead of --ssl-insecure, --set ssl_verify_upstream_trusted_ca=BUNDLE.pem, with BUNDLE.pem
+  holding certifi's roots plus Apple Root CA (some courier servers chain to it), keeps upstream
+  certificate checks on.
+* On the phone, apsd must accept the proxy's certificate.  Stock SSL Kill Switch 3 breaks apsd
+  (no push connection at all); a fixed build is in ssl-kill-switch3-DL at
+  https://github.com/doug-leith/poor-privacy-practices-of-the-apple-app-store
 
-Other offline mode: python apns_mitm.py --streams DIR [--serial] decodes
-DIR/<stream>.{c2s,s2c}.bin written by run_apsd_courier.py.
+Other offline mode: python apns_mitm.py --streams DIR [--serial] decodes DIR/<name>.c2s.bin and
+<name>.s2c.bin, each the plaintext bytes of one direction (e.g. recorded inside apsd with Frida).
 
 Protocol
 --------
@@ -48,9 +52,9 @@ Every message is a command: [cmd u8] followed by fields, each with a field numbe
   * packed (ALPN "apns-pack-v1:<enc>:<dec>"): [cmd u8][len: HPACK int, 8-bit prefix][fields];
     remembered-value and key tables mean a decoder must see a whole connection, in order, with
     one decoder per direction.
-Names and formats were recovered from apsd itself (report_on_apple_apns/README.md): field names by
-running apsd's parser and builders on test input, the packed format by having apsd's
-APNSPackEncoder encode and APNSPackDecoder decode test values.
+Names and formats were recovered from apsd itself (iOS 16.7.11): field names by running apsd's
+parser and builders on test input, the packed format by having apsd's APNSPackEncoder encode and
+APNSPackDecoder decode test values.
 """
 from __future__ import annotations
 
@@ -117,11 +121,10 @@ S2C = {
 }
 
 # client -> server: attribute ids and types from apsd's APSProtocolParser copy*Message builders;
-# names from the builder's selector arguments / getters, confirmed against live builder-argument
-# hooks where marked in README.md.
+# names from the builder's selector arguments / getters.
 C2S = {
     # Connect: ids/types from the builder; names from its selector arguments, confirmed by hooking the
-    # builder's arguments on the live connection (README.md section 4)
+    # builder's arguments on a live connection
     0x07: {1: ("Token", "data"), 2: ("State", "u8"), 5: ("Flags", "u32"), 6: ("Interface", "u8"),
            7: ("ActiveInterval", "u32"), 8: ("Carrier", "str"), 9: ("SoftwareVersion", "str"),
            10: ("SoftwareBuild", "str"), 11: ("HardwareVersion", "str"), 12: ("Certificate", "data"),
@@ -202,7 +205,7 @@ def take(buf: bytes, pos: int, n: int) -> tuple[bytes, int]:
 
 # --------------------------------------------------------------------------- packed (apns-pack-v1)
 
-ENTRY_OVERHEAD = 33     # value-table entry size = value bytes + 33 (measured, README.md)
+ENTRY_OVERHEAD = 33     # value-table entry size = content bytes + 33 (measured against apsd's encoder)
 KEY_TABLE_MAX = 32      # key index is 5 bits; the 33rd-newest key is never referenced
 
 
@@ -703,7 +706,7 @@ def decode_jsonl_file(path: str, full: bool):
 
 
 def decode_streams_dir(path: str, framing: str, full: bool):
-    """DIR/<stream>.{c2s,s2c}.bin as written by run_apsd_courier.py."""
+    """DIR/<name>.{c2s,s2c}.bin: the plaintext bytes of each direction of one connection."""
     def read(p):
         with open(p, "rb") as f:
             return f.read()
@@ -716,12 +719,12 @@ def decode_streams_dir(path: str, framing: str, full: bool):
 
 def main(argv=None):
     import argparse
-    ap = argparse.ArgumentParser(prog="apns_mitm.py", description="Decode saved APNs courier traffic "
-                                 "(see the module docstring for the mitmproxy addon).")
+    ap = argparse.ArgumentParser(prog="apns_mitm.py", description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("capture", nargs="?", help="a .mitm capture file")
     src.add_argument("--jsonl", metavar="FILE", help="the addon's apns_log (raw records); no mitmproxy needed")
-    src.add_argument("--streams", metavar="DIR", help="DIR/<stream>.{c2s,s2c}.bin from run_apsd_courier.py")
+    src.add_argument("--streams", metavar="DIR", help="DIR/<name>.{c2s,s2c}.bin: plaintext of each direction")
     ap.add_argument("--serial", action="store_true", help="with --streams: serial instead of packed encoding")
     ap.add_argument("--packed", action="store_true", help=argparse.SUPPRESS)   # the default; old flag
     ap.add_argument("--full", action="store_true", help="print byte values in full instead of shortened")
