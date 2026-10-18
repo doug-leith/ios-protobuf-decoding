@@ -51,7 +51,7 @@ from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import _ctx_cache, _ctx_store
 from macho.objc_abi import CLASS_T_DATA, CLASS_RO_NAME, FAST_DATA_MASK
 from proto.arm64cfg import build_blocks, dominators, dominates, ivar_slot_loads, split_ops
-from proto.arm64_eval import Flow, _Machine, _MAX_GATE_SPAN
+from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
@@ -191,50 +191,11 @@ def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
         return None
 
 
-# [cap:INPUT-SANITY] a masked jump-table index (``and Wi, Wn, #2^k-1``) is enumerated only up to
-# this many values (a byte-wide index is the widest seen).
-_MAX_MASKED_INDEX = 256
-
-
 def _seed_br_arms(ctx, insns) -> Dict[int, Set[int]]:
     """``{br address: arms}`` to complete a CFG with before any evaluation: each ``br``'s decoded
-    table (:func:`proto.dispatch._jump_table_arm_addrs`), plus -- for a ``br`` whose index is
-    bounded by an ``and`` mask rather than a ``cmp`` gate (``and w8, w0, #7`` on the wire type)
-    -- the targets the ``br`` takes for every value the mask lets through, found by running the
-    straight-line code from the ``and`` to the ``br``."""
-    per_br = {b: set(a) for b, a in D._jump_table_arm_addrs(ctx, insns, per_br=True).items()}
-    flow = None
-    for kb, br in enumerate(insns):
-        if br.mnemonic != 'br' or br.addr in per_br:
-            continue
-        for ka in range(kb - 1, max(-1, kb - 16), -1):
-            a = insns[ka]
-            if a.mnemonic in ('b', 'bl', 'blr', 'br', 'ret', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz') \
-                    or a.mnemonic.startswith('b.'):
-                break
-            ops = split_ops(a.op_str)
-            if a.mnemonic != 'and' or len(ops) != 3 or not ops[2].startswith('#'):
-                continue
-            try:
-                mask = int(ops[2].lstrip('#'), 0)
-            except ValueError:
-                continue
-            if mask <= 0 or mask >= _MAX_MASKED_INDEX or mask & (mask + 1):
-                continue
-            if flow is None:
-                flow = Flow(ctx, insns)
-            arms = set()
-            for v in range(mask + 1):
-                m = _Machine({_norm_reg(ops[0]): v}, fallback=lambda r, k=ka: flow.const_before(k, r))
-                for k in range(ka + 1, kb):
-                    flow._exec(m, insns[k])
-                t = m.get(split_ops(br.op_str)[0])
-                if t is not None and insns[0].addr <= t <= insns[-1].addr:
-                    arms.add(t)
-            if arms:
-                per_br[br.addr] = arms
-            break
-    return per_br
+    table (:func:`proto.dispatch._jump_table_arm_addrs`, which also covers an index bounded by
+    an ``and`` mask rather than a ``cmp`` gate -- ``and w8, w0, #7`` on the wire type)."""
+    return D._jump_table_arm_addrs(ctx, insns, per_br=True)
 
 
 def _as_entries(entries) -> "D.FunctionEntries":

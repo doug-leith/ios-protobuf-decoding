@@ -52,9 +52,11 @@ class TestJumpTableArmAddrsRangeGuardRedundant(unittest.TestCase):
         ]
 
     class _TableCtx:
+        _TABLE = bytes([0, 1, 200])
+
         def read_bytes(self, va, n):
-            assert va == 0x2100 and n == 3
-            return bytes([0, 1, 200])
+            assert 0x2100 <= va and va + n <= 0x2100 + len(self._TABLE)
+            return self._TABLE[va - 0x2100:va - 0x2100 + n]
 
     def test_out_of_range_entry_dropped_by_guard(self):
         # Documents the guard's own claim: it filters 0x1354 out of the arm set.
@@ -85,6 +87,73 @@ class TestJumpTableArmAddrsRangeGuardRedundant(unittest.TestCase):
 
         br_block = cfg_guarded.order[1]
         self.assertEqual(cfg_guarded.succ[br_block], cfg_unguarded.succ[br_block])
+
+
+
+class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
+    """Each index value the bound lets through is run to the ``br``: the table's entry width,
+    signedness and scaling, a bias or clamp of the index and the anchor are whatever the code
+    computes."""
+
+    class _Mem:
+        def __init__(self, base, data):
+            self.base, self.data = base, data
+
+        def read_bytes(self, va, n):
+            if not self.base <= va <= va + n <= self.base + len(self.data):
+                raise ValueError(va)
+            return self.data[va - self.base:va - self.base + n]
+
+        def read_ptr(self, va):
+            return int.from_bytes(self.read_bytes(va, 8), 'little')
+
+    @staticmethod
+    def _listing(lines, base=0x1000):
+        from macho.disasm import Insn
+        return [Insn(addr=base + 4 * k, mnemonic=ln.partition(' ')[0], op_str=ln.partition(' ')[2],
+                     size=4, raw=b'\0' * 4) for k, ln in enumerate(lines)]
+
+    @staticmethod
+    def _deltas(*ds):
+        return b''.join(d.to_bytes(4, 'little', signed=True) for d in ds)
+
+    def test_difference_table_with_a_bare_extend_is_not_scaled(self):
+        # add x16, x17, w16, sxtw: the extend carries no shift, so each entry IS the byte delta
+        # (a decoder that took an unparsed shift for lsl #2 would put the arms 4x too far).
+        insns = self._listing([
+            'cmp w1, #2', 'b.hi #0x1028', 'adrp x17, #0x2000', 'add x17, x17, #0x0',
+            'ldrsw x16, [x17, x1, lsl #2]', 'adr x17, #0x1024', 'add x16, x17, w16, sxtw',
+            'br x16', 'ret', 'ret', 'ret', 'ret', 'ret'])
+        mem = self._Mem(0x2000, self._deltas(4, 8, 12))
+        self.assertEqual(_jump_table_arm_addrs(mem, insns), {0x1028, 0x102c, 0x1030})
+
+    def test_an_index_clamped_after_its_gate(self):
+        # the macOS 27 engine: sub; cmp; b.hi; cmp; csel (clamp); ldrsw [table, x16, lsl #2]
+        insns = self._listing([
+            'sub w16, w1, #1', 'cmp w16, #2', 'b.hi #0x1034', 'cmp x16, #2',
+            'csel x16, x16, xzr, ls', 'adrp x17, #0x2000', 'add x17, x17, #0x0',
+            'ldrsw x16, [x17, x16, lsl #2]', 'adr x17, #0x1024', 'add x16, x17, x16',
+            'br x16', 'ret', 'ret', 'ret', 'ret', 'ret'])
+        mem = self._Mem(0x2000, self._deltas(0x10, 0x14, -0x18))
+        self.assertEqual(_jump_table_arm_addrs(mem, insns, per_br=True),
+                         {0x1028: {0x1034, 0x1038, 0x100c}})
+
+    def test_a_mask_bounded_index(self):
+        # and w8, w0, #3 on a wire type: no compare, every value the mask lets through
+        insns = self._listing([
+            'and w8, w0, #3', 'adr x9, #0x1010', 'add x9, x9, x8, lsl #3', 'br x9',
+            'ret', 'nop', 'ret', 'nop', 'ret', 'nop', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns),
+                         {0x1010, 0x1018, 0x1020, 0x1028})
+
+    def test_a_table_reached_only_through_another_tables_arm(self):
+        # the second br is behind the first table's arm 0x101c: decoded once that arm is an edge
+        insns = self._listing([
+            'and w8, w0, #1', 'adr x9, #0x1014', 'add x9, x9, x8, lsl #3', 'br x9',
+            'ret', 'ret', 'nop', 'and w10, w2, #1', 'adr x11, #0x1030', 'add x11, x11, x10, lsl #2',
+            'br x11', 'ret', 'ret', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns, per_br=True),
+                         {0x100c: {0x1014, 0x101c}, 0x1028: {0x1030, 0x1034}})
 
 
 if __name__ == "__main__":

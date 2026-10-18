@@ -20,9 +20,11 @@ from typing import Dict, List, Optional
 
 from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ObjcClass
-from macho.disasm   import disasm, Insn, find_adrp_add_target
+from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
 from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
                                range_from_unsigned_gate)
+from proto.arm64cfg import dominators
+from proto.arm64_operands import imm_operand, split_ops
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -121,140 +123,104 @@ def _section_name(ctx: BinaryContext, va: int) -> Optional[str]:
     return None
 
 
-def _imm_tok(tok: str) -> Optional[int]:
-    tok = tok.strip().lstrip('#')
-    try:
-        return int(tok, 16) if tok.lower().startswith('0x') else int(tok)
-    except ValueError:
-        return None
+def _index_bounds(flow, k: int):
+    """``(start, register, values)`` when ``insns[k]`` bounds a register a jump table may be
+    indexed by: a compare with an immediate (``cmp w8, #N`` ahead of the ``b.hi`` / ``b.hs`` /
+    ``b.ls`` / ``b.lo`` that guards the table) -- evaluated from the compare itself with
+    values 0 .. N+1, the gate deciding which reach the ``br`` -- or a low-bit mask (``and w8,
+    w0, #2^k-1``), evaluated from just after it with every value the mask lets through.
+    None for anything else."""
+    from proto.arm64_eval import _MAX_GATE_SPAN
+    ins = flow.insns[k]
+    ops = split_ops(ins.op_str)
+    if ins.mnemonic == 'cmp' and len(ops) in (2, 3) and ops[1].startswith('#'):
+        n = imm_operand(ops, 1)
+        r = _norm_reg(ops[0])
+        if n is None or r is None or n > _MAX_GATE_SPAN:
+            return None
+        return k, r, n + 2
+    if ins.mnemonic == 'and' and len(ops) == 3 and ops[2].startswith('#'):
+        mask = _parse_imm(ops[2])
+        r = _norm_reg(ops[0])
+        if mask is None or r is None or mask <= 0 or mask & (mask + 1) or mask >= _MAX_GATE_SPAN:
+            return None
+        return k + 1, r, mask + 1
+    return None
 
 
-def _wname(reg: str) -> str:
-    reg = reg.strip()
-    return 'w' + reg[1:] if reg and reg[0] in 'xX' else reg
+def _evaluated_arms(flow, idom, kb: int, lo: int, hi: int) -> set:
+    """The targets the ``br`` at ``insns[kb]`` takes, by evaluation: from every index bound
+    (:func:`_index_bounds`) in the code that dominates it, each value the bound lets through is
+    run to the ``br`` (:meth:`proto.arm64_eval.Flow.value_at`) and its register read there.
+    So the table's shape -- entry width and signedness, scaling, a bias or clamp of the index,
+    the base -- is whatever the code computes, not a pattern."""
+    reg = flow.insns[kb].op_str.strip()
+    blk = flow._block_of[kb]
+    arms: set = set()
+    d = blk
+    while True:
+        first = flow._first_in_block[d]
+        end = kb if d == blk else first + len(flow.cfg.blocks[d])
+        for k in range(first, end):
+            bound = _index_bounds(flow, k)
+            if bound is None:
+                continue
+            start, r, count = bound
+            for v in range(count):
+                t = flow.value_at(start, {r: v}, kb, reg)
+                if t is not None and lo <= t < hi:
+                    arms.add(t)
+        up = idom.get(d)
+        if up is None or up == d:
+            break
+        d = up
+    return arms
 
 
 def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool = False):
-    """Arm-target addresses of EVERY ``br Xn`` jump table built by either of two
-    compiler idioms:
-
-      * index table  — ``adr xT,#base; ldrb/ldrh wK,[xtable,widx]; add xT,xT,wK,lsl#s; br xT``.
-        Each entry is a small unsigned INDEX; the shift in the final ``add``
-        scales it to the real instruction-aligned byte offset.
-      * difference table — ``adr xT,#base; ldrsw xK,[xtable,widx,lsl#2]; add xT,xT,xK; br xT``.
-        Each entry is a SIGNED 32-bit ``(arm - base)`` byte delta already, so the
-        final ``add`` carries no shift and the entry must be sign-extended, not
-        read as unsigned (a negative delta is a real, common target position —
-        the anchor sits inside the dispatch, not before every arm).  Observed on
-        a newer Apple-internal toolchain's outlined per-class dispatch "engine"
-        (a macOS system dyld cache's GeoServices): the compare-chain field
-        dispatch shares its function with an internal (non-field) bookkeeping
-        jump table using exactly this shape, and without recognising it the CFG
-        stays disconnected past the ``br`` — dominance then can't reach the real
-        field handlers at all, even though they sit later in the same function.
+    """Arm-target addresses of every ``br Xn`` jump table in *insns*, decided by evaluation
+    (:func:`_evaluated_arms`): each value the index's bound lets through is run to the ``br``.
+    That covers every compiler idiom alike -- an index table (``ldrb``/``ldrh`` entry scaled by
+    the final ``add``'s shift), a difference table (signed ``ldrsw`` byte deltas from an
+    ``adr`` anchor inside the dispatch), a mask-bounded index (``and w8, w0, #7`` on a wire
+    type) -- with no look-back window.
 
     A GENERAL CFG-completion decoder: it recovers arm targets for any such ``br`` so a CFG
     (and :func:`proto.arm64cfg.dominators`) reaches the blocks behind it.  Without it a
     reader whose field dispatch shares its function with a control ``br`` ahead of the
-    field-number extraction (e.g. GEOHours) has that extraction unreachable.
-    Read-only; returns in-range arm addresses -- with *per_br*, as ``{br address: its arms}``."""
+    field-number extraction (e.g. GEOHours) has that extraction unreachable.  A ``br`` reached
+    only through another table's arms (a segmented switch) is decoded once those arms are CFG
+    edges; a ``br`` the entry never reaches is not decoded.
+    Read-only; returns in-range arm addresses -- with *per_br*, as ``{br address: its arms}``.
+    Memoised on *ctx* per instruction listing."""
     if ctx is None or not insns:
         return {} if per_br else set()
+    from proto.arm64_eval import Flow
     ins = sorted(insns, key=lambda i: i.addr)
-    lo, hi = ins[0].addr, ins[-1].addr + 4
-    arms: set = set()
-    by_br: Dict[int, set] = {}
-    for k, br in enumerate(ins):
-        if br.mnemonic != 'br':
-            continue
-        reg = br.op_str.strip()
-        win = ins[max(0, k - 24):k]
-        scale = kreg = base_reg = None
-        for w in reversed(win):
-            if w.mnemonic != 'add':
-                continue
-            o = [t.strip() for t in w.op_str.split(',')]
-            if len(o) == 4 and o[0] == reg and any(s in o[3] for s in ('lsl', 'sxtw', 'uxtw')):
-                try:
-                    scale = 1 << int(o[3].split('#')[1])
-                except (NameError, ImportError):
-                    raise
-                except Exception:
-                    scale = 4
-                kreg = o[2]
-                base_reg = reg          # classic idiom: xT self-accumulates arm_base + offset
+    key = tuple(i.addr for i in ins)
+    memo = _ctx_cache(ctx, "_jump_table_arms", dict)
+    by_br = memo.get(key)
+    if by_br is None:
+        by_br = {}
+        lo, hi = ins[0].addr, ins[-1].addr + 4
+        todo = {k for k, i in enumerate(ins) if i.mnemonic == 'br'}
+        while todo:
+            flow = Flow(ctx, ins, br_arms=by_br)
+            idom = dominators(flow.cfg)
+            reached = sorted(k for k in todo if flow._block_of.get(k) in idom)
+            todo.difference_update(reached)
+            new = False
+            for kb in reached:
+                arms = _evaluated_arms(flow, idom, kb, lo, hi)
+                if arms:
+                    by_br[ins[kb].addr] = frozenset(arms)
+                    new = True
+            if not new:
                 break
-            if len(o) == 3 and o[0] == reg:
-                # Difference-table idiom: no shift here because the table entry
-                # (read as ldrsw below) IS the byte delta already.  Unlike the
-                # classic idiom, arm_base lives in its OWN register (o[1]), not
-                # the br register itself — e.g. `adr x17,#base; add x16,x17,x16;
-                # br x16` (x16 only ever holds the loaded offset, never the base).
-                scale = 1
-                kreg = o[2]
-                base_reg = o[1]
-                break
-        if kreg is None:
-            continue
-        arm_base = None
-        for w in reversed(win):
-            if w.mnemonic == 'adr':
-                o = [t.strip() for t in w.op_str.split(',')]
-                if len(o) == 2 and o[0] == base_reg:
-                    arm_base = _imm_tok(o[1])
-                    break
-        if arm_base is None:
-            continue
-        kre = _wname(kreg)
-        table_reg = idx_reg = width = None
-        signed = False
-        for w in reversed(win):
-            if w.mnemonic in ('ldrb', 'ldrh', 'ldrsw'):
-                p = w.op_str.split(',', 1)
-                if len(p) != 2 or _wname(p[0]) != kre:
-                    continue
-                mem = p[1].strip()
-                if '[' not in mem or ']' not in mem:
-                    continue
-                inner = [q.strip() for q in mem[mem.index('[') + 1:mem.rindex(']')].split(',')]
-                table_reg = inner[0]
-                idx_reg = inner[1] if len(inner) > 1 else None
-                width = {'ldrb': 1, 'ldrh': 2, 'ldrsw': 4}[w.mnemonic]
-                signed = w.mnemonic == 'ldrsw'
-                break
-        if table_reg is None:
-            continue
-        table_va = find_adrp_add_target(win, table_reg)
-        if table_va is None:
-            continue
-        count = None
-        idxn = _wname(idx_reg) if idx_reg else None
-        for j in range(len(win) - 1, -1, -1):
-            w = win[j]
-            if w.mnemonic in ('cmp', 'subs'):
-                o = [t.strip() for t in w.op_str.split(',')]
-                if len(o) >= 2 and o[1].startswith('#') and (idxn is None or _wname(o[0]) == idxn):
-                    n = _imm_tok(o[1])
-                    if n is None:
-                        continue
-                    nb = win[j + 1].mnemonic if j + 1 < len(win) else ''
-                    count = n if nb == 'b.hs' else n + 1
-                    break
-        if not count or count <= 0 or count > 4096:
-            continue
-        try:
-            raw = ctx.read_bytes(table_va, count * width)
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            continue
-        for v in range(count):
-            ent = int.from_bytes(raw[v * width:(v + 1) * width], 'little', signed=signed)
-            arm = arm_base + ent * scale
-            if lo <= arm < hi:
-                arms.add(arm)
-                by_br.setdefault(br.addr, set()).add(arm)
-    return by_br if per_br else arms
+        memo[key] = by_br
+    if per_br:
+        return {b: set(a) for b, a in by_br.items()}
+    return set().union(*by_br.values())
 
 
 def build_function_index(ctx: BinaryContext, cl: 'ClassList') -> None:

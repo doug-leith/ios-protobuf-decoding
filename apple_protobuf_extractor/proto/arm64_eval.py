@@ -723,6 +723,47 @@ class Flow:
             k = nxt
         return {}
 
+    def value_at(self, k0: int, regs: Dict[str, int], kt: int, reg: str) -> Optional[int]:
+        """*reg*'s value on reaching ``insns[kt]`` when the code is run from ``insns[k0]`` with
+        *regs* known (any other register: its reaching-definition constant at ``insns[k0]``),
+        following the branches the run decides.  None when the run does not reach *kt* -- a
+        call, a return, a jump out of the listing, a branch it cannot decide, a loop -- or the
+        value there is unknown."""
+        m = _Machine(regs, fallback=lambda r: self.const_before(k0, r))
+        seen: Set[int] = set()
+        k = k0
+        while 0 <= k < len(self.insns) and k not in seen:
+            if k == kt:
+                return m.get(reg)
+            seen.add(k)
+            ins = self.insns[k]
+            mn = ins.mnemonic
+            nxt = k + 1
+            if mn == 'b':
+                nxt = self.addr_idx.get(_parse_imm(ins.op_str))
+                if nxt is None:
+                    return None
+            elif is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                taken, target = self._branch(m, ins)
+                if taken is None:
+                    if is_cond_branch(mn):
+                        return None
+                    try:
+                        nxt = self._skip_trap_branch(k, target, mn, ins)
+                    except _Abort:
+                        return None
+                elif taken:
+                    nxt = self.addr_idx.get(target)
+                    if nxt is None:
+                        return None
+            elif mn in ('bl', 'blr', 'br', 'braa', 'brab', 'blraa', 'blrab',
+                        'ret', 'retaa', 'retab'):
+                return None
+            else:
+                self._exec(m, ins)
+            k = nxt
+        return None
+
     def _branch(self, m: "_Machine", ins: Insn) -> Tuple[Optional[bool], Optional[int]]:
         """``(taken, target)`` of a conditional branch under *m*; ``taken`` is None when the
         condition is not known."""

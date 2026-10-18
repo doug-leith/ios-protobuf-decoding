@@ -550,8 +550,10 @@ adder is the C function 0x19874757c).
   does not keep it; `-init...` and the ARC retain/handshake functions return their argument
   (named only where a standalone binary binds them); an unknown field number behaves as one
   past every compared value.  The CFG is still seeded with the decoded jump tables
-  (`proto.dispatch._jump_table_arm_addrs`) plus `and`-masked tables evaluated per index: a
-  control `br` ahead of the field-number extraction has an index the propagation cannot know.
+  (`proto.dispatch._jump_table_arm_addrs`: every value a dominating `cmp #N` gate or `and`
+  mask lets through is run to the `br`): a control `br` ahead of the field-number extraction
+  has an index the propagation cannot know.  A `br` whose index no such gate or mask bounds
+  is left undecoded.
 - An element core is recognised through the readFrom core index: the function a thin
   `-readFrom:` wrapper hands its object and reader to (decided by data flow; an inline reader,
   or a `-readFrom:` that hands on only the reader, has none), over the image's proto-class set.
