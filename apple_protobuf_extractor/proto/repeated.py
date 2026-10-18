@@ -12,9 +12,9 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Optional, Set, Tuple
 
-from macho.memory    import BinaryContext, _ctx_cache
+from macho.memory    import BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm    import disasm, _norm_reg, _parse_imm
+from macho.disasm    import disasm, _norm_reg
 from proto.arm64cfg  import parse_adrp, mem_operand
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
@@ -73,8 +73,6 @@ _ADDER_MAX_INSNS    = 256    # runaway guard only; first-match returns well befo
 # ObjC type encodings for the NSArray-backed ivar of a repeated field.  Used by
 # the adder→ivar lever to pick the backing array ivar an add-accessor appends to
 # (excluding the flags/has-bits struct ivar the same accessor also touches).
-_ARRAY_IVAR_ENCS = ('@"NSArray"', '@"NSMutableArray"')
-
 # The readFrom: dispatch idioms that used to live here and in proto.dispatch -- jump-table
 # cluster decoding, the clamped-gate matcher, compare-chain dominance attribution, the
 # wrapper->core scan with its ownership signals, the arm walkers, the class-reference windows
@@ -119,6 +117,8 @@ def _adder_array_ivar(
         return None
     try:
         insns = disasm(ctx, imp_va, max_insns=_ADDER_MAX_INSNS, stop_at_ret=True)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     nxt = function_entries(ctx).next_after(imp_va)
@@ -140,6 +140,8 @@ def _adder_array_ivar(
             slot_va = adrp_page[mo[1]] + mo[3]
             try:
                 val = int.from_bytes(ctx.read_bytes(slot_va, 4), 'little')
+            except (NameError, ImportError):
+                raise
             except Exception:
                 continue
             if val in array_offsets:
@@ -234,6 +236,8 @@ def _class_from_type_method_imp(
         return None
     try:
         insns = disasm(ctx, imp, max_insns=8)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
 

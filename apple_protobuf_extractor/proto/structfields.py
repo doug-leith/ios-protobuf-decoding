@@ -168,10 +168,12 @@ def parse_struct_encoding(enc: Optional[str]) -> Optional[StructLayout]:
 # is a handful of straight-line blocks of ~10 instructions, one per member.
 _WRITER_MAX_BLOCKS = 64
 _WRITER_BLOCK_INSNS = 128
-# How far (bytes) a local branch may reach from the writer's entry and still be a block of
-# the same function rather than a tail call into another one.
+# [cap:INPUT-SANITY — verified 2026-10-18] How far (bytes) a local branch may reach from the
+# writer's entry and still be a block of the same function rather than a tail call into
+# another one, and how many instructions back from a write call the value load may sit.
+# Raising them x4 (0x800 -> 0x2000, 12 -> 48) changed no output on any of the 12
+# ios_decoder/protos targets or iOS 27 / macOS 27 GeoServices.
 _WRITER_LOCAL_SPAN = 0x800
-# How many instructions back from a write call the value load may sit.
 _VALUE_LOAD_WINDOW = 12
 
 _LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
@@ -204,6 +206,8 @@ def _writer_insns(ctx, entry: int) -> List:
         seen_blocks.add(a)
         try:
             block = disasm(ctx, a, max_insns=_WRITER_BLOCK_INSNS, stop_at_ret=True)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
         for k, ins in enumerate(block):
@@ -267,6 +271,8 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
     try:
         flow = Flow(ctx, list(insns))
         region = flow.run_from(0, {'x0': _STRUCT_ARG, 'x1': _WRITER_ARG}, opaque=_opaque)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return []
 
@@ -549,6 +555,8 @@ def _flow_for(ctx, insns: Sequence):
     if hit is None or hit[0] is not insns:
         try:
             arms = _jump_table_arm_addrs(ctx, list(insns))
+        except (NameError, ImportError):
+            raise
         except Exception:                      # CFG completion only; the evaluation itself
             arms = ()                          # follows `br` targets and does not need it
         hit = (insns, Flow(ctx, list(insns), jump_table_arms=arms))
@@ -848,6 +856,8 @@ def _linear_method(ctx, cls, selector: str, foreign_sorted: List[int], memo: dic
             try:
                 insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4),
                                stop_at_ret=False)
+            except (NameError, ImportError):
+                raise
             except Exception:
                 insns = None
         memo[key] = insns
@@ -861,6 +871,8 @@ def _ivar_offset_test(ctx, site: StructSite):
     def test(addr) -> bool:
         try:
             return addr is not None and ctx.read_s32(addr) == site.ivar_offset
+        except (NameError, ImportError):
+            raise
         except Exception:
             return False
     return test

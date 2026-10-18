@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 from macho.memory     import BinaryContext, _ctx_cache, _ctx_store
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
-from macho.disasm     import disasm, Insn, _parse_imm
+from macho.disasm     import disasm, Insn
 from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs
@@ -231,6 +231,8 @@ def _function_body_extent(
     outlined block would drag the sweep through foreign code."""
     try:
         insns = disasm(ctx, imp, max_insns=hard_cap, stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return []
     hi = imp
@@ -306,6 +308,8 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
         return None
     try:
         insns = disasm(ctx, m.imp, max_insns=_DICTREP_WRAPPER_INSNS, stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     end = next((k for k, i in enumerate(insns)
@@ -316,6 +320,8 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     try:
         flow = Flow(ctx, insns[:end + 1])
         region = flow.run_from(0, {'x0': SELF}, opaque=_opaque)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     if not region.calls:
@@ -400,6 +406,8 @@ def _harvest_dictrep(
     try:
         body = _dictrep_body(ctx, imp)
         insns = body if body is not None else disasm(ctx, imp, max_insns=_DICTREP_PROBE_INSNS)
+    except (NameError, ImportError):
+        raise
     except Exception as exc:
         log.warning("-[%s _dictionaryRepresentation:] could not be disassembled (%s); "
                     "enum recovery from it is skipped", cls.name, exc)

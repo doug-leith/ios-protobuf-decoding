@@ -406,15 +406,15 @@ def _resolve_dispatch_context(
     """Resolve the readFrom: dispatch context for repeated-<message> element typing.
     Carved from :func:`extract_proto_message` (pre-loop phase). Returns:
 
-      * ``dispatch_elements`` — ``{field_number: element_class}`` from walking the
-        readFrom: jump table / compare chain (keyed by NUMBER).
-      * ``dispatch_ivars`` — ``{ivar_name: (element_class, field_number)}`` from the
-        adder→ivar lever (keyed by IVAR, so trustworthy even for unconfirmed numbers).
+      * ``dispatch_elements`` — ``{field_number: element_class}``: the class each field's
+        readFrom: handler builds (:mod:`proto.dispatch_eval`; keyed by NUMBER).
+      * ``dispatch_ivars`` — ``{ivar_name: (element_class, field_number)}``: the array ivar
+        that handler appends to (keyed by IVAR, so usable even for unconfirmed numbers).
       * ``unambiguous`` — True for the single-real-field + single-dispatch-entry case,
         where the element type can be applied even with an unconfirmed number.
 
-    The lever binds only the element TYPE, never the field number (arm/compare-chain
-    indices are unreliable; the writeTo:/pointer-table pass owns numbers)."""
+    Only the element TYPE is taken from here, never the field number (the writeTo: pass
+    owns numbers)."""
     dispatch_elements: Dict[int, str] = {}
     dispatch_ivars: Dict[str, Tuple[str, int]] = {}
     if readfrom_core_index:

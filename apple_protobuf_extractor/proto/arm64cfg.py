@@ -180,13 +180,12 @@ def _next_imp(imps_sorted, imp):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Basic-block CFG + dominators (TODO #42 — readFrom dispatch resolver)
+# Basic-block CFG + dominators
 # ══════════════════════════════════════════════════════════════════════════════
-# Pure, serializer-agnostic: operate on a list of macho.disasm.Insn over one function.
-# The readFrom resolver attributes each element `bl` to the field whose compare-chain
-# handler block DOMINATES it (exact), vs the address-range approximation. The caller
-# must complete the CFG first (inject_arm_edges with decoded `br` jump-table arms) so
-# blocks reached only via indirect dispatch are reachable.
+# Pure, serializer-agnostic: operate on a list of macho.disasm.Insn over one function
+# (proto.arm64_eval.Flow builds on them).  The caller completes the CFG with decoded `br`
+# jump-table arms (inject_arm_edges, or Flow's per-br arms) so blocks reached only through
+# an indirect branch are reachable.
 
 
 def _succ_addrs(ins, fallthrough, lo, hi):
@@ -346,20 +345,13 @@ def dominates(idom, a, b):
         cur = n
 
 
-def dom_depth(idom, b):
-    d, cur = 0, b
-    while cur in idom and idom[cur] != cur:
-        cur = idom[cur]; d += 1
-    return d
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Lazy/incremental worklist walk — the OTHER CFG-construction mode
 # ══════════════════════════════════════════════════════════════════════════════
 # build_blocks() above needs the complete instruction list for exactly one
 # function, disassembled up front, and is safe exactly when that function is
-# CONTIGUOUS (verified for readFrom: dispatch cores -- see _dominance_field_of
-# in proto/dispatch.py). writeTo: bodies are NOT: the compiler outlines some
+# CONTIGUOUS (readFrom: dispatch cores are; proto.dispatch_eval._function_insns
+# bounds one by the next function entry). writeTo: bodies are NOT: the compiler outlines some
 # field-write blocks past OTHER functions' bodies (see proto/enums.py's
 # _function_body_extent docstring), so there is no safe way to bound "the whole
 # function" ahead of time. LazyWalk is the alternative this requires: it

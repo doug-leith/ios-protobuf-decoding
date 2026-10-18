@@ -11,8 +11,9 @@ in :mod:`proto.dispatch_eval`):
   :class:`proto.arm64_eval.Flow` user seeds its graph with;
 * :func:`_find_field_count` -- the ``cmp wN,#N ; b.hi`` gate reader (enum diagnostics).
 
-Imports only macho.* + arm64decode + protoclass_heuristic (never proto.extractor), so it stays
-cycle-free.
+Top-level imports are macho.* and protoclass_heuristic only (never proto.extractor); the
+evaluator (:mod:`proto.arm64_eval`, :mod:`proto.dispatch_eval`, which imports this module) is
+imported inside the functions that run it.
 """
 from __future__ import annotations
 import struct
@@ -63,6 +64,8 @@ def _find_readfrom_c_func(
 
     try:
         insns = disasm(ctx, method.imp, max_insns=_READFROM_MAX_INSNS, stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return None
     end = next((k for k, i in enumerate(insns)
@@ -77,9 +80,6 @@ def _find_readfrom_c_func(
     if first.args.get('x0') == SELF and first.args.get('x1') == READER:
         return first.target
     return None
-
-
-# _COND_EQ/NE/HI/HS are imported from macho.arm64decode (canonical set).
 
 
 def _read_raw_word(ctx: BinaryContext, va: int) -> Optional[int]:
@@ -189,6 +189,8 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
             if len(o) == 4 and o[0] == reg and any(s in o[3] for s in ('lsl', 'sxtw', 'uxtw')):
                 try:
                     scale = 1 << int(o[3].split('#')[1])
+                except (NameError, ImportError):
+                    raise
                 except Exception:
                     scale = 4
                 kreg = o[2]
@@ -254,6 +256,8 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
             continue
         try:
             raw = ctx.read_bytes(table_va, count * width)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
         for v in range(count):
@@ -317,29 +321,16 @@ def _build_readfrom_core_index(
 
     The ReadAllFrom core is the tail target of ``-[Cls readFrom:]`` (recovered by
     :func:`_find_readfrom_c_func`) — exactly the address a *parent* class's
-    readFrom: dispatch arm ``bl``-calls when parsing an embedded ``<Cls>``
-    element.  :func:`_resolve_repeated_via_dispatch` uses this index to name a
-    repeated field's element class **by the call-target address** of its dispatch
-    arm, which works in cache-native mode where symbol names are stripped.
+    readFrom: dispatch handler calls on a new object when parsing an embedded ``<Cls>``
+    element.  The dispatch evaluator (:mod:`proto.dispatch_eval`) names an element class
+    **by that call target**, which works in cache-native mode where symbol names are
+    stripped.  Also builds the function index (:func:`build_function_index`).
 
-    Mirrors :func:`_identify_string_write_helpers`: one cheap pass over the
-    classlist whose result is threaded through to every
-    :func:`extract_proto_message` call.
-
-    Collisions (two+ classes sharing one core address) are NOT rare: measured
-    live on GeoServices, 38 of 1599 resolved cores are shared, all collapsing
-    onto one address (a trivial/opaque-passthrough ``ReadAllFrom`` body common
-    to many near-empty proto classes — see the project's opaque-passthrough
-    census). The first class encountered wins (see the loop below) and every
-    other class sharing that core silently loses its own identity in this
-    index for the lifetime of the run. This matters because
-    :func:`_resolve_repeated_via_dispatch` names repeated-message fields BY
-    this index's call-target address: a real field whose element embeds via
-    one of the 38 collided cores gets attributed to whichever class happened
-    to be inserted first, not necessarily its true element type. Keep-first
-    (rather than e.g. refusing to resolve on collision) is a deliberate
-    precision/recall tradeoff, not an oversight — but it is not the "rare
-    aliasing" edge case it might look like from the code alone.
+    One pass over the classlist, threaded through to every :func:`extract_proto_message`
+    call.  Two classes sharing one core would make the index name only the first; none do
+    (GeoServices: 1598 cores, all distinct, measured 2026-10-18).  The 38 shared addresses
+    once seen were the runtime stub an inline reader's first call went to, which
+    :func:`_find_readfrom_c_func` no longer takes for a core.
     """
     from proto.protoclass_set import _proto_class_set
     index: Dict[int, str] = {}

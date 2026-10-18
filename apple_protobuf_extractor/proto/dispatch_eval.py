@@ -1,7 +1,7 @@
-"""proto/dispatch_eval.py -- PROTOTYPE: decode a class's readFrom: field dispatch by evaluation.
+"""proto/dispatch_eval.py -- decode a class's readFrom: field dispatch by evaluation.
 
-Not used by the extraction path.  It runs alongside :mod:`proto.dispatch` / :mod:`proto.repeated`
-so their results can be compared (``scripts`` drivers report the disagreements).
+The extraction path's readFrom: reader: :mod:`proto.repeated` takes repeated-message element
+classes and their array ivars from it, :mod:`proto.mapfields` a map's value classes.
 
 The question the dispatch idioms answer by shape -- "for field N, which handler runs, which
 element class does it build, and which ivar does it append to" -- is answered here by running
@@ -53,7 +53,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from macho.disasm import disasm, _parse_imm
 from proto.arm64cfg import dominators, dominates, ivar_slot_loads, split_ops
 from macho.disasm import _norm_reg
-from proto.arm64_eval import Flow
+from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector, RETURNS_ARGUMENT
 from proto import dispatch as D
@@ -68,7 +68,10 @@ _RET_BASE = _TOKEN_BASE + 0x2000_0000          # + 16 * insn index: x0 after tha
 _FIELD_BASE = _TOKEN_BASE + 0x3000_0000        # + offset: self->ivar at that byte offset
 
 _MAX_FIELD = 1 << 29                            # protobuf field numbers are 1 .. 2^29 - 1
-_MAX_SPAN = 1 << 12                             # a gate interval wider than this is not expanded
+# [cap:INPUT-SANITY — verified 2026-10-18] how many calls deep from -readFrom: a dispatch core
+# is looked for, and how many rounds of evaluated jump-table arms extend a core (a round that
+# finds none ends the loop; the last round leaves a note).  Raising both 4 -> 16 changed no
+# output on any of the 12 ios_decoder/protos targets or iOS 27 / macOS 27 GeoServices.
 _DESCEND_DEPTH = 4
 _ARM_ROUNDS = 4
 # [cap:INPUT-SANITY] a br target further than this past the core's entry is not taken as one of
@@ -76,10 +79,6 @@ _ARM_ROUNDS = 4
 _ARM_REACH = 0x40000
 
 _ARRAY_ENCS = ('@"NSMutableArray"', '@"NSArray"')
-
-
-def _is_ret_token(v: Optional[int]) -> bool:
-    return v is not None and _RET_BASE <= v < _RET_BASE + (1 << 28)
 
 
 def _opaque(v: Optional[int]) -> bool:
@@ -267,6 +266,8 @@ def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = 
     try:
         insns = [i for i in disasm(ctx, va, max_insns=max(1, (hard_end - va) // 4),
                                    stop_at_ret=False) if va <= i.addr < hard_end]
+    except (NameError, ImportError):
+        raise
     except Exception:
         return []
     if not insns:
@@ -434,7 +435,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             ivs: List[Tuple[int, int]] = []
             cands = flow.candidates(k, dest, (1, _MAX_FIELD), intervals=ivs)
             for lo, hi in ivs:
-                if hi - lo <= _MAX_SPAN:
+                if hi - lo <= _MAX_GATE_SPAN:      # one imm12 gate's reach
                     cands.update(v for v in range(max(lo, 1), hi + 1) if v < _MAX_FIELD)
             if not cands:
                 continue
@@ -557,6 +558,8 @@ def _slots_loaded(ctx, va: Optional[int]) -> FrozenSet[int]:
     if va not in memo:
         try:
             ins = disasm(ctx, va, max_insns=256, stop_at_ret=True)
+        except (NameError, ImportError):
+            raise
         except Exception:
             ins = []
         memo[va] = frozenset(sl for _i, sl in ivar_slot_loads(ins))
@@ -631,6 +634,8 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
         out.cores.append(core_va)
         try:
             _decode_core(ctx, core_va, entry, cls, core_index, out, entries, flows.get(core_va))
-        except Exception as exc:                # prototype: report, don't hide
+        except (NameError, ImportError):
+            raise
+        except Exception as exc:                # report, don't hide
             out.notes.append(f"core {core_va:#x}: {type(exc).__name__}: {exc}")
     return out

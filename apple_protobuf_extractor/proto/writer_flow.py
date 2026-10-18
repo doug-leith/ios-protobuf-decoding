@@ -35,14 +35,12 @@ not settle.  Undecided never drops anything: callers keep their fallback.
 """
 from __future__ import annotations
 
-import bisect
 import logging
-import re
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
-from macho.memory import BinaryContext, _ctx_cache, _ctx_store
+from macho.memory import BinaryContext, _ctx_store
 from proto.arm64cfg import build_blocks, parse_adrp, split_ops
 from proto.callees import callee_name, stub_selector, RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN
 from proto.arm64_operands import (writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
@@ -462,6 +460,8 @@ class WriterFlow:
                     src = set(_regs(ops[1:] if dst else ops))
                 read |= src - written
                 written |= dst
+        except (NameError, ImportError):
+            raise
         except Exception:
             res = _ALL
         self._live_memo[tgt] = res

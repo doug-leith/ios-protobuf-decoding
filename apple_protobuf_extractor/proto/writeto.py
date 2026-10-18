@@ -34,10 +34,9 @@ fail-safe, never a confident error.
 """
 from typing import Dict, List, Optional, Set, Tuple
 
-from macho.memory import BinaryContext, Section, _is_in_any_section
+from macho.memory import BinaryContext, _is_in_any_section
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm import (disasm, find_adrp_ldr_target, find_adrp_add_target,
-                          find_mov_imm, _parse_imm, _norm_reg, _MAX_ADRP_GAP)
+from macho.disasm import disasm, find_mov_imm, _parse_imm, _norm_reg
 # Tier-1 shared arm64 helpers, lifted to proto/arm64cfg.py.
 # Re-imported (hence re-exported) here so
 # writeto_walk's own callers and tests/test_writeto_walk_coverage.py

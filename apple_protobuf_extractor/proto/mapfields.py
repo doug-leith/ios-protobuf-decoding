@@ -26,11 +26,11 @@ rest from the two serializers:
   binary-wide (:func:`record_helper_votes` / :func:`helper_kind` — the same ground-truth
   mechanism as ``write_helpers._identify_string_write_helpers``).
 
-* **readFrom:** must *create* a message value, so it statically references the value
-  class (``[Cls alloc]`` / ``ClsReadAllFrom``) inside the arm that handles field ``F``.
-  :func:`readfrom_value_classes` returns every proto class referenced in the OUTERMOST
-  ``cmp Wf,#F`` handler's dominance region (so a map entry's own nested ``value = 2``
-  tag compare is not mistaken for top-level field 2).
+* **readFrom:** must *create* a message value, so the handler for field ``F`` allocates the
+  value class or calls its ``ClsReadAllFrom`` core.  :func:`readfrom_value_classes` returns
+  those classes from the dispatch evaluator (:mod:`proto.dispatch_eval`), which runs the
+  outermost field-number dispatch with ``F`` (so a map entry's own nested ``value = 2`` is
+  not mistaken for top-level field 2).
 
 ``writeTo:`` alone names no value class (``writeSubmessage`` dispatches on the object's
 runtime type), which is why the reader side is needed for message values.
@@ -398,6 +398,8 @@ def scan_block_enumerated_maps(
     end = _next_imp(imps_sorted, imp)
     try:
         insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4), stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
     except Exception:
         return out
     for i, ins in enumerate(insns):
@@ -417,6 +419,8 @@ def scan_block_enumerated_maps(
             continue
         try:
             body = disasm(ctx, invoke, max_insns=_BLOCK_INVOKE_MAX_INSNS, stop_at_ret=True)
+        except (NameError, ImportError):
+            raise
         except Exception:
             continue
         if not body or body[-1].mnemonic not in ('ret', 'retaa', 'retab'):
@@ -499,6 +503,8 @@ def _canonical_helper(ctx: BinaryContext, helper_va: int) -> int:
     if helper_va not in memo:
         try:
             memo[helper_va] = _helper_real_target(ctx, helper_va)
+        except (NameError, ImportError):
+            raise
         except Exception:
             memo[helper_va] = helper_va
     return memo[helper_va]
