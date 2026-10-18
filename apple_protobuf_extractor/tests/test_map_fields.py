@@ -21,6 +21,7 @@ import proto.writeto as W
 import proto.callees as C
 import proto.extractor as E
 from macho.disasm import Insn
+from proto.dispatch import listing_flow
 from proto.emitter import build_proto_files, write_from_messages
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 
@@ -195,7 +196,7 @@ class TestAnalyzeEntry(_Patched):
 
     def _begin(self, insns):
         return next(i for i, x in enumerate(insns) if x.mnemonic == 'bl'
-                    and M._scratch_slot_of(insns, i) is not None)
+                    and M._scratch_slot_of(listing_flow(None, insns), i) is not None)
 
     def test_block_invoke_string_key_message_value(self):
         insns, fd = asm(_MANIFEST_INVOKE)
@@ -396,7 +397,8 @@ class TestNewerToolchainBlockShape(_Patched):
             ('add', 'x8, x20, x8'), ('ldr', 'x20, [x8]'), ('mov', 'x0, x20'),
             ('bl', '#0x9000')]))
         ctx = FakeCtx(u32={0x1e493efa8: 32})
-        self.assertEqual(M._trace_ivar(ctx, insns, len(insns) - 1, 'x0', {32: '_vehicleTypes'}),
+        self.assertEqual(M._trace_ivar(ctx, listing_flow(ctx, insns), len(insns) - 1, 'x0',
+                                       {32: '_vehicleTypes'}),
                          '_vehicleTypes')
 
 

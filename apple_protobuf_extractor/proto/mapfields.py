@@ -49,15 +49,14 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from macho.memory import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import disasm, _parse_imm, _norm_reg
-from proto.arm64_operands import CALLER_SAVED_GPRS
 from proto.callees import stub_selector
 
 from proto.arm64cfg import (
-    split_ops, dst_reg, mem_operand, _next_imp,
+    split_ops, mem_operand, _next_imp,
 )
 from proto.writeto import (
     _writeto_field_number_before,
-    _addr_to_name, _NON_DEF_MNEMONICS,
+    _addr_to_name,
 )
 from proto.write_helpers import (
     _helper_real_target, _classify_write_helper, _refine_scalar_by_family,
@@ -65,6 +64,7 @@ from proto.write_helpers import (
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
+from proto.dispatch import listing_flow
 from proto.dispatch_eval import evaluate_class
 
 log = logging.getLogger(__name__)
@@ -139,35 +139,24 @@ class MapTypes:
 
 
 # ── Register / def-use helpers ────────────────────────────────────────────────
+#
+# Every helper reads a listing through its :class:`proto.arm64_eval.Flow`
+# (:func:`proto.dispatch.listing_flow`): ``flow.insns`` is the listing, and a register's
+# definition is its reaching definition over the listing's CFG.
 
-_CALLER_SAVED = frozenset(CALLER_SAVED_GPRS)
 
-
-def _reaching_def(insns: Sequence, i: int, reg: str) -> Optional[int]:
-    """Index of the instruction that defines GPR *reg* (normalised ``xN``) as seen at
-    ``insns[i]``: the closest earlier writer.  A ``bl`` counts as a definition of every
-    caller-saved register (it clobbers them), so a value held across a call in a
-    caller-saved register is correctly NOT traced through it.  ``None`` when no
-    writer precedes (the register is a live-in)."""
-    for j in range(i - 1, -1, -1):
-        ins = insns[j]
-        mn = ins.mnemonic
-        if mn == 'bl':
-            if reg in _CALLER_SAVED:
-                return j
-            continue
-        if mn.startswith('st') or mn in _NON_DEF_MNEMONICS:
-            continue
-        ops = split_ops(ins.op_str)
-        if not ops:
-            continue
-        if mn in ('ldp', 'ldpsw') and len(ops) >= 3:
-            if _norm_reg(ops[0]) == reg or _norm_reg(ops[1]) == reg:
-                return j
-            continue
-        if dst_reg(ins.op_str) == reg:
-            return j
-    return None
+def _reaching_def(flow, i: int, reg: str) -> Optional[int]:
+    """Index of the one instruction whose definition of register *reg* (normalised ``xN``)
+    reaches ``flow.insns[i]``, by reaching definitions over the listing's CFG.  A call
+    defines every caller-saved register (it clobbers them), so a value held across a call in
+    a caller-saved register is not traced through it.  ``None`` when the register is a
+    live-in, when more than one definition reaches (the value depends on the path), or when
+    ``insns[i]`` is unreachable."""
+    defs = flow.defs_before(i, reg)
+    if len(defs) != 1:
+        return None
+    (d,) = defs
+    return d if d >= 0 else None
 
 
 def _sp_offset(ins) -> Optional[int]:
@@ -181,15 +170,16 @@ def _sp_offset(ins) -> Optional[int]:
     return None
 
 
-def _pc_relative_address(insns: Sequence, i: int, reg: str) -> Optional[int]:
+def _pc_relative_address(flow, i: int, reg: str) -> Optional[int]:
     """Address materialised into *reg* at ``insns[i]`` by ``adrp reg,#page ;
-    add reg,reg,#imm`` (the LAST such pair — a body re-uses its scratch register for
+    add reg,reg,#imm`` (the reaching pair — a body re-uses its scratch register for
     many unrelated pages).  None for any other defining form."""
-    d = _reaching_def(insns, i, reg)
+    insns = flow.insns
+    d = _reaching_def(flow, i, reg)
     # arm64e signs a code pointer in place (``pacia reg, disc``) before storing it: the
     # address is unchanged, so look through the signing to the adrp+add that built it.
     while d is not None and insns[d].mnemonic.startswith('pac'):
-        d = _reaching_def(insns, d, reg)
+        d = _reaching_def(flow, d, reg)
     if d is None:
         return None
     add = insns[d]
@@ -198,7 +188,7 @@ def _pc_relative_address(insns: Sequence, i: int, reg: str) -> Optional[int]:
             or _norm_reg(ops[1]) != reg or not ops[2].startswith('#')):
         return None
     imm = _parse_imm(ops[2])
-    p = _reaching_def(insns, d, reg)
+    p = _reaching_def(flow, d, reg)
     if imm is None or p is None or insns[p].mnemonic != 'adrp':
         return None
     pops = split_ops(insns[p].op_str)
@@ -227,7 +217,7 @@ def _stack_store_source(insns: Sequence, i: int, disp: int) -> Optional[Tuple[in
     return None
 
 
-def _offset_var_address(insns: Sequence, i: int, offreg: str) -> Optional[int]:
+def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
     """Address of the ivar-offset variable whose value is in *offreg* at ``insns[i]``:
     the reaching ``ldrsw offreg,[base,#k]`` with ``base`` the reaching ``adrp`` page
     (``+ add``) — or the PC-relative literal ``ldrsw offreg, #ADDR`` a standalone image
@@ -235,7 +225,8 @@ def _offset_var_address(insns: Sequence, i: int, offreg: str) -> Optional[int]:
     (which scans a block prefix for the FIRST matching ``adrp+add``) this is safe over a
     whole function, where an earlier unrelated ``adrp x8 ; add x8,x8,#o`` would shadow the
     page actually feeding this load."""
-    d = _reaching_def(insns, i, offreg)
+    insns = flow.insns
+    d = _reaching_def(flow, i, offreg)
     if d is None or insns[d].mnemonic not in ('ldrsw', 'ldr'):
         return None
     mem = mem_operand(insns[d].op_str)
@@ -244,25 +235,27 @@ def _offset_var_address(insns: Sequence, i: int, offreg: str) -> Optional[int]:
         return _parse_imm(ops[1]) if len(ops) == 2 and ops[1].startswith('#') else None
     if mem[2] is not None:
         return None
-    b = _reaching_def(insns, d, mem[1])
+    b = _reaching_def(flow, d, mem[1])
     if b is None:
         return None
     if insns[b].mnemonic == 'adrp':
         ops = split_ops(insns[b].op_str)
         page = _parse_imm(ops[1]) if len(ops) == 2 else None
         return None if page is None else page + mem[3]
-    base = _pc_relative_address(insns, d, mem[1])
+    base = _pc_relative_address(flow, d, mem[1])
     return None if base is None else base + mem[3]
 
 
-def _trace_ivar(ctx: BinaryContext, insns: Sequence, i: int, reg: str,
+def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
                 offset_to_name: Dict[int, str]) -> Optional[str]:
     """Name of the ivar whose value is in *reg* at ``insns[i]``: follow ``mov`` chains
     back to the defining ``ldr xD,[Xself, Xoff]`` (``Xoff`` = a loaded ivar-offset
     variable → resolved to the ivar by :func:`proto.writeto._addr_to_name`) or the
     immediate-offset form.  The declared-offset membership test IS the validator."""
-    for _ in range(8):                                  # mov-chain depth guard
-        d = _reaching_def(insns, i, reg)
+    insns, seen = flow.insns, set()
+    while (i, reg) not in seen:
+        seen.add((i, reg))
+        d = _reaching_def(flow, i, reg)
         if d is None:
             return None
         ins = insns[d]
@@ -276,14 +269,14 @@ def _trace_ivar(ctx: BinaryContext, insns: Sequence, i: int, reg: str,
                 return None
             if mem[2] is not None:                      # [base, Xoff]
                 return _addr_to_name(
-                    ctx, _offset_var_address(insns, d, mem[2]), offset_to_name)
+                    ctx, _offset_var_address(flow, d, mem[2]), offset_to_name)
             if mem[3] == 0:                             # [Xb] with Xb = add Xself, Xoff
-                a = _reaching_def(insns, d, mem[1])
+                a = _reaching_def(flow, d, mem[1])
                 aops = split_ops(insns[a].op_str) if a is not None else []
                 if (a is not None and insns[a].mnemonic == 'add' and len(aops) == 3
                         and not aops[2].startswith('#') and _norm_reg(aops[2])):
                     return _addr_to_name(
-                        ctx, _offset_var_address(insns, a, _norm_reg(aops[2])),
+                        ctx, _offset_var_address(flow, a, _norm_reg(aops[2])),
                         offset_to_name)
                 return None
             return offset_to_name.get(mem[3])           # [base, #off]
@@ -291,17 +284,18 @@ def _trace_ivar(ctx: BinaryContext, insns: Sequence, i: int, reg: str,
     return None
 
 
-def _trace_unbox_selector(ctx: BinaryContext, insns: Sequence, i: int) -> Optional[str]:
+def _trace_unbox_selector(ctx: BinaryContext, flow, i: int) -> Optional[str]:
     """Selector of the objc call that produced the value passed in ``x1`` at the
     write-helper call ``insns[i]`` — the NSNumber unboxing step (``[v longLongValue]``)
     for a scalar key/value, or ``None`` when the object is passed straight through
     (string / message / bytes) or the chain can't be followed."""
-    reg, j = 'x1', i
-    for _ in range(8):
-        d = _reaching_def(insns, j, reg)
+    reg, j, seen = 'x1', i, set()
+    while (j, reg) not in seen:
+        seen.add((j, reg))
+        d = _reaching_def(flow, j, reg)
         if d is None:
             return None
-        ins = insns[d]
+        ins = flow.insns[d]
         if ins.mnemonic == 'bl':
             return stub_selector(ctx, _parse_imm(ins.op_str)) if reg == 'x0' else None
         ops = split_ops(ins.op_str)
@@ -323,8 +317,9 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
     and a matching END mark (same scratch slot, no field number) — anything else
     (nested sub-messages, a second write of a sub-field, an unterminated body, a
     sub-field other than 1/2) is not a recognisable map entry."""
+    flow = listing_flow(ctx, insns)
     begin = insns[begin_idx]
-    slot = _scratch_slot_of(insns, begin_idx)       # shared by the begin and end marks
+    slot = _scratch_slot_of(flow, begin_idx)       # shared by the begin and end marks
     if begin.mnemonic != 'bl' or slot is None:
         return None
     number = _writeto_field_number_before(insns, begin_idx)
@@ -338,7 +333,7 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
             continue
         target = _parse_imm(ins.op_str)
         fn = _writeto_field_number_before(insns, j)
-        j_slot = _scratch_slot_of(insns, j)
+        j_slot = _scratch_slot_of(flow, j)
         if j_slot is not None:
             if fn is None and j_slot == slot:                         # END mark
                 break
@@ -356,11 +351,11 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
     (kh, kj), (vh, vj) = writes[_KEY_FIELD], writes[_VALUE_FIELD]
     return MapEntryWriter(
         number=number, key_helper=kh, value_helper=vh,
-        key_sel=_trace_unbox_selector(ctx, insns, kj),
-        value_sel=_trace_unbox_selector(ctx, insns, vj))
+        key_sel=_trace_unbox_selector(ctx, flow, kj),
+        value_sel=_trace_unbox_selector(ctx, flow, vj))
 
 
-def _scratch_slot_of(insns: Sequence, k: int) -> Optional[int]:
+def _scratch_slot_of(flow, k: int) -> Optional[int]:
     """Stack offset K of the ``add x1, sp, #K`` that defines ``x1`` as the argument of
     the call at ``insns[k]`` (the begin/end-mark idiom), else None.  A function that
     addresses its locals from the frame pointer says ``sub x1, x29, #K`` instead; that
@@ -368,14 +363,15 @@ def _scratch_slot_of(insns: Sequence, k: int) -> Optional[int]:
     begin/end pairing needs.  Unlike :func:`proto.writeto._value_is_stack_scratch` this
     honours call clobbers: a ``bl`` between the definition and *k* redefines ``x1``, so a
     stale scratch is never reported."""
-    d = _reaching_def(insns, k, 'x1')
+    d = _reaching_def(flow, k, 'x1')
     if d is None:
         return None
-    ops = split_ops(insns[d].op_str)
-    if insns[d].mnemonic == 'sub' and len(ops) == 3 and ops[1] == 'x29' and ops[2].startswith('#'):
+    ins = flow.insns[d]
+    ops = split_ops(ins.op_str)
+    if ins.mnemonic == 'sub' and len(ops) == 3 and ops[1] == 'x29' and ops[2].startswith('#'):
         k_off = _parse_imm(ops[2])
         return None if k_off is None else -k_off
-    return _sp_offset(insns[d])
+    return _sp_offset(ins)
 
 
 # ── Shape A: enumerateKeysAndObjectsUsingBlock: ───────────────────────────────
@@ -403,19 +399,20 @@ def scan_block_enumerated_maps(
         raise
     except Exception:
         return out
+    flow = listing_flow(ctx, insns)
     for i, ins in enumerate(insns):
         if ins.mnemonic != 'bl':
             continue
         if stub_selector(ctx, _parse_imm(ins.op_str)) != _ENUMERATE_SELECTOR:
             continue
-        ivar = _trace_ivar(ctx, insns, i, 'x0', offset_to_name)
-        d = _reaching_def(insns, i, 'x2')
+        ivar = _trace_ivar(ctx, flow, i, 'x0', offset_to_name)
+        d = _reaching_def(flow, i, 'x2')
         blk = _sp_offset(insns[d]) if d is not None else None
         if ivar is None or blk is None or ivar in out:
             continue
         store = _stack_store_source(insns, i, blk + _BLOCK_INVOKE_OFFSET)
         invoke = (None if store is None
-                  else _pc_relative_address(insns, store[0] + 1, store[1]))
+                  else _pc_relative_address(flow, store[0] + 1, store[1]))
         if invoke is None:
             continue
         try:
@@ -426,8 +423,9 @@ def scan_block_enumerated_maps(
             continue
         if not body or body[-1].mnemonic not in ('ret', 'retaa', 'retab'):
             continue                                    # never analyse a truncated body
+        body_flow = listing_flow(ctx, body)
         for k, b in enumerate(body):
-            if b.mnemonic == 'bl' and _scratch_slot_of(body, k) is not None:
+            if b.mnemonic == 'bl' and _scratch_slot_of(body_flow, k) is not None:
                 entry = analyze_entry(ctx, body, k)
                 if entry is not None:
                     out[ivar] = entry

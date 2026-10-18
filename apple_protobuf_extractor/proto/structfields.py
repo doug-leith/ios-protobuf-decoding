@@ -175,7 +175,6 @@ _WRITER_BLOCK_INSNS = 128
 # ios_decoder/protos targets or iOS 27 / macOS 27 GeoServices.
 _WRITER_LOCAL_SPAN = 0x800
 
-
 _LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
 _BRANCH_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
                                'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz'))
@@ -323,7 +322,7 @@ class Bracket:
 _BRACKET_MAX_INSNS = 4096
 
 
-def analyze_bracket(insns: Sequence, begin_idx: int) -> Optional[Bracket]:
+def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     """Analyse the sub-message write whose BEGIN mark (``bl`` with a stack-scratch ``x1`` and a
     literal field number) is at ``insns[begin_idx]`` in the owner's linear ``writeTo:``
     listing.  The body is every instruction reachable from the mark WITHOUT passing the
@@ -335,8 +334,9 @@ def analyze_bracket(insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     serialisers ``f(&struct, writer)``) and the calls that DO carry one (members written
     inline), or ``None`` if there is no begin mark here, a path leaves the listing or reaches
     ``ret`` before an end mark, or a nested/foreign mark appears (an unmodelled shape)."""
+    flow = listing_flow(ctx, insns)
     begin = insns[begin_idx]
-    slot = _scratch_slot_of(insns, begin_idx)
+    slot = _scratch_slot_of(flow, begin_idx)
     if begin.mnemonic != 'bl' or slot is None:
         return None
     number = _writeto_field_number_before(insns, begin_idx)
@@ -357,7 +357,7 @@ def analyze_bracket(insns: Sequence, begin_idx: int) -> Optional[Bracket]:
             if mn in ('ret', 'retaa', 'retab'):
                 return None                          # a path with no end mark
             if mn in ('bl', 'b'):
-                j_slot = _scratch_slot_of(insns, k) if mn == 'bl' else None
+                j_slot = _scratch_slot_of(flow, k) if mn == 'bl' else None
                 fn = _writeto_field_number_before(insns, k)
                 target = _branch_target(ins)
                 if j_slot is not None:
@@ -871,7 +871,7 @@ def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorte
     idx = next((i for i, x in enumerate(insns) if x.addr == site.write_addr), None)
     if idx is None:
         return None
-    br = analyze_bracket(insns, idx)
+    br = analyze_bracket(ctx, insns, idx)
     if br is None or br.number != site.number:
         return None
     for callee in br.callees:

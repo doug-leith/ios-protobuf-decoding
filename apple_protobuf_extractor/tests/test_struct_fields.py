@@ -19,6 +19,7 @@ import artifacts
 import proto.extractor as E
 import proto.structfields as SF
 import proto.writeto as W
+from proto.dispatch import listing_flow
 import live_artifacts as V
 from proto.models import FieldLabel
 from macho.disasm import Insn, disasm
@@ -201,18 +202,18 @@ class TestAnalyzeBracket(_Patched):
 
     def test_field_number_and_struct_writer_callee_of_a_bracketed_member(self):
         insns, begin = self._insns()
-        b = SF.analyze_bracket(insns, begin)
+        b = SF.analyze_bracket(None, insns, begin)
         self.assertEqual(b.number, 1)
         self.assertEqual(b.callees, (0x18c241b50,))
 
     def test_a_begin_with_no_end_mark_is_rejected(self):
         insns, begin = self._insns()
         cut = [x for x in insns if x.op_str != '#0x18dbdab94']
-        self.assertIsNone(SF.analyze_bracket(cut, begin))
+        self.assertIsNone(SF.analyze_bracket(None, cut, begin))
 
     def test_not_a_begin_mark_is_rejected(self):
         insns, _ = self._insns()
-        self.assertIsNone(SF.analyze_bracket(insns, 0))
+        self.assertIsNone(SF.analyze_bracket(None, insns, 0))
 
 
 # Real listing: the dictionary-representation function of GEOWiFiQualityTimeRange — per member
@@ -352,7 +353,7 @@ class TestInlineStructWrites(_Patched):
         self.patch(fake)
         begin = next(i for i, x in enumerate(insns)
                      if x.mnemonic == 'bl' and x.op_str == '#0x18dbdab88')
-        br = SF.analyze_bracket(insns, begin)
+        br = SF.analyze_bracket(None, insns, begin)
         return insns, br, SF.parse_struct_encoding(layout_enc), (lambda a: a == ivar_off_var)
 
     def test_by_value_struct_members_are_read_from_the_inline_writes(self):
@@ -838,7 +839,8 @@ class TestFramePointerScratch(_Patched):
             ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'), ('mov', 'w2, #0xb'),
             ('bl', '#0x18dbdab88'), ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'),
             ('bl', '#0x18dbdab94')]))
-        begin, end = SF._scratch_slot_of(order, 3), SF._scratch_slot_of(order, 6)
+        flow = listing_flow(None, order)
+        begin, end = SF._scratch_slot_of(flow, 3), SF._scratch_slot_of(flow, 6)
         self.assertEqual(begin, end)
         self.assertIsNotNone(begin)
 
@@ -1016,7 +1018,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
         self.patch(fake)
         begin = next(i for i, x in enumerate(insns)
                      if x.mnemonic == 'bl' and x.op_str == '#0x1a0103d00')
-        br = SF.analyze_bracket(insns, begin)
+        br = SF.analyze_bracket(None, insns, begin)
         layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
         var = lambda a: a == 0x1e4930558                                       # noqa: E731
         loads = SF.track_struct_loads(insns, max(br.region), var, True, window=set(br.region))
