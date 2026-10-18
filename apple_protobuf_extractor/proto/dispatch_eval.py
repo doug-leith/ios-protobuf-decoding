@@ -285,7 +285,7 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
         if not insns:
             return
         per_br = _seed_br_arms(ctx, insns)
-        flow = Flow(ctx, insns, br_arms=per_br)
+        flow = D.decoded_flow(ctx, insns)
         region = flow.run_from(0, regs, call_result=call_result(ctx), field_value=field_value, opaque=opaque,
                                object_escape=True, tail_targets=tails)
         # A core extracts a field number on a path from ITS OWN entry (the window can hold

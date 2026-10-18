@@ -14,6 +14,7 @@ evaluator (:mod:`proto.arm64_eval`) is imported inside the functions that run it
 from __future__ import annotations
 import bisect
 import logging
+import re
 import struct
 from typing import Dict, List, Optional
 
@@ -24,7 +25,7 @@ from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_H
                                range_from_unsigned_gate)
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, opaque
-from proto.arm64_operands import imm_operand, split_ops
+from proto.arm64_operands import NO_DEST, imm_operand, is_cond_branch, split_ops
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -122,20 +123,41 @@ def _section_name(ctx: BinaryContext, va: int) -> Optional[str]:
     return None
 
 
-def _index_bounds(flow, k: int):
+# An unsigned range check: the branch that guards a table (a signed compare or an equality
+# test is not an index bound).
+_RANGE_CONDS = frozenset(('hi', 'hs', 'cs', 'lo', 'cc', 'ls'))
+
+
+def _guarding_cond(flow, k: int) -> Optional[str]:
+    """The condition of the conditional branch that reads the flags ``insns[k]`` sets: the
+    first flag reader after it in its block, when that is a ``b.<cond>``; else None."""
+    from proto.arm64_eval import _FLAG_SETTERS
+    b = flow._block_of.get(k)
+    end = flow._first_in_block[b] + len(flow.cfg.blocks[b])
+    for j in range(k + 1, end):
+        mn = flow.insns[j].mnemonic
+        if is_cond_branch(mn):
+            return mn[2:]
+        if mn in _FLAG_SETTERS or mn in ('csel', 'csinc', 'csinv', 'csneg', 'cset', 'csetm',
+                                         'cinc', 'cinv', 'cneg', 'ccmp', 'ccmn', 'adc', 'sbc'):
+            return None
+    return None
+
+
+def _index_bound(flow, k: int):
     """``(start, register, values)`` when ``insns[k]`` bounds a register a jump table may be
-    indexed by: a compare with an immediate (``cmp w8, #N`` ahead of the ``b.hi`` / ``b.hs`` /
-    ``b.ls`` / ``b.lo`` that guards the table) -- evaluated from the compare itself with
-    values 0 .. N+1, the gate deciding which reach the ``br`` -- or a low-bit mask (``and w8,
-    w0, #2^k-1``), evaluated from just after it with every value the mask lets through.
-    None for anything else."""
+    indexed by: a compare with an immediate whose flags an unsigned range branch reads
+    (``cmp w8, #N ; b.hi`` -- or ``b.hs`` / ``b.ls`` / ``b.lo`` -- guarding the table),
+    evaluated from the compare itself with values 0 .. N+1, the gate deciding which reach the
+    ``br``; or a low-bit mask (``and w8, w0, #2^k-1``), evaluated from just after it with
+    every value the mask lets through.  None for anything else."""
     from proto.arm64_eval import _MAX_GATE_SPAN
     ins = flow.insns[k]
     ops = split_ops(ins.op_str)
     if ins.mnemonic == 'cmp' and len(ops) in (2, 3) and ops[1].startswith('#'):
         n = imm_operand(ops, 1)
         r = _norm_reg(ops[0])
-        if n is None or r is None or n > _MAX_GATE_SPAN:
+        if n is None or r is None or n > _MAX_GATE_SPAN or _guarding_cond(flow, k) not in _RANGE_CONDS:
             return None
         return k, r, n + 2
     if ins.mnemonic == 'and' and len(ops) == 3 and ops[2].startswith('#'):
@@ -147,33 +169,78 @@ def _index_bounds(flow, k: int):
     return None
 
 
+_GPR = re.compile(r'\b[xw](\d+)\b')
+
+
+def _reads(ins) -> set:
+    """The general registers (``xN`` form) *ins* reads: every register operand but the
+    destination(s)."""
+    ops = split_ops(ins.op_str)
+    mn = ins.mnemonic
+    if mn in NO_DEST or mn == 'movk' or is_cond_branch(mn) or mn in ('ret', 'retaa', 'retab'):
+        src = ops
+    elif mn in ('ldp', 'ldpsw', 'ldnp'):
+        src = ops[2:]
+    else:
+        src = ops[1:]
+    return {f"x{m}" for o in src for m in _GPR.findall(o)}
+
+
+def _sources(flow, kb: int, reg: str) -> set:
+    """The definitions *reg*'s value at ``insns[kb]`` is computed from, transitively by
+    reaching definitions: instruction indices, and ``('entry', r)`` for a register's value on
+    entry."""
+    out: set = set()
+    work = [(kb, _norm_reg(reg))]
+    while work:
+        k, r = work.pop()
+        for d in flow.defs_before(k, r):
+            node = ('entry', r) if d < 0 else d
+            if node in out:
+                continue
+            out.add(node)
+            if d >= 0:
+                work.extend((d, s) for s in _reads(flow.insns[d]))
+    return out
+
+
 def _evaluated_arms(flow, idom, kb: int, lo: int, hi: int) -> set:
-    """The targets the ``br`` at ``insns[kb]`` takes, by evaluation: from every index bound
-    (:func:`_index_bounds`) in the code that dominates it, each value the bound lets through is
-    run to the ``br`` (:meth:`proto.arm64_eval.Flow.value_at`) and its register read there.
-    So the table's shape -- entry width and signedness, scaling, a bias or clamp of the index,
-    the base -- is whatever the code computes, not a pattern."""
+    """The targets the ``br`` at ``insns[kb]`` takes, by evaluation from its index bound: the
+    nearest bound (:func:`_index_bound`) in the code that dominates the ``br`` and whose value
+    the target is computed from (:func:`_sources`).  Each value the bound lets through is run
+    to the ``br`` (:meth:`proto.arm64_eval.Flow.value_at`) and its register read there, so the
+    table's shape -- entry width and signedness, scaling, a bias or clamp of the index, the
+    base -- is whatever the code computes, not a pattern.  Every path to the ``br`` passes
+    that bound, so a bound further up (a range check of the same value before a bias) lets
+    through no value it does not; one further up is tried only when the nearest gives no
+    target."""
     reg = flow.insns[kb].op_str.strip()
     blk = flow._block_of[kb]
-    arms: set = set()
+    sources = _sources(flow, kb, reg)
     d = blk
     while True:
         first = flow._first_in_block[d]
         end = kb if d == blk else first + len(flow.cfg.blocks[d])
-        for k in range(first, end):
-            bound = _index_bounds(flow, k)
+        for k in range(end - 1, first - 1, -1):
+            bound = _index_bound(flow, k)
             if bound is None:
                 continue
             start, r, count = bound
+            bounded = {k} if start != k else \
+                {('entry', r) if x < 0 else x for x in flow.defs_before(k, r)}
+            if not bounded & sources:
+                continue                     # the target is not computed from this value
+            arms = set()
             for v in range(count):
                 t = flow.value_at(start, {r: v}, kb, reg)
                 if t is not None and lo <= t < hi:
                     arms.add(t)
+            if arms:
+                return arms
         up = idom.get(d)
         if up is None or up == d:
-            break
+            return set()
         d = up
-    return arms
 
 
 def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool = False):
@@ -194,13 +261,23 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
     Memoised on *ctx* per instruction listing."""
     if ctx is None or not insns:
         return {} if per_br else set()
+    by_br = _decoded(ctx, insns)[0]
+    if per_br:
+        return {b: set(a) for b, a in by_br.items()}
+    return set().union(*by_br.values())
+
+
+def _decoded(ctx: BinaryContext, insns: List["Insn"]) -> list:
+    """``[{br address: arms}, Flow or None, sorted listing]`` for *insns*, memoised on *ctx* per
+    listing: the decoder's last Flow is kept when it was built with the final arms."""
     from proto.arm64_eval import Flow
     ins = sorted(insns, key=lambda i: i.addr)
     key = tuple(i.addr for i in ins)
     memo = _ctx_cache(ctx, "_jump_table_arms", dict)
-    by_br = memo.get(key)
-    if by_br is None:
-        by_br = {}
+    hit = memo.get(key)
+    if hit is None:
+        by_br: Dict[int, frozenset] = {}
+        final = None
         lo, hi = ins[0].addr, ins[-1].addr + 4
         todo = {k for k, i in enumerate(ins) if i.mnemonic == 'br'}
         while todo:
@@ -208,33 +285,38 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
             idom = dominators(flow.cfg)
             reached = sorted(k for k in todo if flow._block_of.get(k) in idom)
             todo.difference_update(reached)
-            new = False
+            new = {}
             for kb in reached:
                 arms = _evaluated_arms(flow, idom, kb, lo, hi)
                 if arms:
-                    by_br[ins[kb].addr] = frozenset(arms)
-                    new = True
+                    new[ins[kb].addr] = frozenset(arms)
             if not new:
+                final = flow
                 break
-        memo[key] = by_br
-    if per_br:
-        return {b: set(a) for b, a in by_br.items()}
-    return set().union(*by_br.values())
+            by_br = {**by_br, **new}
+        hit = memo[key] = [by_br, final, ins]
+    return hit
+
+
+def decoded_flow(ctx: BinaryContext, insns: List["Insn"]):
+    """The :class:`proto.arm64_eval.Flow` of *insns* (in address order) with each ``br``
+    reaching its own decoded table (:func:`_jump_table_arm_addrs`): the decoder's own when it
+    built one with the final arms.  Memoised on *ctx* per listing."""
+    from proto.arm64_eval import Flow
+    hit = _decoded(ctx, insns)
+    if hit[1] is None:
+        hit[1] = Flow(ctx, hit[2], br_arms=hit[0])
+    return hit[1]
 
 
 def listing_flow(ctx: BinaryContext, insns: List["Insn"]):
     """The :class:`proto.arm64_eval.Flow` of an instruction listing, each ``br`` reaching its
-    own decoded table (:func:`_jump_table_arm_addrs`).  Memoised per list on *ctx*; built
-    afresh (and with no tables, which need the image) when *ctx* is None."""
+    own decoded table (:func:`decoded_flow` for a listing in address order); with no tables,
+    which need the image, when *ctx* is None."""
     from proto.arm64_eval import Flow
-    if ctx is None:
-        return Flow(None, list(insns), br_arms={})
-    cache = _ctx_cache(ctx, "_listing_flows", dict)
-    hit = cache.get(id(insns))
-    if hit is None or hit[0] is not insns:
-        hit = (insns, Flow(ctx, list(insns), br_arms=_jump_table_arm_addrs(ctx, insns, per_br=True)))
-        cache[id(insns)] = hit
-    return hit[1]
+    if ctx is None or any(a.addr >= b.addr for a, b in zip(insns, insns[1:])):
+        return Flow(ctx, list(insns), br_arms=_jump_table_arm_addrs(ctx, insns, per_br=True))
+    return decoded_flow(ctx, insns)
 
 
 def build_function_index(ctx: BinaryContext, cl: 'ClassList') -> None:
