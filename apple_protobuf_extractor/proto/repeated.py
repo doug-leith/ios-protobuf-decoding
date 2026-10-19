@@ -13,10 +13,10 @@ from dataclasses import dataclass
 from typing import Dict, FrozenSet, Optional, Tuple
 
 from macho.memory    import BinaryContext
-from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm    import disasm, _norm_reg
-from proto.arm64cfg  import mem_operand, parse_adrp
-from proto.callees   import callee_name
+from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
+from macho.disasm    import disasm, _parse_imm
+from proto.arm64_operands import mem_regs, split_ops
+from proto.callees   import callee_name, RETURNS_ARGUMENT
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
 log = logging.getLogger(__name__)
@@ -179,87 +179,138 @@ def _resolve_repeated_via_dispatch(
     return evaluate_class(ctx, cls, core_index).elements()
 
 
+#: Tail calls that return the class they are handed in x0: the ARC return-value handshake,
+#: and ``objc_opt_class`` (a class object's class is itself).
+_RETURNS_CLASS_ARGUMENT = RETURNS_ARGUMENT | {'_objc_opt_class'}
+# [cap:INPUT-SANITY] runaway backstop: a ``+xyzType`` body is three instructions (the
+# listing also ends at the next function entry).
+_TYPE_METHOD_MAX_INSNS = 64
+
+
+def _returned_class_ref(ctx: BinaryContext, imp: int) -> Optional[Tuple[str, int]]:
+    """How the method at *imp* returns a class in x0, by x0's reaching definition at every
+    exit -- a ``ret``, or a tail call to a function that returns the class it is handed
+    (:data:`_RETURNS_CLASS_ARGUMENT`): ``("slot", addr)`` when x0 is loaded from the
+    class-reference slot at *addr* (``adrp ; ldr x0, [x8, #off]``), ``("class", addr)`` when
+    x0 is the class's own address (``adrp ; add x0, x8, #off``, iOS 27).  None when an exit
+    returns anything else or the exits disagree."""
+    from proto.dispatch import function_entries, listing_flow
+    nxt = function_entries(ctx).next_after(imp)
+    insns = [i for i in disasm(ctx, imp, max_insns=_TYPE_METHOD_MAX_INSNS, stop_at_ret=True)
+             if nxt is None or i.addr < nxt]
+    if not insns:
+        return None
+    flow = listing_flow(ctx, insns)
+    end = insns[-1].addr + 4
+    refs = set()
+    for k, ins in enumerate(insns):
+        if ins.mnemonic == 'b':
+            t = _parse_imm(ins.op_str)
+            if t is not None and imp <= t < end:
+                continue                                    # a block of this method
+        elif ins.mnemonic not in ('ret', 'retaa', 'retab'):
+            continue
+        d = _x0_source(ctx, flow, k)
+        if d is _UNREACHED:
+            continue                                        # not code of this method
+        if d is None or (ins.mnemonic == 'b' and callee_name(ctx, _parse_imm(ins.op_str))
+                         not in _RETURNS_CLASS_ARGUMENT):
+            return None
+        ops = split_ops(insns[d].op_str)
+        if insns[d].mnemonic == 'ldr' and len(ops) == 2:
+            m = mem_regs(ops[1])
+            base = flow.const_before(d, m[0]) if m and m[0] and m[1] is None else None
+            if base is None:
+                return None
+            refs.add(("slot", base + m[2]))
+        else:
+            v = flow.const_before(d + 1, 'x0')
+            if v is None:
+                return None
+            refs.add(("class", v))
+    return refs.pop() if len(refs) == 1 else None
+
+
+_UNREACHED = object()
+
+
+def _x0_source(ctx: BinaryContext, flow, k: int):
+    """Index of the instruction whose x0 the exit ``insns[k]`` returns, through calls that
+    return the class they are handed (``bl _objc_opt_class ; bl
+    _objc_claimAutoreleasedReturnValue ; ret``); :data:`_UNREACHED` when no path from the
+    entry reaches ``insns[k]``, None when x0 has more than one source or is the entry's."""
+    seen = set()
+    while k not in seen:
+        seen.add(k)
+        defs = flow.defs_before(k, 'x0')
+        if not defs:
+            return _UNREACHED
+        if len(defs) != 1 or min(defs) < 0:
+            return None
+        (d,) = defs
+        ins = flow.insns[d]
+        if ins.mnemonic != 'bl':
+            return d
+        if callee_name(ctx, _parse_imm(ins.op_str)) not in _RETURNS_CLASS_ARGUMENT:
+            return None
+        k = d                                               # x0 before that call
+    return None
+
+
 def _class_from_type_method_imp(
     ctx: BinaryContext,
     imp: int,
     cl: ClassList,
 ) -> Optional[str]:
-    """
-    Given the IMP of a ``+[Cls xyzType]`` metaclass method, disassemble it
-    and return the ObjC class name it returns, or None.
+    """The ObjC class a ``+[Cls xyzType]`` metaclass method returns, or None.  The method
+    returns a class reference (:func:`_returned_class_ref`)::
 
-    Apple's runtime ``+xyzType`` methods are always a simple two-instruction
-    sequence::
+        adrp  x8, <page>          ; iPhone 8: a class-reference slot in __DATA_CONST
+        ldr   x0, [x8, #<off>]
+        b     _objc_opt_class
 
-        adrp  x8, <page>         ; address of class reference in __DATA_CONST
-        ldr   x0, [x8, #<off>]  ; load the decoded class pointer into x0
-        b     <return_thunk>     ; tail-call ret
+        adrp  x8, <page>          ; iOS 27: the class itself
+        add   x0, x8, #<off>
+        b     _objc_opt_class
 
-    Note the **cross-register** pattern: ADRP writes a scratch register (e.g.
-    ``x8``) while LDR loads the class pointer *into* ``x0`` (the return
-    register) *from* that scratch register — a dedicated scan is needed since
-    ADRP and LDR use different registers here.
+    A class pointer names its class through the image's class list, else its ``class_t``
+    (:func:`macho.classlist.class_name_at`: another image's class in the dyld cache).  A slot
+    that holds no pointer is a chained-fixup bind for an external / system class (NSString,
+    NSData): its symbol name (``ctx._bind_name_map``) names it, letting callers map it to a
+    proto scalar via :data:`_CLASS_TO_PROTO`.
 
-    For binary-local classes: ``read_ptr`` decodes the class pointer and
-    ``cl.by_vmaddr`` resolves it to the ``ObjcClass`` record.  For external /
-    system classes (e.g. NSString, NSData): the slot is a chained-fixup bind
-    entry, whose symbol name was recorded in ``ctx._bind_name_map`` during
-    binary construction and is returned directly (e.g. ``"NSString"``),
-    letting callers map it to a proto scalar via :data:`_CLASS_TO_PROTO`.
-
-    This fallback is essential for shared-cache-extracted binaries (like
-    GeoServices) where preoptimised relative method lists render selector names
-    unresolvable: name-based resolution fails for fields whose ivar name
-    doesn't directly suffix-match the element class (e.g.
-    ``_legacyPlaceResults`` → element class ``GEOPDPlace``, not
-    ``GEOPDLegacyPlaceResult``).
-    """
+    This is essential for shared-cache-extracted binaries (like GeoServices) where
+    preoptimised relative method lists render selector names unresolvable: name-based
+    resolution fails for fields whose ivar name doesn't directly suffix-match the element
+    class (e.g. ``_legacyPlaceResults`` → element class ``GEOPDPlace``, not
+    ``GEOPDLegacyPlaceResult``)."""
     if imp == 0:
         return None
     try:
-        insns = disasm(ctx, imp, max_insns=8)
+        ref = _returned_class_ref(ctx, imp)
+        if ref is None:
+            return None
+        kind, va = ref
+        class_va = ctx.read_ptr(va) if kind == "slot" else va
+        if class_va:
+            obj_cls = cl.by_vmaddr(class_va)
+            if obj_cls is not None and not obj_cls.is_meta:
+                return obj_cls.name
+            name = class_name_at(ctx, class_va)
+            if name:
+                return name
+        if kind == "slot":
+            bind_sym = ctx.bind_name_for(va)
+            if bind_sym:
+                # "_OBJC_CLASS_$_NSString" → "NSString"
+                if '_OBJC_CLASS_$_' in bind_sym:
+                    return bind_sym.split('_OBJC_CLASS_$_', 1)[1]
+                return bind_sym
     except (NameError, ImportError):
         raise
-    except Exception:
-        return None
-
-    # Scan for: adrp xN, page  ...  ldr x0, [xN, #off]
-    # Collect the ADRP page for each base register seen.
-    adrp_page: Dict[str, int] = {}
-    for ins in insns:
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None:
-                adrp_page[pa[0]] = pa[1]
-            continue
-
-        if ins.mnemonic == 'ldr':
-            mo = mem_operand(ins.op_str)        # immediate/no-offset form only
-            if mo is not None and mo[2] is None:
-                # Accept any LDR into x0 whose base register has a known ADRP page
-                if _norm_reg(mo[0]) == 'x0' and mo[1] in adrp_page:
-                    slot_va = adrp_page[mo[1]] + mo[3]
-                    try:
-                        class_va = ctx.read_ptr(slot_va)
-                        if class_va:
-                            obj_cls = cl.by_vmaddr(class_va)
-                            if obj_cls is not None and not obj_cls.is_meta:
-                                return obj_cls.name
-                        # ── Bind table fallback for external / system classes ──
-                        # When cl.by_vmaddr() fails, the slot may be a bind entry
-                        # for an external class (NSString, NSData, …).  The symbol
-                        # name was recorded in _bind_name_map during fixup parsing.
-                        bind_sym = ctx.bind_name_for(slot_va)
-                        if bind_sym:
-                            # "_OBJC_CLASS_$_NSString" → "NSString"
-                            if '_OBJC_CLASS_$_' in bind_sym:
-                                return bind_sym.split('_OBJC_CLASS_$_', 1)[1]
-                            return bind_sym
-                    except (ValueError, KeyError):
-                        pass
-
+    except (ValueError, KeyError):
+        pass
     return None
-
 
 def _resolve_repeated_type(type_sel: str, metaclass: Optional[ObjcClass],
                             cl: ClassList,

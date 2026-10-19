@@ -159,6 +159,47 @@ class TestScalarWriterElementType(unittest.TestCase):
             self.assertIsNone(R._writer_element_type(None, 0x9000))
 
 
+class TestReturnedClassRef(unittest.TestCase):
+    """proto.repeated._returned_class_ref: what a ``+xyzType`` method returns in x0, by its
+    reaching definition at every exit the entry reaches."""
+    OPT_CLASS, CLAIM = 0x9000, 0x9100
+
+    def _ref(self, blocks, entries=(0x1000, 0x2000)):
+        from types import SimpleNamespace
+        import proto.repeated as R
+        from tests._listing import layout
+        _o, fd = layout(*blocks)
+        names = {self.OPT_CLASS: '_objc_opt_class', self.CLAIM: '_objc_claimAutoreleasedReturnValue'}
+        ctx = SimpleNamespace(_function_entries=set(entries))
+        with patch.object(R, 'disasm', fd), \
+                patch.object(R, 'callee_name', lambda c, va: names.get(va)):
+            return R._returned_class_ref(ctx, 0x1000)
+
+    def test_a_slot_loaded_then_tail_called_into_objc_opt_class(self):
+        self.assertEqual(self._ref([(0x1000, [('adrp', 'x8, #0x5000'), ('ldr', 'x0, [x8, #0x80]'),
+                                              ('b', '#0x9000')])]), ("slot", 0x5080))
+
+    def test_the_class_address_itself(self):
+        # iOS 27: adrp ; add x0 ; b _objc_opt_class
+        self.assertEqual(self._ref([(0x1000, [('adrp', 'x8, #0x6000'), ('add', 'x0, x8, #0x248'),
+                                              ('b', '#0x9000')])]), ("class", 0x6248))
+
+    def test_through_calls_that_return_their_class(self):
+        self.assertEqual(self._ref([(0x1000, [
+            ('stp', 'x29, x30, [sp, #-0x10]!'), ('mov', 'x29, sp'), ('adrp', 'x8, #0x5000'),
+            ('ldr', 'x0, [x8, #0x80]'), ('bl', '#0x9000'), ('bl', '#0x9100'),
+            ('ldp', 'x29, x30, [sp], #0x10'), ('ret', '')])]), ("slot", 0x5080))
+
+    def test_code_past_the_tail_call_is_not_this_method(self):
+        # padding, then an unnamed C function before the next method returns something else
+        self.assertEqual(self._ref([(0x1000, [('adrp', 'x8, #0x5000'), ('ldr', 'x0, [x8, #0x80]'),
+                                              ('b', '#0x9000'), ('udf', '#0'),
+                                              ('mov', 'x0, #0'), ('ret', '')])]), ("slot", 0x5080))
+
+    def test_any_other_tail_call_returns_no_class(self):
+        self.assertIsNone(self._ref([(0x1000, [('mov', 'w2, #0'), ('b', '#0x9200')])]))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # live: GeoServices (dyld cache) and locationd (standalone binary)
 # ══════════════════════════════════════════════════════════════════════════════

@@ -1261,7 +1261,7 @@ class TestMetaclassTypeMethodResolution(unittest.TestCase):
     @classmethod
     def _encode_adrp_ldr(cls) -> bytes:
         """
-        Encode ``adrp x8, <data_page>; ldr x0, [x8, #<data_off>]`` for the
+        Encode ``adrp x8, <data_page>; ldr x0, [x8, #<data_off>]; ret`` for the
         +valuesType IMP that returns the class pointer at _DATA_SLOT_VA.
         """
         import struct
@@ -1279,13 +1279,13 @@ class TestMetaclassTypeMethodResolution(unittest.TestCase):
         imm12  = data_off // 8
         ldr_w  = 0xF9400000 | (imm12 << 10) | (8 << 5) | 0       # x0 from [x8]
 
-        return struct.pack('<II', adrp_w, ldr_w)
+        return struct.pack('<III', adrp_w, ldr_w, 0xD65F03C0)    # ... ; ret
 
     def _make_fake_ctx(self):
         """Build a minimal BinaryContext-like object for the test."""
         import struct
 
-        imp_bytes       = self._encode_adrp_ldr()              # 8 instruction bytes
+        imp_bytes       = self._encode_adrp_ldr()              # 12 instruction bytes
         slot_ptr_bytes  = struct.pack('<Q', self._COMPONENT_VA) # pointer to correct class
 
         meta_va  = self._META_VA
