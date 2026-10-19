@@ -15,6 +15,6 @@ message _CPVisibleResultsFeedback {
   repeated _cpsearchresultforfeedback._CPSearchResultForFeedback results = 2;
   int32 triggerEvent = 3;
   _cpsearchresultforfeedback._CPSearchResultForFeedback goTakeoverResult = 4;
-  repeated bytes uniqueIdsOfVisibleButtons = 5;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated uint64 uniqueIdsOfVisibleButtons = 5 [features.repeated_field_encoding = EXPANDED];
   repeated string uniqueIdentifiersOfVisibleCardSections = 6;
 }

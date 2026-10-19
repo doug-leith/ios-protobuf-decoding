@@ -49,7 +49,7 @@ from proto.defaults import DEFAULT_PREFIXES
 from proto.models import (
     FieldLabel, ProtoField, ProtoMessage, ProtoEnum, ProtoEnumValue,
     OPAQUE_PASSTHROUGH_COMMENT, HEURISTIC_CLASS_DETECTION_COMMENT,
-    VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix,
+    VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix, PACKABLE_SCALARS as _PACKABLE_SCALARS,
 )
 
 _GENERATOR = "apple_protobuf_extractor (ios_protobuf_decoding)"
@@ -284,11 +284,6 @@ def _best_in_compat_group(
     )
 
 
-# Scalar types that protobuf can encode packed (and an enum): the only ones a
-# ``repeated_field_encoding`` feature may be set on.
-_PACKABLE_SCALARS = frozenset((
-    "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
-    "sfixed32", "sfixed64", "float", "double", "bool"))
 
 # A repeated scalar C-list no writeTo: write binds: its wire encoding
 # is unknown, and the file's edition default (PACKED) is only a default.

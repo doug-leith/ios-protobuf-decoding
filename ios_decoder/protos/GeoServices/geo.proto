@@ -26514,7 +26514,7 @@ message PDBatchPopularNearbySearchParameters {
   uint32 maxResults = 1;
   PDViewportInfo viewportInfo = 2;
   double requestLocalTimestamp = 3;
-  repeated bytes suggestionEntryMetadatas = 4;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes suggestionEntryMetadatas = 4;
 }
 
 message PDBatchPopularNearbySearchResult {
@@ -27410,7 +27410,7 @@ message PDExternalTransitLookupParameters {
   double transactionTimestamp = 1;
   Location transactionLocation = 2;
   string sourceId = 3;
-  repeated bytes externalTransitStationCodes = 4;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes externalTransitStationCodes = 4;
 }
 
 message PDExternalTransitLookupResult {
@@ -28791,7 +28791,7 @@ message PDPriceDescriptionFilter {
 message PDPrototype {
   string componentType = 1;
   string version = 2;
-  repeated bytes values = 3;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes values = 3;
 }
 
 message PDPrototypeContainer {
@@ -28943,7 +28943,7 @@ message PDRecentRouteInfo {
   bytes routeId = 3;
   PreferredTransportType preferredTransportType = 4;
   bytes etaFilter = 5;
-  repeated bytes zilchPointSegments = 6;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes zilchPointSegments = 6;
   bytes evChargingMetadata = 7;
   bytes originalWaypointRoute = 8;
 }

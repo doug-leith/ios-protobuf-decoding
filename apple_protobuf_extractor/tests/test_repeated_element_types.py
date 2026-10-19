@@ -129,6 +129,36 @@ class TestRepeatedElementPrecedence(unittest.TestCase):
         self.assertEqual(out[0], 'string')
 
 
+class TestScalarWriterElementType(unittest.TestCase):
+    """A repeated object array written with a named ProtocolBuffer scalar writer has that
+    writer's element type (CoreParsec _CPVisibleResultsFeedback.uniqueIdsOfVisibleButtons:
+    an NSArray written element by element with _PBDataWriterWriteUint64Field)."""
+
+    def _resolve(self, writer_name):
+        import proto.repeated as R
+        ivar = ObjcIvar(name='_ids', type_enc='@"NSArray"', offset=8, size=8)
+        with patch.object(R, 'callee_name', lambda ctx, va: writer_name if va == 0x9000 else None):
+            return R._resolve_repeated_field_type(ivar, 'ids', None, None, None, STR_HELPER,
+                                                  {'_ids': 0x9000})
+
+    def test_scalar_writer_names_the_element_type(self):
+        rr = self._resolve('_PBDataWriterWriteUint64Field')
+        self.assertEqual((rr.type_name, rr.abi_confirmed), ('uint64', True))
+        self.assertEqual(self._resolve('_PBDataWriterWriteSfixed32Field').type_name, 'sfixed32')
+
+    def test_data_writer_is_genuine_bytes_not_a_give_up(self):
+        rr = self._resolve('_PBDataWriterWriteDataField')
+        self.assertEqual((rr.type_name, rr.element_unresolved), ('bytes', False))
+
+    def test_submessage_and_unnamed_writers_name_nothing(self):
+        import proto.repeated as R
+        self.assertIsNone(R._writer_element_type(None, None))
+        with patch.object(R, 'callee_name', lambda ctx, va: '_PBDataWriterWriteSubmessage'):
+            self.assertIsNone(R._writer_element_type(None, 0x9000))
+        with patch.object(R, 'callee_name', lambda ctx, va: None):
+            self.assertIsNone(R._writer_element_type(None, 0x9000))
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # live: GeoServices (dyld cache) and locationd (standalone binary)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -168,6 +198,12 @@ class TestGeoServicesRepeatedElementTypes(unittest.TestCase):
 
     def _field(self, cls_name, fname):
         return next(f for f in self.msgs[cls_name].fields if f.name == fname)
+
+    # -- a Data writer's elements are genuine bytes (not a flagged give-up) -----
+
+    def test_data_writer_array_is_unflagged_bytes(self):
+        f = self._field('GEOPDExternalTransitLookupParameters', 'externalTransitStationCodes')
+        self.assertEqual((f.type_name, f.type_inference_note), ('bytes', None))
 
     # -- the reported bug: string writer vs name-suffix guess ------------------
 

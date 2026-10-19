@@ -111,8 +111,15 @@ class TestRepeatedEncodingOffline(unittest.TestCase):
     def test_unseen_write(self):
         self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {}), 'UNSEEN')
 
-    def test_not_a_clist(self):
-        self.assertIsNone(_repeated_encoding(_Ivar('_a', '@"NSMutableArray"'), {}))
+    def test_object_array_of_scalars_is_read_the_same_way(self):
+        # an NSArray whose elements are scalars (written per element with the field's number)
+        arr = _Ivar('_a', '@"NSArray"')
+        self.assertEqual(_repeated_encoding(arr, {'_a': {'bracket': False}}, 'uint64'), 'EXPANDED')
+        self.assertEqual(_repeated_encoding(arr, {}, 'int32', 'ENUM:E'), 'UNSEEN')
+        self.assertIsNone(_repeated_encoding(arr, {'_a': {'bracket': False}}, 'string'))
+
+    def test_neither_a_clist_nor_an_array(self):
+        self.assertIsNone(_repeated_encoding(_Ivar('_a', '@"NSString"'), {}))
 
     def _emit(self, **kw):
         f = ProtoField(name='xs', number=3, label=FieldLabel.REPEATED, number_confirmed=True,

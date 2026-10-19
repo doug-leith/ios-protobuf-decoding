@@ -129,6 +129,13 @@ class FieldLabel(str, Enum):
     REQUIRED = "required"
 
 
+# Scalar types that protobuf can encode packed (and an enum): the only ones a
+# ``repeated_field_encoding`` feature may be set on.
+PACKABLE_SCALARS = frozenset((
+    "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
+    "sfixed32", "sfixed64", "float", "double", "bool"))
+
+
 @dataclass
 class ProtoField:
     """One field in a proto message."""

@@ -168,12 +168,12 @@ message NSPPrivacyProxyTokenActivationQuery {
 
 message NSPPrivacyProxyTokenActivationResponse {
   uint64 tokenExpiryTimestamp = 1;
-  repeated bytes activatedTokenLists = 2;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes activatedTokenLists = 2;
 }
 
 message NSPPrivacyProxyTokenInfo {
   string proxyURL = 1;
   bytes tokenKeyID = 2;
-  repeated bytes unactivatedTokenLists = 3;  // element type could not be determined; emitted as bytes — each element may be an unparsed message; see LIMITATIONS.md (2)
+  repeated bytes unactivatedTokenLists = 3;
   string vendor = 4;
 }

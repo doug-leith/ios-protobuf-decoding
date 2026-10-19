@@ -16,9 +16,30 @@ from macho.memory    import BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm    import disasm, _norm_reg
 from proto.arm64cfg  import ivar_slot_loads, mem_operand, parse_adrp
+from proto.callees   import callee_name
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
 log = logging.getLogger(__name__)
+
+#: ProtocolBuffer.framework's field writers (ABI names ``_PBDataWriterWrite<T>Field``) by
+#: the proto type of the one value each serialises.  ``Submessage`` is not here: its
+#: element class comes from the class-naming paths.
+_WRITER_ELEMENT_TYPE = {
+    "BOOL": "bool", "Int32": "int32", "Int64": "int64", "Uint32": "uint32",
+    "Uint64": "uint64", "Sint32": "sint32", "Sint64": "sint64", "Fixed32": "fixed32",
+    "Fixed64": "fixed64", "Sfixed32": "sfixed32", "Sfixed64": "sfixed64",
+    "Float": "float", "Double": "double", "String": "string", "Data": "bytes",
+}
+
+
+def _writer_element_type(ctx: BinaryContext, helper_va: Optional[int]) -> Optional[str]:
+    """The proto type the ProtocolBuffer field writer at *helper_va* serialises, by its ABI
+    name (:func:`proto.callees.callee_name`: a cache export, or a standalone binary's
+    import); None for an unnamed helper or a writer with no one value type."""
+    name = callee_name(ctx, helper_va) if helper_va else None
+    if not name or not (name.startswith("_PBDataWriterWrite") and name.endswith("Field")):
+        return None
+    return _WRITER_ELEMENT_TYPE.get(name[len("_PBDataWriterWrite"):-len("Field")])
 
 def _repeated_element_type(ivar: ObjcIvar, metaclass: Optional[ObjcClass]) -> str:
     """
@@ -298,10 +319,12 @@ def _resolve_repeated_field_type(
 
     Implements, in order:
 
-    1. **Write-helper string check** (ABI evidence, checked FIRST): if the ivar's
-       write-helper address matches the binary-wide string write-helper, the field
-       is definitively ``"string"`` -- the NSString writer is never used for a
-       message element, so it outranks the class-naming path below.
+    1. **Write-helper check** (ABI evidence, checked FIRST): if the ivar's write-helper
+       address matches the binary-wide string write-helper, the field is definitively
+       ``"string"`` -- the NSString writer is never used for a message element, so it
+       outranks the class-naming path below; likewise a write helper that is a named
+       ProtocolBuffer scalar writer (``_PBDataWriterWriteUint64Field`` ...) writes one
+       element of that type per call (:func:`_writer_element_type`).
 
     2. The ``+[Cls xyzType]`` metaclass method via :func:`_repeated_element_type` +
        :func:`_resolve_repeated_type` (the class is read out of the method's IMP).
@@ -318,6 +341,10 @@ def _resolve_repeated_field_type(
                   pname, string_helper)
         return _RepeatedTypeResult(type_name="string", type_class=None,
                                    abi_confirmed=True)
+    written = _writer_element_type(ctx, wt_helpers.get(ivar.name))
+    if written is not None:
+        log.debug("%s: repeated %s via writeTo: writer", pname, written)
+        return _RepeatedTypeResult(type_name=written, type_class=None, abi_confirmed=True)
 
     type_sel = _repeated_element_type(ivar, metaclass)
     resolved, elem_unresolved = _resolve_repeated_type(type_sel, metaclass, cl, ctx=ctx)

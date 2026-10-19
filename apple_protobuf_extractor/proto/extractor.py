@@ -51,7 +51,7 @@ from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
 from proto.models    import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics,
-                             record_analysis_failure, record_failed_pass)
+                             record_analysis_failure, record_failed_pass, PACKABLE_SCALARS)
 from proto.writeto   import _extract_writeto_field_numbers, writeto_sent_selectors
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
@@ -149,6 +149,9 @@ _MAP_OBJC_CLASSES = MAP_OBJC_CLASSES
 # and cannot be emitted, so the tool estimates the lowest legal number — but that
 # number is NOT what's on the wire.  When writeTo: writes it with a literal 0
 # for an ESTIMATED field, say so explicitly.  See LIMITATIONS.md (4), to-do #52.
+#: Object array ivars: a repeated field whose elements are objects (or boxed scalars).
+_OBJECT_ARRAY_ENCS = frozenset({'@"NSArray"', '@"NSMutableArray"'})
+
 #: Object ivar types that name no wire type: the field is emitted as bytes.
 _OPAQUE_OBJECT_TYPES = frozenset({"NSNumber", "NSValue", "NSObject"})
 _OPAQUE_OBJECT_NOTE = ("ivar type {enc} names no wire type; emitted as bytes")
@@ -634,14 +637,18 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, bound_wr
     return _refine_scalar_by_family(type_name, fams.pop(), f"{owner}.{ivar.name}"), True
 
 
-def _repeated_encoding(ivar, bound_writes):
-    """How ``writeTo:`` writes a repeated scalar/enum C-list ivar (``{?="list"^<elem>…}``):
+def _repeated_encoding(ivar, bound_writes, type_name=None, type_class=None):
+    """How ``writeTo:`` writes a repeated ivar -- a scalar/enum C-list (``{?="list"^<elem>…}``)
+    or an object array whose element type (*type_name* / *type_class*) is packable (a
+    scalar or an enum, :mod:`proto.repeated`):
     ``"PACKED"`` when its binding write is a length-delimited begin/recall bracket around no-tag
     element writes (``bound_writes[ivar]['bracket']``), ``"EXPANDED"`` when it is the
     element writer called with the field's own number (one tag per element), ``"UNSEEN"``
-    when no write binds the ivar, None when the ivar is not a C-list.  The
-    emitter declares the encoding from this, instead of edition 2023's PACKED default."""
-    if not _is_packed_list_enc(ivar.type_enc):
+    when no write binds the ivar, None when the ivar is neither.  The emitter declares the
+    encoding from this, instead of edition 2023's PACKED default."""
+    packable = type_name in PACKABLE_SCALARS or (type_class or "").startswith("ENUM:")
+    if not (_is_packed_list_enc(ivar.type_enc)
+            or (ivar.type_enc in _OBJECT_ARRAY_ENCS and packable)):
         return None
     w = (bound_writes or {}).get(ivar.name)
     if not w:
@@ -988,7 +995,7 @@ def extract_proto_message(
             type_class=type_class,
             number_confirmed=confirmed,
             type_inference_note=_type_note,
-            repeated_encoding=_repeated_encoding(ivar, _bound_writes),
+            repeated_encoding=_repeated_encoding(ivar, _bound_writes, type_name, type_class),
         ))
 
     # Drop manual-array backing-store ivars (``_xCount``/``_xSpace``) that ObjC
