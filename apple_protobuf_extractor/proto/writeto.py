@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from macho.memory import BinaryContext, _is_in_any_section
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm import disasm, find_mov_imm, _parse_imm, _norm_reg
+from macho.disasm import disasm, _parse_imm, _norm_reg
 # Tier-1 shared arm64 helpers, lifted to proto/arm64cfg.py.
 # Re-imported (hence re-exported) here so
 # writeto_walk's own callers and tests/test_writeto_walk_coverage.py
@@ -37,103 +37,62 @@ from proto.arm64cfg import (              # noqa: F401  (re-export)
     split_ops, dst_reg, mem_operand, parse_adrp,
 )
 
+from proto.arm64_operands import writes
 from proto.callees import stub_selector
 from proto.models import record_analysis_failure
-import re
 
 
-# Function-epilogue instructions the compiler may hoist between the field-number
-# load (`mov w2,#N`) and a tail-call (`b`) to the write helper.  ``unk`` is
-# included because the native mini-decoder renders some ldp/stp variants
-# (post-indexed `ldp x22,x21,[sp],#0x30`, etc.) as ``unk``; in the epilogue gap
-# those are restores, not field-relevant instructions.
-_WRITETO_EPILOGUE_MNEMONICS = frozenset({'ldp', 'stp', 'unk'})
+# Instructions execution does not fall through: the straight-line run that ends at a call
+# starts after the last of them (or after the previous call).
+_NO_FALL_THROUGH = frozenset(('b', 'br', 'braa', 'brab', 'ret', 'retaa', 'retab', 'eret',
+                              'brk', 'udf'))
 
 
-# Operand 0 naming FP/SIMD register 0 in any width/arrangement (`d0`, `s0`, `v0.16b`, …):
-# the first floating-point argument register.  The newer toolchain copies a spilled double
-# into it with `mov v0.16b, v8.16b` where the old one wrote `fmov d0, d8`.
-_FP_ARG0 = re.compile(r'\s*[dsvqhb]0(?![0-9])')
-_NO_DEST_MNEMONICS = frozenset(('cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'tbz', 'tbnz', 'cbz', 'cbnz'))
-
-
-def _sets_up_fp_value(insns: List, idx: int) -> bool:
-    """True when the call at ``insns[idx]`` has a floating-point value argument: some
-    instruction since the previous ``bl`` writes ``d0`` or ``s0`` (``ldr d0,[..]``,
-    ``fmov d0,x8``, ``scvtf d0,..``).
-
-    A double/float field is written as ``(writer, field#, value in d0/s0)`` — the field
-    number goes in ``w1``, not ``w2``.  An integer-argument call whose ``w1`` merely holds
-    a constant (``os_unfair_lock_lock_with_options(lock, 0x10000)`` in the newer
-    toolchain's serializers) has no FP value, and ``w1`` is not a field number there."""
-    for k in range(idx - 1, -1, -1):
-        ins = insns[k]
-        if ins.mnemonic == 'bl':
-            return False
-        if ins.mnemonic.startswith('st') or ins.mnemonic in _NO_DEST_MNEMONICS:
-            continue                          # stores / compares: operand 0 is read, not written
-        if _FP_ARG0.match(ins.op_str):
-            return True
-    return False
-
-
-def _field_number_imm(cand: List, insns: List, idx: int) -> Optional[int]:
-    """The field-number immediate set up by the single instruction in *cand* for the call
-    at ``insns[idx]``: ``mov w2,#N``, or ``mov w1,#N`` when (and only when) the call
-    passes an FP value in d0/s0 (:func:`_sets_up_fp_value`)."""
-    n = find_mov_imm(cand, 'w2')
-    if n is None:
-        n = find_mov_imm(cand, 'w1')
-        if n is not None and not _sets_up_fp_value(insns, idx):
+def _run_definition(insns: List, idx: int, reg: str) -> Optional[int]:
+    """Index of the instruction that defines *reg* (``xN`` / ``vN`` form) for ``insns[idx]``
+    along the straight-line run ending there -- conditional branches fall through, a call
+    (which clobbers the caller-saved registers) or an instruction that does not fall through
+    ends the run -- or None when nothing in the run defines it."""
+    for j in range(idx - 1, -1, -1):
+        ins = insns[j]
+        if ins.mnemonic in _NO_FALL_THROUGH:
             return None
-    return n
-
-
-def _writeto_field_number_before(insns: List, idx: int) -> Optional[int]:
-    """Return the proto field number for the field-write call at ``insns[idx]``.
-
-    The field number is the immediate of the ``mov/movz w2,#N`` (or ``w1`` for
-    double/float fields, whose value occupies ``d0``) that sets up the call.  It
-    is normally the instruction immediately before the call, but for a tail-call
-    (`b`) write the compiler hoists the function epilogue (``ldp``/``stp``
-    restores, some rendered ``unk``) in between — so skip those when looking
-    back.  Returns None when no field-number immediate precedes the call (e.g. a
-    control-flow ``b``).
-
-    The skip path only engages when the instruction immediately before the call
-    is an epilogue insn; a normal ``bl`` field write has ``movz w2,#N`` directly
-    before it, so this never alters that (common) case.
-    """
-    j = idx - 1
-    skipped = 0
-    while (j >= 0 and skipped < 6
-           and insns[j].mnemonic in _WRITETO_EPILOGUE_MNEMONICS):
-        j -= 1
-        skipped += 1
-    if j < 0:
-        return None
-    if skipped:
-        # Tail-call epilogue-hoisted case: the one instruction only (the epilogue skip keeps
-        # its own 6-instruction bound).
-        return _field_number_imm([insns[j]], insns, idx)
-    # A plain call: insns[j] first, then up to two more back -- an older scheduler can put
-    # one unrelated argument setup between the call's two movs (`mov w2,#N; mov x0,<writer>;
-    # bl`).  Any `bl` on the way, insns[j] included, ends the search: it is a preceding
-    # call's (`mov w2,#1; bl f; b target`), and its `mov w2` is not this site's number.
-    for k in range(j, max(-1, j - 3), -1):
-        if insns[k].mnemonic == 'bl':
-            break
-        n = _field_number_imm([insns[k]], insns, idx)
-        if n is not None:
-            return n
+        if reg in writes(ins):
+            return j
     return None
 
 
-# ════════════════════════════════════════════════════════════════════════════
-# CFG-walk decoder (productionised from wt_reader.py — see that file's module
-# docstring for the full design, contract, and the S1–S5 known-miss catalogue).
-# Sound reachability walk over -[Cls writeTo:] basic blocks, binding each
-# field-write to its container ivar by tracing the value/offset registers.
+def _immediate_in(insns: List, idx: int, reg: str) -> Optional[int]:
+    """The immediate *reg* holds at ``insns[idx]`` when its definition in the run
+    (:func:`_run_definition`) is a ``mov`` / ``movz`` of one into it; else None.  Only the
+    move itself counts: a copy from another register (``mov x2, x21``) may carry a loop
+    counter whose other definitions sit on a back edge this run does not see."""
+    d = _run_definition(insns, idx, reg)
+    if d is None or insns[d].mnemonic not in ('mov', 'movz'):
+        return None
+    ops = split_ops(insns[d].op_str)
+    return _parse_imm(ops[1]) if len(ops) == 2 and ops[1].startswith('#') else None
+
+
+def _writeto_field_number_before(insns: List, idx: int) -> Optional[int]:
+    """The proto field number of the field-write call (``bl``, or tail-call ``b``) at
+    ``insns[idx]``: the immediate w2 holds there -- or, for a float/double writer, whose
+    value travels in v0 and number in w1, the immediate w1 holds when the run sets v0 -- by
+    the definition reaching the call along its straight-line run (:func:`_immediate_in`).
+    So epilogue restores hoisted between the number and a tail call, or argument set-up in
+    any order, read the same.  A float/double writer takes no third argument, so an
+    immediate in w2 means an integer writer.  Without an FP value a constant w1 is just an
+    argument (``os_unfair_lock_lock_with_options(lock, 0x10000)``), not a field number; nor
+    does a call ending the run count as setting v0 (it only clobbers it).  None when no
+    such immediate reaches the call."""
+    n = _immediate_in(insns, idx, 'x2')
+    if n is None:
+        v0 = _run_definition(insns, idx, 'v0')
+        if v0 is not None and insns[v0].mnemonic not in ('bl', 'blr'):
+            n = _immediate_in(insns, idx, 'x1')
+    return n
+
+
 # ════════════════════════════════════════════════════════════════════════════
 
 # protobuf wire-format field-number range (spec): 1 .. 2^29-1.  Principled

@@ -222,12 +222,43 @@ class TestWriteToFieldNumberBefore(unittest.TestCase):
                  self._i('b', '#0x3000')]
         self.assertIsNone(self.fn(insns, 1))
 
-    def test_skip_bounded_does_not_run_off(self):
-        # More than the skip bound of epilogue insns before any mov → None.
+    def test_any_number_of_restores_between_number_and_tail_call(self):
+        # The number is the definition reaching the call, however many epilogue restores
+        # (here also an arm64e `autibsp`) sit between: no skip bound.
         insns = [self._i('movz', 'w2, #0x5')] + \
-                [self._i('ldp', f'x{n}, x{n+1}, [sp]') for n in range(8)] + \
-                [self._i('b', '#0x4000')]
-        self.assertIsNone(self.fn(insns, len(insns) - 1))
+                [self._i('ldp', f'x{n}, x{n+1}, [sp]') for n in range(19, 29, 2)] + \
+                [self._i('autibsp'), self._i('b', '#0x4000')]
+        self.assertEqual(self.fn(insns, len(insns) - 1), 5)
+
+    def test_number_set_up_further_back_than_three_instructions(self):
+        insns = [self._i('movz', 'w2, #0x9'), self._i('mov', 'x0, x19'),
+                 self._i('mov', 'x1, x20'), self._i('mov', 'x3, #0'), self._i('mov', 'x4, #0'),
+                 self._i('bl', '#0x1000')]
+        self.assertEqual(self.fn(insns, 5), 9)
+
+    def test_a_restore_of_x2_is_its_definition(self):
+        insns = [self._i('movz', 'w2, #0x5'), self._i('ldp', 'x1, x2, [sp]'),
+                 self._i('b', '#0x4000')]
+        self.assertIsNone(self.fn(insns, 2))
+
+    def test_the_run_starts_after_a_branch_that_does_not_fall_through(self):
+        # `mov w2,#3; b elsewhere` -- the call after the `b` is reached from somewhere else
+        insns = [self._i('movz', 'w2, #0x3'), self._i('b', '#0x5000'),
+                 self._i('mov', 'x0, x19'), self._i('bl', '#0x1000')]
+        self.assertIsNone(self.fn(insns, 3))
+
+    def test_the_run_starts_after_the_previous_call(self):
+        insns = [self._i('movz', 'w2, #0x3'), self._i('bl', '#0x1000'),
+                 self._i('mov', 'x0, x19'), self._i('bl', '#0x1000')]
+        self.assertEqual(self.fn(insns, 1), 3)
+        self.assertIsNone(self.fn(insns, 3))
+
+    def test_a_register_copy_is_not_a_field_number(self):
+        # `mov x2, x21` with x21 a loop counter set to 0 before the loop: along this run it
+        # looks constant, but the back edge redefines it.
+        insns = [self._i('mov', 'x21, #0'), self._i('mov', 'x0, x19'),
+                 self._i('mov', 'x2, x21'), self._i('bl', '#0x1000')]
+        self.assertIsNone(self.fn(insns, 3))
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
