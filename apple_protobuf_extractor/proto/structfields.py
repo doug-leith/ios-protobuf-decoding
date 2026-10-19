@@ -387,7 +387,7 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     return Bracket(number, tuple(dict.fromkeys(callees)), tuple(sorted(seen)), tuple(writes))
 
 
-# ── inlined struct members: a symbolic base-register tracker ──────────────────
+# ── inlined struct members: a symbolic base-register data flow ─────────────────
 
 
 def _load_width(ins, mem) -> int:
@@ -402,7 +402,70 @@ _LOAD_MNEMONICS = ('ldrsw', 'ldr', 'ldrb', 'ldrh', 'ldur')
 _NO_DEST_MNEMONICS = ('cmp', 'cmn', 'tst', 'tbz', 'tbnz', 'cbz', 'cbnz', 'b')
 
 
-def track_struct_loads(insns: Sequence, last: int, is_ivar_offset, is_array: bool,
+def _struct_load_step(ins, k: int, state: Dict[str, tuple], pages: Dict[str, int],
+                      is_ivar_offset, is_array: bool) -> Optional[Tuple[int, int]]:
+    """One instruction's effect on the struct-addressing state (see
+    :func:`track_struct_loads`); returns ``(member offset, width)`` when *ins* loads a member."""
+    mn, ops = ins.mnemonic, split_ops(ins.op_str)
+    if mn == 'bl':
+        for r in _CALLER_SAVED:
+            state.pop(r, None)
+            pages.pop(r, None)
+        return None
+    if not ops or mn.startswith('st') or mn in _NO_DEST_MNEMONICS:
+        return None
+    dst = _norm_reg(ops[0])
+    new, member = None, None
+    if mn == 'adrp' and len(ops) == 2:
+        pages[dst] = _parse_imm(ops[1])
+        state.pop(dst, None)
+        return None
+    if mn in _LOAD_MNEMONICS or mn.startswith('ldrs'):
+        mem = mem_operand(ins.op_str)
+        if mem is None:                                             # PC-relative literal
+            if mn == 'ldrsw' and len(ops) == 2 and is_ivar_offset(_parse_imm(ops[1])):
+                new = ('ivoff',)
+        else:
+            base_st = state.get(mem[1])
+            idx_st = state.get(mem[2]) if mem[2] else None
+            if mn == 'ldrsw' and mem[2] is None and mem[1] in pages \
+                    and is_ivar_offset(pages[mem[1]] + mem[3]):
+                new = ('ivoff',)                                    # the offset variable itself
+            elif idx_st == ('ivoff',):
+                if is_array:
+                    new = ('base', 0)                               # the element array
+                else:
+                    member = (0, _load_width(ins, mem))             # by value: member 0
+            elif base_st == ('slot',) and mem[2] is None and mem[3] == 0:
+                new = ('base', 0)                                   # the element array
+            elif base_st is not None and base_st[0] == 'base':
+                member = (base_st[1] + (mem[3] if mem[2] is None else 0), _load_width(ins, mem))
+    elif mn == 'add' and len(ops) in (3, 4):                        # 4: ``add xE, xA, xI, lsl #s``
+        a = state.get(_norm_reg(ops[1]))
+        if ops[2].startswith('#'):
+            if a and a[0] == 'base' and len(ops) == 3:
+                new = ('base', a[1] + (_parse_imm(ops[2]) or 0))
+        elif state.get(_norm_reg(ops[2])) == ('ivoff',) and len(ops) == 3:
+            # &self->ivar: the struct itself (by value), or the slot holding the array pointer
+            new = ('slot',) if is_array else ('base', 0)
+        elif a and a[0] == 'base':
+            new = ('base', a[1])                                    # array element
+    elif mn == 'mov' and len(ops) == 2 and _norm_reg(ops[1]) in state:
+        new = state[_norm_reg(ops[1])]
+    if dst is not None:
+        if new is not None:
+            state[dst] = new
+        else:
+            state.pop(dst, None)
+        pages.pop(dst, None)
+    return member
+
+
+def _join_maps(a: Dict, b: Dict) -> Dict:
+    return {r: v for r, v in a.items() if b.get(r) == v}
+
+
+def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array: bool,
                        window=None) -> Dict[int, Tuple[int, int]]:
     """``{instruction index: (member offset, width)}`` for every load, among ``insns[:last+1]``
     (restricted to the indices in *window*, when given), that reads a member of the struct held
@@ -417,68 +480,39 @@ def track_struct_loads(insns: Sequence, last: int, is_ivar_offset, is_array: boo
       array, ``add xE, xA, xI`` (``xI`` possibly scaled: ``, lsl #s``) an element, members
       ``[xE, #k]`` (member 0 may be ``[xA, xI]``).
 
-    Registers are tracked in address order from the start of the listing (the offset load is
-    often hoisted above the loop); a register written by anything not modelled — and every
-    caller-saved one across a call — is forgotten, so only a genuine chain from the offset
-    variable yields a member."""
-    pages: Dict[str, int] = {}
-    state: Dict[str, tuple] = {}                    # reg -> ('ivoff',) | ('slot',) | ('base', offset)
+    A forward data flow over the listing's CFG (:func:`proto.dispatch.listing_flow`): a
+    register holds one of these roles at an instruction when every path into it agrees, so
+    an offset load hoisted above a loop reaches the loop body, and a role set on one branch
+    only does not.  A register written by anything not modelled -- and every caller-saved
+    one across a call -- loses its role, so only a genuine chain from the offset variable
+    yields a member."""
+    flow = listing_flow(ctx, list(insns))
+    cfg = flow.cfg
+    if cfg.entry is None:
+        return {}
+    at = {ins.addr: k for k, ins in enumerate(flow.insns)}
+    states: Dict[int, Tuple[Dict, Dict]] = {cfg.entry: ({}, {})}
+    work = [cfg.entry]
+    while work:
+        b = work.pop()
+        state, pages = dict(states[b][0]), dict(states[b][1])
+        for ins in cfg.blocks[b]:
+            _struct_load_step(ins, at[ins.addr], state, pages, is_ivar_offset, is_array)
+        for s in cfg.succ.get(b, []):
+            cur = states.get(s)
+            nxt = (dict(state), dict(pages)) if cur is None else \
+                (_join_maps(cur[0], state), _join_maps(cur[1], pages))
+            if cur is None or nxt != cur:
+                states[s] = nxt
+                work.append(s)
     out: Dict[int, Tuple[int, int]] = {}
-    for k in range(last + 1):
-        ins = insns[k]
-        mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        if mn == 'bl':
-            for r in _CALLER_SAVED:
-                state.pop(r, None)
-                pages.pop(r, None)
-            continue
-        if not ops or mn.startswith('st') or mn in _NO_DEST_MNEMONICS:
-            continue
-        dst = _norm_reg(ops[0])
-        new = None
-        if mn == 'adrp' and len(ops) == 2:
-            pages[dst] = _parse_imm(ops[1])
-            state.pop(dst, None)
-            continue
-        if mn in _LOAD_MNEMONICS or mn.startswith('ldrs'):
-            mem = mem_operand(ins.op_str)
-            if mem is None:                                         # PC-relative literal
-                if mn == 'ldrsw' and len(ops) == 2 and is_ivar_offset(_parse_imm(ops[1])):
-                    new = ('ivoff',)
-            else:
-                base_st = state.get(mem[1])
-                idx_st = state.get(mem[2]) if mem[2] else None
-                if mn == 'ldrsw' and mem[2] is None and mem[1] in pages \
-                        and is_ivar_offset(pages[mem[1]] + mem[3]):
-                    new = ('ivoff',)                                # the offset variable itself
-                elif idx_st == ('ivoff',):
-                    if is_array:
-                        new = ('base', 0)                           # the element array
-                    elif window is None or k in window:
-                        out[k] = (0, _load_width(ins, mem))         # by value: member 0
-                elif base_st == ('slot',) and mem[2] is None and mem[3] == 0:
-                    new = ('base', 0)                               # the element array
-                elif base_st is not None and base_st[0] == 'base' and (window is None or k in window):
-                    out[k] = (base_st[1] + (mem[3] if mem[2] is None else 0), _load_width(ins, mem))
-        elif mn == 'add' and len(ops) in (3, 4):                    # 4: ``add xE, xA, xI, lsl #s``
-            a = state.get(_norm_reg(ops[1]))
-            if ops[2].startswith('#'):
-                if a and a[0] == 'base' and len(ops) == 3:
-                    new = ('base', a[1] + (_parse_imm(ops[2]) or 0))
-            elif state.get(_norm_reg(ops[2])) == ('ivoff',) and len(ops) == 3:
-                # &self->ivar: the struct itself (by value), or the slot holding the array pointer
-                new = ('slot',) if is_array else ('base', 0)
-            elif a and a[0] == 'base':
-                new = ('base', a[1])                                # array element
-        elif mn == 'mov' and len(ops) == 2 and _norm_reg(ops[1]) in state:
-            new = state[_norm_reg(ops[1])]
-        if dst is not None:
-            if new is not None:
-                state[dst] = new
-            else:
-                state.pop(dst, None)
-            if mn != 'adrp':
-                pages.pop(dst, None)
+    for b, (st0, pg0) in states.items():
+        state, pages = dict(st0), dict(pg0)
+        for ins in cfg.blocks[b]:
+            k = at[ins.addr]
+            member = _struct_load_step(ins, k, state, pages, is_ivar_offset, is_array)
+            if member is not None and k <= last and (window is None or k in window):
+                out[k] = member
     return out
 
 
@@ -492,7 +526,7 @@ def decode_inline_writes(ctx, insns: Sequence, bracket: Bracket, is_ivar_offset,
     in w1 -- and it must trace, by reaching definitions through copies (:func:`_member_in`), to
     one member load.  A write fed by anything else is skipped and the layout match
     (:func:`match_layout`) rejects an incomplete struct."""
-    loads = track_struct_loads(insns, max(bracket.region), is_ivar_offset, layout.is_array,
+    loads = track_struct_loads(ctx, insns, max(bracket.region), is_ivar_offset, layout.is_array,
                                window=set(bracket.region))
     flow = listing_flow(ctx, insns)
     out: List[MemberWrite] = []
@@ -771,7 +805,7 @@ def decode_inline_dictrep_members(ctx, insns: Sequence, is_ivar_offset,
     members are located through the ivar's offset variable exactly as in the inline
     ``writeTo:`` (:func:`track_struct_loads`), so only this ivar's keys are paired."""
     want = {m.offset for m in layout.members}
-    loads = track_struct_loads(insns, len(insns) - 1, is_ivar_offset, layout.is_array)
+    loads = track_struct_loads(ctx, insns, len(insns) - 1, is_ivar_offset, layout.is_array)
     members, _unpaired = _pair_members(
         ctx, insns, lambda k: loads[k][0] if k in loads and loads[k][0] in want else None)
     return members
