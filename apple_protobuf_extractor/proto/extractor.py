@@ -471,7 +471,7 @@ def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
         if parent is None:
             return None
         cur = parent
-    sent = writeto_sent_selectors(ctx, cur.get_method("writeTo:").imp, cur.name)
+    sent = writeto_sent_selectors(ctx, cur)
     if sent is None or sent & below:
         return None
     return cur

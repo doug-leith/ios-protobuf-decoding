@@ -795,6 +795,62 @@ def _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps) -> WalkBindi
     return out
 
 
+# No length-delimited mark is open on any path into the call (WriteSite.open_marks).
+_NO_OPEN_MARK = frozenset({()})
+
+
+def _ivars_of(origins) -> Set[str]:
+    return {o[1] for o in origins if isinstance(o, tuple) and o[0] == 'I'}
+
+
+def _site_bindings(sites, field_ivars) -> WalkBindings:
+    """Bindings from :class:`proto.writer_flow.WriteSite` records, in address order.
+
+    A call outside every mark binds the one field ivar its value derives from to the field
+    number it is handed (number 0: a #52 zero field).  A begin mark (PlaceMark) outside every
+    mark binds the one field ivar the values written directly inside it derive from -- a
+    packed list or an inline sub-message -- and its no-tag calls are the element writers
+    (:data:`_NO_TAG_FIELD_NUMBER`).  Calls inside a mark write the element's own fields.  A
+    value from more than one ivar binds nothing; the first call binding an ivar wins."""
+    names = {iv.name for iv in field_ivars if iv.offset != 0 and iv.name}
+    out = WalkBindings()
+    zero: Set[str] = set()
+    for s in sites:
+        n = s.number
+        if n is None or s.open_marks != _NO_OPEN_MARK:
+            continue
+        elem: List[int] = []
+        if s.is_mark:
+            if not _is_field_number(n):
+                continue
+            inner = [t for t in sites if not t.is_mark
+                     and any(stk and stk[-1] == (s.slot, s.addr) for stk in t.open_marks)]
+            ivs = set().union(*(_ivars_of(t.value_origins) for t in inner))
+            for t in inner:
+                if (t.number == _NO_TAG_FIELD_NUMBER and t.target is not None
+                        and t.target not in elem):
+                    elem.append(t.target)
+        elif n == 0 or _is_field_number(n):
+            ivs = _ivars_of(s.value_origins)
+        else:
+            continue
+        if len(ivs) != 1:
+            continue
+        (name,) = ivs
+        if name not in names:
+            continue
+        if n == 0:
+            zero.add(name)
+        elif name not in out.numbers:
+            out.numbers[name] = n
+            if s.target is not None:
+                out.helpers[name] = s.target
+            out.writes[name] = dict(n=n, write_addr=s.addr, bracket=s.is_mark,
+                                    elem_helper_vas=elem)
+    out.zero_fields = zero - set(out.numbers)
+    return out
+
+
 def _extract_writeto_field_numbers(
     ctx: BinaryContext,
     cls: ObjcClass,
@@ -816,54 +872,33 @@ def _extract_writeto_field_numbers(
     :mod:`proto.mapfields` recovers those numbers from the block, and anything it cannot
     recover degrades to a flagged ivar-order estimate upstream — fail-safe, never a
     confident error."""
-    indeg = getattr(ctx, "_writeto_indeg", None)
-    foreign_imps = getattr(ctx, "_writeto_foreign_imps", None)
-    if indeg is None or foreign_imps is None:
+    wf = getattr(ctx, "_writer_flow", None)
+    if wf is None:
         return WalkBindings()
     try:
-        return _walk_field_numbers(ctx, cls, field_ivars, indeg, foreign_imps)
+        sites = wf.write_sites(cls)
     except (NameError, ImportError):
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
         # Bad binary input → per-class fail-safe (flagged ivar-order estimate), reported.
-        record_analysis_failure(ctx, getattr(cls, "name", "?"), "writeTo: walk",
+        record_analysis_failure(ctx, getattr(cls, "name", "?"), "writeTo: flow",
                                 f"{type(exc).__name__}: {exc}")
         return WalkBindings()
+    return WalkBindings() if sites is None else _site_bindings(sites, field_ivars)
 
 
-def writeto_sent_selectors(ctx: BinaryContext, imp: int, cls_name: str) -> Optional[frozenset]:
-    """Every selector the ``writeTo:`` at *imp* sends, or None when that cannot be told.
-
-    Read off the code the CFG walk visits: a ``bl`` / tail-``b`` to an
-    ``objc_msgSend$<sel>`` stub sends ``<sel>``, and a selector loaded into x1 from
-    ``__objc_selrefs`` is the selector of a plain ``objc_msgSend`` call (counted whether
-    or not the call follows — an over-count only makes the caller more cautious).
-    None when the walk did not see all of the method: it was truncated, made an
-    indirect call (``blr``), or branched into a shared thunk it does not enter; or when
-    the binary-wide walk pre-pass is absent."""
-    indeg = getattr(ctx, "_writeto_indeg", None)
-    foreign_imps = getattr(ctx, "_writeto_foreign_imps", None)
-    if indeg is None or foreign_imps is None or not imp:
+def writeto_sent_selectors(ctx: BinaryContext, cls: ObjcClass) -> Optional[frozenset]:
+    """Every selector *cls*'s own ``writeTo:`` sends
+    (:meth:`proto.writer_flow.WriterFlow.sent_selectors`), or None when that cannot be told:
+    the body is not decoded, its fixpoint does not go through, it makes an indirect call, or
+    the image's writer flow (built by the ``writeTo:`` pre-pass) is absent."""
+    wf = getattr(ctx, "_writer_flow", None)
+    if wf is None:
         return None
     try:
-        _writes, flags = writeto_walk(ctx, imp, foreign_imps - {imp}, indeg)
+        return wf.sent_selectors(cls)
     except (NameError, ImportError):
         raise
     except Exception as exc:
-        record_analysis_failure(ctx, cls_name, "writeTo: walk", f"{type(exc).__name__}: {exc}")
+        record_analysis_failure(ctx, cls.name, "writeTo: flow", f"{type(exc).__name__}: {exc}")
         return None
-    if flags['truncated'] or flags['indirect_calls'] or flags['unexamined_thunks']:
-        return None
-    sels = {stub_selector(ctx, t) for t in flags['call_targets']}
-    selrefs = [s for (_seg, name), s in getattr(ctx, "_sections", {}).items()
-               if name == "__objc_selrefs"]
-    for slot in flags['x1_loads']:
-        if _is_in_any_section(slot, selrefs):
-            try:
-                sels.add(ctx.read_cstring(ctx.read_ptr(slot)))
-            except (NameError, ImportError):
-                raise
-            except Exception:
-                return None             # a selector slot we cannot read: cannot tell
-    sels.discard(None)
-    return frozenset(sels)

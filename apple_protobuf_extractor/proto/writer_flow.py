@@ -265,12 +265,14 @@ class WriteSite:
 
 
 class _Result:
-    __slots__ = ('ser', 'ret', 'complete', 'why', 'sites')
+    __slots__ = ('ser', 'ret', 'complete', 'why', 'sites', 'sends', 'indirect_calls')
 
     def __init__(self):
         self.ser: Set = set()
         self.ret: Set = set()
         self.sites: Dict[int, WriteSite] = {}
+        self.sends: Set[str] = set()         # selectors the body's own calls send
+        self.indirect_calls = 0              # its ``blr`` calls (target unknown)
         self.complete = True
         self.why: List[str] = []
 
@@ -300,7 +302,7 @@ class WriterFlow:
     def reachable_ivars(self, cls: ObjcClass) -> Tuple[Optional[FrozenSet[str]], List[str]]:
         """``(ivars whose values can reach the writer, reasons)``; the set is None when
         undecided (the reasons say why)."""
-        reach, why, _sites = self.analyse(cls)
+        reach, why = self.analyse(cls)[:2]
         return reach, why
 
     def write_sites(self, cls: ObjcClass) -> Optional[List[WriteSite]]:
@@ -309,10 +311,16 @@ class WriterFlow:
         leaves the function window, an indirect jump is unresolved, ...)."""
         return self.analyse(cls)[2]
 
-    def analyse(self, cls: ObjcClass
-                ) -> Tuple[Optional[FrozenSet[str]], List[str], Optional[List[WriteSite]]]:
-        """``(reachable ivars, reasons, write sites)`` of *cls*'s ``writeTo:`` (see
-        :meth:`reachable_ivars` / :meth:`write_sites`), memoised per class."""
+    def sent_selectors(self, cls: ObjcClass) -> Optional[FrozenSet[str]]:
+        """Every selector *cls*'s own ``writeTo:`` sends: through a selector stub, or a plain
+        ``objc_msgSend`` with the selector in x1.  None when that cannot be told: the body
+        is not decoded, the fixpoint does not go through, or it makes an indirect call."""
+        return self.analyse(cls)[3]
+
+    def analyse(self, cls: ObjcClass):
+        """``(reachable ivars, reasons, write sites, sent selectors)`` of *cls*'s
+        ``writeTo:`` (see :meth:`reachable_ivars` / :meth:`write_sites` /
+        :meth:`sent_selectors`), memoised per class."""
         hit = self._analysed.get(cls.vmaddr)
         if hit is None:
             hit = self._analysed[cls.vmaddr] = self._analyse(cls)
@@ -321,7 +329,7 @@ class WriterFlow:
     def _analyse(self, cls: ObjcClass):
         m = cls.get_method("writeTo:")
         if m is None or not m.imp:
-            return None, ["no writeTo:"], None
+            return None, ["no writeTo:"], None, None
         chain = self._chain(cls)
         self.cls = cls
         self.own_imps = {mm.imp: mm.name for c in chain for mm in c.methods if mm.imp and mm.name}
@@ -331,15 +339,16 @@ class WriterFlow:
         self._summary_memo = {}
         res = self._run(m.imp, {'x0': frozenset({_S}), 'x2': frozenset({_W})}, 0, m.imp)
         if res is None:
-            return None, ["writeTo: body not decoded"], None
+            return None, ["writeTo: body not decoded"], None, None
         if not res.complete:
-            return None, res.why, None
+            return None, res.why, None, None
         sites = [res.sites[a] for a in sorted(res.sites)]
+        sends = None if res.indirect_calls else frozenset(res.sends)
         bad = sorted(str(x) for x in res.ser if not isinstance(x, tuple) or x[0] != 'I')
         if any(x in (_S, _T) for x in res.ser):
-            return None, [f"self reaches the writer ({', '.join(bad)})"], sites
+            return None, [f"self reaches the writer ({', '.join(bad)})"], sites, sends
         return (frozenset(x[1] for x in res.ser if isinstance(x, tuple) and x[0] == 'I'), [],
-                sites)
+                sites, sends)
 
     def _chain(self, cls: ObjcClass) -> List[ObjcClass]:
         out, c = [], cls
@@ -462,6 +471,11 @@ class WriterFlow:
         sel = stub_selector(self.ctx, tgt) if tgt is not None else None
         if sel is None and name == "_objc_msgSend" and 'x1' in st.cv:
             sel = self._cstring(st.cv['x1'])   # the generic send: x1 is the selector
+        if depth == 0:
+            if tgt is None:
+                res.indirect_calls += 1
+            elif sel is not None:
+                res.sends.add(sel)
         wreg = next((r for r in _ARG_REGS if _W in st.p(r)), None) if depth == 0 else None
         if wreg is not None and addr is not None:
             # the last visit of a call is the fixpoint's

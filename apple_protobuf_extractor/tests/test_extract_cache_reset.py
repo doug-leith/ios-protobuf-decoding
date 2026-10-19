@@ -66,16 +66,19 @@ class TestExtractAllResetsCaches:
         # the readFrom: evaluator, callee naming and the writer flow keep.
         for attr in ("_dispatch_eval_cache", "_callee_names", "_function_entries"):
             _ctx_cache(ctx, attr, dict)["stale"] = object()
-        _ctx_store(ctx, "_writer_flow", object())
+        stale_flow = _ctx_store(ctx, "_writer_flow", object())
 
         # Empty class list: extract_all runs its pre-passes and returns [].
-        result = E.extract_all(ctx, StringTable(), ClassList([]))
+        cl = ClassList([])
+        result = E.extract_all(ctx, StringTable(), cl)
 
         assert result == []
-        for attr in ("_dispatch_eval_cache", "_callee_names", "_function_entries", "_writer_flow"):
+        for attr in ("_dispatch_eval_cache", "_callee_names", "_function_entries"):
             assert not getattr(ctx, attr), (
                 f"{attr} not reset by extract_all: a stale cache would leak "
                 f"across extractions on a reused BinaryContext")
+        # the writeTo: pre-pass builds this extraction's own writer flow
+        assert ctx._writer_flow is not stale_flow and ctx._writer_flow.cl is cl
 
 
 class TestNoDirectCacheStores:

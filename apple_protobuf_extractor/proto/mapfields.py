@@ -434,15 +434,25 @@ def scan_block_enumerated_maps(
 # ── Shape B: inline enumeration loop (walk-bound begin-mark) ──────────────────
 
 
-def entry_from_walk_write(ctx: BinaryContext, w: dict) -> Optional[MapEntryWriter]:
-    """The :class:`MapEntryWriter` for a ``writeTo:`` CFG-walk write event *w* that is a
-    begin-submessage mark (the walk already bound it to the dictionary ivar and read
-    its field number).  The entry body is the straight-line code after it in the same
-    basic block; a loop body that spans several blocks is not analysed (``None``)."""
-    blk, k = w.get('srcblk'), w.get('srck')
-    if blk is None or k is None:
+def entry_from_walk_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
+                          w: dict) -> Optional[MapEntryWriter]:
+    """The :class:`MapEntryWriter` for a bound ``writeTo:`` write *w* (at *imp*) that is a
+    begin-submessage mark (already bound to the dictionary ivar, with its field number).
+    The entry body is the code after it in the method's linear listing (``imp`` .. the next
+    method IMP)."""
+    if not w.get('bracket'):
         return None
-    entry = analyze_entry(ctx, blk, k)
+    end = _next_imp(imps_sorted, imp)
+    try:
+        insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4), stop_at_ret=False)
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        return None
+    k = next((i for i, x in enumerate(insns) if x.addr == w['write_addr']), None)
+    if k is None:
+        return None
+    entry = analyze_entry(ctx, insns, k)
     if entry is None or entry.number != w.get('n'):
         return None
     return MapEntryWriter(**{**entry.__dict__, 'shape': 'inline-loop'})
@@ -461,17 +471,17 @@ def find_map_writers(
     if m is None or not m.imp or not map_ivars:
         return {}
     writers: Dict[str, MapEntryWriter] = {}
+    imps_sorted = sorted(getattr(ctx, "_writeto_foreign_imps", None) or ())
     for iv in map_ivars:
         w = walk_writes.get(iv.name)
         if w is not None:
-            e = entry_from_walk_write(ctx, w)
+            e = entry_from_walk_write(ctx, m.imp, imps_sorted, w)
             if e is not None:
                 writers[iv.name] = e
     pending = [iv for iv in map_ivars if iv.name not in writers]
     if pending:
-        foreign = getattr(ctx, "_writeto_foreign_imps", None) or ()
         for name, e in scan_block_enumerated_maps(
-                ctx, m.imp, sorted(foreign), offset_to_name).items():
+                ctx, m.imp, imps_sorted, offset_to_name).items():
             if any(iv.name == name for iv in pending):
                 writers[name] = e
     taken: Dict[int, str] = {}

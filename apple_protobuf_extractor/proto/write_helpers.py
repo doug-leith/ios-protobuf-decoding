@@ -31,6 +31,7 @@ from macho.classlist import ClassList, ObjcIvar
 from macho.disasm    import disasm, _parse_imm
 
 from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegree
+from proto.writer_flow import WriterFlow
 from proto.arm64cfg  import split_ops
 from proto.callees   import import_name, real_target
 from proto.models    import record_failed_pass
@@ -399,6 +400,9 @@ def _ensure_writeto_indegree(ctx: BinaryContext, cl: ClassList) -> None:
     Builds only when absent; on a (real-world-unseen) build failure it leaves the
     attrs ``None``, so a persistently failing context retries — acceptable, since
     the pre-pass succeeds on every supported artifact."""
+    wf = getattr(ctx, "_writer_flow", None)
+    if wf is None or wf.cl is not cl:
+        _ctx_store(ctx, "_writer_flow", WriterFlow(ctx, cl))
     if (getattr(ctx, "_writeto_indeg", None) is not None
             and getattr(ctx, "_writeto_foreign_imps", None) is not None):
         return
