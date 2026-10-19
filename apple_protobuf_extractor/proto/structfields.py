@@ -51,7 +51,7 @@ from macho.memory import _ctx_cache
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
 from proto.arm64_operands import CALLER_SAVED_GPRS, LOAD_BYTES, reg_name
 from proto import arm64_eval, dictrep_flow
-from proto.callees import stub_selector
+from proto.callees import callee_name, stub_selector
 from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
 from proto.dispatch import _jump_table_arm_addrs, listing_flow
@@ -169,11 +169,6 @@ def parse_struct_encoding(enc: Optional[str]) -> Optional[StructLayout]:
 # is a handful of straight-line blocks of ~10 instructions, one per member.
 _WRITER_MAX_BLOCKS = 64
 _WRITER_BLOCK_INSNS = 128
-# [cap:INPUT-SANITY — verified 2026-10-18] How far (bytes) a local branch may reach from the
-# writer's entry and still be a block of the same function rather than a tail call into
-# another one.  Raising it x4 (0x800 -> 0x2000) changed no output on any of the 12
-# ios_decoder/protos targets or iOS 27 / macOS 27 GeoServices.
-_WRITER_LOCAL_SPAN = 0x800
 
 _LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
 _BRANCH_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
@@ -194,9 +189,20 @@ def _branch_target(ins) -> Optional[int]:
     return _parse_imm(ops[-1]) if ops and ops[-1].startswith('#') else None
 
 
+def _is_function_entry(ctx, va: int) -> bool:
+    """*va* starts a function of its own: a method IMP, a named export / import (a C
+    serialiser such as ``_GEOPDTimeRangeWriteTo``) or a selector stub."""
+    return (va in (getattr(ctx, "_method_imps", None) or ()) or callee_name(ctx, va) is not None
+            or stub_selector(ctx, va) is not None)
+
+
 def _writer_insns(ctx, entry: int) -> List:
     """The instructions reachable from *entry* in address order: conditional branches and
-    in-function jumps are followed, ``ret`` and a tail-called write helper end a path."""
+    in-function jumps are followed, ``ret`` and a tail call end a path.  A ``b`` is an
+    in-function jump when its target lies in the function's extent (*entry* .. the next
+    method IMP) and is not itself a function entry (:func:`_is_function_entry`); otherwise
+    it is a tail call -- to a write helper, another serialiser, the runtime."""
+    end = _next_imp(sorted(getattr(ctx, "_method_imps", None) or ()), entry)
     seen_blocks, work, out = set(), [entry], {}
     while work and len(seen_blocks) < _WRITER_MAX_BLOCKS:
         a = work.pop()
@@ -222,8 +228,8 @@ def _writer_insns(ctx, entry: int) -> List:
                 if field_number_at(arm64_eval.Flow(ctx, block[:k + 1]), k) is not None:
                     break                                   # tail-called write helper
                 t = _branch_target(ins)
-                if t is not None and abs(t - entry) < _WRITER_LOCAL_SPAN:
-                    work.append(t)
+                if t is not None and entry <= t < end and not _is_function_entry(ctx, t):
+                    work.append(t)                          # a block of this function
                 break
     return [out[a] for a in sorted(out)]
 

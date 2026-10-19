@@ -58,6 +58,38 @@ class _Patched(unittest.TestCase):
         self.addCleanup(setattr, SF, 'disasm', orig)
 
 
+class TestWriterExtent(_Patched):
+    """structfields._writer_insns: a ``b`` inside the serialiser's extent (entry .. the next
+    method IMP) that is not itself a function is one of its blocks, however far; a ``b`` to a
+    function (a method IMP, a named symbol, a stub) is a tail call, however near."""
+
+    def _addrs(self, blocks, names=None, imps=()):
+        from types import SimpleNamespace
+        from unittest import mock
+        insns, fd = asm(*blocks)
+        self.patch(fd)
+        ctx = SimpleNamespace(_method_imps=set(imps))
+        with mock.patch.object(SF, 'callee_name', lambda c, va: (names or {}).get(va)), \
+                mock.patch.object(SF, 'stub_selector', lambda c, va: None):
+            return {i.addr for i in SF._writer_insns(ctx, 0x1000)}
+
+    def test_a_far_block_of_the_same_function_is_followed(self):
+        got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x2000')]),
+                           (0x2000, [('mov', 'x0, x19'), ('ret', '')])], imps=(0x1000, 0x3000))
+        self.assertIn(0x2000, got)                     # 0x1000 bytes away, still this function
+
+    def test_a_near_named_function_is_a_tail_call(self):
+        got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x1040')]),
+                           (0x1040, [('mov', 'x0, x19'), ('ret', '')])],
+                          names={0x1040: '_GEOOtherWriteTo'}, imps=(0x1000, 0x3000))
+        self.assertNotIn(0x1040, got)
+
+    def test_a_jump_past_the_next_method_is_a_tail_call(self):
+        got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x3100')]),
+                           (0x3100, [('ret', '')])], imps=(0x1000, 0x3000))
+        self.assertNotIn(0x3100, got)
+
+
 class _SelectorsPatched(_Patched):
     """Also answers which selector each ``bl`` target sends (``None``: not a message send)."""
 
