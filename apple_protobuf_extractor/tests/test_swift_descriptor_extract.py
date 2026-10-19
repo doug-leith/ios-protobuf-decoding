@@ -604,8 +604,8 @@ def _remindd_path():
 
 def _trustedpeershelper_path():
     """iOS 16.7.11 TrustedPeersHelper.xpc (Cuttlefish/Octagon keychain-trust
-    swift-protobuf messages) from the extracted phone disk image, which sits
-    beside the repo rather than under ``iphone8_data``.  ``MACHO_TEST_TRUSTEDPEERSHELPER``
+    swift-protobuf messages) from the iPhone 8 disk image (``artifacts.disk_image_dir()``;
+    skipped when it is not there).  ``MACHO_TEST_TRUSTEDPEERSHELPER``
     overrides."""
     p = os.environ.get("MACHO_TEST_TRUSTEDPEERSHELPER", "").strip()
     if p:
@@ -613,7 +613,7 @@ def _trustedpeershelper_path():
     try:
         import artifacts
         cand = os.path.join(
-            os.path.dirname(artifacts.REPO_ROOT), "phone_disk_image", "System",
+            artifacts.disk_image_dir(), "System",
             "Library", "Frameworks", "Security.framework", "XPCServices",
             "TrustedPeersHelper.xpc", "TrustedPeersHelper")
         return cand if os.path.isfile(cand) else None
@@ -886,7 +886,7 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
 def _seymourcore_path():
     try:
         import artifacts
-        p = os.path.join(artifacts.data_dir(), "iphone8_data", "dylib", "System", "Library",
+        p = os.path.join(artifacts.data_dir(), "dylib", "System", "Library",
                          "PrivateFrameworks", "SeymourCore.framework", "SeymourCore")
         return p if os.path.isfile(p) else None
     except Exception:
@@ -1158,7 +1158,7 @@ class TestDispatchStub(unittest.TestCase):
 def _pegasus_path():
     try:
         import artifacts
-        p = os.path.join(artifacts.data_dir(), "iphone8_data", "dylib", "System", "Library",
+        p = os.path.join(artifacts.data_dir(), "dylib", "System", "Library",
                          "PrivateFrameworks", "PegasusAPI.framework", "PegasusAPI")
         return p if os.path.isfile(p) else None
     except Exception:

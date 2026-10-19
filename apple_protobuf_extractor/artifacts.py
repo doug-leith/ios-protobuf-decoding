@@ -107,6 +107,13 @@ def geoservices_path():
     return os.path.join(data_dir(), _GEOSERVICES_CACHE_TREE_REL)
 
 
+def disk_image_dir():
+    """Root of the iPhone 8 filesystem copy (``<data_dir>/disk_image``) — for binaries
+    that are not in ``dylib/`` or among the standalone copies (e.g. XPC services).
+    It need not be present, so callers must check the file."""
+    return os.path.join(data_dir(), "disk_image")
+
+
 def swift_oracle_path():
     """Path to the committed swift-protobuf ORACLE fixture binary (see
     tests/swift_oracle_fixture/README.md) — a genuinely-compiled, known-schema
