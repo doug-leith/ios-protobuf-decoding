@@ -40,8 +40,9 @@ from __future__ import annotations
 import re
 import sys
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from proto.defaults import DEFAULT_PREFIXES
 
@@ -53,29 +54,19 @@ from proto.models import (
 
 _GENERATOR = "apple_protobuf_extractor (ios_protobuf_decoding)"
 
-# ── ObjC prefix → proto package ───────────────────────────────────────────────
+class InputKind(Enum):
+    """What the run extracted from.  It decides what an enum field left unresolved means:
+    a dyld-cache image and a standalone executable carry every selector and value string
+    the tool reads, so one is a tool bug (an ERROR, and a non-zero exit); a binary-only
+    dylib may need string data that lives in the cache, outside the file (a note)."""
+    DYLIB = "binary-only dylib"
+    EXECUTABLE = "standalone executable"
+    CACHE_IMAGE = "dyld cache image"
 
-#: Maps the leading ObjC class-name prefix to a proto package name.
-#: Initialised from :data:`~proto.defaults.DEFAULT_PREFIXES`; each key maps
-#: to its lowercased form.  Call configure_prefix_packages() to extend for
-#: other binaries.
-_PREFIX_PACKAGE: Dict[str, str] = {p: p.lower() for p in DEFAULT_PREFIXES}
+    @property
+    def self_contained(self) -> bool:
+        return self is not InputKind.DYLIB
 
-#: Whether this run is cache-native (--framework + --cache).  Controls the
-#: ambiguous-enum header note: binary-only explains the data lives in the cache
-#: outside the binary; cache-native treats any ambiguous enum as an error
-#: (it should be impossible) and escalates to stderr in :func:`print_summary`.
-#: Set via :func:`configure_cache_active` from the CLI before emission.
-_CACHE_ACTIVE: bool = False
-
-#: Whether the --binary input is a standalone executable (MH_EXECUTE) rather
-#: than a shared library extracted from the cache.  A standalone executable is
-#: self-contained, so an ambiguous enum should be impossible — it is treated as
-#: an error (and escalated to stderr) exactly like the cache-native case.  A
-#: binary-only *dylib* may legitimately reference cache data, so it stays a note.
-#: Ignored when :data:`_CACHE_ACTIVE`.  Set via
-#: :func:`configure_binary_is_executable` from the CLI before emission.
-_BINARY_IS_EXECUTABLE: bool = False
 
 #: One-time explanatory note emitted once above the enum section.  Apple's
 #: protobuf enums compile to plain C enums, whose *type* name leaves no symbol
@@ -110,28 +101,6 @@ _PACKAGE_RECON_NOTE: str = (
 )
 
 
-def configure_cache_active(active: bool) -> None:
-    """Record whether this run is cache-native (a dyld shared cache is in use).
-
-    Call before :func:`build_proto_files`.  Affects the wording of the
-    ambiguous-enum file-header note and the cache-native error escalation in
-    :func:`print_summary`.
-    """
-    global _CACHE_ACTIVE
-    _CACHE_ACTIVE = bool(active)
-
-
-def configure_binary_is_executable(is_executable: bool) -> None:
-    """Record whether the --binary input is a standalone executable.
-
-    Call before :func:`build_proto_files`.  Controls whether a binary-only
-    ambiguous enum is worded/escalated as an error (executable) or a note
-    (dylib).  See :data:`_BINARY_IS_EXECUTABLE`.
-    """
-    global _BINARY_IS_EXECUTABLE
-    _BINARY_IS_EXECUTABLE = bool(is_executable)
-
-
 #: All proto3 scalar / built-in type names.
 _KNOWN_SCALAR_TYPES: frozenset = frozenset({
     "int32", "int64", "uint32", "uint64",
@@ -153,35 +122,19 @@ _OBJC_BUILTINS: frozenset = frozenset({
 })
 
 
-def configure_prefix_packages(prefixes: List[str]) -> None:
-    """
-    Update the prefix→package mapping used by :func:`package_for_class`.
-
-    For each prefix in *prefixes*, adds ``prefix → prefix.lower()`` unless
-    an entry already exists.  Call this before :func:`build_proto_files`
-    whenever the target binary uses ObjC class prefixes beyond the defaults.
-
-    Example (CLI integration)::
-
-        configure_prefix_packages(args.prefixes or [])
-    """
-    for prefix in prefixes:
-        if prefix not in _PREFIX_PACKAGE:
-            _PREFIX_PACKAGE[prefix] = prefix.lower()
-
-
 #: Matches the ObjC class-name prefix: the leading all-caps run that ends
 #: just before the first CamelCase word (e.g. "GEOPD" from "GEOPDPlace",
 #: "APPL" from "APPLFoo", "CLP" from "CLPLocation").
 _OBJC_PREFIX_RE = re.compile(r'^([A-Z]{2,})(?=[A-Z][a-z])')
 
 
-def package_for_class(class_name: str) -> str:
+def package_for_class(class_name: str, prefixes: Sequence[str] = ()) -> str:
     """
     Return the proto package name for an ObjC class name.
 
-    Checks the explicit ``_PREFIX_PACKAGE`` map first (e.g. ``GEO`` →
-    ``"geo"``).  If no entry matches, auto-derives the package from the
+    A known prefix -- :data:`~proto.defaults.DEFAULT_PREFIXES`, then the run's own
+    *prefixes* (``--prefix``) -- maps to its lowercase form (e.g. ``GEO`` → ``"geo"``),
+    the first that matches winning.  If none matches, auto-derives the package from the
     ObjC class-name prefix: the leading all-caps run before the first
     CamelCase word, lowercased (e.g. ``"APPLFoo"`` → ``"appl"``) — every
     standard ObjC class name has one, so no catch-all fallback is needed.
@@ -195,9 +148,9 @@ def package_for_class(class_name: str) -> str:
     :func:`proto.enums._enum_name_from_pairs`).  Full rationale:
     notes/PACKAGE_NAMES.md.
     """
-    for prefix, pkg in _PREFIX_PACKAGE.items():
+    for prefix in (*DEFAULT_PREFIXES, *prefixes):
         if class_name.startswith(prefix):
-            return pkg
+            return prefix.lower()
     # Auto-derive from the class name itself.
     m = _OBJC_PREFIX_RE.match(class_name)
     if m:
@@ -376,6 +329,15 @@ class ProtoFile:
     # grouped them (so in single-file mode every class maps to this file's one package).
     # emit() qualifies cross-package references with it unless given a map explicitly.
     class_to_pkg: Dict[str, str] = field(default_factory=dict)
+    input_kind: InputKind = InputKind.DYLIB
+    # The file's enum definitions, planned once when the file is built (_collect_enums:
+    # merged, split, renamed, zero value added -- the field references it renames are
+    # patched then), so emit() only renders.
+    enums: List[ProtoEnum] = field(default=None)
+
+    def __post_init__(self) -> None:
+        if self.enums is None:
+            self.enums = self._collect_enums()
 
     # ── Emission ──────────────────────────────────────────────────────────────
 
@@ -437,7 +399,7 @@ class ProtoFile:
                 f"types emitted as bytes — see inline comments"
             )
         if self.n_ambiguous:
-            if _CACHE_ACTIVE:
+            if self.input_kind is InputKind.CACHE_IMAGE:
                 # Should be impossible in cache-native mode (selector names are
                 # resolved through the cache); if it happens the cache or the
                 # tool is at fault, so word it as an error, not a footnote.
@@ -447,7 +409,7 @@ class ProtoFile:
                     f"and indicates a tool bug or an incomplete/corrupt cache; the "
                     f"affected fields must not be trusted (see inline comments)"
                 )
-            elif _BINARY_IS_EXECUTABLE:
+            elif self.input_kind is InputKind.EXECUTABLE:
                 # A standalone executable is self-contained, so an ambiguous enum
                 # should be impossible here too — flag it as an error, not a note.
                 lines.append(
@@ -497,7 +459,7 @@ class ProtoFile:
             lines.append("")
 
         # ── enum blocks ───────────────────────────────────────────────────────
-        all_enums = self._collect_enums()
+        all_enums = self.enums
         if all_enums:
             lines.append("// ── Enum types ──────────────────────────────────────────────────────────")
             if not foreign_only:
@@ -1103,6 +1065,8 @@ def build_proto_files(
     single_file: bool = False,
     package_override: Optional[str] = None,
     source_name: str = "",
+    prefixes: Sequence[str] = (),
+    input_kind: InputKind = InputKind.DYLIB,
 ) -> List[ProtoFile]:
     """
     Full pipeline: resolve cross-refs → group by package → compute imports.
@@ -1118,6 +1082,11 @@ def build_proto_files(
         version of *source_name*, or ``"messages"`` if source_name is empty.
     source_name
         Source binary name (embedded in file header comments).
+    prefixes
+        The run's own ObjC class-name prefixes (``--prefix``), for the package names
+        (:func:`package_for_class`).
+    input_kind
+        What the messages were extracted from (:class:`InputKind`).
 
     Returns
     -------
@@ -1130,7 +1099,7 @@ def build_proto_files(
     #    message may carry an explicit package (foreign-serializer messages do);
     #    otherwise it is derived from the ObjC class-name prefix.
     def _pkg_of(m: ProtoMessage) -> str:
-        return m.package or package_for_class(m.class_name)
+        return m.package or package_for_class(m.class_name, prefixes)
 
     class_to_pkg: Dict[str, str] = {m.class_name: _pkg_of(m) for m in messages}
 
@@ -1156,6 +1125,7 @@ def build_proto_files(
                 messages=sorted(messages, key=lambda m: m.name),
                 imports=[],
                 source_name=source_name,
+                input_kind=input_kind,
             )
         ]
     else:
@@ -1181,6 +1151,7 @@ def build_proto_files(
                 messages=sorted(msgs, key=lambda m: m.name),
                 imports=[],
                 source_name=source_name,
+                input_kind=input_kind,
             ))
 
     # 4. Compute cross-package import statements
@@ -1230,6 +1201,8 @@ def write_from_messages(
     single_file: bool = False,
     package_override: Optional[str] = None,
     source_name: str = "",
+    prefixes: Sequence[str] = (),
+    input_kind: InputKind = InputKind.DYLIB,
 ) -> Tuple[List[Path], List[ProtoFile]]:
     """
     Convenience wrapper: build_proto_files → write_proto_files.
@@ -1242,6 +1215,8 @@ def write_from_messages(
         single_file=single_file,
         package_override=package_override,
         source_name=source_name,
+        prefixes=prefixes,
+        input_kind=input_kind,
     )
     written = write_proto_files(proto_files, Path(output_dir))
     return written, proto_files
@@ -1283,7 +1258,12 @@ def enum_error_escalated(messages: List[ProtoMessage], proto_files: List[ProtoFi
     (unresolved enums in a self-contained input, where that is a tool bug): the run
     completed but its output is not trustworthy, so the CLI exits non-zero."""
     return bool(extraction_stats(messages, proto_files).get("ambiguous")
-                and (_CACHE_ACTIVE or _BINARY_IS_EXECUTABLE))
+                and _input_kind(proto_files).self_contained)
+
+
+def _input_kind(proto_files: List[ProtoFile]) -> InputKind:
+    """The run's input kind: every file a run builds carries the same one."""
+    return proto_files[0].input_kind if proto_files else InputKind.DYLIB
 
 
 def print_summary(
@@ -1354,8 +1334,9 @@ def print_summary(
     # non-zero anyway it is a tool bug (or, for cache, a corrupt cache).  Surface
     # it as a loud error on stderr rather than a quiet footnote in the table.
     # A binary-only *dylib* is the one expected case — left as a table note.
-    if stats.get("ambiguous") and (_CACHE_ACTIVE or _BINARY_IS_EXECUTABLE):
-        if _CACHE_ACTIVE:
+    kind = _input_kind(proto_files)
+    if stats.get("ambiguous") and kind.self_contained:
+        if kind is InputKind.CACHE_IMAGE:
             reason = ("despite a shared cache. This should not happen and "
                       "indicates a tool bug or an incomplete/corrupt cache")
         else:
@@ -1394,6 +1375,7 @@ def print_summary(
 
 
 __all__ = [
+    "InputKind",
     "ProtoFile",
     "enum_error_escalated",
     "build_proto_files",

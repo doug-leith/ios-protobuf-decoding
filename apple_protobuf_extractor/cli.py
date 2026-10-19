@@ -403,7 +403,7 @@ def _report_symbol_recovery(counts) -> None:
 EXIT_INCOMPLETE = 3
 
 
-def _build_and_write_output(messages, args, source_name, ctx) -> int:
+def _build_and_write_output(messages, args, source_name, ctx, input_kind) -> int:
     """Resolve cross-references, group by package, print the summary, and write
     the .proto files (unless --dry-run).  Returns the process exit code
     (``EXIT_INCOMPLETE`` when the output is known to be missing something)."""
@@ -415,6 +415,8 @@ def _build_and_write_output(messages, args, source_name, ctx) -> int:
         single_file=args.single_file,
         package_override=args.package,
         source_name=source_name,
+        prefixes=args.prefixes or (),
+        input_kind=input_kind,
     )
     _done(t)
 
@@ -740,18 +742,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     from macho.memory    import BinaryContext
     from macho.load      import load_classes
     from proto.extractor import extract_all, SelectorsUnresolvedError
-    from proto.emitter   import (
-        configure_prefix_packages,
-        configure_cache_active as _configure_emitter_cache_active,
-        configure_binary_is_executable as _configure_emitter_is_executable,
-    )
+    from proto.emitter   import InputKind
 
     # ObjC class-name prefixes to strip → threaded into extract_all(prefixes=…);
-    # None means use proto.defaults.DEFAULT_PREFIXES.  The emitter keeps its own
-    # package-map registration (separate concern from the extractor's stripping).
+    # None means use proto.defaults.DEFAULT_PREFIXES.  The emitter's package names take
+    # them on top of the defaults (build_proto_files(prefixes=…)).
     _prefixes = tuple(args.prefixes) if args.prefixes else None
-    if args.prefixes:
-        configure_prefix_packages(args.prefixes)
 
     # ── Determine mode ────────────────────────────────────────────────────────
     cache_native = (args.framework is not None)
@@ -765,10 +761,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         cache = _open_cache(args.cache, cache_native)
         reader = cache     # kept past the post-extraction close (handles reopen lazily)
 
-        # Tell the extractor/emitter whether a cache is in play so the
-        # ambiguous-enum comments don't suggest "--cache" when one is in use.
-        _configure_emitter_cache_active(cache is not None)
-
         if cache_native:
             ctx, mach_va = _load_cache_native_context(args, cache, BinaryContext)
         else:
@@ -776,12 +768,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     except _CliAbort as abort:
         return abort.code
 
-    # Tell the extractor/emitter the input kind so ambiguous-enum messaging has
-    # the right severity.  A standalone executable (MH_EXECUTE) is self-contained,
-    # so an ambiguous enum should be impossible — reported as an error, like
-    # cache-native.  A binary-only dylib may reference cache data, so it stays a
-    # note.  (Cache images report as dylibs; _CACHE_ACTIVE takes precedence.)
-    _configure_emitter_is_executable(ctx.is_executable)
+    # The input kind decides what an ambiguous enum means (proto.emitter.InputKind): a
+    # cache image or a standalone executable (MH_EXECUTE) is self-contained, so one is an
+    # error; a binary-only dylib may reference cache data, so it stays a note.  (Cache
+    # images report as dylibs, hence the cache test first.)
+    input_kind = (InputKind.CACHE_IMAGE if cache_native else
+                  InputKind.EXECUTABLE if ctx.is_executable else InputKind.DYLIB)
 
     # ── String table, ObjC class list, .symbols method names ─────────────────
     # The one front end every image extraction runs (macho.load), so the images the
@@ -845,7 +837,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # ── Build + write proto files ──────────────────────────────────────────────
-    return _build_and_write_output(messages, args, source_name, ctx)
+    return _build_and_write_output(messages, args, source_name, ctx, input_kind)
 
 
 if __name__ == "__main__":

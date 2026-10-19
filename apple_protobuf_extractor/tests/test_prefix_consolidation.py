@@ -8,9 +8,8 @@ The change is purely structural (no behaviour change), so tests focus on:
   • DEFAULT_PREFIXES is importable from proto.defaults
   • config._class_to_proto_name defaults to DEFAULT_PREFIXES (no hardcoded literal)
   • an explicit prefixes= tuple overrides the default
-  • emitter._PREFIX_PACKAGE has exactly the same keys as DEFAULT_PREFIXES
-  • emitter._PREFIX_PACKAGE values are lowercased key names
-  • configure_prefix_packages still works (backward compat)
+  • emitter.package_for_class takes its known prefixes from DEFAULT_PREFIXES
+    (the run's own --prefix set is an argument, no module-level map)
 """
 
 from __future__ import annotations
@@ -77,40 +76,18 @@ class TestConfigDefaultPrefixes(unittest.TestCase):
 
 
 class TestEmitterUsesDefaultPrefixes(unittest.TestCase):
-    """emitter._PREFIX_PACKAGE must be derived from DEFAULT_PREFIXES."""
+    """emitter.package_for_class must take its known prefixes from DEFAULT_PREFIXES."""
 
-    def setUp(self):
+    def test_each_default_prefix_gives_its_lowercase_package(self):
         from proto.defaults import DEFAULT_PREFIXES
+        from proto.emitter import package_for_class
+        for p in DEFAULT_PREFIXES:
+            self.assertEqual(package_for_class(p + "ABFoo"), p.lower())
+
+    def test_no_module_level_prefix_map(self):
         import proto.emitter as em
-        self.defaults = DEFAULT_PREFIXES
-        self.pkg_map  = em._PREFIX_PACKAGE
-
-    def test_package_map_has_all_default_keys(self):
-        for p in self.defaults:
-            self.assertIn(p, self.pkg_map,
-                          f"Default prefix {p!r} must be in _PREFIX_PACKAGE")
-
-    def test_package_values_are_lowercased_keys(self):
-        for p in self.defaults:
-            self.assertEqual(self.pkg_map[p], p.lower(),
-                             f"{p!r} must map to {p.lower()!r}")
-
-    def test_configure_prefix_packages_still_works(self):
-        """configure_prefix_packages() must still add new entries (backward compat)."""
-        import proto.emitter as em
-        before = set(em._PREFIX_PACKAGE.keys())
-        try:
-            em.configure_prefix_packages(["TSTX"])
-            self.assertIn("TSTX", em._PREFIX_PACKAGE)
-            self.assertEqual(em._PREFIX_PACKAGE["TSTX"], "tstx")
-        finally:
-            em._PREFIX_PACKAGE.pop("TSTX", None)
-
-    def test_no_extra_default_keys_added(self):
-        # The package map may have MORE keys (from configure_prefix_packages calls)
-        # but must have AT LEAST the default ones
-        for p in self.defaults:
-            self.assertIn(p, self.pkg_map)
+        self.assertFalse(hasattr(em, "_PREFIX_PACKAGE"))
+        self.assertFalse(hasattr(em, "configure_prefix_packages"))
 
 
 class TestSingleCanonicalSource(unittest.TestCase):
@@ -128,14 +105,6 @@ class TestSingleCanonicalSource(unittest.TestCase):
         from proto.defaults import DEFAULT_PREFIXES
         for p in DEFAULT_PREFIXES:
             self.assertEqual(_class_to_proto_name(p + "X"), "X")
-
-    def test_emitter_package_map_keys_match_defaults(self):
-        """emitter package map defaults must be derivable from DEFAULT_PREFIXES."""
-        from proto.defaults import DEFAULT_PREFIXES
-        import proto.emitter as em
-        for p in DEFAULT_PREFIXES:
-            self.assertIn(p, em._PREFIX_PACKAGE)
-            self.assertEqual(em._PREFIX_PACKAGE[p], p.lower())
 
     def test_no_module_level_prefix_global_and_no_cross_call_leakage(self):
         """1ec059a's actual change (none of the 4 flagged tests above can observe

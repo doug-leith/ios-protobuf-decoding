@@ -153,7 +153,7 @@ def resolve_cross_image(
     loc = _Locator(reader)
     result = CrossImageResult()
     known: Set[str] = {m.class_name for m in messages}
-    taken: Set[Tuple[str, str]] = {(m.package or package_for_class(m.class_name), m.name)
+    taken: Set[Tuple[str, str]] = {(m.package or package_for_class(m.class_name, prefixes or ()), m.name)
                                    for m in messages}
     # image mach_va -> {class_name: message} (None while/if its extraction failed)
     by_image: Dict[int, Optional[Dict[str, ProtoMessage]]] = {mach_va: None}
@@ -181,7 +181,7 @@ def resolve_cross_image(
         msg.defined_in = loc.path_of(owner_va)
         msg.defined_in_via = via
         known.add(msg.class_name)
-        taken.add((msg.package or package_for_class(msg.class_name), msg.name))
+        taken.add((msg.package or package_for_class(msg.class_name, prefixes or ()), msg.name))
         result.added.append(msg)
         pending.append((owner_va, msg))
 
@@ -227,7 +227,7 @@ def resolve_cross_image(
                     f"defined in {path}, but its extraction raised: {err}" if err else
                     f"defined in {path}, but not a PBCodable message there")
                 continue
-            key = (target.package or package_for_class(target.class_name), target.name)
+            key = (target.package or package_for_class(target.class_name, prefixes or ()), target.name)
             if key in taken:
                 result.unresolved[cname] = (
                     f"defined in {loc.path_of(owner_va)}, but its message name "

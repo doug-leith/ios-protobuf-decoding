@@ -1075,11 +1075,8 @@ def extract_proto_message(
 # (CLI: ``--prefix``) to strip a different set for other binaries; it threads down
 # to :func:`proto.config._class_to_proto_name` as an explicit argument.
 
-# NOTE: the cache-active / binary-is-executable flags that gate ambiguous-enum
-# message *severity* live solely in :mod:`proto.emitter` (its _CACHE_ACTIVE /
-# _BINARY_IS_EXECUTABLE + configure_* setters).  The extractor previously carried
-# its own copies, but nothing here ever read them — they were dead duplicates and
-# a desync hazard, so they were removed.  The emitter is the single owner.
+# NOTE: what an ambiguous enum means (an error for a self-contained input, a note for a
+# binary-only dylib) is decided at emission, from the run's proto.emitter.InputKind.
 
 
 # ── Top-level extraction ───────────────────────────────────────────────────────

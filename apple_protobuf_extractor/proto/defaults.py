@@ -17,7 +17,7 @@ that a change to the defaults only needs to be made in one place.
 #: 2. **Package derivation** — lowercased to produce proto package names:
 #:    ``GEO`` → package ``geo``, ``CLP`` → package ``clp``.
 #:
-#: Pass ``prefixes=`` to :func:`proto.extractor.extract_all` and call
-#: :func:`proto.emitter.configure_prefix_packages` (or just use the ``--prefix``
-#: CLI flag, which wires both) to strip a different set for other binaries.
+#: Pass ``prefixes=`` to :func:`proto.extractor.extract_all` and to
+#: :func:`proto.emitter.build_proto_files` (or just use the ``--prefix`` CLI flag,
+#: which passes both) for other binaries.
 DEFAULT_PREFIXES: tuple = ("GEO", "CLP", "CLM", "CLN")
