@@ -403,17 +403,10 @@ class Flow:
             self._first_in_block[b] = self.addr_idx[body[0].addr]
             for ins in body:
                 self._block_of[self.addr_idx[ins.addr]] = b
-        self._wr: List[List[str]] = [writes(i) for i in insns]       # registers each insn writes
-        self._gen: Dict[int, Dict[str, FrozenSet[int]]] = {}          # block -> last def of each reg
-        for b in self.cfg.order:
-            first = self._first_in_block[b]
-            gen: Dict[str, FrozenSet[int]] = {}
-            for k in range(first, first + len(self.cfg.blocks[b])):
-                for r in self._wr[k]:
-                    gen[r] = frozenset((k,))
-            self._gen[b] = gen
-        self._in: Dict[int, Dict[str, FrozenSet[int]]] = {}
-        self._solve()
+        # reaching definitions, solved on first use (:meth:`defs_before`): a run that only
+        # evaluates (propagate / run_from) never needs them
+        self._wr: Optional[List[List[str]]] = None    # registers each insn writes
+        self._in: Optional[Dict[int, Dict[str, FrozenSet[int]]]] = None
         self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
         self._ivar_memo: Dict[int, Optional[int]] = {}
 
@@ -423,8 +416,18 @@ class Flow:
         """Forward reaching-definitions fixpoint: sweep the blocks in reverse postorder, joining
         the predecessors' OUT sets, until nothing changes (a few sweeps for a reducible CFG)."""
         cfg = self.cfg
+        self._wr = [writes(i) for i in self.insns]
+        self._in = {}
         if cfg.entry is None:
             return
+        gens: Dict[int, Dict[str, FrozenSet[int]]] = {}  # block -> last def of each reg
+        for b in cfg.order:
+            first = self._first_in_block[b]
+            gen: Dict[str, FrozenSet[int]] = {}
+            for k in range(first, first + len(cfg.blocks[b])):
+                for r in self._wr[k]:
+                    gen[r] = frozenset((k,))
+            gens[b] = gen
         preds = predecessors(cfg)
         rpo = reverse_postorder(cfg)
         entry_state = {r: frozenset((_ENTRY,)) for r in _REGS}
@@ -449,7 +452,7 @@ class Flow:
                                 else frozenset().union(*(o[r] for o in ps))
                 self._in[b] = inn
                 state = dict(inn)
-                state.update(self._gen[b])
+                state.update(gens[b])
                 if out.get(b) != state:
                     out[b] = state
                     changed = True
@@ -459,6 +462,8 @@ class Flow:
         entry); empty if the instruction is unreachable."""
         if k < 0:                                   # the function's entry (a root of -1)
             return frozenset((_ENTRY,)) if reg in _REGS else frozenset()
+        if self._in is None:
+            self._solve()
         b = self._block_of.get(k)
         if b is None or b not in self._in or reg not in _REGS:
             return frozenset()

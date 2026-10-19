@@ -67,14 +67,43 @@ class TestFastEnumerationContract(unittest.TestCase):
         from unittest import mock
         import proto.writer_flow as WF
         wf = WF.WriterFlow(SimpleNamespace(segments=[]), [])
-        st = WF._St({'x0': frozenset({('I', '_b')})}, sv={'sp': 0, 'x2': 0x40})
+        wf._cx = {0x1000: {'sp': WF._STACK_TOP, 'x2': WF._STACK_TOP + 0x40}}   # x2 = &state
+        st = WF._St({'x0': frozenset({('I', '_b')})})
         st.frame_write(0x40, 64, frozenset({('I', '_a')}))      # an earlier loop's state
         with mock.patch.object(WF, 'stub_selector', lambda ctx, va: WF._FAST_ENUMERATION), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None):
-            wf._call(st, 0x9000, WF._Result(), 0, 0)
+            wf._call(st, 0x9000, WF._Result(), 0, 0, 0x1000)
         self.assertEqual(st.frame_read(0x48, 8), frozenset({('I', '_b')}))   # itemsPtr
         self.assertEqual(st.p('x0'), frozenset({('I', '_b')}))               # the count
 
+
+
+class TestFrameAddressesComeFromTheEvaluation(unittest.TestCase):
+    """WriterFlow reads frame addresses from the function's Flow run, so a large frame's
+    shifted ``sub sp, sp, #1, lsl #12`` is the 4096 bytes it is: a value stored through x29
+    and reloaded through sp is the same slot (GEOActiveTileGroup's prologue; WriterFlow's
+    own constant tracking used to read only the unshifted form)."""
+
+    def test_a_slot_stored_through_x29_reloads_through_a_shifted_sp(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import proto.writer_flow as WF
+        from tests._listing import layout
+        _order, fd = layout((0x1000, [
+            ('stp', 'x29, x30, [sp, #-0x10]!'), ('mov', 'x29, sp'),
+            ('sub', 'sp, sp, #1, lsl #12'),
+            ('mov', 'x19, x2'), ('ldr', 'x8, [x0, #8]'),     # self->_a
+            ('stur', 'x8, [x29, #-8]'),
+            ('ldr', 'x1, [sp, #0xff8]'),                     # sp + 0xff8 == x29 - 8
+            ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
+        wf = WF.WriterFlow(SimpleNamespace(segments=[]), [])
+        wf.off_to_ivar = {8: '_a'}
+        with mock.patch('proto.dispatch_eval.disasm', fd), \
+                mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
+                mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
+            res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
+        site = res.sites[0x1024]
+        self.assertEqual((site.number, set(site.value_origins)), (1, {('I', '_a')}))
 
 try:
     import live_artifacts as _V
