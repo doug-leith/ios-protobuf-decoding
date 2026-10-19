@@ -7,11 +7,7 @@ toolchain actually emitted.  Offline: no binary needed.
 import unittest
 
 from serializers import swift_namemap_bytecode as B
-
-
-class _FI:
-    def __init__(self, mnemonic, op_str=""):
-        self.mnemonic, self.op_str = mnemonic, op_str
+from tests._listing import insns as _listing
 
 
 class _Ctx:
@@ -80,10 +76,10 @@ class TestLiteralFromGetter(unittest.TestCase):
         lit = b"\x00\x01timestamp\x00\x01identifier\x00"
         data = b"\x00" * 0x1c0 + lit
         ctx = _Ctx(data, 0x22b73a000 - 0x0)   # base such that 0x22b73a1c0 -> offset 0x1c0
-        insns = [_FI("adrp", "x1, #0x2706aa000"), _FI("add", "x1, x1, #0x2e8"),
-                 _FI("adrp", "x2, #0x22b73a000"), _FI("add", "x2, x2, #0x1c0"),
-                 _FI("mov", "w3, #0x18"), _FI("b", "#0x22b6b11c8")]
-        got = B.bytecode_literal_from_getter(ctx, insns)
+        insns = [("adrp", "x1, #0x2706aa000"), ("add", "x1, x1, #0x2e8"),
+                 ("adrp", "x2, #0x22b73a000"), ("add", "x2, x2, #0x1c0"),
+                 ("mov", "w3, #0x18"), ("b", "#0x22b6b11c8")]
+        got = B.bytecode_literal_from_getter(ctx, _listing(insns))
         self.assertEqual(got, lit)
         self.assertEqual(B.decode_namemap_bytecode(got),
                          [(1, "timestamp"), (2, "identifier")])
@@ -94,36 +90,36 @@ class TestLiteralFromGetter(unittest.TestCase):
         lit = b"\x00\x01name\x00\x01value\x00"
         data = b"\x00" * 0x40 + lit
         ctx = _Ctx(data, 0x1000)                       # 0x1040 -> offset 0x40
-        insns = [_FI("bl", "#0x2000"),
-                 _FI("adrp", "x9, #0x1000"), _FI("add", "x9, x9, #0x40"),
-                 _FI("mov", "x8, x0"), _FI("mov", "x0, x9"),
-                 _FI("mov", "w1, #%d" % len(lit)), _FI("mov", "w2, #2"),
-                 _FI("bl", "#0x3000"), _FI("ret")]
-        self.assertEqual(B.bytecode_literal_from_getter(ctx, insns), lit)
+        insns = [("bl", "#0x2000"),
+                 ("adrp", "x9, #0x1000"), ("add", "x9, x9, #0x40"),
+                 ("mov", "x8, x0"), ("mov", "x0, x9"),
+                 ("mov", "w1, #%d" % len(lit)), ("mov", "w2, #2"),
+                 ("bl", "#0x3000"), ("ret", "")]
+        self.assertEqual(B.bytecode_literal_from_getter(ctx, _listing(insns)), lit)
 
     def test_inline_form_requires_staticstring_flags_and_valid_bytecode(self):
         bare = b"capabilities"                          # not a bytecode (no header)
         ctx = _Ctx(b"\x00" * 0x40 + bare, 0x1000)
-        insns = [_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #0x40"),
-                 _FI("mov", "w1, #12"), _FI("mov", "w2, #2"), _FI("bl", "#0x3000")]
-        self.assertIsNone(B.bytecode_literal_from_getter(ctx, insns))
-        insns[3] = _FI("mov", "w2, #0")                 # wrong flags
-        self.assertIsNone(B.bytecode_literal_from_getter(ctx, insns))
+        insns = [("adrp", "x0, #0x1000"), ("add", "x0, x0, #0x40"),
+                 ("mov", "w1, #12"), ("mov", "w2, #2"), ("bl", "#0x3000")]
+        self.assertIsNone(B.bytecode_literal_from_getter(ctx, _listing(insns)))
+        insns[3] = ("mov", "w2, #0")                 # wrong flags
+        self.assertIsNone(B.bytecode_literal_from_getter(ctx, _listing(insns)))
 
     def test_registers_clobbered_by_call_are_not_reused(self):
         lit = b"\x00\x01a\x00"
         ctx = _Ctx(b"\x00" * 0x40 + lit, 0x1000)
-        insns = [_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #0x40"),
-                 _FI("mov", "w1, #4"), _FI("mov", "w2, #2"),
-                 _FI("bl", "#0x5000"),                 # clobbers x0-x17 (this call has no literal ... ok)
-                 _FI("bl", "#0x6000")]
+        insns = [("adrp", "x0, #0x1000"), ("add", "x0, x0, #0x40"),
+                 ("mov", "w1, #4"), ("mov", "w2, #2"),
+                 ("bl", "#0x5000"),                 # clobbers x0-x17 (this call has no literal ... ok)
+                 ("bl", "#0x6000")]
         # first bl already sees a complete, valid argument set and accepts it
-        self.assertEqual(B.bytecode_literal_from_getter(ctx, insns), lit)
+        self.assertEqual(B.bytecode_literal_from_getter(ctx, _listing(insns)), lit)
 
     def test_non_dispatch_getter_rejected(self):
-        insns = [_FI("adrp", "x2, #0x1000"), _FI("add", "x2, x2, #0"),
-                 _FI("cmn", "x8, #1"), _FI("mov", "w3, #4"), _FI("b", "#0x40")]
-        self.assertIsNone(B.bytecode_literal_from_getter(_Ctx(b"", 0), insns))
+        insns = [("adrp", "x2, #0x1000"), ("add", "x2, x2, #0"),
+                 ("cmn", "x8, #1"), ("mov", "w3, #4"), ("b", "#0x40")]
+        self.assertIsNone(B.bytecode_literal_from_getter(_Ctx(b"", 0), _listing(insns)))
 
 
 class TestEnumBytecode(unittest.TestCase):
@@ -153,10 +149,10 @@ class TestEnumBytecode(unittest.TestCase):
     def test_inline_locator_honours_enum_flag(self):
         data = b"\x00" * 0x40 + self.INNER
         ctx = _Ctx(data, 0x1000)
-        insns = [_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #0x40"), _FI("mov", "x8, sp"),
-                 _FI("mov", "w1, #%d" % len(self.INNER)), _FI("mov", "w2, #2"), _FI("bl", "#0x3000")]
-        self.assertIsNone(B.bytecode_literal_from_getter(ctx, insns))
-        self.assertEqual(B.bytecode_literal_from_getter(ctx, insns, enum=True), self.INNER)
+        insns = [("adrp", "x0, #0x1000"), ("add", "x0, x0, #0x40"), ("mov", "x8, sp"),
+                 ("mov", "w1, #%d" % len(self.INNER)), ("mov", "w2, #2"), ("bl", "#0x3000")]
+        self.assertIsNone(B.bytecode_literal_from_getter(ctx, _listing(insns)))
+        self.assertEqual(B.bytecode_literal_from_getter(ctx, _listing(insns), enum=True), self.INNER)
 
 
 if __name__ == "__main__":

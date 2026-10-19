@@ -30,9 +30,8 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   literal shape as A, just reached by chasing the ``adr`` instead of walking
   the getter inline (:func:`_shared_once_init_targets`).  Some builders are
   themselves only a further arg-setup stub for a *second*, arity-specific
-  shared template (:func:`_walk_namemap_builder_hop` follows that one extra
-  hop, concatenating the stub's setup with the template's body since the
-  template starts with empty register state on its own).
+  shared template (:func:`_walk_namemap_builder_hop` reads that template with the
+  registers the stub hands it).
 
 * **E — packed bytecode** (newer swift-protobuf / iOS 27 InternalSwiftProtobuf):
   ``_NameMap(bytecode: "<literal>")`` -- the whole (number, name) table is one
@@ -53,22 +52,31 @@ they come from the cache's ``.symbols`` sub-cache (same nlist, keyed by vmaddr).
 The disassembly-driven decoders are mode-agnostic (all reads route through
 ``ctx``).
 
+Every shape reads a function's :func:`_listing` (what its entry reaches within its extent,
+``LC_FUNCTION_STARTS``) and register values from :class:`proto.arm64_eval.Flow`; a builder's
+(number, name) entries are paired by the address they are stored at (:func:`_table_entries`).
+
 The residual swift type/number estimates (and which are flagged) are catalogued
 in LIMITATIONS.md (10) / to-do #63a/#63b/#66/#67/#68/#70.
 """
 from __future__ import annotations
 
+import bisect
 import logging
 import re
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from collections import Counter
+from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from macho.memory import BinaryContext
-from macho.disasm import disasm, _parse_imm
+from macho.memory import BinaryContext, _ctx_cache
+from macho.disasm import disasm, _norm_reg, _parse_imm
+from proto.arm64_eval import Flow
+from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, is_cond_branch,
+                                  parse_mem, split_ops)
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
-    bytecode_literal_from_getter, decode_namemap_bytecode)
+    bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
 
 log = logging.getLogger(__name__)
 
@@ -77,9 +85,14 @@ log = logging.getLogger(__name__)
 _MAX_FIELD_NUMBER = 0x1FFFFFFF
 _MAX_NAME_LEN = 80
 _NAMEMAP_MARKER = "17_protobuf_nameMap"
-# Runaway guard for the inline-closure walk; `stop_at_ret` is the real
-# terminator and the next-symbol extent tightens this further when known.
+# [cap:INPUT-SANITY] runaway guard on a listing read without a function index (:func:`_listing`;
+# with one, the function's extent bounds it) and on the linear decodeMessage / traverse reads.
+# A listing that reaches it is marked truncated and the builder numbers read from it are
+# reported as estimated.
 _INLINE_MAX_INSNS = 4000
+# [cap:COSMETIC] instructions disassembled per read while following a path; a path is read
+# on until it ends, whatever this is.
+_READ_CHUNK = 64
 
 
 # ── data model ──────────────────────────────────────────────────────────────
@@ -250,49 +263,231 @@ def _parse_namemap_symbol(sym: str) -> Optional[Tuple[str, str, bool]]:
     return idents[0], ".".join(idents[1:]), m.group(2) == "O"
 
 
-# ── small disasm helpers ──────────────────────────────────────────────────────
+# ── listings and register values ──────────────────────────────────────────────
 
-def _adr_target(insn) -> Optional[int]:
-    if insn.mnemonic in ("adr", "adrp"):
-        return _parse_imm(insn.op_str)
-    return None
+# What ends a path through a function: a return, an indirect jump, a trap.
+_PATH_ENDS = RETURNS | INDIRECT_BRANCHES | frozenset(("brk", "udf", "hlt"))
 
 
-def _cstr(ctx: BinaryContext, va: int) -> Optional[str]:
-    for cand in (va, va & 0x7FFFFFFFF):
+class _Listing(list):
+    """A function's instructions in address order (:func:`_listing`); *truncated* when the
+    read stopped at :data:`_INLINE_MAX_INSNS` with paths still open."""
+    truncated = False
+
+
+_LC_SEGMENT_64, _LC_FUNCTION_STARTS = 0x19, 0x26
+
+
+def _load_commands(ctx: BinaryContext) -> List[Tuple[int, bytes]]:
+    """``(cmd, bytes)`` for each load command of the image."""
+    reader = getattr(ctx, "_cache_reader", None)
+    if reader is not None and getattr(ctx, "is_cache_backed", False):
+        return reader._image_load_commands(ctx.image_base)
+    data = getattr(ctx, "_data", b"") or b""
+    if len(data) < 32:
+        return []
+    ncmds, sizeofcmds = struct.unpack_from("<II", data, 16)
+    out, pos, end = [], 32, min(32 + sizeofcmds, len(data))
+    for _ in range(ncmds):
+        if pos + 8 > end:
+            break
+        cmd, size = struct.unpack_from("<II", data, pos)
+        if size < 8:
+            break
+        out.append((cmd, data[pos:pos + size]))
+        pos += size
+    return out
+
+
+def _build_function_starts(ctx: BinaryContext) -> List[int]:
+    segs: Dict[str, Tuple[int, int]] = {}
+    dataoff = datasize = None
+    for cmd, body in _load_commands(ctx):
+        if cmd == _LC_SEGMENT_64 and len(body) >= 56:
+            name = body[8:24].split(b"\x00", 1)[0].decode("ascii", "replace")
+            vmaddr, _vmsize, fileoff = struct.unpack_from("<QQQ", body, 24)
+            segs[name] = (vmaddr, fileoff)
+        elif cmd == _LC_FUNCTION_STARTS and len(body) >= 16:
+            dataoff, datasize = struct.unpack_from("<II", body, 8)
+    if dataoff is None or "__TEXT" not in segs or not datasize:
+        return []
+    if getattr(ctx, "is_cache_backed", False):
+        le_vm, le_off = segs["__LINKEDIT"]                 # the shared linkedit, by its segment
+        blob = ctx.read_bytes(le_vm + dataoff - le_off, datasize)
+    else:
+        blob = ctx._data[dataoff:dataoff + datasize]
+    starts, addr, p = [], segs["__TEXT"][0], 0
+    while p < len(blob):
+        delta, p = _uleb(blob, p, len(blob))
+        if delta == 0:
+            break
+        addr += delta
+        starts.append(addr)
+    return starts
+
+
+def _function_starts(ctx: BinaryContext) -> List[int]:
+    """The image's function entries (``LC_FUNCTION_STARTS``), sorted; empty without the
+    command.  Memoised on *ctx*."""
+    def build():
         try:
-            s = ctx.read_cstring(cand, _MAX_NAME_LEN + 16)
+            return _build_function_starts(ctx)
         except (NameError, ImportError):
             raise
         except Exception:
-            continue
-        if s and all(32 <= ord(c) < 127 for c in s):
-            return s
-    return None
+            return []
+    return _ctx_cache(ctx, "_swift_function_starts", build)
 
 
-def _adrp_add_targets(insns) -> List[int]:
-    """Every ``adrp Xn,#page`` + ``add Xn,Xn,#off`` page+offset target."""
-    out: List[int] = []
-    for i, ins in enumerate(insns):
-        if ins.mnemonic != "adrp":
-            continue
-        reg = ins.op_str.split(",", 1)[0].strip()
-        page = _adr_target(ins)
-        if page is None:
-            continue
-        for nxt in insns[i + 1:i + 5]:
-            if nxt.mnemonic == "add" and nxt.op_str.split(",", 1)[0].strip() == reg:
-                off = _parse_imm(nxt.op_str)
-                if off is not None:
-                    out.append(page + off)
+def _function_end(ctx: BinaryContext, va: int) -> Optional[int]:
+    """Where the function at *va* ends: the next function entry after it (None: unknown)."""
+    starts = _function_starts(ctx)
+    i = bisect.bisect_right(starts, va)
+    return starts[i] if i < len(starts) else None
+
+
+def _branch_target(ins) -> Optional[int]:
+    """Target of a direct branch (``b``, ``b.cond``, ``cbz``/``tbz``...): its last operand."""
+    ops = split_ops(ins.op_str)
+    return _parse_imm(ops[-1]) if ops else None
+
+
+def _listing(ctx: BinaryContext, va: int) -> _Listing:
+    """The instructions of the function at *va* that its entry reaches, in address order:
+    both sides of each conditional branch and the target of each ``b`` inside the function
+    (its extent: *va* up to the next function entry, :func:`_function_starts`), each path
+    on to a return, an indirect jump, or a branch out of the function (a tail call, which
+    is not followed).  Calls return.  Without a function index a ``b`` ends its path
+    unless it goes to the next instruction.  Raises when *va* itself cannot be read."""
+    end = _function_end(ctx, va)
+
+    def inside(t: Optional[int]) -> bool:
+        return t is not None and va <= t and (end is None or t < end)
+
+    out: Dict[int, object] = {}
+    work = [va]
+    while work:
+        a = work.pop()
+        while a is not None and a not in out and (end is None or a < end):
+            try:
+                chunk = disasm(ctx, a, max_insns=_READ_CHUNK, stop_at_ret=False)
+            except (NameError, ImportError):
+                raise
+            except Exception:
+                if a == va:
+                    raise
                 break
+            if not chunk:
+                break
+            nxt: Optional[int] = chunk[-1].addr + 4
+            for ins in chunk:
+                if ins.addr in out or (end is not None and ins.addr >= end):
+                    nxt = None
+                    break
+                if end is None and len(out) >= _INLINE_MAX_INSNS:
+                    listing = _Listing(sorted(out.values(), key=lambda i: i.addr))
+                    listing.truncated = True
+                    return listing
+                out[ins.addr] = ins
+                mn = ins.mnemonic
+                if mn in _PATH_ENDS:
+                    nxt = None
+                    break
+                if mn == "b":
+                    t = _branch_target(ins)
+                    if inside(t) if end is not None else t == ins.addr + 4:
+                        work.append(t)
+                    nxt = None
+                    break
+                if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
+                    t = _branch_target(ins)
+                    if inside(t):
+                        work.append(t)
+            a = nxt
+    return _Listing(sorted(out.values(), key=lambda i: i.addr))
+
+
+def _tail_calls(insns) -> List[int]:
+    """Indices of the listing's ``b`` instructions to an address outside it."""
+    inside = {i.addr for i in insns}
+    return [k for k, ins in enumerate(insns)
+            if ins.mnemonic == "b" and _branch_target(ins) not in inside]
+
+
+def _cstr(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
+    if va is None:
+        return None
+    try:
+        s = ctx.read_cstring(va, _MAX_NAME_LEN + 16)
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        return None
+    return s if s and all(32 <= ord(c) < 127 for c in s) else None
+
+
+def _constant_addresses(insns) -> List[int]:
+    """Every value an ``add Xd, Xn, #imm`` computes from a constant ``Xn`` (an ``adrp`` page,
+    by reaching definitions): the data addresses the function materialises."""
+    flow = Flow(None, list(insns))
+    out: List[int] = []
+    for k, ins in enumerate(insns):
+        if ins.mnemonic != "add":
+            continue
+        ops = split_ops(ins.op_str)
+        if len(ops) != 3 or not ops[2].startswith("#"):
+            continue
+        base = flow.const_before(k, _norm_reg(ops[1]) or "")
+        off = _parse_imm(ops[2])
+        if base is not None and off is not None:
+            out.append(base + off)
     return out
+
+
+# Instructions that only compute registers: what a pure tail-call stub is made of (arm64e signs
+# a function pointer in place before passing it: ``paciza x16; mov x2, x16``).
+_SETUP = frozenset({"adr", "adrp", "add", "mov", "movz", "movk", "movn", "nop", "paciza", "pacia"})
+
+
+def _tail_call_args(insns) -> Optional[Dict[str, int]]:
+    """The argument registers (x0-x7) known at the tail call of a pure stub -- a listing whose
+    instructions before its last, a ``b`` out, only compute registers -- or None for any other
+    listing.
+
+    Such a getter / builder holds no table of its own: the (number, name) data is in the
+    function it passes (shape D), in a literal it passes (shape E, F) or in a static blob."""
+    if (len(insns) < 2 or insns[-1].mnemonic != "b" or _tail_calls(insns) != [len(insns) - 1]
+            or any(i.mnemonic not in _SETUP for i in insns[:-1])):
+        return None
+    k = len(insns) - 1
+    regs = Flow(None, list(insns)).propagate({}, at=[k]).get(k, {})
+    return {f"x{n}": regs[f"x{n}"] for n in range(8) if f"x{n}" in regs}
+
+
+def _in_executable_text(ctx: BinaryContext, va: int) -> bool:
+    """True when *va* lands inside this image's own executable code section
+    (as opposed to a data address, e.g. a once-token or a storage slot)."""
+    if not ctx.has_section("__TEXT", "__text"):
+        return False
+    sec = ctx.section("__TEXT", "__text")
+    return sec.vmaddr <= va < sec.vmaddr + sec.vmsize
 
 
 # ── shape C: static-object blob ───────────────────────────────────────────────
 
-def _parse_enum_blob(ctx: BinaryContext, buf: bytes, count: int) -> Optional[List[SwiftField]]:
+def _name_ptr(ctx: BinaryContext, slot_va: int) -> Optional[int]:
+    """The name pointer stored at *slot_va*, through the image's pointer fixups
+    (``ctx.read_ptr``: a chained-fixup rebase in a standalone binary, the cache's slide)."""
+    try:
+        return ctx.read_ptr(slot_va)
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        return None
+
+
+def _parse_enum_blob(ctx: BinaryContext, blob_va: int, buf: bytes,
+                     count: int) -> Optional[List[SwiftField]]:
     """Strict reader for a static ``Array<(Int, _NameDescription)>`` of enum cases.
 
     Elements start right after the 0x20-byte header, each ``(value: Int, name ptr,
@@ -305,11 +500,10 @@ def _parse_enum_blob(ctx: BinaryContext, buf: bytes, count: int) -> Optional[Lis
         if off + 24 > len(buf):
             return None
         num = struct.unpack_from("<q", buf, off)[0]
-        nptr = struct.unpack_from("<Q", buf, off + 8)[0]
         ln = struct.unpack_from("<Q", buf, off + 16)[0]
         if not (-(1 << 31) <= num < (1 << 31)) or not 1 <= ln <= _MAX_NAME_LEN:
             return None
-        nm = _cstr(ctx, nptr)
+        nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
         if not nm or ln != len(nm) or not _IDENT_RE.match(nm):
             return None
         return num, nm
@@ -370,7 +564,7 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
     if not buf:
         return None
     if enum:
-        return _parse_enum_blob(ctx, buf, count)
+        return _parse_enum_blob(ctx, blob_va, buf, count)
     out: List[SwiftField] = []
     seen = set()
     # Real elements start right after the 0x20-byte header.  Message blobs have always
@@ -389,10 +583,9 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
         if not valid:
             off += 8
             continue
-        nptr = struct.unpack_from("<Q", buf, off + 8)[0]
         ln = struct.unpack_from("<Q", buf, off + 16)[0]
         if 1 <= ln <= _MAX_NAME_LEN:
-            nm = _cstr(ctx, nptr)
+            nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
             key = (num, nm) if enum else num
             if (nm and ln == len(nm) and key not in seen
                     and (not enum or _IDENT_RE.match(nm))):
@@ -403,360 +596,215 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
     return out or None
 
 
-# ── shapes A/B: inline closure / single-field tail-call ───────────────────────
+# ── shapes A/B/C: the (number, name) stores of a name-map builder ────────────
 
-_MOVK_RE = re.compile(r"(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+),\s*lsl\s*#(\d+)")
-
-
-def _movk(reg_imm: Dict[str, int], op_str: str) -> None:
-    """``movk wN,#imm,lsl #sh`` -- insert 16 bits into an already-known immediate
-    (a value that does not fit one ``mov``, e.g. an enum value of 100000)."""
-    m = _MOVK_RE.match(op_str.strip())
-    if not m:
-        return
-    reg = m.group(1).replace("x", "w")
-    if reg not in reg_imm:
-        return
-    sh = int(m.group(3))
-    reg_imm[reg] = (reg_imm[reg] & ~(0xFFFF << sh)) | ((int(m.group(2), 0) & 0xFFFF) << sh)
+class _Slot(NamedTuple):
+    k: int                                  # the store's index in the listing
+    addr: Tuple[Tuple[Tuple, ...], int]     # symbolic address (:func:`_sym`)
+    value: Optional[int]                    # the stored register's value, if known
+    bits: int                               # the stored register's width
 
 
-def _walk_inline_closure(ctx: BinaryContext, insns, enum: bool = False) -> List[SwiftField]:
-    """Shape A: each entry is ``mov w,#<num>; str x,[base]`` (number stored at
-    the entry's slot-0) plus ``<name-load>; mov w,#<len>; stp x,x,[entry]``
-    (name pointer + length).  The length-check pins names to real entries.
-
-    The name pointer is loaded either as a single ``adr x,<name>`` (close
-    cstrings, the standalone-binary form) OR as ``adrp x,#page; add x,x,#off``
-    (the device / cache form, where the name pool is >1 MB away — far beyond
-    ``adr`` reach).  Both are resolved here."""
-    reg_imm: Dict[str, int] = {}
-    reg_str: Dict[str, Optional[str]] = {}
-    adrp_page: Dict[str, int] = {}
-    entries: List[SwiftField] = []
-    cur_num: Optional[int] = None
-    for ins in insns:
-        m, o = ins.mnemonic, ins.op_str
-        if m in ("mov", "movz"):
-            parts = o.split(",")
-            if len(parts) == 2:
-                v = _parse_imm(parts[1])
-                if v is not None:
-                    dst = parts[0].strip().replace("x", "w")
-                    reg_imm[dst] = v
-                    adrp_page.pop(dst.replace("w", "x"), None)
-        elif m == "movk":
-            _movk(reg_imm, o)
-        elif m == "adrp":
-            reg = o.split(",", 1)[0].strip()
-            page = _adr_target(ins)
-            if page is not None:
-                adrp_page[reg] = page
-            reg_str.pop(reg, None)
-        elif m == "adr":
-            va = _adr_target(ins)
-            reg_str[o.split(",", 1)[0].strip().replace("w", "x")] = (
-                _cstr(ctx, va) if va is not None else None
-            )
-        elif m == "add":
-            # adrp/add page+offset -> resolve to the name cstring it points at.
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
-            if mm and mm.group(2) in adrp_page:
-                off = _parse_imm("#" + mm.group(3))
-                if off is not None:
-                    reg_str[mm.group(1)] = _cstr(ctx, adrp_page[mm.group(2)] + off)
-        elif m == "str":
-            mm = re.match(r"(\w+),\s*\[(\w+)\]$", o)
-            if mm:
-                if enum and mm.group(1) in ("xzr", "wzr"):
-                    cur_num = 0           # enum value 0 is stored from the zero register
-                else:
-                    cur_num = reg_imm.get(mm.group(1).replace("x", "w"))
-        elif m == "stp":
-            mm = re.match(r"(\w+),\s*(\w+),\s*\[(\w+)", o)
-            if mm:
-                nm = reg_str.get(mm.group(1).replace("w", "x"))
-                ln = reg_imm.get(mm.group(2).replace("x", "w"))
-                if nm and ln == len(nm) and cur_num is not None:
-                    entries.append(SwiftField(cur_num, nm))
-    return entries
+def _sym(flow: Flow, k: int, reg: Optional[str], memo: Dict[int, tuple]) -> tuple:
+    """*reg* before ``insns[k]`` as a symbolic address ``(atoms, offset)``: a constant plus a
+    sum of values the listing cannot know -- a call's result, a field offset loaded from type
+    metadata, a register's value on entry -- each an *atom* named by where it comes from.
+    Read off the reaching definitions through ``mov`` copies and ``add`` / ``sub``; two
+    addresses with the same atoms lie at a known distance from each other."""
+    if reg is None:
+        return (("?", k, ""),), 0
+    c = flow.const_before(k, reg)
+    if c is not None:
+        return (), c
+    defs = flow.defs_before(k, reg)
+    if len(defs) != 1:
+        return (("join", k, reg),), 0
+    (d,) = defs
+    if d < 0:
+        return (("entry", -1, reg),), 0
+    if d in memo:
+        return memo[d]
+    res = memo[d] = (("def", d, ""),), 0           # also what a cycle (a loop counter) sees
+    ins = flow.insns[d]
+    ops = split_ops(ins.op_str)
+    if ins.mnemonic == "mov" and len(ops) == 2 and not ops[1].startswith("#"):
+        res = _sym(flow, d, _norm_reg(ops[1]), memo)
+    elif ins.mnemonic in ("add", "sub") and len(ops) == 3:
+        a = _sym(flow, d, _norm_reg(ops[1]), memo)
+        b = ((), _parse_imm(ops[2])) if ops[2].startswith("#") else \
+            _sym(flow, d, _norm_reg(ops[2]), memo)
+        if b[1] is not None and ins.mnemonic == "add":
+            res = tuple(sorted(a[0] + b[0])), a[1] + b[1]
+        elif b[1] is not None and not b[0]:
+            res = a[0], a[1] - b[1]
+    memo[d] = res
+    return res
 
 
-def _walk_namemap_builder(ctx: BinaryContext, insns, enum: bool = False) -> List[SwiftField]:
-    """Runtime-built ``_NameMap``: read the ``(fieldNumber, name)`` table the cold
-    builder writes into its freshly-allocated buffer.  swift-protobuf emits the
-    entries in (at least) three store shapes, all of which carry the number and the
-    name literally — only the instruction encoding differs:
+def _store_slots(flow: Flow, entry: Optional[Dict[str, int]]) -> List[_Slot]:
+    """Every 64- / 32-bit register the listing stores outside its frame (``str`` / ``stur`` /
+    ``stp``), with its address (:func:`_sym`) and value (:meth:`Flow.propagate` from
+    *entry*).  Stores the entry cannot reach are left out."""
+    ks = [k for k, ins in enumerate(flow.insns) if ins.mnemonic in ("str", "stur", "stp")]
+    vals = flow.propagate(dict(entry or {}), at=ks)
+    memo: Dict[int, tuple] = {}
+    out: List[_Slot] = []
+    for k in ks:
+        if k not in vals:
+            continue
+        ops = split_ops(flow.insns[k].op_str)
+        n = 2 if flow.insns[k].mnemonic == "stp" else 1
+        if len(ops) < n + 1 or any(r[:1] not in ("x", "w") for r in ops[:n]):
+            continue
+        pm = parse_mem(ops[n])
+        if pm is None or pm.base in (None, "sp", "x29") or pm.index is not None:
+            continue                         # the frame, or an indexed store: not a table
+        atoms, off = _sym(flow, k, pm.base, memo)
+        if len(ops) == n + 1:                # a post-indexed store writes at the base itself
+            off += pm.disp
+        for r in ops[:n]:
+            width = 8 if r.startswith("x") else 4
+            v = 0 if r in ("xzr", "wzr") else vals[k].get(_norm_reg(r))
+            out.append(_Slot(k, (atoms, off), None if v is None else v & ((1 << 8 * width) - 1),
+                             8 * width))
+            off += width
+    return out
 
-      A. combined ``stp <wNum>, <xName>, [base,#off]`` (number first, name second);
-         the per-entry length lives in a separate 16-byte ``_NameDescription`` const.
-      B. split ``str <wNum>, [base,#off]`` + ``str <xName>, [base,#off+8]`` (the tail
-         entry is sometimes lowered this way instead of a combined ``stp``).
-      C. packed/parallel form: ``str <wNum>, [keybase]`` into a number array and a
-         separate ``stp <xName>, <wLen>, [namebase]`` (name first, LENGTH second)
-         into a parallel name array.
 
-    The ``stp`` cases A and C are disambiguated by OPERAND POSITION (name is the
-    2nd operand in A, the 1st in C) — NOT by value, because a field whose number
-    equals its name length (e.g. ``Field.name`` = #4, ``len('name')`` = 4) would be
-    misclassified otherwise.  A/B entries pair directly; C's separate number stores
-    are zipped with its name stores in program order (which the compiler emits
-    consistently per field).
+def _table_entries(ctx: BinaryContext, insns, enum: bool, entry: Optional[Dict[str, int]] = None,
+                   with_len: bool = False) -> List[SwiftField]:
+    """The (number, name) entries a name-map builder stores, paired by ADDRESS.  The name
+    pointer of an entry is stored either 8 bytes after its number -- ``stp <num>, <name>``
+    (shape A) or two ``str`` (shape B) -- or at the number's address plus one more unknown
+    offset (shape C: the number is the ``Int`` of an ``(Int, _NameDescription)`` element and
+    the name the first word of its ``_NameDescription``, whose offset in the element the
+    runtime type metadata supplies: ``str <num>, [E]`` ... ``add Xd, E, <offset>`` ...
+    ``stp <name>, <len>, [Xd]``).  A name pairs only with the one number at such an address,
+    and each number with one name; entries come in store order.
 
-    *enum*: the entries are enum cases.  A case value may be 0 (stored from the zero
-    register, ``str xzr,[…]``), negative or repeated (an alias), so the field-number
-    range filter and the unique-number dedupe do not apply; both are unsafe to relax
-    for messages, where a zero store is unrelated bookkeeping."""
-    reg_imm: Dict[str, int] = {}
-    reg_str: Dict[str, Optional[str]] = {}
-    adrp_page: Dict[str, int] = {}
-    paired: List[SwiftField] = []        # A/B: number + name bound at the store
-    loose_names: List[str] = []          # C: name-only stores (number is separate)
-    loose_nums: List[int] = []           # C: standalone number stores
-    seen: set = set()
-
-    def _clear(reg: str) -> None:
-        rx, rw = reg.replace("w", "x"), reg.replace("x", "w")
-        reg_imm.pop(rw, None)
-        reg_str.pop(rx, None)
-        adrp_page.pop(rx, None)
-
-    def _bind(num, nm) -> None:
-        if not nm or num is None:
-            return
+    *with_len*: the name must be followed by its length (``stp <name>, <len>``, the inline
+    closure).  *enum*: a number is any int32 (the stored register sign-extended), else a field
+    number (1 .. 2^29-1).  *entry*: register values on entry (a stub's arguments)."""
+    slots = _store_slots(Flow(ctx, list(insns)), entry)
+    at: Dict[tuple, Optional[_Slot]] = {}
+    for s in slots:
+        at[s.addr] = None if s.addr in at else s          # stored twice: not one entry
+    numbers: Dict[tuple, int] = {}
+    for a, s in at.items():
+        if s is None or s.value is None:
+            continue
+        v = s.value
         if enum:
-            ok, key = -(1 << 31) <= num < (1 << 31), (num, nm)
-        else:
-            ok, key = 1 <= num <= _MAX_FIELD_NUMBER, num
-        if ok and key not in seen:
+            v = v - (1 << s.bits) if v >> (s.bits - 1) else v
+            if -(1 << 31) <= v < (1 << 31):
+                numbers[a] = v
+        elif 1 <= v <= _MAX_FIELD_NUMBER:
+            numbers[a] = v
+    pairs = []
+    for (atoms, off), s in at.items():
+        if s is None or s.bits != 64:
+            continue
+        name = _cstr(ctx, s.value)
+        if not name:
+            continue
+        if with_len:
+            ln = at.get((atoms, off + 8))
+            if ln is None or ln.value != len(name):
+                continue
+        keys = {(atoms, off - 8)} | {(atoms[:i] + atoms[i + 1:], off) for i in range(len(atoms))}
+        hits = [a for a in keys if a in numbers]
+        if len(hits) == 1:
+            pairs.append((s.k, hits[0], name))
+    once = Counter(a for _k, a, _n in pairs)
+    return [SwiftField(numbers[a], name) for _k, a, name in sorted(pairs) if once[a] == 1]
+
+
+def _walk_inline_closure(ctx: BinaryContext, insns, enum: bool = False,
+                         entry: Optional[Dict[str, int]] = None) -> List[SwiftField]:
+    """Shape A, inline (device / framework closures): each entry is a number store plus
+    ``<name>; mov w,#<len>; stp x,x,[entry]`` -- the name pointer with its length, which pins
+    names to real entries (:func:`_table_entries` with the length)."""
+    return _table_entries(ctx, insns, enum, entry, with_len=True)
+
+
+def _walk_namemap_builder(ctx: BinaryContext, insns, enum: bool = False,
+                          entry: Optional[Dict[str, int]] = None) -> List[SwiftField]:
+    """Runtime-built ``_NameMap``: the ``(fieldNumber, name)`` table the cold builder writes
+    into its freshly-allocated buffer (:func:`_table_entries`; the length lives in a separate
+    ``_NameDescription`` constant, so none is required).  A message keeps the first entry per
+    number; an enum case may be 0, negative or repeated (an alias), so it keeps the first per
+    (value, name)."""
+    out: List[SwiftField] = []
+    seen: set = set()
+    for f in _table_entries(ctx, insns, enum, entry):
+        key = (f.number, f.name) if enum else f.number
+        if key not in seen:
             seen.add(key)
-            paired.append(SwiftField(num, nm))
-
-    for ins in insns:
-        m, o = ins.mnemonic, ins.op_str
-        if m == "movk":
-            _movk(reg_imm, o)
-        elif m in ("mov", "movz"):
-            parts = o.split(",")
-            if len(parts) == 2:
-                dst_raw, src_raw = parts[0].strip(), parts[1].strip()
-                dst = dst_raw.replace("x", "w")
-                v = _parse_imm(src_raw)
-                if v is not None:
-                    _clear(dst)
-                    reg_imm[dst] = v
-                elif re.fullmatch(r"[wx]\d+", src_raw):
-                    # Register-to-register copy (e.g. a callee-saved-register
-                    # save at a call site): propagate whichever value the
-                    # source register carries so it survives the copy -- some
-                    # builders stage the name/len args through a fresh
-                    # register before the actual store (shape D, #74).
-                    src_x, src_w = src_raw.replace("w", "x"), src_raw.replace("x", "w")
-                    _clear(dst)
-                    if src_x in reg_str:
-                        reg_str[dst.replace("w", "x")] = reg_str[src_x]
-                    elif src_w in reg_imm:
-                        reg_imm[dst] = reg_imm[src_w]
-        elif m == "adrp":
-            reg = o.split(",", 1)[0].strip()
-            page = _adr_target(ins)
-            _clear(reg)
-            if page is not None:
-                adrp_page[reg] = page
-        elif m == "adr":
-            reg = o.split(",", 1)[0].strip()
-            _clear(reg)
-            va = _adr_target(ins)
-            reg_str[reg.replace("w", "x")] = _cstr(ctx, va) if va is not None else None
-        elif m == "add":
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
-            if mm and mm.group(2) in adrp_page:
-                off = _parse_imm("#" + mm.group(3))
-                if off is not None:
-                    s = _cstr(ctx, adrp_page[mm.group(2)] + off)
-                    _clear(mm.group(1))
-                    reg_str[mm.group(1).replace("w", "x")] = s
-        elif m == "stp":
-            mm = re.match(r"(\w+),\s*(\w+),\s*\[", o)
-            if mm:
-                a, b = mm.group(1), mm.group(2)
-                a_str, b_str = reg_str.get(a.replace("w", "x")), reg_str.get(b.replace("w", "x"))
-                a_imm, b_imm = reg_imm.get(a.replace("x", "w")), reg_imm.get(b.replace("x", "w"))
-                if b_str and a_imm is not None:       # A: stp <num>, <name>
-                    _bind(a_imm, b_str)
-                elif a_str and b_imm is not None:     # C: stp <name>, <len>
-                    loose_names.append(a_str)
-                elif a_str or b_str:                  # name with no imm partner
-                    loose_names.append(a_str or b_str)
-        elif m == "str":
-            mm = re.match(r"(\w+),\s*\[(\w+)", o)
-            if mm and enum and mm.group(2) == "sp":
-                continue                              # enum: a stack spill, not a table entry
-            if mm:
-                r = mm.group(1)
-                s = reg_str.get(r.replace("w", "x"))
-                v = reg_imm.get(r.replace("x", "w"))
-                if enum and r in ("xzr", "wzr"):
-                    loose_nums.append(0)              # enum value 0 (zero register)
-                elif s is not None:                   # B/C: lone name pointer
-                    loose_names.append(s)
-                elif v is not None and (enum or 1 <= v <= _MAX_FIELD_NUMBER):
-                    loose_nums.append(v)              # B/C: standalone number
-    for num, nm in zip(loose_nums, loose_names):      # pair C/B leftovers by order
-        _bind(num, nm)
-    return paired
-
-
-def _in_executable_text(ctx: BinaryContext, va: int) -> bool:
-    """True when *va* lands inside this image's own executable code section
-    (as opposed to a data address, e.g. a once-token or a storage slot)."""
-    if not ctx.has_section("__TEXT", "__text"):
-        return False
-    sec = ctx.section("__TEXT", "__text")
-    return sec.vmaddr <= va < sec.vmaddr + sec.vmsize
-
-
-# Straight-line setup that may sit between the address loads and the tail ``b`` of a shape-D
-# getter.  ``paciza``/``pacia`` + ``mov x2,x16`` appear on arm64e (iOS 27), where the builder's
-# function pointer is signed before being passed (``adrp/add x16,<builder>; paciza x16;
-# mov x2,x16``); none of them transfers control.
-_DISPATCH_SETUP_OK = frozenset({"nop", "mov", "movz", "paciza", "pacia"})
+            out.append(f)
+    return out
 
 
 def _shared_once_init_targets(insns) -> List[int]:
-    """Shape D: a short ``adr`` x2/x3 + unconditional-branch dispatch into a
-    lazy-once-init TEMPLATE shared across many unrelated types (device /
-    newer-toolchain ``static let`` lowering).  The branch target itself
-    carries no type information -- it is the same shared function for every
-    type -- but one of the ``adr``'d values is the type's own builder
-    function (the others are a once-token and the type's ``_NameMap``
-    storage slot).
+    """Shape D: the getter is only a tail call into a lazy-once-init TEMPLATE shared across
+    many unrelated types (device / newer-toolchain ``static let`` lowering), passing a
+    once-token, the type's ``_NameMap`` storage slot and the type's own builder function.
+    The template carries no type information; the arguments do.  Returns the values of the
+    argument registers (:func:`_tail_call_args`); callers keep the code addresses
+    (:func:`_in_executable_text`), which drops the token and the slot in ``__DATA``.
 
-    Only matches the MINIMAL dispatch shape: nothing but straight-line
-    address materialisation (``adr``, or ``adrp``+``add`` page+offset) and
-    ``nop`` before the tail ``b``.  A once-init getter with its own inline
-    fast/cold path (:func:`_runtime_namemap_fields`'s shape) reaches a
-    conditional branch (``cmn``/``b.ne`` etc.) first and is rejected here --
-    without this gate, an `adr` sitting anywhere later in that LONGER function
-    (its cold path, e.g.) would be wrongly treated as a shape-D builder
-    reference (#74 regression: remindd's UnmigrateRequest picked up its sibling
-    `Option` enum's builder this way).
+    Only a pure stub qualifies: a once-init getter with its own fast / cold path (the
+    :func:`_runtime_namemap_fields` shape) branches first, and an address in its cold path is
+    not this type's builder (#74: remindd's UnmigrateRequest picked up its sibling `Option`
+    enum's builder that way)."""
+    args = _tail_call_args(insns)
+    return list(args.values()) if args else []
 
-    The once-token and storage slot live in ``__DATA`` and are routinely out
-    of ``adr`` reach (+-1 MB), so the compiler materialises them with
-    ``adrp``+``add``; only the builder -- a nearby function -- is a plain
-    ``adr``.  A getter such as ``adrp x0; add x0; adrp x1; add x1; adr x2;
-    nop; b`` (iOS 16 TrustedPeersHelper) is therefore the same minimal shape.
-    The ``adrp``+``add`` results are returned too (a far-away builder is
-    materialised the same way); callers filter to code addresses with
-    :func:`_in_executable_text`, which drops the data token/slot."""
-    out: List[int] = []
-    page: Dict[str, int] = {}
-    for ins in insns:
-        m = ins.mnemonic
-        if m == "adr":
-            t = _adr_target(ins)
-            if t is not None:
-                out.append(t)
-        elif m == "adrp":
-            p = _adr_target(ins)
-            if p is not None:
-                page[ins.op_str.split(",", 1)[0].strip()] = p
-        elif m == "add":
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
-            if mm and mm.group(2) in page:
-                off = _parse_imm("#" + mm.group(3))
-                if off is not None:
-                    out.append(page[mm.group(2)] + off)
-        elif m == "b":
-            return out
-        elif m not in _DISPATCH_SETUP_OK:
-            return []   # any other control flow -> not the minimal dispatch shape
-    return []
+
+def _tail_callee(ctx: BinaryContext, insns) -> Optional[Tuple[int, Dict[str, int]]]:
+    """``(target, registers)`` when the listing ends in exactly one tail call, to code of
+    this image: the function it hands its registers to (:meth:`Flow.propagate` at the
+    ``b``), e.g. the shared template a builder stub sets up arguments for."""
+    tails = _tail_calls(insns)
+    if len(tails) != 1:
+        return None
+    k = tails[0]
+    t = _branch_target(insns[k])
+    regs = Flow(ctx, list(insns)).propagate({}, at=[k]).get(k)
+    if t is None or t == insns[0].addr or regs is None or not _in_executable_text(ctx, t):
+        return None
+    return t, regs
 
 
 def _walk_namemap_builder_hop(ctx: BinaryContext, va: int,
                               enum: bool = False) -> List[SwiftField]:
-    """Read one builder's (number, name) table, following ONE extra tail-call
-    hop when the builder is itself just an arg-setup stub (``adr x1,<storage>;
-    adr x2,<name>; mov w3,<len>; b <template>``) for a second, arity-specific
-    shared template that does the actual stores.  When the template happens
-    to sit immediately after the stub in memory, a single ``stop_at_ret``
-    disasm from *va* already covers both (the register state flows through
-    naturally); when it doesn't, CONCATENATE the stub's own setup
-    instructions with the template's body before walking, so the args it
-    staged into registers are still live when the template stores them --
-    disassembling the template alone starts with empty register state and
-    loses them."""
+    """Read one builder's (number, name) table.  When the builder is itself only an
+    arg-setup stub (``adr x1,<storage>; adr x2,<name>; mov w3,<len>; b <template>``) for a
+    second, arity-specific shared template that does the stores, read the template with the
+    registers the stub hands it (:func:`_tail_callee`) as its entry values."""
     try:
-        body = disasm(ctx, va, max_insns=600, stop_at_ret=True)
+        body = _listing(ctx, va)
+        got = _walk_namemap_builder(ctx, body, enum)
+        callee = None if got else _tail_callee(ctx, body)
+        if callee is not None:
+            got = _walk_namemap_builder(ctx, _listing(ctx, callee[0]), enum, entry=callee[1])
     except (NameError, ImportError):
         raise
     except Exception:
         return []
-    got = _walk_namemap_builder(ctx, body, enum)
-    if got:
-        return got
-    setup: List = []
-    for ins in body:
-        if ins.mnemonic == "b":
-            t = _parse_imm(ins.op_str)
-            if t is None or t == va:
-                return []
-            try:
-                inner = disasm(ctx, t, max_insns=600, stop_at_ret=True)
-            except (NameError, ImportError):
-                raise
-            except Exception:
-                return []
-            return _walk_namemap_builder(ctx, setup + inner, enum)
-        setup.append(ins)
-        if len(setup) > 12:
-            return []
-    return []
-
-
-_RET_MNEMONICS = ("ret", "retab", "retaa")
-
-
-def _disasm_hit_cap(body, cap: int) -> bool:
-    """True when a ``stop_at_ret`` disasm ran to its *cap* WITHOUT reaching a
-    ret-family instruction — i.e. the function body extends past what we read, so
-    anything decoded from it may be INCOMPLETE.  (A complete function stops at the
-    ret, which disasm includes, so it ends on a ret mnemonic and/or is shorter than
-    the cap.)"""
-    return bool(body) and len(body) >= cap and body[-1].mnemonic not in _RET_MNEMONICS
-
-
-_CLOSURE_ARG_REGS = ("x1", "x9", "x16")
+    return got
 
 
 def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
-    """Code addresses an init/once closure is passed in (``x1``/``x9``/``x16``):
-    ``adr xN,<closure>`` when it is within +-1 MB, else ``adrp xN,#page; add
-    xN,xN,#off`` (device / cache form, where the closure sits far from the
-    getter).  ``adrp``+``add`` results are kept only when they land in this
-    image's executable text, so a once-token or storage slot in ``__DATA``
-    (also materialised that way, usually in ``x0``/``x1``) is never mistaken
-    for a builder."""
+    """Code addresses the listing hands a callee as an argument (x0-x7 at a call or tail
+    call): the closure a once-init getter passes ``swift_once`` (``adr x1,<closure>``, or
+    ``adrp``+``add`` when it is far, as in device / cache images).  Values outside this
+    image's executable text -- the once-token, a storage slot -- are not closures."""
     out: List[int] = []
-    page: Dict[str, int] = {}
-    for ins in insns:
-        reg = ins.op_str.split(",", 1)[0].strip()
-        if ins.mnemonic == "adr" and reg in _CLOSURE_ARG_REGS:
-            t = _adr_target(ins)
-            if t is not None:
-                out.append(t)
-        elif ins.mnemonic == "adrp":
-            p = _adr_target(ins)
-            if p is not None:
-                page[reg] = p
-        elif ins.mnemonic == "add" and reg in _CLOSURE_ARG_REGS:
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
-            if mm and mm.group(2) in page:
-                off = _parse_imm("#" + mm.group(3))
-                if off is not None and _in_executable_text(ctx, page[mm.group(2)] + off):
-                    out.append(page[mm.group(2)] + off)
+    for _k, regs in call_site_registers(ctx, insns):
+        for r in (f"x{n}" for n in range(8)):
+            v = regs.get(r)
+            if v is not None and v not in out and _in_executable_text(ctx, v):
+                out.append(v)
     return out
 
 
@@ -776,12 +824,11 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     if not any(ins.mnemonic == "cmn" and ins.op_str.strip().endswith("#1")
                for ins in getter_insns):
         return []
-    # Candidate builder/closure entry points: cold-path branch targets + any
-    # directly-referenced closure address.
+    # Candidate builder/closure entry points: branch targets + the closures passed to calls.
     targets: List[int] = []
     for ins in getter_insns:
-        if ins.mnemonic.startswith("b.") or ins.mnemonic in ("b", "cbz", "cbnz"):
-            t = _parse_imm(ins.op_str)
+        if is_cond_branch(ins.mnemonic) or ins.mnemonic in COMPARE_BRANCHES or ins.mnemonic == "b":
+            t = _branch_target(ins)
             if t is not None:
                 targets.append(t)
     targets += _closure_arg_targets(ctx, getter_insns)
@@ -789,25 +836,25 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     best_truncated = False
     for t in targets:
         try:
-            body = disasm(ctx, t, max_insns=400, stop_at_ret=True)
+            body = _listing(ctx, t)
         except (NameError, ImportError):
             raise
         except Exception:
             continue
         got = _walk_namemap_builder(ctx, body, enum)
-        trunc = _disasm_hit_cap(body, 400)
+        trunc = body.truncated
         if not got:
-            # the builder is often reached one hop on, via `adr x1,<closure>`.
+            # the builder is often reached one hop on, as the closure the cold path passes.
             for ct in _closure_arg_targets(ctx, body):
                 try:
-                    inner = disasm(ctx, ct, max_insns=400, stop_at_ret=True)
+                    inner = _listing(ctx, ct)
                 except (NameError, ImportError):
                     raise
                 except Exception:
                     got = []
                     continue
                 got = _walk_namemap_builder(ctx, inner, enum)
-                trunc = _disasm_hit_cap(inner, 400)
+                trunc = inner.truncated
                 if not got:
                     # the closure may itself be only an arg-setup stub that tail-calls
                     # the real builder (the Google well-known wrappers do)
@@ -817,10 +864,9 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
         if len(got) > len(best):
             best = got
             best_truncated = trunc
-    # CAUTIOUS: if the builder body overran the disasm window, its (number, name)
-    # store table may be incomplete.  Rather than launder a partial read as
-    # ground truth, flag the recovered numbers as estimated (renders
-    # "// number estimated") so a truncated read is never presented as confirmed.
+    # CAUTIOUS: if the builder's listing ran into the runaway guard, its (number, name) store
+    # table may be incomplete.  Rather than launder a partial read as ground truth, flag the
+    # recovered numbers as estimated (renders "// number estimated").
     if best_truncated:
         for f in best:
             f.number_confirmed = False
@@ -835,37 +881,17 @@ def _single_entry_stub(ctx: BinaryContext, va: int) -> List[SwiftField]:
     unlike the shape-B tail call where it must come from ``decodeMessage``.  Accepted only
     when the length matches the name's cstring."""
     try:
-        insns = disasm(ctx, va, max_insns=16, stop_at_ret=False)
+        args = _tail_call_args(_listing(ctx, va))
     except (NameError, ImportError):
         raise
     except Exception:
         return []
-    page: Dict[str, int] = {}
-    regs: Dict[str, int] = {}
-    imm: Dict[str, int] = {}
-    for ins in insns:
-        m, o = ins.mnemonic, ins.op_str
-        parts = [x.strip() for x in o.split(",")]
-        if m == "adrp":
-            page[parts[0]] = _adr_target(ins)
-        elif m == "adr":
-            regs[parts[0]] = _adr_target(ins)
-        elif m == "add":
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
-            if mm and page.get(mm.group(2)) is not None:
-                regs[mm.group(1)] = page[mm.group(2)] + int(mm.group(3), 0)
-        elif m in ("mov", "movz") and len(parts) == 2 and _parse_imm(parts[1]) is not None:
-            imm[parts[0]] = _parse_imm(parts[1])
-        elif m == "b":
-            break
-        elif m != "nop":
-            return []
-    if "x3" not in regs or "w2" not in imm or "w4" not in imm:
+    if not args or "x2" not in args or "x4" not in args:
         return []
-    name = _cstr(ctx, regs["x3"])
-    if not name or len(name) != imm["w4"] or not 1 <= imm["w2"] <= _MAX_FIELD_NUMBER:
+    name, num = _cstr(ctx, args.get("x3")), args["x2"] & 0xFFFFFFFF
+    if not name or len(name) != args["x4"] & 0xFFFFFFFF or not 1 <= num <= _MAX_FIELD_NUMBER:
         return []
-    return [SwiftField(imm["w2"], name)]
+    return [SwiftField(num, name)]
 
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
@@ -907,10 +933,15 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
 def _decode_message_numbers(ctx: BinaryContext, decode_va: int) -> List[int]:
     """Field numbers from a ``decodeMessage`` body, read off its ``cmp x0,#N``
     field-number switch (used to supply the number for the single-field
-    tail-call shape, where it is not in the nameMap closure)."""
+    tail-call shape, where it is not in the nameMap closure).
+
+    Read linearly from the entry to its first return: past it a dense switch's jump-table
+    bound (``sub x8, x0, #1; cmp x8, #14``) would be taken for a field number.  A reading of
+    the numbers the switch on ``nextFieldNumber()``'s result distinguishes, jump-table arms
+    decoded, would replace this (TODO #95)."""
     nums: List[int] = []
     try:
-        insns = disasm(ctx, decode_va, max_insns=400, stop_at_ret=True)
+        insns = disasm(ctx, decode_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
     except (NameError, ImportError):
         raise
     except Exception:
@@ -964,44 +995,17 @@ def _traverse_field_numbers(ctx: BinaryContext, traverse_va: int) -> List[int]:
 
 def _single_field_tail_call(ctx: BinaryContext, insns, decode_va: Optional[int],
                             traverse_va: Optional[int] = None) -> List[SwiftField]:
-    """Shape B: a compact closure that loads ``x2=<name>``, ``w3=<len>`` and
-    tail-calls a shared builder.  The single name is the cstring whose length
-    matches an immediate; the number comes from ``decodeMessage``.
-
-    The name pointer is loaded either as a single ``adr`` (standalone-binary
-    form) or as ``adrp x,#page; add x,x,#off`` (device / cache form) — both are
-    collected (cache name pools sit past ``adr`` reach)."""
-    # Collect immediates and name cstrings up to the tail branch, THEN pair the
-    # name to a length immediate (the `mov #len` may follow the name load).
-    imms: set = set()
-    names: List[str] = []
-    adrp_page: Dict[str, int] = {}
-    for ins in insns:
-        if ins.mnemonic in ("mov", "movz"):
-            v = _parse_imm(ins.op_str.split(",", 1)[1]) if "," in ins.op_str else None
-            if v is not None:
-                imms.add(v)
-        elif ins.mnemonic == "adrp":
-            reg = ins.op_str.split(",", 1)[0].strip()
-            page = _adr_target(ins)
-            if page is not None:
-                adrp_page[reg] = page
-        elif ins.mnemonic == "adr":
-            va = _adr_target(ins)
-            s = _cstr(ctx, va) if va is not None else None
-            if s:
-                names.append(s)
-        elif ins.mnemonic == "add":
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
-            if mm and mm.group(2) in adrp_page:
-                off = _parse_imm("#" + mm.group(3))
-                if off is not None:
-                    s = _cstr(ctx, adrp_page[mm.group(2)] + off)
-                    if s:
-                        names.append(s)
-        elif ins.mnemonic in ("b", "br"):
+    """Shape B: a compact closure that hands ``x2=<name>``, ``w3=<len>`` to a shared builder
+    in a tail call.  The single name is an argument cstring whose length is another argument
+    of the same tail call (``b`` out of the listing, or ``br``); the number comes from
+    ``decodeMessage`` / ``traverse``."""
+    name = None
+    for _k, regs in call_site_registers(ctx, insns, tail_only=True):
+        args = [regs[r] for r in (f"x{n}" for n in range(8)) if r in regs]
+        name = next((s for v in args if (s := _cstr(ctx, v))
+                     and any(w & 0xFFFFFFFF == len(s) for w in args)), None)
+        if name:
             break
-    name = next((s for s in names if len(s) in imms), None)
     if not name:
         return []
     # The number is NOT in the closure (it carries only name + len + the field's
@@ -1031,31 +1035,6 @@ def _single_field_tail_call(ctx: BinaryContext, insns, decode_va: Optional[int],
 
 
 # ── per-type extraction ───────────────────────────────────────────────────────
-
-_STUB_OK = frozenset({"adr", "adrp", "add", "mov", "movz", "movk", "nop", "paciza", "pacia"})
-
-
-def _is_dispatch_stub(insns, max_len: int = 16) -> bool:
-    """True when the function is just straight-line address/constant setup ending in
-    a tail-call ``b`` (``adrp/add …; mov w3,#len; b <shared template>``).
-
-    Such a getter contains no table of its own: the (number, name) data is in the
-    function it passes (shape D), in a literal it passes (shape E) or in a static
-    blob (shape C).  The inline shapes (A, runtime) walk a function 'until ret', and
-    a stub has no ``ret`` -- so they would run on into the NEXT function in memory and
-    read its table as this type's.  Callers skip those shapes for a stub."""
-    for i, ins in enumerate(insns[:max_len]):
-        if ins.mnemonic == "b":
-            # `b <next instruction>` is a fall-through the linker left behind, not a
-            # tail call: the code that follows is this function's own body.
-            addr, tgt = getattr(ins, "addr", None), _parse_imm(ins.op_str)
-            if addr is not None and tgt == addr + 4:
-                continue
-            return i > 0
-        if ins.mnemonic not in _STUB_OK:
-            return False
-    return False
-
 
 def _enum_cases_plausible(got: List[SwiftField]) -> bool:
     """Self-consistency of a recovered enum case table.
@@ -1089,48 +1068,48 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
                      enum: bool = False) -> Tuple[List[SwiftField], str]:
     """Recover one type's (number, name) entries, auto-detecting the lowering.
 
+    Every shape reads the getter's :func:`_listing` -- what its entry reaches, up to its
+    returns and tail calls -- so a stub getter (a tail call) is never read on into the
+    next function in memory.
+
     *enum*: the type is a swift ``enum`` (case value <-> case name) rather than a
     message.  The same lowerings are used, but values may be 0 / negative / repeated
     and there is no ``decodeMessage`` to cross-check or single-field default."""
     try:
-        insns = disasm(ctx, init_va, max_insns=64, stop_at_ret=False)
+        insns = _listing(ctx, init_va)
     except (NameError, ImportError):
         raise
     except Exception:
         return [], "none"
 
-    # C — static object: try each adrp+add target as a static _NameMap blob.
+    # C — static object: try each address the getter materialises as a static _NameMap blob.
     best: Optional[List[SwiftField]] = None
-    for blob in _adrp_add_targets(insns):
+    for blob in _constant_addresses(insns):
         got = _parse_static_blob(ctx, blob, enum)
         if got and (best is None or len(got) > len(best)):
             best = got
     if best:
         return best, "static"
 
-    # A — inline, directly in this function.  Device / cache inline closures
-    # build one entry per ~10 instructions and span well past the 64-insn shape
-    # probe, so walk the WHOLE init function — `stop_at_ret` is the principled
-    # terminator (the function's own `ret`); the insn cap is only a runaway
-    # guard.  (A next-symbol extent bound was tried and rejected: the `.symbols`
-    # nlist carries mid-function local symbols, so it truncates real fields.)
-    stub = _is_dispatch_stub(insns)
-    if not stub:
+    # A — inline, directly in this function, or in the function it tail-calls with its
+    # registers (CreateML getters: `adrp; add; b <the closure placed next>`).
+    got = _walk_inline_closure(ctx, insns, enum)
+    callee = None if got else _tail_callee(ctx, insns)
+    if callee is not None:
         try:
-            full = disasm(ctx, init_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
+            got = _walk_inline_closure(ctx, _listing(ctx, callee[0]), enum, entry=callee[1])
         except (NameError, ImportError):
             raise
         except Exception:
-            full = insns
-        got = _walk_inline_closure(ctx, full, enum)
-        if got:
-            return got, "inline"
+            got = []
+    if got:
+        return got, "inline"
 
     # Runtime-built _NameMap (once-init `cmn x?,#1; b.ne <builder>`): follow the
     # cold builder closure and read its literal (number, name) table.  Placed
     # before the shape-B fallback, which would under-read such a message to its
     # first field only (e.g. remindd Credential 5 -> 1).  #72.
-    got = [] if stub else _runtime_namemap_fields(ctx, insns, enum)
+    got = _runtime_namemap_fields(ctx, insns, enum)
     if len(got) > (0 if enum else 1) and _namemap_builder_validated(
             ctx, got, decode_va, traverse_va, enum):
         return got, "runtime-namemap"
@@ -1141,8 +1120,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     runtime_single = got if (len(got) == 1 and not enum) else None
 
     # D — shared once-init template (`adr x0,<token>; adr x1,<storage>;
-    # adr x2,<builder>; b <shared-template>`): chase every `adr`'d CODE
-    # address (skipping the once-token / storage data addresses) and read
+    # adr x2,<builder>; b <shared-template>`): chase every CODE address the stub
+    # passes (skipping the once-token / storage data addresses) and read
     # its literal (number, name) table (:func:`_walk_namemap_builder_hop`,
     # which follows one further tail-call when the builder is itself just an
     # arg-setup stub for a second shared template) -- oracle-validated for
@@ -1153,17 +1132,16 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         if t == init_va or not _in_executable_text(ctx, t):
             continue
         got = _walk_namemap_builder_hop(ctx, t, enum)
-        stub = False
+        single = False
         if not got and not enum:
             got = _single_entry_stub(ctx, t)
-            stub = bool(got)
+            single = bool(got)
         packed = False
         if not got:
             # iOS 27: the builder is a stub passing the packed bytecode literal (x2) and its
             # length (w3) to the shared template (shape E's data, one hop deeper)
             try:
-                lit = bytecode_literal_from_getter(
-                    ctx, disasm(ctx, t, max_insns=16, stop_at_ret=False), enum=enum)
+                lit = bytecode_literal_from_getter(ctx, _listing(ctx, t), enum=enum)
             except (NameError, ImportError):
                 raise
             except Exception:
@@ -1174,7 +1152,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
                 packed = True
         if len(got) > len(best_shared):
             best_shared = got
-            shared_shape = ("bytecode" if packed else "single-stub" if stub else "shared-once")
+            shared_shape = ("bytecode" if packed else "single-stub" if single else "shared-once")
     if best_shared and (shared_shape == "bytecode"
                         or _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum)):
         return best_shared, shared_shape
@@ -1189,31 +1167,25 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         if decoded:
             return [SwiftField(n, nm) for n, nm in decoded], "bytecode"
 
-    # A — inline, reached via an `adr x16,<closure>` (device getter → swift_once).
-    for ins in insns:
-        if ins.mnemonic == "adr" and ins.op_str.split(",", 1)[0].strip() in ("x16", "x9", "x1"):
-            t = _adr_target(ins)
-            if t is not None and t != init_va and abs(t - init_va) < 0x8000:
-                try:
-                    got = _walk_inline_closure(ctx, disasm(ctx, t, max_insns=600, stop_at_ret=True), enum)
-                except (NameError, ImportError):
-                    raise
-                except Exception:
-                    got = []
-                if got:
-                    return got, "inline-closure"
-                if enum:
-                    continue
-                # B — single-field tail-call inside the followed closure.
-                try:
-                    cl = disasm(ctx, t, max_insns=40, stop_at_ret=False)
-                except (NameError, ImportError):
-                    raise
-                except Exception:
-                    cl = []
-                got = _single_field_tail_call(ctx, cl, decode_va, traverse_va)
-                if got:
-                    return got, "single"
+    # A — inline, in the closure the getter passes a call (device getter → swift_once).
+    for t in _closure_arg_targets(ctx, insns):
+        if t == init_va:
+            continue
+        try:
+            cl = _listing(ctx, t)
+        except (NameError, ImportError):
+            raise
+        except Exception:
+            continue
+        got = _walk_inline_closure(ctx, cl, enum)
+        if got:
+            return got, "inline-closure"
+        if enum:
+            continue
+        # B — single-field tail-call inside the followed closure.
+        got = _single_field_tail_call(ctx, cl, decode_va, traverse_va)
+        if got:
+            return got, "single"
 
     # B — single-field tail-call directly in this function.  Not for an enum: its
     # single-field number comes from a message's decodeMessage, which an enum lacks.

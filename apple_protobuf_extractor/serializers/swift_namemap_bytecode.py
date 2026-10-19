@@ -42,10 +42,11 @@ mov w3,#<len>; b <template>``) or calls ``_NameMap.init(bytecode:)`` inline with
 """
 from __future__ import annotations
 
-import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from macho.disasm import _parse_imm
+from proto.arm64_eval import Flow
+from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, split_ops
 
 _SAME_NEXT, _SAME_DELTA = 1, 2
 _STD_NEXT, _STD_DELTA = 3, 4
@@ -144,12 +145,30 @@ def decode_namemap_bytecode(raw: bytes, enum: bool = False) -> Optional[List[Tup
 
 
 _MAX_LITERAL_LEN = 4096
-_RET = ("ret", "retab", "retaa")
+_W = 0xFFFFFFFF
+
+
+def call_site_registers(ctx, insns, tail_only: bool = False) -> List[Tuple[int, Dict[str, int]]]:
+    """``(k, registers known before insns[k])`` at each call in the listing *insns* -- a
+    ``bl`` / ``blr``, and a tail call: a ``b`` to an address outside the listing or a ``br``
+    -- in address order, by :meth:`proto.arm64_eval.Flow.propagate` from its entry (calls
+    clobber the caller-saved registers).  *tail_only*: the tail calls only."""
+    inside = {i.addr for i in insns}
+    ks = []
+    for k, ins in enumerate(insns):
+        mn = ins.mnemonic
+        ops = split_ops(ins.op_str)
+        tail = ((mn == "b" and ops and _parse_imm(ops[-1]) not in inside)
+                or mn in INDIRECT_BRANCHES)
+        if tail or (not tail_only and mn in CALLS):
+            ks.append(k)
+    regs = Flow(ctx, list(insns)).propagate({}, at=ks)
+    return [(k, regs[k]) for k in ks if k in regs]
 
 
 def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[bytes]:
     """Locate the bytecode string literal passed to ``_NameMap.init(bytecode:)``
-    from a getter's leading instructions.  Two lowerings:
+    from a getter's listing (the instructions its entry reaches).  Two lowerings:
 
     * **tail-call**: ``adrp/add x1,<slot>; adrp/add x2,<literal>; mov w3,#len;
       b <shared-template>`` -- literal in ``x2``, length in ``w3``;
@@ -157,56 +176,20 @@ def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[byt
       mov x0,x9; mov w1,#len; mov w2,#2; bl <_NameMap.init(bytecode:)>`` -- the
       ``StaticString`` is (``x0`` ptr, ``w1`` len, ``w2`` flags=2 utf8-pointer).
 
-    A simple forward scan tracks ``adrp``+``add`` addresses and ``mov`` copies and
-    clears caller-saved registers across each ``bl``.  The returned bytes are only
-    a CANDIDATE: callers must validate with :func:`decode_namemap_bytecode`, which
-    declines anything that is not a well-formed bytecode."""
-    page: dict = {}
-    addr: dict = {}          # xN -> resolved address
-    imm: dict = {}           # wN -> immediate
-    for ins in insns[:80]:
-        m, o = ins.mnemonic, ins.op_str
-        if m in _RET:
-            break
-        parts = [x.strip() for x in o.split(",")]
-        dst = parts[0] if parts else ""
-        if m == "adrp":
-            page[dst] = _parse_imm(o)
-            addr.pop(dst, None)
-        elif m == "adr":
-            addr[dst] = _parse_imm(o)
-        elif m == "add":
-            mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
-            if mm and mm.group(2) in page and page[mm.group(2)] is not None:
-                addr[mm.group(1)] = page[mm.group(2)] + int(mm.group(3), 0)
-            else:
-                addr.pop(dst, None)
-        elif m in ("mov", "movz") and len(parts) == 2:
-            v = _parse_imm(parts[1])
-            wdst = dst.replace("x", "w")
-            if v is not None:
-                imm[wdst] = v
-                addr.pop(dst.replace("w", "x"), None)
-            elif re.fullmatch(r"[wx]\d+", parts[1]):
-                src = parts[1].replace("w", "x")
-                xdst = dst.replace("w", "x")
-                if src in addr:
-                    addr[xdst] = addr[src]
-                else:
-                    addr.pop(xdst, None)
-                imm.pop(wdst, None)
-        elif m == "b":                               # tail-call form
-            if "x2" in addr and imm.get("w3"):
-                return _read(ctx, addr["x2"], imm["w3"])
-            break
-        elif m in ("bl", "blr"):                     # inline form
-            if "x0" in addr and imm.get("w1") and imm.get("w2") == 2:
-                lit = _read(ctx, addr["x0"], imm["w1"])
-                if lit is not None and decode_namemap_bytecode(lit, enum=enum):
-                    return lit
-            for r in range(0, 18):                   # caller-saved regs are dead after a call
-                addr.pop("x%d" % r, None)
-                imm.pop("w%d" % r, None)
+    The registers are read at each call (:func:`call_site_registers`), in address order,
+    up to the first tail call.  The tail-call candidate is only a CANDIDATE: callers must
+    validate it with :func:`decode_namemap_bytecode`, which declines anything that is not a
+    well-formed bytecode."""
+    for k, regs in call_site_registers(ctx, insns):
+        if insns[k].mnemonic not in CALLS:                   # tail-call form
+            if regs.get("x2") is not None and regs.get("x3", 0) & _W:
+                return _read(ctx, regs["x2"], regs["x3"] & _W)
+            return None
+        if (regs.get("x0") is not None and regs.get("x1", 0) & _W     # inline form
+                and regs.get("x2", 0) & _W == 2):
+            lit = _read(ctx, regs["x0"], regs["x1"] & _W)
+            if lit is not None and decode_namemap_bytecode(lit, enum=enum):
+                return lit
     return None
 
 

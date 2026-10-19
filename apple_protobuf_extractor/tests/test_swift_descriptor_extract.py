@@ -19,6 +19,7 @@ import unittest
 
 from serializers import swift_descriptor_extract as S
 from tests.conftest import encode_adrp, encode_add_imm64, encode_movz, NOP_BYTES, RET_BYTES
+from tests._listing import insns as _listing
 
 
 # ── a minimal in-memory ctx where vmaddr == file offset (image_base 0) ────────
@@ -26,15 +27,19 @@ from tests.conftest import encode_adrp, encode_add_imm64, encode_movz, NOP_BYTES
 class _FakeCtx:
     image_base = 0
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, fixups=None):
         self._data = data
         self._symtab = None
         self._export_trie = None
+        self._fixups = fixups or {}     # slot -> the pointer its fixup decodes to
 
     def read_bytes(self, va: int, n: int) -> bytes:
         if va < 0 or va + n > len(self._data):
             raise ValueError("oob")
         return self._data[va:va + n]
+
+    def read_ptr(self, va: int) -> int:
+        return self._fixups.get(va, struct.unpack("<Q", self.read_bytes(va, 8))[0])
 
     def read_cstring(self, va: int, max_len: int = 4096) -> str:
         if va < 0 or va >= len(self._data):
@@ -145,6 +150,18 @@ class TestStaticBlobScan(unittest.TestCase):
         self.assertEqual([(f.number, f.name) for f in got],
                          [(2, "b"), (5, "big"), (9, "raw")])
 
+    def test_name_pointer_read_through_its_fixup(self):
+        # a standalone binary's static blob holds chained-fixup words, not addresses: the
+        # name is found through ctx.read_ptr at the slot, never by masking the raw word
+        buf, blob = _build_static_blob([(3, "gamma")], 0x28)
+        slot = blob + 0x20 + 8
+        name_va = struct.unpack_from("<Q", buf, slot)[0]
+        raw = bytearray(buf)
+        struct.pack_into("<Q", raw, slot, 0x8010_0000_0000_0000 | name_va)   # an encoded rebase
+        self.assertIsNone(S._parse_static_blob(_FakeCtx(bytes(raw)), blob))
+        got = S._parse_static_blob(_FakeCtx(bytes(raw), {slot: name_va}), blob)
+        self.assertEqual([(f.number, f.name) for f in got], [(3, "gamma")])
+
     def test_zero_count_returns_none(self):
         # NOTE: with count=0, `len(out) < count` (0 < 0) is False from the very
         # first loop check regardless of buffer size or content -- no fixture
@@ -188,42 +205,76 @@ class _FI:
 
 
 class TestInlineClosureWalk(unittest.TestCase):
-    """The inline-closure walker must read name pointers from BOTH a single
-    ``adr`` (standalone-binary form) and an ``adrp x,#page; add x,x,#off`` pair
-    (device / cache form, where the name pool is far past ``adr`` reach)."""
+    """Entries are paired by ADDRESS (:func:`_table_entries`): the closure builds each
+    ``(Int, _NameDescription)`` element ``E`` -- the number stored at ``E``, the name and its
+    length at ``E`` plus the ``_NameDescription`` offset read from type metadata (CreateML /
+    iOS 27 MessageProtection).  The name pointer is an ``adr`` or ``adrp``+``add``."""
     def _ctx(self):
         data = bytearray(0x40)
         data[0x10:0x14] = b"key\x00"
         data[0x20:0x25] = b"data\x00"
         return _FakeCtx(bytes(data))
 
-    def test_adrp_add_name_pointer(self):
-        # entry 1: number 1 + name "key" via adrp+add (page 0x0, off 0x10)
-        insns = [
-            _FI("mov", "w0, #1"), _FI("str", "x0, [x20]"),
-            _FI("adrp", "x1, #0x0"), _FI("add", "x1, x1, #0x10"),
-            _FI("mov", "w2, #3"), _FI("stp", "x1, x2, [x21]"),
-            # entry 2: number 2 + name "data" via a single adr
-            _FI("mov", "w0, #2"), _FI("str", "x0, [x20]"),
-            _FI("adr", "x1, #0x20"), _FI("mov", "w2, #4"),
-            _FI("stp", "x1, x2, [x21]"),
-        ]
-        got = S._walk_inline_closure(self._ctx(), insns)
+    # x26 = element 0 (a call's result), x25 = the stride, [x21, #0x30] = the field offset
+    _TWO = [
+        ("ldrsw", "x8, [x21, #0x30]"), ("add", "x22, x26, x8"),
+        ("mov", "w8, #1"), ("str", "x8, [x26]"),
+        ("adrp", "x8, #0x0"), ("add", "x8, x8, #0x10"), ("mov", "w9, #3"),
+        ("stp", "x8, x9, [x22]"),
+        ("add", "x8, x26, x25"), ("ldrsw", "x9, [x21, #0x30]"), ("add", "x0, x8, x9"),
+        ("mov", "w10, #2"), ("str", "x10, [x8]"),
+        ("adr", "x8, #0x20"), ("mov", "w9, #4"), ("stp", "x8, x9, [x0]"),
+    ]
+
+    def test_adrp_add_and_adr_name_pointers(self):
+        got = S._walk_inline_closure(self._ctx(), _listing(self._TWO))
         self.assertEqual([(f.number, f.name) for f in got], [(1, "key"), (2, "data")])
 
-    def test_length_mismatch_rejected(self):
-        # a name whose len immediate disagrees with the cstring is not an entry
-        insns = [
-            _FI("mov", "w0, #1"), _FI("str", "x0, [x20]"),
-            _FI("adrp", "x1, #0x0"), _FI("add", "x1, x1, #0x10"),
-            _FI("mov", "w2, #9"), _FI("stp", "x1, x2, [x21]"),   # 9 != len("key")
-        ]
-        self.assertEqual(S._walk_inline_closure(self._ctx(), insns), [])
+    def test_pairing_is_by_address_not_program_order(self):
+        # both numbers stored first, then the names, the second element's first
+        lines = [self._TWO[i] for i in (0, 1, 2, 3, 8, 9, 10, 11, 12, 13, 14, 15, 4, 5, 6, 7)]
+        got = S._walk_inline_closure(self._ctx(), _listing(lines))
+        self.assertEqual(sorted((f.number, f.name) for f in got), [(1, "key"), (2, "data")])
 
-    _SINGLE_FIELD_INSNS = [
-        _FI("adrp", "x2, #0x0"), _FI("add", "x2, x2, #0x10"),  # -> "key"
-        _FI("mov", "w3, #3"), _FI("b", "#0x100"),
-    ]
+    def test_name_at_an_unrelated_address_is_not_paired(self):
+        # the number at [x20], the name at [x21]: no address relation, no entry
+        lines = [("mov", "w0, #1"), ("str", "x0, [x20]"), ("adrp", "x1, #0x0"),
+                 ("add", "x1, x1, #0x10"), ("mov", "w2, #3"), ("stp", "x1, x2, [x21]")]
+        self.assertEqual(S._walk_inline_closure(self._ctx(), _listing(lines)), [])
+
+    def test_length_mismatch_rejected(self):
+        lines = list(self._TWO[:8])
+        lines[6] = ("mov", "w9, #9")                       # 9 != len("key")
+        self.assertEqual(S._walk_inline_closure(self._ctx(), _listing(lines)), [])
+
+    def test_builder_store_shapes(self):
+        # remindd: A `stp <num>, <name>, [x0, #o]`, B `str <num>` + `str <name>` 8 bytes on,
+        # and an enum value 0 stored from the zero register
+        lines = [("adrp", "x8, #0x0"), ("add", "x8, x8, #0x10"), ("stp", "xzr, x8, [x0, #0x20]"),
+                 ("mov", "w9, #1"), ("adr", "x8, #0x20"), ("stp", "x9, x8, [x0, #0x58]")]
+        got = S._walk_namemap_builder(self._ctx(), _listing(lines), enum=True)
+        self.assertEqual([(f.number, f.name) for f in got], [(0, "key"), (1, "data")])
+        self.assertEqual([(f.number, f.name) for f in
+                          S._walk_namemap_builder(self._ctx(), _listing(lines))], [(1, "data")])
+        lines = [("mov", "w8, #9"), ("str", "x8, [x0, #0x218]"),
+                 ("adr", "x8, #0x10"), ("str", "x8, [x0, #0x220]")]
+        got = S._walk_namemap_builder(self._ctx(), _listing(lines))
+        self.assertEqual([(f.number, f.name) for f in got], [(9, "key")])
+
+    def test_template_reads_the_stub_arguments(self):
+        # a builder stub hands name / length to a shared template that does the stores
+        got = S._walk_namemap_builder(
+            self._ctx(), _listing([("mov", "x20, x2"), ("mov", "x19, x3"),
+                                   ("ldrsw", "x9, [x21, #0x30]"), ("add", "x23, x8, x9"),
+                                   ("mov", "w9, #5"), ("str", "x9, [x8]"),
+                                   ("stp", "x20, x19, [x23]")]),
+            entry={"x2": 0x20, "x3": 4})
+        self.assertEqual([(f.number, f.name) for f in got], [(5, "data")])
+
+    _SINGLE_FIELD_INSNS = _listing([
+        ("adrp", "x2, #0x0"), ("add", "x2, x2, #0x10"),  # -> "key"
+        ("mov", "w3, #3"), ("b", "#0x100"),
+    ])
 
     def test_single_field_tail_call_adrp_add(self):
         # cache/device single-field shape: name via adrp+add, len via mov, tail b.
@@ -394,44 +445,44 @@ class TestSharedOnceInitTargets(unittest.TestCase):
     until it did)."""
 
     def test_adr_only_form(self):
-        insns = [_FI("adr", "x0, #0x100"), _FI("adr", "x1, #0x200"),
-                 _FI("adr", "x2, #0x300"), _FI("nop"), _FI("b", "#0x400")]
-        self.assertEqual(S._shared_once_init_targets(insns), [0x100, 0x200, 0x300])
+        insns = [("adr", "x0, #0x100"), ("adr", "x1, #0x200"),
+                 ("adr", "x2, #0x300"), ("nop", ""), ("b", "#0x400")]
+        self.assertEqual(S._shared_once_init_targets(_listing(insns)), [0x100, 0x200, 0x300])
 
     def test_adrp_add_token_and_slot_with_adr_builder(self):
         # the verbatim TrustedPeersHelper EstablishRequest getter
-        insns = [_FI("adrp", "x0, #0x1001e7000"), _FI("add", "x0, x0, #0x5d8"),
-                 _FI("adrp", "x1, #0x1001f3000"), _FI("add", "x1, x1, #0xcd8"),
-                 _FI("adr", "x2, #0x100071e9c"), _FI("nop"),
-                 _FI("b", "#0x100087efc")]
-        got = S._shared_once_init_targets(insns)
+        insns = [("adrp", "x0, #0x1001e7000"), ("add", "x0, x0, #0x5d8"),
+                 ("adrp", "x1, #0x1001f3000"), ("add", "x1, x1, #0xcd8"),
+                 ("adr", "x2, #0x100071e9c"), ("nop", ""),
+                 ("b", "#0x100087efc")]
+        got = S._shared_once_init_targets(_listing(insns))
         self.assertIn(0x100071E9C, got)               # the builder
         self.assertIn(0x1001E7000 + 0x5D8, got)       # token (data; caller filters)
         self.assertIn(0x1001F3000 + 0xCD8, got)       # storage slot (data)
 
     def test_builder_materialised_by_adrp_add(self):
-        insns = [_FI("adr", "x0, #0x100"), _FI("adr", "x1, #0x200"),
-                 _FI("adrp", "x2, #0x7000"), _FI("add", "x2, x2, #0x1c"),
-                 _FI("b", "#0x400")]
-        self.assertIn(0x701C, S._shared_once_init_targets(insns))
+        insns = [("adr", "x0, #0x100"), ("adr", "x1, #0x200"),
+                 ("adrp", "x2, #0x7000"), ("add", "x2, x2, #0x1c"),
+                 ("b", "#0x400")]
+        self.assertIn(0x701C, S._shared_once_init_targets(_listing(insns)))
 
     def test_add_without_adrp_page_is_ignored(self):
-        insns = [_FI("add", "x0, x0, #0x10"), _FI("adr", "x2, #0x300"),
-                 _FI("b", "#0x400")]
-        self.assertEqual(S._shared_once_init_targets(insns), [0x300])
+        insns = [("add", "x0, x0, #0x10"), ("adr", "x2, #0x300"),
+                 ("b", "#0x400")]
+        self.assertEqual(S._shared_once_init_targets(_listing(insns)), [0x300])
 
     def test_inline_fast_path_getter_still_rejected(self):
         # #74 regression guard: a once-init getter with its own cmn/b.ne fast path
         # is the runtime-_NameMap shape, not shape D -- even though it contains
         # adrp/add/adr and ends in a tail call.
-        insns = [_FI("adrp", "x8, #0x1001f3000"), _FI("ldr", "x8, [x8, #0x60]"),
-                 _FI("cmn", "x8, #1"), _FI("b.ne", "#0x500"),
-                 _FI("adr", "x1, #0x300"), _FI("b", "#0x400")]
-        self.assertEqual(S._shared_once_init_targets(insns), [])
+        insns = [("adrp", "x8, #0x1001f3000"), ("ldr", "x8, [x8, #0x60]"),
+                 ("cmn", "x8, #1"), ("b.ne", "#0x500"),
+                 ("adr", "x1, #0x300"), ("b", "#0x400")]
+        self.assertEqual(S._shared_once_init_targets(_listing(insns)), [])
 
     def test_no_tail_branch_rejected(self):
         self.assertEqual(S._shared_once_init_targets(
-            [_FI("adr", "x0, #0x100"), _FI("nop")]), [])
+            _listing([("adr", "x0, #0x100"), ("nop", "")])), [])
 
 
 class _TextCtx:
@@ -447,48 +498,48 @@ class _TextCtx:
 
 
 class TestClosureArgTargets(unittest.TestCase):
-    """``_closure_arg_targets``: the once-init closure is ``adr`` when near and
-    ``adrp``+``add`` when far (device / cache images -- SeymourCore, SiriOntology,
-    NewsPersonalization: ~300 messages read as empty before)."""
+    """``_closure_arg_targets``: the code addresses a listing hands a callee -- the once-init
+    closure ``swift_once`` gets in x1, ``adr`` when near and ``adrp``+``add`` when far (device /
+    cache images -- SeymourCore, SiriOntology, NewsPersonalization: ~300 messages read as empty
+    before)."""
     def test_adr_closure(self):
-        insns = [_FI("adr", "x1, #0x1200")]
+        insns = _listing([("adr", "x1, #0x1200"), ("blr", "x8")])
         self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [0x1200])
 
     def test_adrp_add_closure_in_text(self):
-        insns = [_FI("adrp", "x1, #0x1000"), _FI("add", "x1, x1, #0xcf8")]
+        insns = _listing([("adrp", "x1, #0x1000"), ("add", "x1, x1, #0xcf8"), ("blr", "x8")])
         self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [0x1CF8])
 
     def test_data_token_not_taken_as_closure(self):
         # the swift_once token (x0) and a once-storage address outside __text
-        insns = [_FI("adrp", "x0, #0x9000"), _FI("add", "x0, x0, #0"),
-                 _FI("adrp", "x1, #0x9000"), _FI("add", "x1, x1, #0x40")]
+        insns = _listing([("adrp", "x0, #0x9000"), ("add", "x0, x0, #0"),
+                          ("adrp", "x1, #0x9000"), ("add", "x1, x1, #0x40"), ("blr", "x8")])
         self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [])
 
-    def test_other_destination_register_ignored(self):
-        insns = [_FI("adrp", "x2, #0x1000"), _FI("add", "x2, x2, #0x10")]
+    def test_code_address_not_passed_to_a_call_ignored(self):
+        insns = _listing([("adrp", "x9, #0x1000"), ("add", "x9, x9, #0x10"), ("blr", "x8")])
         self.assertEqual(S._closure_arg_targets(_TextCtx(), insns), [])
-
 
 class TestSharedOnceInitTargetsArm64e(unittest.TestCase):
     """arm64e (iOS 27): the builder pointer is signed before being passed --
     ``adrp/add x16,<builder>; paciza x16; mov x2,x16; b <template>``."""
     def _getter(self):
-        return [_FI("adrp", "x0, #0x100345000"), _FI("add", "x0, x0, #0x560"),
-                _FI("adrp", "x1, #0x10035f000"), _FI("add", "x1, x1, #0x7f8"),
-                _FI("adrp", "x16, #0x1000f4000"), _FI("add", "x16, x16, #0x390"),
-                _FI("paciza", "x16"), _FI("mov", "x2, x16"), _FI("b", "#0x10011a25c")]
+        return [("adrp", "x0, #0x100345000"), ("add", "x0, x0, #0x560"),
+                ("adrp", "x1, #0x10035f000"), ("add", "x1, x1, #0x7f8"),
+                ("adrp", "x16, #0x1000f4000"), ("add", "x16, x16, #0x390"),
+                ("paciza", "x16"), ("mov", "x2, x16"), ("b", "#0x10011a25c")]
 
     def test_signed_builder_pointer_is_returned(self):
-        self.assertIn(0x1000F4390, S._shared_once_init_targets(self._getter()))
+        self.assertIn(0x1000F4390, S._shared_once_init_targets(_listing(self._getter())))
 
     def test_still_rejects_conditional_control_flow(self):
         g = self._getter()
-        g.insert(6, _FI("cmn", "x8, #1"))
-        g.insert(7, _FI("b.ne", "#0x500"))
-        self.assertEqual(S._shared_once_init_targets(g), [])
+        g.insert(6, ("cmn", "x8, #1"))
+        g.insert(7, ("b.ne", "#0x500"))
+        self.assertEqual(S._shared_once_init_targets(_listing(g)), [])
 
-    def test_is_a_dispatch_stub(self):
-        self.assertTrue(S._is_dispatch_stub(self._getter()))
+    def test_is_a_pure_stub(self):
+        self.assertIsNotNone(S._tail_call_args(_listing(self._getter())))
 
 
 def _ios27_tph_path():
@@ -1130,35 +1181,70 @@ class TestEnumCasePlausibility(unittest.TestCase):
         self.assertFalse(S._enum_cases_plausible([]))
 
 
-class TestDispatchStub(unittest.TestCase):
+class TestTailCallArgs(unittest.TestCase):
+    """A pure stub -- register setup ending in a tail ``b`` -- hands its argument registers on
+    (:func:`_tail_call_args`); anything else is not a stub."""
     def test_tail_call_stub(self):
-        self.assertTrue(S._is_dispatch_stub(
-            [_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #8"), _FI("adr", "x2, #0x40"),
-             _FI("nop"), _FI("b", "#0x100")]))
-        self.assertTrue(S._is_dispatch_stub(
-            [_FI("adrp", "x1, #0x1000"), _FI("add", "x1, x1, #8"), _FI("mov", "w3, #24"),
-             _FI("b", "#0x100")]))
+        self.assertEqual(S._tail_call_args(_listing(
+            [("adrp", "x0, #0x1000"), ("add", "x0, x0, #8"), ("adr", "x2, #0x40"),
+             ("nop", ""), ("b", "#0x100")])), {"x0": 0x1008, "x2": 0x40})
+        self.assertEqual(S._tail_call_args(_listing(
+            [("adrp", "x1, #0x1000"), ("add", "x1, x1, #8"), ("mov", "w3, #24"),
+             ("b", "#0x100")])), {"x1": 0x1008, "x3": 24})
 
     def test_real_function_is_not_a_stub(self):
-        self.assertFalse(S._is_dispatch_stub(
-            [_FI("pacibsp"), _FI("stp", "x29, x30, [sp, #-0x10]!"), _FI("bl", "#0x100")]))
-        self.assertFalse(S._is_dispatch_stub([_FI("adrp", "x0, #0x1000"), _FI("ldr", "x8, [x0]"),
-                                              _FI("cmn", "x8, #1"), _FI("b.ne", "#0x40")]))
-
-    def test_branch_to_next_instruction_is_a_fallthrough_not_a_tail_call(self):
-        # CreateML getters: `adrp; add; b <next>` then the closure body follows
-        class _I(_FI):
-            def __init__(self, m, o, addr):
-                super().__init__(m, o)
-                self.addr = addr
-        insns = [_I("adrp", "x1, #0x1000", 0x100), _I("add", "x1, x1, #8", 0x104),
-                 _I("b", "#0x10c", 0x108), _I("stp", "x22, x21, [sp, #-0x30]!", 0x10c)]
-        self.assertFalse(S._is_dispatch_stub(insns))
-        insns[2] = _I("b", "#0x900", 0x108)            # a real tail call elsewhere
-        self.assertTrue(S._is_dispatch_stub(insns))
+        self.assertIsNone(S._tail_call_args(_listing(
+            [("pacibsp", ""), ("stp", "x29, x30, [sp, #-0x10]!"), ("bl", "#0x100")])))
+        self.assertIsNone(S._tail_call_args(_listing(
+            [("adrp", "x0, #0x1000"), ("ldr", "x8, [x0]"), ("cmn", "x8, #1"), ("b.ne", "#0x40")])))
 
     def test_no_branch_is_not_a_stub(self):
-        self.assertFalse(S._is_dispatch_stub([_FI("adrp", "x0, #0x1000"), _FI("add", "x0, x0, #8")]))
+        self.assertIsNone(S._tail_call_args(_listing([("adrp", "x0, #0x1000"),
+                                                      ("add", "x0, x0, #8")])))
+
+
+class _ListingCtx:
+    """A disasm-able ctx over a hand-built listing, with a function index (``_function_starts``
+    memo) so :func:`S._listing` can be driven offline."""
+    def __init__(self, lines, base, starts):
+        from tests._listing import layout
+        self.order, self.fake = layout((base, lines))
+        self._swift_function_starts = starts
+
+
+class TestListing(unittest.TestCase):
+    """:func:`_listing` reads what the entry reaches inside the function's extent (up to the
+    next function entry): a jump inside it is followed, a branch out of it is a tail call."""
+    def _read(self, lines, starts):
+        ctx = _ListingCtx(lines, 0x1000, starts)
+        orig = S.disasm
+        S.disasm = ctx.fake
+        try:
+            return [i.addr for i in S._listing(ctx, 0x1000)]
+        finally:
+            S.disasm = orig
+
+    def test_forward_jump_inside_the_function_is_followed(self):
+        # decodeMessage enters its loop with `b` over the loop's continue block
+        lines = [("mov", "x0, x1"), ("b", "#0x100c"), ("mov", "x0, x2"),
+                 ("bl", "#0x9000"), ("cbz", "x0, #0x1008"), ("ret", "")]
+        self.assertEqual(self._read(lines, [0x1000, 0x1018]),
+                         [0x1000, 0x1004, 0x1008, 0x100c, 0x1010, 0x1014])
+
+    def test_branch_to_the_next_function_is_a_tail_call(self):
+        # CreateML getters: `adrp; add; b <next>` where the next instruction starts a function
+        lines = [("adrp", "x1, #0x1000"), ("add", "x1, x1, #8"), ("b", "#0x100c"),
+                 ("stp", "x22, x21, [sp, #-0x30]!"), ("ret", "")]
+        self.assertEqual(self._read(lines, [0x1000, 0x100c]), [0x1000, 0x1004, 0x1008])
+        # ... while the same `b` inside one function is a fall-through
+        self.assertEqual(self._read(lines, [0x1000, 0x1100]),
+                         [0x1000, 0x1004, 0x1008, 0x100c, 0x1010])
+
+    def test_cold_path_after_the_return_is_read(self):
+        lines = [("cmn", "x8, #1"), ("b.ne", "#0x100c"), ("ret", ""),
+                 ("adr", "x1, #0x2000"), ("bl", "#0x9000"), ("b", "#0x1008")]
+        self.assertEqual(len(self._read(lines, [0x1000, 0x1018])), 6)
+
 
 
 def _pegasus_path():
@@ -1428,51 +1514,20 @@ class TestCliLive(unittest.TestCase):
         self.assertIn("message StartMigrationRequest.Credential {", out)
 
 
-class TestDisasmHitCap(unittest.TestCase):
-    """`_disasm_hit_cap` decides whether a stop_at_ret disasm overran its window
-    (so a runtime-_NameMap builder read off it may be INCOMPLETE → flag the
-    recovered numbers estimated rather than launder a partial read as confirmed).
-    A complete function stops at — and includes — its ret, so it ends on a ret
-    mnemonic and/or is shorter than the cap."""
-
-    def test_short_body_not_truncated(self):
-        self.assertFalse(S._disasm_hit_cap([_FI("mov"), _FI("ret")], 400))
-
-    def test_cap_length_ending_in_ret_not_truncated(self):
-        body = [_FI("mov")] * 399 + [_FI("ret")]      # exactly cap, ends in ret
-        self.assertFalse(S._disasm_hit_cap(body, 400))
-
-    def test_cap_length_no_ret_is_truncated(self):
-        body = [_FI("mov")] * 400                      # ran to cap, no ret reached
-        self.assertTrue(S._disasm_hit_cap(body, 400))
-
-    def test_retaa_retab_count_as_ret(self):
-        for r in ("retaa", "retab"):
-            body = [_FI("mov")] * 399 + [_FI(r)]
-            self.assertFalse(S._disasm_hit_cap(body, 400))
-
-    def test_empty_body_not_truncated(self):
-        self.assertFalse(S._disasm_hit_cap([], 400))
-
-
 class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
-    """The 5 tests above only unit-test `_disasm_hit_cap` in isolation with bare
-    `_FI` (mnemonic, op_str) stand-ins -- its one production caller,
-    `_runtime_namemap_fields`, drives it off a REAL `disasm(ctx, ..., stop_at_ret=
-    True)` call, and nothing anywhere in the suite exercised that call actually
-    hitting its 400-instruction cap. Build a genuine (if synthetic) arm64
-    instruction stream -- disassembled through capstone, not faked -- long
-    enough to run out the cap without reaching a ret, embedding one real
-    `_walk_namemap_builder`-recognizable (number, name) store, and confirm the
-    real code path flags the recovered field `number_confirmed=False`."""
+    """A builder listing read without a function index stops at the runaway guard
+    (``_INLINE_MAX_INSNS``) with its path still open: `_runtime_namemap_fields` must flag the
+    numbers it read off it as estimated.  A genuine (if synthetic) arm64 instruction stream --
+    disassembled through capstone, not faked -- long enough to reach the guard without a ret,
+    embedding one real (number, name) store."""
 
     _BUILDER_VA = 0x10000
-    _PAGE_DELTA = 1
+    _PAGE_DELTA = 5
     _STR_OFF = 0x100
     _STR_VA = (_BUILDER_VA & ~0xFFF) + _PAGE_DELTA * 0x1000 + _STR_OFF
     _FIELD_NAME = "hitCapField"
     _FIELD_NUM = 7
-    _CAP = 400
+    _CAP = S._INLINE_MAX_INSNS
 
     def _build(self, n_total_insns, terminate_with_ret):
         # mov w8,#num ; adrp x1,#page ; add x1,x1,#off ; stp x8,x1,[x20] ; then
@@ -1499,10 +1554,10 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
         # Only the once-init guard + cold-path branch target matter to
         # _runtime_namemap_fields's outer gate; these can be bare stand-ins --
         # it's the disasm() call AT the branch target that must be real.
-        return [_FI("cmn", "x0, #1"), _FI("b.ne", f"#{self._BUILDER_VA}")]
+        return _listing([("cmn", "x0, #1"), ("b.ne", f"#{self._BUILDER_VA:#x}")], base=0x100)
 
     def test_builder_hitting_cap_flags_number_unconfirmed(self):
-        ctx = self._build(self._CAP, terminate_with_ret=False)
+        ctx = self._build(self._CAP + 16, terminate_with_ret=False)   # runs on past the guard
         fields = S._runtime_namemap_fields(ctx, self._getter_insns())
         self.assertEqual(len(fields), 1)
         self.assertEqual(fields[0].number, self._FIELD_NUM)
