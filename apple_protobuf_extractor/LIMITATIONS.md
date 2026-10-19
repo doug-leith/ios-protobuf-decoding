@@ -239,11 +239,11 @@ checking every readFrom dispatch (compare-chain field==0 handler / jump-table
 number is non-wire-accurate for all of them. **None occur in GeoServices / locationd /
 CoreLocationProtobuf**, so this flag does not affect the golden-snapshot artifacts.
 
-**Detection.** The `writeTo:` CFG walk captures top-level writes carrying a literal
-field number 0 (`writeto.py`, `zero_writes`), binds them to their ivar, and the
-extractor emits `_FIELD_ZERO_NOTE` for any such field that ends up *estimated*
+**Detection.** The `writeTo:` write sites bind a call outside every length-delimited
+mark that is handed a literal field number 0 to its ivar (`writeto.py`, `zero_fields`),
+and the extractor emits `_FIELD_ZERO_NOTE` for any such field that ends up *estimated*
 (a field whose number is otherwise confirmed needs no flag). Conservative: only
-simple direct-field writes are captured (not nested/submessage writers).
+direct-field writes are bound (not writes inside a sub-message's marks).
 
 **Heuristic.** The ivar-order estimate the field number falls back to.
 

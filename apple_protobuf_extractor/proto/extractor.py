@@ -16,8 +16,8 @@ set of methods:
 
 Field names come from the ObjC ivars and types from their type encodings, refined by the
 writeTo: writers (proto.write_helpers) and the readFrom: dispatch (proto.dispatch_eval).
-Field numbers are confirmed from the writeTo: walk (proto.writeto: the number each write
-passes); a field the walk does not bind gets the next free number in ivar order and is
+Field numbers are confirmed from the writeTo: write sites (proto.writeto: the number each
+write passes); a field they do not bind gets the next free number in ivar order and is
 flagged "number estimated".
 
 Usage
@@ -56,7 +56,7 @@ from proto.writeto   import _extract_writeto_field_numbers, writeto_sent_selecto
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
-    _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_indegree, INT_ENCODING_NOTE,
+    _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_prepass, INT_ENCODING_NOTE,
     _ensure_string_write_helpers,
 )
 from proto.protocore import (
@@ -147,7 +147,7 @@ _MAP_OBJC_CLASSES = MAP_OBJC_CLASSES
 # ACCEPTED LIMITATION (field# 0): Apple emits deliberate 0-based proto fields
 # (writeTo: `mov w2,#0`, readFrom: `case 0`).  Field 0 is illegal in proto2/proto3
 # and cannot be emitted, so the tool estimates the lowest legal number — but that
-# number is NOT what's on the wire.  When the writeTo: walk saw a literal-0 write
+# number is NOT what's on the wire.  When writeTo: writes it with a literal 0
 # for an ESTIMATED field, say so explicitly.  See LIMITATIONS.md (4), to-do #52.
 #: Object ivar types that name no wire type: the field is emitted as bytes.
 _OPAQUE_OBJECT_TYPES = frozenset({"NSNumber", "NSValue", "NSObject"})
@@ -208,9 +208,9 @@ class _FieldNumberResult:
     # {ivar_name: MapEntryWriter} for NSDictionary ivars whose map-entry writer was
     # recovered (#41); their numbers are already merged into ``confirmed_numbers``.
     map_writers: Dict[str, MapEntryWriter] = field(default_factory=dict)
-    # {ivar_name: raw writeTo: walk write event} — the begin-mark of an inline C-struct
+    # {ivar_name: the writeTo: write that binds it} — the begin-mark of an inline C-struct
     # sub-message is bound here (proto.structfields, #37).
-    walk_writes: Dict[str, dict] = field(default_factory=dict)
+    bound_writes: Dict[str, dict] = field(default_factory=dict)
 
 
 def _confirm_field_numbers(
@@ -223,15 +223,10 @@ def _confirm_field_numbers(
 ) -> _FieldNumberResult:
     """Confirm proto field numbers for *cls* via binary analysis.
 
-    Phase 3 of :func:`extract_proto_message`.  The **writeTo: CFG walk is the
-    authoritative source** — it reads the literal ``mov w2,#N`` field number and
-    binds it to the container ivar by value-tracing (:func:`_extract_writeto_field_numbers`).
-    Its bindings are adopted per-field.
-
-    (A legacy pointer-table dispatch pass that gap-filled the walk was REMOVED
-    2026-06-15: instrumentation showed ``_try_pointer_table`` returned nothing on
-    every supported artifact — 1201 calls, 0 non-empty — so it never contributed a
-    confirmed number and the writeTo walk is the sole source.)
+    Phase 3 of :func:`extract_proto_message`.  The **writeTo: write sites are the
+    authoritative source** — each binds the field number its call is handed to the ivar
+    its value derives from (:func:`_extract_writeto_field_numbers`).  Its bindings are
+    adopted per-field.
 
     Write-helper addresses are collected regardless (``wt_helpers``) because
     they distinguish ``repeated string`` from ``repeated bytes`` fields.
@@ -239,25 +234,21 @@ def _confirm_field_numbers(
     to the caller-supplied binary-wide set.
     """
     # ── writeTo: field numbers (the sole, authoritative source) ───────────────
-    # The writeTo CFG walk reads the literal `mov w2,#N` and binds it to the
-    # container ivar by value-tracing — the sound field-number decoder.  (It
-    # replaced the former all-or-nothing `min_needed` coverage gate, which
-    # discarded a sub-threshold walk WHOLESALE and dropped sound confirmations to
-    # ivar-order estimates, e.g. GEOLPRRoot {_regions:1} -> regions 2.)  Always
-    # collect wt_helpers too — needed for repeated string vs bytes/message.
-    walk = _extract_writeto_field_numbers(ctx, cls, field_ivars)
-    confirmed_numbers = walk.numbers
-    wt_helpers = walk.helpers
-    wt_zero = walk.zero_fields      # ivars written with a literal field# 0 (#52)
-    wt_writes = walk.writes         # raw walk write events (map-entry analysis, #41)
+    # Each binding is per field (no all-or-nothing coverage gate).  Always collect
+    # wt_helpers too — needed for repeated string vs bytes/message.
+    bound = _extract_writeto_field_numbers(ctx, cls, field_ivars)
+    confirmed_numbers = bound.numbers
+    wt_helpers = bound.helpers
+    wt_zero = bound.zero_fields     # ivars written with a literal field# 0 (#52)
+    wt_writes = bound.writes        # the binding writes (map-entry analysis, #41)
     if confirmed_numbers:
-        log.debug("%s: %d field number(s) from writeTo: walk",
+        log.debug("%s: %d field number(s) from writeTo:",
                   cls.name, len(confirmed_numbers))
 
     # ── Map fields (#41) ──────────────────────────────────────────────────────
     # An NSDictionary ivar is a protobuf map<>; its number + entry key/value writers
     # live in the enumerate-block invoke fn / inline enumeration loop, not in the
-    # walk's own bindings.  Recovered numbers join the confirmed set.
+    # sites' own bindings.  Recovered numbers join the confirmed set.
     map_writers: Dict[str, MapEntryWriter] = {}
     map_ivars = [iv for iv in field_ivars if iv.type_enc in MAP_IVAR_ENCS]
     if map_ivars:
@@ -280,7 +271,7 @@ def _confirm_field_numbers(
         string_helper     = string_helper,
         wrote_zero_fields = wt_zero,
         map_writers       = map_writers,
-        walk_writes       = wt_writes,
+        bound_writes      = wt_writes,
     )
 
 
@@ -443,8 +434,8 @@ def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
       * no ``readFrom:`` on *cls* or an intermediate class (a message the client only reads
         is defined by what its own ``readFrom:`` reads); and
       * that ``writeTo:`` sending no selector *cls* or an intermediate class implements
-        (:func:`proto.writeto.writeto_sent_selectors`; None there -- a truncated walk,
-        an indirect call, an unentered thunk -- is "cannot tell").
+        (:func:`proto.writeto.writeto_sent_selectors`; None there -- an undecided
+        writer flow, an indirect call -- is "cannot tell").
 
     Not checked: a send made by a function the ancestor's ``writeTo:`` calls.
     GeoServices: GEOAnalyticsPipelineSharedStateData, GEOComposedWaypointEVStop,
@@ -603,7 +594,7 @@ def _self_offset(flow, k: int, reg: Optional[str], seen: Set[int]) -> Optional[i
 
 # ── extract_proto_message per-field helpers ───────────────────────────────────
 
-def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_writes=None,
+def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, bound_writes=None,
                           owner=""):
     """Refine the canonical int default to its true wire form.
 
@@ -620,8 +611,8 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_wri
     * one tagged value per call — a singular field, or a C-list
       (``{?="list"^<elem>…}``) written UNPACKED (the element writer called per element
       with the real field#): the field-write helper itself (``wt_helpers``);
-    * a C-list written PACKED — the walk's write is a length-delimited begin-mark
-      (``walk_writes[ivar]['bracket']``, wire type 2, no element family); the wire
+    * a C-list written PACKED — its binding write is a length-delimited begin-mark
+      (``bound_writes[ivar]['bracket']``, wire type 2, no element family); the wire
       form is that of the no-tag ELEMENT writer called inside the begin/recall bracket
       (``elem_helper_vas``, see :data:`proto.writeto._NO_TAG_FIELD_NUMBER`).  Refined
       only when every element writer in the bracket agrees on one family; none found
@@ -633,7 +624,7 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_wri
     Non-int types are unchanged and decided."""
     if type_class is not None or type_name not in ("int32", "int64", "uint32", "uint64"):
         return type_name, True
-    w = (walk_writes or {}).get(ivar.name) or {}
+    w = (bound_writes or {}).get(ivar.name) or {}
     if not w.get('bracket'):
         fams = {_classify_write_helper(ctx, wt_helpers.get(ivar.name))}
     else:
@@ -643,16 +634,16 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, walk_wri
     return _refine_scalar_by_family(type_name, fams.pop(), f"{owner}.{ivar.name}"), True
 
 
-def _repeated_encoding(ivar, walk_writes):
+def _repeated_encoding(ivar, bound_writes):
     """How ``writeTo:`` writes a repeated scalar/enum C-list ivar (``{?="list"^<elem>…}``):
-    ``"PACKED"`` when the walk saw one length-delimited begin/recall bracket around no-tag
-    element writes (``walk_writes[ivar]['bracket']``), ``"EXPANDED"`` when it saw the
+    ``"PACKED"`` when its binding write is a length-delimited begin/recall bracket around no-tag
+    element writes (``bound_writes[ivar]['bracket']``), ``"EXPANDED"`` when it is the
     element writer called with the field's own number (one tag per element), ``"UNSEEN"``
-    when the walk saw no write of the ivar, None when the ivar is not a C-list.  The
+    when no write binds the ivar, None when the ivar is not a C-list.  The
     emitter declares the encoding from this, instead of edition 2023's PACKED default."""
     if not _is_packed_list_enc(ivar.type_enc):
         return None
-    w = (walk_writes or {}).get(ivar.name)
+    w = (bound_writes or {}).get(ivar.name)
     if not w:
         return "UNSEEN"
     return "PACKED" if w.get('bracket') else "EXPANDED"
@@ -778,9 +769,9 @@ def extract_proto_message(
     if cls.name not in _proto_class_names and not _is_proto_class(cls):
         return None
 
-    # Ensure the writeTo CFG-walk pre-pass is available (extract_all builds it once;
-    # a standalone call builds it lazily here so writeTo decoding isn't silently lost).
-    _ensure_writeto_indegree(ctx, cl)
+    # Ensure the writeTo: pre-pass is available (extract_all builds it once; a
+    # standalone call builds it lazily here so writeTo decoding isn't silently lost).
+    _ensure_writeto_prepass(ctx, cl)
 
     # Resolve the two field-typing pre-passes: auto-build (+cache on ctx) unless the
     # caller passed an explicit value (incl. an explicit empty/None opt-out).
@@ -881,7 +872,7 @@ def extract_proto_message(
     _string_helper    = _fnr.string_helper
     _wrote_zero       = _fnr.wrote_zero_fields
     _map_writers      = _fnr.map_writers
-    _walk_writes      = _fnr.walk_writes
+    _bound_writes      = _fnr.bound_writes
 
     # One vote per field for "which wire kind does this write helper encode" — the
     # binary-wide table :func:`_finalize_map_fields` reads to type map keys/values.
@@ -911,7 +902,7 @@ def extract_proto_message(
         # TODO #38/#44: refine the canonical int default to its true wire form
         # (sint*/[s]fixed*) from the field's writeTo: helper VA.
         type_name, _int_decided = _refine_int_wire_form(ctx, type_name, type_class, ivar,
-                                                        _wt_helpers, _walk_writes, owner=cls.name)
+                                                        _wt_helpers, _bound_writes, owner=cls.name)
 
         # Mode A enum-fallback debug: an untagged int field whose xAsString: selector exists
         # somewhere in the image (evidence of an enum this class's methods did not show).
@@ -964,7 +955,7 @@ def extract_proto_message(
             if not _type_note:
                 _type_note = _MAP_FIELD_NOTE
 
-        # ACCEPTED LIMITATION (field# 0): the writeTo: walk saw this ESTIMATED field
+        # ACCEPTED LIMITATION (field# 0): writeTo: writes this ESTIMATED field
         # written with a literal field number 0 (Apple 0-based; illegal in .proto).
         # The estimated number is not wire-accurate — flag it (see LIMITATIONS.md (4),
         # #52).  Only for estimated fields: a confirmed number is the real one.
@@ -982,12 +973,12 @@ def extract_proto_message(
             _type_note = _opaque_object_note(ivar, type_class)
 
         # Inline C-struct sub-message (by value or an array of them): remember the
-        # begin-mark the walk bound to it, so :func:`finalize_struct_fields` can read the
+        # begin-mark bound to it, so :func:`finalize_struct_fields` can read the
         # struct's serialiser once the whole image is extracted (#37).  Fields it cannot
         # resolve keep the flagged `bytes` fallback set above.
         if type_name == "bytes":
             record_struct_site(ctx, cls.name, pname, ivar.name, ivar.offset, ivar.type_enc,
-                               _walk_writes.get(ivar.name))
+                               _bound_writes.get(ivar.name))
 
         fields.append(ProtoField(
             name=pname,
@@ -997,7 +988,7 @@ def extract_proto_message(
             type_class=type_class,
             number_confirmed=confirmed,
             type_inference_note=_type_note,
-            repeated_encoding=_repeated_encoding(ivar, _walk_writes),
+            repeated_encoding=_repeated_encoding(ivar, _bound_writes),
         ))
 
     # Drop manual-array backing-store ivars (``_xCount``/``_xSpace``) that ObjC
@@ -1011,9 +1002,9 @@ def extract_proto_message(
 
     # Drop estimated fields whose ivar the class's own writeTo: provably never serialises:
     # no value derived from it can reach the PBDataWriter (:mod:`proto.writer_flow`).  Only
-    # when that analysis decides the class, and only if it agrees with the walk -- every
-    # ivar the walk bound to a field number must be among the reachable ones; otherwise the
-    # two disagree and nothing is dropped.
+    # when that analysis decides the class, and only if it agrees with the confirmed
+    # numbers -- every ivar bound to a field number (a map's from its block, too) must be
+    # among the reachable ones; otherwise the two disagree and nothing is dropped.
     _writes_no_ivars = False
     if any(not f.number_confirmed for f in fields):
         _reach, _why = writer_reachable_ivars(ctx, cl, cls)
@@ -1023,7 +1014,7 @@ def extract_proto_message(
                       if f.number_confirmed or _ivar_by_pname.get(f.name) in _reach]
             _writes_no_ivars = not fields
         elif _reach is not None:
-            log.warning("%s: writer flow disagrees with the writeTo: walk (%s not reachable);"
+            log.warning("%s: writer flow disagrees with the confirmed numbers (%s not reachable);"
                         " estimated fields kept", cls.name,
                         sorted(set(confirmed_numbers) - _reach))
         else:
@@ -1223,11 +1214,11 @@ def extract_all(
 
     # Image-wide pre-passes, built once here (per class would be O(n^2)); a failure is
     # recorded in the run diagnostics and the run continues without it.
-    #  * the branch-indegree map + method-IMP set the writeTo: walk needs;
+    #  * the writer flow + method-IMP set the writeTo: bindings need;
     #  * the string write helper(s), from a class with a confirmed NSString ivar;
     #  * the {ReadAllFrom vmaddr -> class name} index the readFrom: evaluator names
     #    element classes by.
-    _ensure_writeto_indegree(ctx, cl)
+    _ensure_writeto_prepass(ctx, cl)
     string_write_helpers: FrozenSet[int] = _ensure_string_write_helpers(ctx, cl)
     log.debug("String write helpers identified: %s", [hex(h) for h in string_write_helpers])
     readfrom_core_index: Dict[int, str] = _ensure_readfrom_core_index(ctx, cl)

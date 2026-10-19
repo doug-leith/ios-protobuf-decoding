@@ -13,11 +13,11 @@ rest from the two serializers:
 
   - **block** — ``[self->_dict enumerateKeysAndObjectsUsingBlock:&block]``: the entry
     code lives in the block's *invoke* function (the function pointer at
-    ``block+0x10``), which the field-number CFG walk never enters.  Found by
+    ``block+0x10``), not ``writeTo:`` itself.  Found by
     :func:`scan_block_enumerated_maps`.
   - **inline loop** — a ``countByEnumeratingWithState:`` loop in ``writeTo:`` itself;
-    the CFG walk already binds the begin-mark to the ivar, so the entry body is the
-    straight-line code after that write (:func:`entry_from_walk_write`).
+    the write sites already bind the begin-mark to the ivar, so the entry body is the
+    code after that write (:func:`entry_from_bound_write`).
 
   Both feed :func:`analyze_entry`, which reads the field number and the key/value
   *write helpers* (plus, as a cross-check, the NSNumber unboxing selector feeding
@@ -54,10 +54,7 @@ from proto.callees import real_target, stub_selector
 from proto.arm64cfg import (
     split_ops, mem_operand, _next_imp,
 )
-from proto.writeto import (
-    _writeto_field_number_before,
-    _addr_to_name,
-)
+from proto.writeto import _writeto_field_number_before
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
@@ -66,6 +63,20 @@ from proto.dispatch import listing_flow
 from proto.dispatch_eval import evaluate_class
 
 log = logging.getLogger(__name__)
+
+
+def _addr_to_name(ctx, addr, offset_to_name):
+    """Read the u32 ivar byte-offset at *addr* and map to an ivar name.  The
+    map-membership check IS the validator (a stray read almost never equals a byte
+    offset this class declares), so no hard section gate is needed."""
+    if addr is None:
+        return None
+    try:
+        return offset_to_name.get(ctx.read_u32(addr))
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        return None
 
 #: ObjC ivar classes a protobuf ``map<>`` field compiles to.
 MAP_OBJC_CLASSES = frozenset({"NSDictionary", "NSMutableDictionary"})
@@ -248,7 +259,7 @@ def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
                 offset_to_name: Dict[int, str]) -> Optional[str]:
     """Name of the ivar whose value is in *reg* at ``insns[i]``: follow ``mov`` chains
     back to the defining ``ldr xD,[Xself, Xoff]`` (``Xoff`` = a loaded ivar-offset
-    variable → resolved to the ivar by :func:`proto.writeto._addr_to_name`) or the
+    variable → resolved to the ivar by :func:`_addr_to_name`) or the
     immediate-offset form.  The declared-offset membership test IS the validator."""
     insns, seen = flow.insns, set()
     while (i, reg) not in seen:
@@ -358,9 +369,8 @@ def _scratch_slot_of(flow, k: int) -> Optional[int]:
     the call at ``insns[k]`` (the begin/end-mark idiom), else None.  A function that
     addresses its locals from the frame pointer says ``sub x1, x29, #K`` instead; that
     slot is reported as ``-K`` (never equal to an sp-relative one), which is all the
-    begin/end pairing needs.  Unlike :func:`proto.writeto._value_is_stack_scratch` this
-    honours call clobbers: a ``bl`` between the definition and *k* redefines ``x1``, so a
-    stale scratch is never reported."""
+    begin/end pairing needs.  A call between the definition and *k* redefines ``x1``,
+    so a stale scratch is never reported."""
     d = _reaching_def(flow, k, 'x1')
     if d is None:
         return None
@@ -431,10 +441,10 @@ def scan_block_enumerated_maps(
     return out
 
 
-# ── Shape B: inline enumeration loop (walk-bound begin-mark) ──────────────────
+# ── Shape B: inline enumeration loop (bound begin-mark) ──────────────────────
 
 
-def entry_from_walk_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
+def entry_from_bound_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
                           w: dict) -> Optional[MapEntryWriter]:
     """The :class:`MapEntryWriter` for a bound ``writeTo:`` write *w* (at *imp*) that is a
     begin-submessage mark (already bound to the dictionary ivar, with its field number).
@@ -460,11 +470,11 @@ def entry_from_walk_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
 
 def find_map_writers(
     ctx: BinaryContext, cls: ObjcClass, map_ivars: Sequence[ObjcIvar],
-    walk_writes: Dict[str, dict], offset_to_name: Dict[int, str],
+    bound_writes: Dict[str, dict], offset_to_name: Dict[int, str],
     confirmed_numbers: Dict[str, int],
 ) -> Dict[str, MapEntryWriter]:
     """Map-entry writers for *cls*'s dictionary ivars: the inline-loop shape from the
-    CFG-walk write events (*walk_writes* = ``{ivar: write}``), else the block shape from
+    binding writes (*bound_writes* = ``{ivar: write}``), else the block shape from
     :func:`scan_block_enumerated_maps`.  A writer is dropped if its number collides with
     another ivar's confirmed number (inconsistent evidence is never trusted)."""
     m = cls.get_method("writeTo:")
@@ -473,9 +483,9 @@ def find_map_writers(
     writers: Dict[str, MapEntryWriter] = {}
     imps_sorted = sorted(getattr(ctx, "_writeto_foreign_imps", None) or ())
     for iv in map_ivars:
-        w = walk_writes.get(iv.name)
+        w = bound_writes.get(iv.name)
         if w is not None:
-            e = entry_from_walk_write(ctx, m.imp, imps_sorted, w)
+            e = entry_from_bound_write(ctx, m.imp, imps_sorted, w)
             if e is not None:
                 writers[iv.name] = e
     pending = [iv for iv in map_ivars if iv.name not in writers]
@@ -523,7 +533,7 @@ def record_helper_votes(
 ) -> None:
     """Accumulate, on *ctx*, one vote per field ``{canonical write helper → wire kind of
     the ivar that uses it}``.  Called per class by ``extract_proto_message`` with the write
-    helpers the CFG walk already bound (``WalkBindings.helpers``; no extra analysis), so by
+    helpers the write sites already bound (``WriteBindings.helpers``; no extra analysis), so by
     the end of ``extract_all`` the table covers every class in the binary."""
     votes = _ctx_cache(ctx, "_helper_votes", dict)
     for iv in field_ivars:

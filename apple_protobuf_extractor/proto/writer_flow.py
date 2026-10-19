@@ -45,7 +45,6 @@ from macho.memory import BinaryContext, _ctx_store
 from proto.arm64cfg import build_blocks_with_br_arms, parse_adrp, split_ops
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs
 from proto.dispatch_eval import _function_insns
-from proto.writeto import _image_text_range
 from proto.callees import callee_name, stub_selector, RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN
 from proto.arm64_operands import (writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   CALLER_SAVED_GPRS, CALLER_SAVED_FPRS)
@@ -105,6 +104,22 @@ _SEND_SERIALISES = {"writeTo:": "x0", "writeData:": "x2"}
 # in the reused state.
 _FAST_ENUMERATION = "countByEnumeratingWithState:objects:count:"
 _FAST_ENUMERATION_STATE_BYTES = 64
+
+
+def _image_text_range(ctx):
+    """``(lo, hi)`` of the image's own ``__TEXT`` segment, or None when the context
+    does not expose one (a unit-test stub) — then nothing is treated as out-of-image.
+
+    The newer toolchain (iOS 27, macOS 27) tail-calls a function in another image
+    directly (``b <objc_sync_exit>``; the old one branched to a stub in the image's own
+    ``__stubs``)."""
+    try:
+        for seg in ctx.segments:
+            if seg.name == "__TEXT" and seg.vmsize:
+                return seg.vmaddr, seg.vmaddr + seg.vmsize
+    except AttributeError:
+        pass
+    return None
 
 
 def _regs(tokens: Iterable[str]) -> List[str]:

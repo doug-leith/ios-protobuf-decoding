@@ -1,6 +1,7 @@
 #import "pbshim.h"
 
-// Ground truth (see expected.py). This fixture covers proto/writeto.py's
+// Ground truth (see expected.py). Written for the writeTo: walk (deleted
+// 2026-10-19, TODO #85; expected.py says what covers it now). It covered proto/writeto.py's
 // ACCESSOR-SOURCED value-binding tier (bind_write's "2d": _selector_stub_name,
 // _getter_loads_offset, _build_accessor_ivar_map, _trace_accessor_sourced_value),
 // which had ZERO synthetic coverage before this fixture. Real, documented bug

@@ -1,6 +1,7 @@
 #import "pbshim.h"
 
-// Ground truth (see expected.py). This fixture covers proto/writeto.py's
+// Ground truth (see expected.py). Written for the writeTo: walk (deleted
+// 2026-10-19, TODO #85; expected.py says what covers it now). It covered proto/writeto.py's
 // _forward_self_load_off — the "container array" forwarder for an INLINE
 // repeated-message field, previously ZERO synthetic coverage (no fixture in
 // this suite reached it at all: verified via a monkeypatched trace against

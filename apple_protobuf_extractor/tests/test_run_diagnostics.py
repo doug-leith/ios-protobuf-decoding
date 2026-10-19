@@ -222,16 +222,16 @@ class TestEnumValueNameDisclosure(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
-class TestWalkFailureIsRecorded(unittest.TestCase):
+class TestWriterFlowFailureIsRecorded(unittest.TestCase):
 
-    def test_a_writeto_walk_that_raises_is_an_analysis_failure(self):
-        import proto.writeto as W
+    def test_write_sites_that_raise_are_an_analysis_failure(self):
+        from proto.writer_flow import WriterFlow
         ctx, st, cl = _load()
-        with mock.patch.object(W, 'writeto_walk', side_effect=RuntimeError('boom')):
+        with mock.patch.object(WriterFlow, 'write_sites', side_effect=RuntimeError('boom')):
             extract_all(ctx, st, cl)
         failures = get_diagnostics(ctx).analysis_failures
         self.assertTrue(failures)
-        self.assertTrue(all(a == 'writeTo: walk' and d == 'RuntimeError: boom'
+        self.assertTrue(all(a == 'writeTo: flow' and d == 'RuntimeError: boom'
                             for _c, a, d in failures), failures)
 
 

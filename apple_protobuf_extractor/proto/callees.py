@@ -17,7 +17,7 @@ Every stub is decoded by one reader, :func:`stub_target` (its computed target or
 
 A function of the image itself (not exported) has no name here: None.
 
-This module is the one owner of call naming (the writeTo: walk, the writer flow, the map and
+This module is the one owner of call naming (the writer flow, the map and
 struct decoders and the readFrom: evaluator use it).
 """
 from __future__ import annotations

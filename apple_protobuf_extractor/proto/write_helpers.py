@@ -30,7 +30,7 @@ from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcIvar
 from macho.disasm    import disasm, _parse_imm
 
-from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegree
+from proto.writeto   import _extract_writeto_field_numbers
 from proto.writer_flow import WriterFlow
 from proto.arm64cfg  import split_ops
 from proto.callees   import import_name, real_target
@@ -71,10 +71,10 @@ def _identify_string_write_helpers(
     ``+xyzType`` method returns NSString, an external class not in the
     binary-local classlist).
     """
-    # The writeTo decoder (CFG walk) needs the binary-wide indegree pre-pass on
-    # ctx; ensure it exists so a standalone caller (one that builds this
-    # set before extract_all has run) gets real helpers instead of an empty set.
-    _ensure_writeto_indegree(ctx, cl)
+    # The writeTo: bindings need the binary-wide pre-pass on ctx; ensure it exists so a
+    # standalone caller (one that builds this set before extract_all has run)
+    # gets real helpers instead of an empty set.
+    _ensure_writeto_prepass(ctx, cl)
 
     string_helpers: Set[int] = set()
     proto_classes = _proto_class_set(ctx, cl)
@@ -223,7 +223,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     ``int32``/``uint32``/``sint32``/``[s]fixed32`` all collapse to the canonical
     ``int32`` default (:func:`proto.protocore._type_from_enc`).  The **helper** a
     field's ``writeTo:`` calls selects the actual wire form, and the writeTo CFG
-    walk already captures it per ivar (``WalkBindings.helpers``) — so this is a cheap
+    bindings already capture it per ivar (``WriteBindings.helpers``) — so this is a cheap
     post-pass, mirroring the string-helper reclassification
     (:func:`_find_string_write_helper`).
 
@@ -385,42 +385,28 @@ def _refine_scalar_by_family(type_name: str, fam: str, where: str = "") -> str:
 # ── Lazy binary-wide pre-passes (cached on ctx) ───────────────────────────────
 
 
-def _ensure_writeto_indegree(ctx: BinaryContext, cl: ClassList) -> None:
-    """Lazily build + cache the writeTo CFG-walk indegree pre-pass on ``ctx``.
+def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
+    """Lazily build + cache the binary-wide ``writeTo:`` pre-pass on ``ctx``: the image's
+    :class:`proto.writer_flow.WriterFlow` (``_writer_flow``, which the bindings
+    :func:`_extract_writeto_field_numbers` read) and the set of every method IMP
+    (``_writeto_foreign_imps``, the method extents the map / struct / enum passes use).
 
-    The walk decoder (:func:`_extract_writeto_field_numbers`) needs the binary-wide
-    branch-indegree map + writeTo-IMP set threaded onto ``ctx``.
     :func:`proto.extractor.extract_all` builds it once up front, but
     :func:`proto.extractor.extract_proto_message` may also be called standalone
     (single-class extraction, unit tests) without ``extract_all`` — so build it on
-    first use here too.  Cached on ``ctx`` (the binary-wide build runs at most once
-    per context); without this, a standalone call would silently get NO writeTo
-    decoding (the walk's no-pre-pass path returns ``{}``).
-
-    Builds only when absent; on a (real-world-unseen) build failure it leaves the
-    attrs ``None``, so a persistently failing context retries — acceptable, since
-    the pre-pass succeeds on every supported artifact."""
+    first use here too; without this, a standalone call would silently get NO writeTo
+    decoding.  Rebuilt for a different class list."""
     wf = getattr(ctx, "_writer_flow", None)
     if wf is None or wf.cl is not cl:
         _ctx_store(ctx, "_writer_flow", WriterFlow(ctx, cl))
-    if (getattr(ctx, "_writeto_indeg", None) is not None
-            and getattr(ctx, "_writeto_foreign_imps", None) is not None):
-        return
-    try:
-        indeg, foreign = build_writeto_indegree(ctx, cl)
-        _ctx_store(ctx, "_writeto_indeg", indeg)
-        _ctx_store(ctx, "_writeto_foreign_imps", foreign)
-    except (NameError, ImportError):
-        raise
-    except Exception as exc:
-        record_failed_pass(ctx, "writeTo indegree", exc,
-                           "the writeTo: walk is off: field numbers are ivar-order estimates")
+    if getattr(ctx, "_writeto_foreign_imps", None) is None:
+        _ctx_store(ctx, "_writeto_foreign_imps", {m.imp for c in cl for m in c.methods if m.imp})
 
 
 def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSet[int]":
     """Lazily build + cache the binary-wide string-write-helper VA set on ``ctx``.
 
-    Mirrors :func:`_ensure_writeto_indegree`: ``extract_all`` builds this once and
+    Mirrors :func:`_ensure_writeto_prepass`: ``extract_all`` builds this once and
     passes it explicitly, but a standalone :func:`proto.extractor.extract_proto_message`
     caller that omits the kwarg would otherwise silently lose ``repeated string`` vs
     ``repeated bytes`` typing. Cached so the binary-wide scan runs at most once per

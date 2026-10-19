@@ -83,13 +83,14 @@ except Exception:
     _HAVE = False
 
 
-def _walk_confirmed(ctx, cl, cls):
+def _bound_ivars(ctx, cl, cls):
     import proto.writeto as W
     from proto.protocore import _is_real_field_ivar
+    from proto.write_helpers import _ensure_writeto_prepass
     names = {m.name for m in cls.methods if m.name}
     fivars = [iv for iv in cls.ivars if _is_real_field_ivar(iv, names)]
-    indeg, foreign = W.build_writeto_indegree(ctx, cl)
-    return set(W._walk_field_numbers(ctx, cls, fivars, indeg, foreign).numbers)
+    _ensure_writeto_prepass(ctx, cl)
+    return set(W._extract_writeto_field_numbers(ctx, cls, fivars).numbers)
 
 
 @unittest.skipUnless(_HAVE, "iPhone 8 dyld cache not available")
@@ -124,7 +125,7 @@ class TestWriterFlowLive(unittest.TestCase):
         cls = cl.find(cls_name)
         reach, why = writer_reachable_ivars(ctx, cl, cls)
         self.assertIsNotNone(reach, f"{cls_name} undecided: {why}")
-        self.assertLessEqual(_walk_confirmed(ctx, cl, cls), reach)   # sound w.r.t. the walk
+        self.assertLessEqual(_bound_ivars(ctx, cl, cls), reach)   # every bound ivar reaches it
         for iv in gone:
             self.assertNotIn(iv, reach)
         for iv in kept:
@@ -187,21 +188,21 @@ class TestIOS27SharedSelectorStub(unittest.TestCase):
         from macho.strings import build_string_table
         from macho.classlist import build_class_list
         from macho.disasm import disasm
-        import proto.writeto as W
+        from proto.callees import stub_selector
         r = DyldCacheReader(os.path.join(_ios27_cache_dir(), "dyld_shared_cache_arm64e"))
         mv = r.find_image_header("GeoServices")
         ctx = BinaryContext.from_cache(r, mv)
         cl = build_class_list(ctx, build_string_table(ctx))
-        indeg, foreign = W.build_writeto_indegree(ctx, cl)
-        imp = cl.find("GEOPlaceSearchRequest").get_method("writeTo:").imp
-        _w, flags = W.writeto_walk(ctx, imp, foreign - {imp}, indeg)
-        add_form = [t for t in flags["call_targets"]
-                    if [i.mnemonic for i in disasm(ctx, t, 3, stop_at_ret=False)] == ["adrp", "add", "b"]]
+        wf = WriterFlow(ctx, cl)
+        cls = cl.find("GEOPlaceSearchRequest")
+        add_form = [s.target for s in wf.write_sites(cls) if s.target is not None
+                    and [i.mnemonic for i in disasm(ctx, s.target, 3, stop_at_ret=False)]
+                    == ["adrp", "add", "b"]]
         self.assertTrue(add_form)
-        from proto.callees import stub_selector
         sels = {stub_selector(ctx, t) for t in add_form}
         self.assertNotIn(None, sels)
         self.assertIn("writeData:", sels)
+        self.assertIn("writeData:", wf.sent_selectors(cls))
 
 
 if __name__ == "__main__":

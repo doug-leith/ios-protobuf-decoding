@@ -17,7 +17,6 @@ import unittest
 from pathlib import Path
 
 import proto.mapfields as M
-import proto.writeto as W
 import proto.callees as C
 import proto.extractor as E
 from macho.disasm import Insn
@@ -83,7 +82,7 @@ class _Patched(unittest.TestCase):
     """Route ``disasm`` in the modules that read memory to a fake."""
 
     def patch(self, fake):
-        for mod in (W, M, C):
+        for mod in (M, C):
             orig = mod.disasm
             mod.disasm = fake
             self.addCleanup(setattr, mod, 'disasm', orig)
@@ -404,7 +403,7 @@ class TestNewerToolchainBlockShape(_Patched):
 
 class TestFindMapWriters(_Patched):
 
-    def test_walk_number_collision_drops_the_writer(self):
+    def test_number_collision_drops_the_writer(self):
         insns, fd = asm(_MANIFEST_WRITETO, _MANIFEST_INVOKE,
                         selector_stub(0x18dae11e0, 0x18d100000))
         self.patch(fd)

@@ -139,7 +139,7 @@ class ProtoField:
                                     # an enum name ('FeedbackType')
     label:            FieldLabel
     type_class:       Optional[str] = None   # ObjC class name or "ENUM:<EnumName>"
-    number_confirmed: bool = False           # True  → from the writeTo: walk
+    number_confirmed: bool = False           # True  → read from writeTo:
                                              # False → ivar-order estimate
     unresolved_type_class: Optional[str] = None
     # Set by proto.emitter.resolve_type_refs() when the ObjC class named in
@@ -195,8 +195,8 @@ class ProtoField:
     repeated_encoding: Optional[str] = None
     # For a repeated scalar/enum stored as a C-list: how writeTo: writes it on the wire,
     # "PACKED" (one length-delimited run) or "EXPANDED" (one tag per element), read off the
-    # writeTo: walk (proto.extractor._repeated_encoding); "UNSEEN" when the walk saw no write
-    # of it; None when not a C-list.  The emitter declares EXPANDED explicitly (edition 2023
+    # write binding it (proto.extractor._repeated_encoding); "UNSEEN" when no write binds
+    # it; None when not a C-list.  The emitter declares EXPANDED explicitly (edition 2023
     # defaults to PACKED) and notes an UNSEEN one.
 
     def __repr__(self) -> str:

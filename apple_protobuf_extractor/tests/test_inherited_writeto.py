@@ -149,8 +149,8 @@ class TestInheritedWriteToLive(unittest.TestCase):
 
     def test_inherited_writeto_sends_none_of_the_subclass_selectors(self):
         from proto.writeto import writeto_sent_selectors
-        from proto.write_helpers import _ensure_writeto_indegree
-        _ensure_writeto_indegree(self.ctx, self.cl)          # the image's writer flow
+        from proto.write_helpers import _ensure_writeto_prepass
+        _ensure_writeto_prepass(self.ctx, self.cl)          # the image's writer flow
         parent = self.cl.find("GEOComposedWaypoint")
         sent = writeto_sent_selectors(self.ctx, parent)
         self.assertIsNotNone(sent)

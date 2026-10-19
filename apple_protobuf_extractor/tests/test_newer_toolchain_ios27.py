@@ -4,8 +4,9 @@ Four shapes that the iPhone 8 images never contain made the iOS 27 / macOS 27 ru
 degrade (see notes/descriptor_comparison_2026-10-04/REPORT.md):
 
 * a tail call ``b <fn>`` straight into ANOTHER image (the old toolchain branched to a stub
-  in the image's own ``__stubs``) was taken for the method's own outlined block, the walk
-  ran off the image, and the whole class fell back to ivar-order "number estimated";
+  in the image's own ``__stubs``) was taken for the method's own outlined block, the
+  writeTo: walk ran off the image, and the whole class fell back to ivar-order "number
+  estimated" (the writer flow, which replaced the walk, takes it as a call);
 * a ``bl`` to a no-return function followed by ``udf`` padding let the walk read on into
   the next method;
 * the write helper of a fixed-width field computes ``lsl w,field,#3`` BEFORE its
@@ -24,13 +25,13 @@ import os
 import unittest
 
 import artifacts
-import proto.writeto as W
+from proto.writer_flow import _image_text_range as WF_image_text_range
 from macho.arm64decode import jumptable_arm_target
 from macho.disasm import Insn
 from macho.memory import Segment
 
 
-# ── offline: the walk ─────────────────────────────────────────────────────────
+# ── offline: the writer flow on hand-built code ──────────────────────────────
 
 def _asm(*blocks):
     mem = {}
@@ -55,117 +56,100 @@ class _ImageCtx:
         self.segments = [Segment(name="__TEXT", vmaddr=lo, vmsize=size, fileoff=0, filesize=size)]
 
 
-def _walk(fd, imp, ctx, **kw):
-    orig = W.disasm
-    W.disasm = fd
-    try:
-        writes, _ = W.writeto_walk(ctx, imp, set(), kw.pop("indeg", {}), **kw)
-    finally:
-        W.disasm = orig
-    return {w['n'] for w in writes}
+# Image text is [0x1000, 0x2000); 0x9000 is another image's code.
+_CTX = _ImageCtx(0x1000, 0x1000)
+# writeTo: entry: self in x0, the writer in x2, kept in x19 across calls
+_KEEP_WRITER = [('mov', 'x19, x2')]
 
 
-class TestWalkStaysInImage(unittest.TestCase):
-    # Image text is [0x1000, 0x2000); 0x9000 is another image's code.
-    CTX = _ImageCtx(0x1000, 0x1000)
+def _flow(*blocks, names=None):
+    """WriterFlow run of the writeTo: at 0x1000 in *blocks*: (decided, [site numbers]).
+    *names* are the exported callee names; every other callee is an unnamed function."""
+    from unittest import mock
+    import proto.writer_flow as WF
+    fd, names = _asm(*blocks), names or {}
+    wf = WF.WriterFlow(_CTX, [])
+    with mock.patch.object(WF, 'disasm', fd), mock.patch('proto.dispatch_eval.disasm', fd), \
+            mock.patch.object(WF, 'callee_name', lambda ctx, va: names.get(va)), \
+            mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
+        res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
+    return res.complete, [res.sites[a].number for a in sorted(res.sites)]
 
+
+class TestFlowStaysInImage(unittest.TestCase):
     def test_image_text_range(self):
-        self.assertEqual(W._image_text_range(self.CTX), (0x1000, 0x2000))
-        self.assertIsNone(W._image_text_range(None))           # unit-test stub: no bound
+        self.assertEqual(WF_image_text_range(_CTX), (0x1000, 0x2000))
+        self.assertIsNone(WF_image_text_range(None))           # unit-test stub: no bound
 
-    def test_tail_call_into_other_image_not_followed(self):
-        # `b 0x9000` is branched to from this method only, so the in-degree test alone
-        # calls it "our own outlined block".  It is outside the image's __TEXT: not ours.
-        fd = _asm(
-            (0x1000, [('mov', 'w2, #1'), ('bl', '#0x1800'), ('b', '#0x9000')]),
-            (0x9000, [('mov', 'w2, #77'), ('bl', '#0x1800'), ('ret', '')]),
-        )
-        self.assertEqual(_walk(fd, 0x1000, self.CTX, indeg={0x9000: {0x1000}}), {1})
+    def test_tail_call_into_another_images_function_is_a_call(self):
+        # `b 0x9000` to a function another image exports (the newer toolchain's direct
+        # tail call): a call that ends the path, its code never read as this method's.
+        code = (0x1000, _KEEP_WRITER + [('mov', 'x0, x19'), ('mov', 'w2, #1'),
+                                        ('bl', '#0x1800'), ('b', '#0x9000')])
+        other = (0x9000, [('mov', 'x0, x19'), ('mov', 'w2, #77'), ('bl', '#0x1800'),
+                          ('ret', '')])
+        decided, numbers = _flow(code, other, names={0x9000: "_objc_sync_exit"})
+        self.assertTrue(decided)
+        self.assertEqual([n for n in numbers if n is not None], [1])
 
-    def test_same_tail_call_followed_without_an_image_bound(self):
-        # Contrast: with no text range (stub ctx) the single-source target IS followed —
-        # the bound, not something else, is what stops it above.
-        fd = _asm(
-            (0x1000, [('mov', 'w2, #1'), ('bl', '#0x1800'), ('b', '#0x9000')]),
-            (0x9000, [('mov', 'w2, #77'), ('bl', '#0x1800'), ('ret', '')]),
-        )
-        self.assertEqual(_walk(fd, 0x1000, None, indeg={0x9000: {0x1000}}), {1, 77})
+    def test_branch_out_of_the_function_to_no_function_is_undecided(self):
+        code = (0x1000, _KEEP_WRITER + [('mov', 'x0, x19'), ('mov', 'w2, #1'),
+                                        ('bl', '#0x1800'), ('b', '#0x9000')])
+        self.assertFalse(_flow(code)[0])
 
-    def test_in_image_outlined_block_still_followed(self):
-        fd = _asm(
-            (0x1000, [('mov', 'w2, #1'), ('bl', '#0x1800'), ('b', '#0x1500')]),
-            (0x1500, [('mov', 'w2, #2'), ('bl', '#0x1800'), ('ret', '')]),
-        )
-        self.assertEqual(_walk(fd, 0x1000, self.CTX), {1, 2})
+    def test_conditional_branch_out_of_the_function_is_undecided(self):
+        code = (0x1000, _KEEP_WRITER + [('cbz', 'x8, #0x9000'), ('mov', 'x0, x19'),
+                                        ('mov', 'w2, #1'), ('bl', '#0x1800'), ('ret', '')])
+        self.assertFalse(_flow(code)[0])
 
-    def test_conditional_branch_out_of_image_not_followed(self):
-        fd = _asm(
-            (0x1000, [('cbz', 'x8, #0x9000'), ('mov', 'w2, #1'), ('bl', '#0x1800'), ('ret', '')]),
-            (0x9000, [('mov', 'w2, #77'), ('bl', '#0x1800'), ('ret', '')]),
-        )
-        self.assertEqual(_walk(fd, 0x1000, self.CTX), {1})
-
-    def test_tail_call_field_write_into_other_image_still_recorded(self):
-        # `mov w2,#5 ; b <helper in another image>` is a field WRITE (the helper is where
-        # the value is serialised), not a branch to follow: classified before the bound.
-        fd = _asm((0x1000, [('mov', 'w2, #5'), ('b', '#0x9000')]))
-        self.assertEqual(_walk(fd, 0x1000, self.CTX), {5})
-
-    def test_udf_padding_ends_the_path(self):
+    def test_no_return_call_ends_the_path(self):
         # `bl <no-return>` is followed by `udf` padding, then the NEXT method's body.
-        fd = _asm((0x1000, [
-            ('mov', 'w2, #1'), ('bl', '#0x1800'),
+        code = (0x1000, _KEEP_WRITER + [
+            ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x1800'),
             ('bl', '#0x1900'), ('udf', '#0'), ('udf', '#0'),
-            ('mov', 'w2, #9'), ('bl', '#0x1800'), ('ret', ''),          # the next method
-        ]))
-        self.assertEqual(_walk(fd, 0x1000, self.CTX), {1})
+            ('mov', 'x0, x19'), ('mov', 'w2, #9'), ('bl', '#0x1800'), ('ret', '')])
+        decided, numbers = _flow(code, names={0x1900: "___stack_chk_fail"})
+        self.assertTrue(decided)
+        self.assertEqual([n for n in numbers if n is not None], [1])
 
 
 class TestFieldNumberInW1NeedsAnFpValue(unittest.TestCase):
-    """`mov w1,#N` is the field number only for a double/float write (value in d0/s0)."""
+    """For a writer with no ABI name, `mov w1,#N` is the field number only for a double /
+    float write (value set up in v0 for that call); otherwise w2 is."""
+
+    def _numbers(self, *lines):
+        return _flow((0x1000, _KEEP_WRITER + list(lines) + [('ret', '')]))[1]
 
     def test_w1_constant_without_fp_value_is_not_a_field_number(self):
-        fd = _asm((0x1000, [
-            ('mov', 'w2, #1'), ('bl', '#0x1800'),
-            ('add', 'x0, x21, x8'), ('mov', 'w1, #0x10000'), ('bl', '#0x1900'),
-            ('ret', ''),
-        ]))
-        self.assertEqual(_walk(fd, 0x1000, None), {1})
+        self.assertEqual(self._numbers(
+            ('mov', 'x0, x19'), ('mov', 'w1, #0x10000'), ('mov', 'w2, #3'), ('bl', '#0x1900'),
+            ('mov', 'x0, x19'), ('mov', 'w1, #7'), ('bl', '#0x1900')), [3, None])
 
     def test_w1_with_d0_value_is_the_field_number(self):
-        fd = _asm((0x1000, [
+        self.assertEqual(self._numbers(
             ('ldr', 'd0, [x8]'), ('mov', 'x0, x19'), ('mov', 'w1, #0x14'), ('bl', '#0x1800'),
-            ('ldr', 's0, [x9]'), ('mov', 'x0, x19'), ('mov', 'w1, #0x15'), ('bl', '#0x1800'),
-            ('ret', ''),
-        ]))
-        self.assertEqual(_walk(fd, 0x1000, None), {0x14, 0x15})
+            ('ldr', 's0, [x9]'), ('mov', 'x0, x19'), ('mov', 'w1, #0x15'), ('bl', '#0x1800')),
+            [0x14, 0x15])
 
     def test_newer_toolchain_vector_register_copy_counts_as_the_fp_value(self):
         # CLPPressure.writeTo: on iOS 27 passes a spilled double with `mov v0.16b,v8.16b`
         # (the old toolchain wrote `fmov d0,d8`).
-        fd = _asm((0x1000, [
+        self.assertEqual(self._numbers(
             ('ldr', 'd8, [x8]'), ('bl', '#0x1900'),
-            ('mov', 'v0.16b, v8.16b'), ('mov', 'w1, #1'), ('bl', '#0x1800'),
-            ('ret', ''),
-        ]))
-        self.assertEqual(_walk(fd, 0x1000, None), {1})
+            ('mov', 'v0.16b, v8.16b'), ('mov', 'x0, x19'), ('mov', 'w1, #1'), ('bl', '#0x1800')),
+            [None, 1])
 
     def test_store_of_d0_is_not_an_fp_argument(self):
         # `str d0,[sp]` READS d0; it does not set up the call's FP argument.
-        fd = _asm((0x1000, [
-            ('str', 'd0, [sp, #8]'), ('mov', 'w1, #0x10000'), ('bl', '#0x1900'),
-            ('ret', ''),
-        ]))
-        self.assertEqual(_walk(fd, 0x1000, None), set())
+        self.assertEqual(self._numbers(
+            ('str', 'd0, [sp, #8]'), ('mov', 'x0, x19'), ('mov', 'w1, #0x10000'),
+            ('bl', '#0x1900')), [None])
 
     def test_fp_value_of_an_earlier_call_does_not_count(self):
-        # d0 was set for the PREVIOUS call; the scan stops at that `bl`.
-        fd = _asm((0x1000, [
-            ('ldr', 'd0, [x8]'), ('mov', 'w1, #0x14'), ('bl', '#0x1800'),
-            ('mov', 'w1, #0x10000'), ('bl', '#0x1900'),
-            ('ret', ''),
-        ]))
-        self.assertEqual(_walk(fd, 0x1000, None), {0x14})
+        # d0 was set for the PREVIOUS call, which clobbers it.
+        self.assertEqual(self._numbers(
+            ('ldr', 'd0, [x8]'), ('mov', 'x0, x19'), ('mov', 'w1, #0x14'), ('bl', '#0x1800'),
+            ('mov', 'x0, x19'), ('mov', 'w1, #0x10000'), ('bl', '#0x1900')), [0x14, None])
 
 
 # ── offline: jump-table arm address ───────────────────────────────────────────
@@ -225,7 +209,7 @@ class TestIos27Live(unittest.TestCase):
     def _fields(self, cname):
         return {f.name: f for f in self.msgs[cname].fields}
 
-    def test_walk_confirms_every_number_of_a_class_that_used_to_fall_back(self):
+    def test_every_number_of_a_class_that_used_to_fall_back_is_confirmed(self):
         # GEOClientNetworkMetrics' writeTo: tail-calls out of the image; before the fix its
         # nine fields were ALL "number estimated".  Expected = the iPhone 8 (golden) numbers,
         # incl. the two doubles at 20/21 (field# in w1, value in d0).

@@ -363,7 +363,7 @@ def _harvest_dictrep_enums(
 def _dictrep_body(ctx: BinaryContext, imp: int) -> Optional[List[Insn]]:
     """The dictRep function at *imp* as the linear range ``[imp, next method IMP)`` -- or
     None when the method-IMP set is not on *ctx* (it is built once by ``extract_all``;
-    see build_writeto_indegree).
+    see proto.write_helpers._ensure_writeto_prepass).
 
     Bound by structure, not by a count or by a `ret`: the next method IMP is a hard upper
     bound on the function (as for the writeTo: pre-scan).  A dictRep leaves by a tail

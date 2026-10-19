@@ -17,6 +17,11 @@ its field number) is proto/writeto.py's accessor-sourced tier
 proto.callees.stub_selector + _getter_loads_offset). Confirmed by instrumenting
 bind_write directly before writing this file: the `context` field
 resolves with status exactly 'ok-accessor'.
+
+Since 2026-10-19 (TODO #85) the walk is replaced by proto.writer_flow: the
+getter's result is the value its own body returns (the flow summarises a
+method of self).  Differential on the flow: with no summary (a call's result
+derives from its arguments only) `context` falls to an estimate (1).
 """
 
 EXPECTED = {

@@ -18,7 +18,6 @@ import unittest
 import artifacts
 import proto.extractor as E
 import proto.structfields as SF
-import proto.writeto as W
 from proto.dispatch import listing_flow
 import live_artifacts as V
 from proto.models import FieldLabel
@@ -843,14 +842,6 @@ class TestFramePointerScratch(_Patched):
         begin, end = SF._scratch_slot_of(flow, 3), SF._scratch_slot_of(flow, 6)
         self.assertEqual(begin, end)
         self.assertIsNotNone(begin)
-
-    def test_value_is_stack_scratch_accepts_the_frame_relative_form(self):
-        order, _ = asm((0x1000, [('sub', 'x1, x29, #0xd8'), ('mov', 'w2, #0xb'),
-                                 ('bl', '#0x18dbdab88')]))
-        self.assertTrue(W._value_is_stack_scratch(order, 2))
-        order, _ = asm((0x1000, [('sub', 'x1, x21, #0xd8'), ('mov', 'w2, #0xb'),
-                                 ('bl', '#0x18dbdab88')]))
-        self.assertFalse(W._value_is_stack_scratch(order, 2))
 
 
 class TestLiveStructEnums(unittest.TestCase):

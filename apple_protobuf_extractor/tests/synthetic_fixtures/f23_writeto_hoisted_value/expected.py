@@ -19,6 +19,11 @@ False -- the ivar binding is lost even though the literal field-number
 immediate is still readable, exactly what the function exists to recover.
 Re-verified on the 2026-10-19 rebuild, which writes to the real writer
 (see fixture.m's header).
+
+Since 2026-10-19 (TODO #85) the walk is replaced by proto.writer_flow: the
+hoisted value survives the call because a call clobbers only the
+caller-saved registers.  Differential on the flow: treating v8 (d8) as
+clobbered at calls leaves `a`'s number 1 but unconfirmed.
 """
 
 EXPECTED = {

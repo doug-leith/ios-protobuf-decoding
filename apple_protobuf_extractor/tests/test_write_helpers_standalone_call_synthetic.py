@@ -1,9 +1,9 @@
 """Synthetic ground-truth test for write_helpers.py's LAZY PRE-PASS builders
-(_ensure_writeto_indegree, _ensure_string_write_helpers) — the standalone
+(_ensure_writeto_prepass, _ensure_string_write_helpers) — the standalone
 proto.extractor.extract_proto_message() call path.
 
 Both functions are no-ops (early return, guard already satisfied) whenever
-extract_all is the caller: extract_all builds the writeTo-indegree map and
+extract_all is the caller: extract_all builds the writeTo: writer flow and
 the string-write-helper set itself, up front, and either the ctx attrs are
 already set by the time a per-class extraction runs or an explicit
 (non-_AUTO) value is passed down — so their actual BUILD logic never
@@ -13,7 +13,7 @@ which fixture.
 
 extract_proto_message is also a public, documented standalone entry point
 (single-class extraction — see its own docstring and proto/write_helpers.py's
-_ensure_writeto_indegree docstring: "a standalone caller ... without
+_ensure_writeto_prepass docstring: "a standalone caller ... without
 extract_all"), used by standalone callers. Reusing an
 EXISTING fixture binary and calling extract_proto_message directly on a
 FRESH BinaryContext (built the same way _extract() does, just skipping
@@ -61,7 +61,7 @@ class TestWriteHelpersStandaloneCall(unittest.TestCase):
 
     def test_lazy_prepasses_absent_before_first_call(self):
         ctx, st, cl = self._fresh_ctx()
-        self.assertIsNone(getattr(ctx, "_writeto_indeg", None))
+        self.assertIsNone(getattr(ctx, "_writer_flow", None))
         self.assertIsNone(getattr(ctx, "_string_write_helpers", None))
 
     def test_standalone_call_builds_prepasses_and_matches_fixture_ground_truth(self):
@@ -72,7 +72,7 @@ class TestWriteHelpersStandaloneCall(unittest.TestCase):
         msg = extract_proto_message(ctx, st, cl, cls)
 
         # The lazy pre-passes must now be built (not left None/absent).
-        self.assertIsNotNone(getattr(ctx, "_writeto_indeg", None))
+        self.assertIsNotNone(getattr(ctx, "_writer_flow", None))
         self.assertIsNotNone(getattr(ctx, "_writeto_foreign_imps", None))
         got_string_helpers = getattr(ctx, "_string_write_helpers", None)
         self.assertIsNotNone(got_string_helpers)

@@ -1,6 +1,7 @@
 #import "pbshim.h"
 
-// Ground truth (see expected.py). This fixture covers proto/writeto.py's
+// Ground truth (see expected.py). Written for the writeTo: walk (deleted
+// 2026-10-19, TODO #85; expected.py says what covers it now). It covered proto/writeto.py's
 // _trace_hoisted_self_value ("S1" hoisted value-load), previously ZERO
 // synthetic coverage (confirmed by a corpus trace before writing this
 // fixture: 6 real hits across GeoServices/CoreLocationProtobuf, including

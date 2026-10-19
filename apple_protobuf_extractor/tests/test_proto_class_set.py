@@ -193,7 +193,7 @@ class TestNonStructuralDetectionFailsTheRun(unittest.TestCase):
         from unittest import mock
         from proto.protoclass_heuristic import ProtoClassDetectionError
         cl, ctx = self._cluster_only_fixture()
-        with mock.patch.object(E, "_ensure_writeto_indegree") as pre_pass:
+        with mock.patch.object(E, "_ensure_writeto_prepass") as pre_pass:
             with self.assertRaises(ProtoClassDetectionError):
                 E.extract_all(ctx, None, cl)
         pre_pass.assert_not_called()

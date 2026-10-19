@@ -30,7 +30,7 @@ Everything needed is nevertheless in the binary, and none of it is a heuristic:
   guessed.
 
 The owner-side entry point mirrors :mod:`proto.mapfields`: ``extract_proto_message`` records
-the ``writeTo:`` CFG-walk event that bound the begin-mark to the struct ivar
+the ``writeTo:`` write that binds the begin-mark to the struct ivar
 (:func:`record_struct_site`); once the whole image has been extracted,
 :func:`finalize_struct_fields` decodes each site, groups the sites by struct tag (every owner
 of one tag must agree), synthesises one :class:`ProtoMessage` per tag and retypes the owner
@@ -789,7 +789,7 @@ def decode_inline_dictrep_names(ctx, insns: Sequence, is_ivar_offset,
 
 @dataclass(frozen=True)
 class StructSite:
-    """A struct-typed field of one class and the ``writeTo:`` begin-mark the CFG walk bound
+    """A struct-typed field of one class and the ``writeTo:`` begin-mark bound
     to it: enough to analyse the write once the whole image is extracted."""
     ivar: str
     write_addr: int              # address of the begin-mark ``bl``
@@ -800,8 +800,8 @@ class StructSite:
 
 def record_struct_site(ctx, class_name: str, field_name: str, ivar_name: str,
                        ivar_offset: int, enc: Optional[str], write: Optional[dict]) -> None:
-    """Remember a struct-typed field's walk-bound begin-mark for :func:`finalize_struct_fields`.
-    A no-op unless the ivar is a flat scalar struct and the walk bound a write to it."""
+    """Remember a struct-typed field's bound begin-mark for :func:`finalize_struct_fields`.
+    A no-op unless the ivar is a flat scalar struct and a write binds it."""
     if write is None or write.get('write_addr') is None or write.get('n') is None:
         return
     if parse_struct_encoding(enc) is None:

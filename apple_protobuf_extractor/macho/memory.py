@@ -263,9 +263,8 @@ class BinaryContext:
         # the _DICTREP_MAX_INSNS budget, so dictRep enum recovery may be incomplete;
         # surfaced as ProtoMessage.enum_recovery_truncated.  None == empty.
         self._dictrep_truncated_classes: Optional[set] = None
-        # writeTo: CFG-walk pre-pass results, threaded by proto.extractor.extract_all
-        # (binary-wide branch-indegree map + the set of all method IMPs).
-        self._writeto_indeg:         Optional[dict] = None
+        # writeTo: pre-pass results, threaded by proto.extractor.extract_all (the set of
+        # all method IMPs; the image's WriterFlow is _writer_flow).
         self._writeto_foreign_imps:  Optional[set]  = None
         # Binary-wide field-typing pre-passes, lazily built + cached for standalone
         # extract_proto_message callers (extract_all builds + passes them directly).

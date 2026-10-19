@@ -24,6 +24,10 @@ to always return None changes the recovered output to
 `{itemsCount: 1 (confirmed), items: 2 (estimated)}` -- the exact
 count-vs-array mis-binding the function's own docstring (Issue B)
 describes. With it enabled, `items` binds correctly to field 1, confirmed.
+
+Since 2026-10-19 (TODO #85) the walk is replaced by proto.writer_flow: the
+begin mark binds the ivar the values written inside the marks derive from,
+and those derive from `_items` alone (the count only bounds the loop).
 """
 
 EXPECTED = {

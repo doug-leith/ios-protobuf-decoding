@@ -290,7 +290,7 @@ _PACKABLE_SCALARS = frozenset((
     "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
     "sfixed32", "sfixed64", "float", "double", "bool"))
 
-# A repeated scalar C-list whose writeTo: write the walk did not see: its wire encoding
+# A repeated scalar C-list no writeTo: write binds: its wire encoding
 # is unknown, and the file's edition default (PACKED) is only a default.
 _REPEATED_ENCODING_UNSEEN_NOTE = (
     "packed/expanded not read from writeTo: (declared PACKED by the edition default)")
