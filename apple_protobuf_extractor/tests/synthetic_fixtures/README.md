@@ -455,6 +455,15 @@ f29_writer_import_names/    int encodings from the NAMES of the
                              ivars (flagged: no wire type).  REAL COMPILED
                              CODE, plain build.  Differential-checked: without
                              the name reading the test fails.
+f30_writeto_reused_base_register/  the writeTo: walk's ivar-offset base
+                             register from its NEAREST definition: a stack
+                             block's descriptor `adrp x8 ; add x8,x8,#o`, then
+                             the ivar-offset page in the same x8 (`adrp x8 ;
+                             ldrsw x8,[x8,#k] ; add x1,self,x8`) -- the iOS 27
+                             GEOPairedDeviceSubscriptionStatesSummary shape
+                             (TODO #81).  REAL COMPILED CODE, arm64 + arm64e.
+                             Differential-checked: with the first-adrp+add
+                             resolver both numbers are estimated
 ```
 
 f1-f5 each isolate ONE recovery mechanism in a minimal toy message (1-6

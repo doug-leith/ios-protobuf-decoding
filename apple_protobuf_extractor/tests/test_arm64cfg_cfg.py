@@ -140,6 +140,31 @@ class TestResolveOffsetAddr(unittest.TestCase):
         pre = [_ins(0x0, 'ldrsw', 'x9, #0x1000b7160')]
         self.assertIsNone(_resolve_offset_addr(pre, 'x8', {}))
 
+    def test_base_is_its_nearest_definition(self):
+        # iOS 27 -[GEOPairedDeviceSubscriptionStatesSummary writeTo:] (TODO #81): x8 first
+        # holds a block descriptor (adrp+add), then the ivar-offset page.  The load reads
+        # _isUpdateAvailable's slot 0x1e4567114, not descriptor page + add + 0x114.
+        pre = [_ins(0x191a891b0, 'adrp', 'x8, #0x1e0a94000'),
+               _ins(0x191a891b4, 'add', 'x8, x8, #0xde8'),
+               _ins(0x191a891b8, 'stp', 'x16, x8, [sp, #0x18]'),
+               _ins(0x191a891bc, 'bl', '#0x198105b10'),
+               _ins(0x191a891f0, 'adrp', 'x8, #0x1e4567000'),
+               _ins(0x191a891f4, 'ldrsw', 'x8, [x8, #0x114]')]
+        self.assertEqual(_resolve_offset_addr(pre, 'x8', {}), 0x1e4567114)
+
+    def test_base_add_chain_from_the_walk_state(self):
+        # `add x21, x21, #k` on a base the prefix does not define: the walk's value + k.
+        pre = [_ins(0x0, 'add', 'x21, x21, #0x10'),
+               _ins(0x4, 'ldrsw', 'x8, [x21, #0x4]')]
+        self.assertEqual(_resolve_offset_addr(pre, 'x8', {'x21': 0x30000}), 0x30014)
+
+    def test_base_overwritten_by_a_non_constant_falls_back_to_the_walk_state(self):
+        pre = [_ins(0x0, 'adrp', 'x21, #0x1000'),
+               _ins(0x4, 'ldr', 'x21, [sp, #0x8]'),
+               _ins(0x8, 'ldrsw', 'x8, [x21, #0x4]')]
+        self.assertEqual(_resolve_offset_addr(pre, 'x8', {'x21': 0x30000}), 0x30004)
+        self.assertIsNone(_resolve_offset_addr(pre, 'x8', {}))
+
 
 if __name__ == '__main__':
     unittest.main()

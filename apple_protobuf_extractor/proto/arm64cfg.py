@@ -8,8 +8,8 @@ operand helpers.  They carry no writeTo: or readFrom: meaning and operate on dec
 import bisect
 from collections import deque
 
-from macho.disasm import find_adrp_add_target, _parse_imm, _norm_reg
-from proto.arm64_operands import split_ops, parse_mem  # noqa: F401  (re-export)
+from macho.disasm import _parse_imm, _norm_reg
+from proto.arm64_operands import split_ops, parse_mem, writes  # noqa: F401  (re-export)
 
 
 TERMINALS = {'ret', 'retaa', 'retab', 'eret'}
@@ -120,14 +120,36 @@ def _adrp_page(pre, reg):
     return None
 
 
+def _value_before(pre, reg, entry):
+    """Value of *reg* at the end of *pre*, from its NEAREST definition in *pre*: an ``adrp``
+    gives its page, ``add reg, src, #imm`` the value of *src* there plus *imm*; any other
+    definition is not a constant (None).  With no definition in *pre* the register holds its
+    value on entry to *pre*: ``entry.get(reg)``."""
+    for i in range(len(pre) - 1, -1, -1):
+        ins = pre[i]
+        if reg not in writes(ins):
+            continue
+        if ins.mnemonic == 'adrp':
+            pa = parse_adrp(ins.op_str)
+            return pa[1] if pa is not None and pa[0] == reg else None
+        ops = split_ops(ins.op_str)
+        if ins.mnemonic == 'add' and len(ops) == 3 and ops[2].startswith('#'):
+            src = _norm_reg(ops[1])
+            v = _value_before(pre[:i], src, entry) if src is not None else None
+            return None if v is None else v + _parse_imm(ops[2])
+        return None
+    return entry.get(reg)
+
+
 def _resolve_offset_addr(pre, off, base_regs):
-    """Address of the ivar-offset variable held in register *off*.  Follows the
-    defining `ld* off,[base,#k]` and resolves *base* — preferring a LOCAL `adrp+add`
-    or `adrp` in the window (so a callee-saved base reg reloaded mid-function uses
-    its CURRENT value, not the stale prologue capture), falling back to base_regs.
-    Covers direct (`adrp x8; ldrsw x8,[x8,#k]`) and indirect/base-reg forms, plus
-    the PC-relative LITERAL form (`ldrsw x8, #ADDR`) the compiler emits in
-    BINARY-MODE standalone images instead of the cache's `adrp+ldrsw[base,#k]`."""
+    """Address of the ivar-offset variable held in register *off* at the end of the block
+    prefix *pre*.  Follows the defining ``ld* off,[base,#k]`` and takes *base* from its
+    NEAREST definition before the load (:func:`_value_before`: an ``adrp`` [+ ``add``] chain),
+    so a register reused for another page later in the block resolves to its CURRENT value,
+    not an earlier one; a base not defined by such a chain is the walk's tracked value
+    (*base_regs*: a callee-saved table base set up in the prologue).  Also the PC-relative
+    LITERAL form (``ldrsw x8, #ADDR``) a standalone image uses instead of the cache's
+    ``adrp+ldrsw[base,#k]``."""
     for i in range(len(pre) - 1, -1, -1):
         ins = pre[i]
         if ins.mnemonic not in ('ldrsw', 'ldr', 'ldrsh', 'ldrh', 'ldrb', 'ldrsb'):
@@ -145,16 +167,10 @@ def _resolve_offset_addr(pre, off, base_regs):
         if _norm_reg(m[0]) != off:
             continue
         base, imm = m[1], m[3]
-        before = pre[:i]
-        add_val = find_adrp_add_target(before, base)        # local adrp+add table base
-        if add_val is not None:
-            return add_val + imm
-        page = _adrp_page(before, base)                     # local adrp scratch reg
-        if page is not None:
-            return page + imm
-        if base in base_regs:                               # prologue base (far from use)
-            return base_regs[base] + imm
-        return None
+        val = _value_before(pre[:i], base, base_regs)
+        if val is None:
+            val = base_regs.get(base)
+        return None if val is None else val + imm
     return None
 
 

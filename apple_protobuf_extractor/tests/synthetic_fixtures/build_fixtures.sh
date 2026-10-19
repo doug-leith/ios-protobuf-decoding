@@ -443,4 +443,16 @@ if want f29_writer_import_names; then
         f29_writer_import_names/fixture.m
 fi
 
+if want f30_writeto_reused_base_register; then
+    # The writeTo: walk's ivar-offset base register from its NEAREST definition: a stack
+    # block's descriptor `adrp x8 ; add x8,x8,#o` and then the ivar-offset page in the same
+    # x8 (TODO #81 (2)).  Plain compiled code, arm64 and arm64e (the iOS 27 case is arm64e).
+    build_fixture f30_writeto_reused_base_register \
+        -o f30_writeto_reused_base_register/testrb \
+        f30_writeto_reused_base_register/fixture.m
+    build_fixture_e f30_writeto_reused_base_register \
+        -o f30_writeto_reused_base_register/testrb_e \
+        f30_writeto_reused_base_register/fixture.m
+fi
+
 echo "Done."

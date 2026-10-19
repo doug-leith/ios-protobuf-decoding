@@ -71,6 +71,8 @@ _FIXTURES = [
     ("f27_compare_tree_engine_no_guard", "testgr"),
     ("f27_compare_tree_engine_no_guard", "testgr_e"),
     ("f29_writer_import_names", "testwn"),
+    ("f30_writeto_reused_base_register", "testrb"),
+    ("f30_writeto_reused_base_register", "testrb_e"),
 ]
 
 
