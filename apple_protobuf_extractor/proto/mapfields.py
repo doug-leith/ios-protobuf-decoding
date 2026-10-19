@@ -54,7 +54,7 @@ from proto.callees import real_target, stub_selector
 from proto.arm64cfg import (
     split_ops, mem_operand, _next_imp,
 )
-from proto.writeto import _writeto_field_number_before
+from proto.writeto import field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
@@ -307,7 +307,7 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
     slot = _scratch_slot_of(flow, begin_idx)       # shared by the begin and end marks
     if begin.mnemonic != 'bl' or slot is None:
         return None
-    number = _writeto_field_number_before(insns, begin_idx)
+    number = field_number_at(flow, begin_idx)
     if number is None or number < 1:
         return None
 
@@ -317,7 +317,7 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
         if ins.mnemonic != 'bl':
             continue
         target = _parse_imm(ins.op_str)
-        fn = _writeto_field_number_before(insns, j)
+        fn = field_number_at(flow, j)
         j_slot = _scratch_slot_of(flow, j)
         if j_slot is not None:
             if fn is None and j_slot == slot:                         # END mark

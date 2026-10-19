@@ -58,7 +58,7 @@ from proto.dispatch import _jump_table_arm_addrs, listing_flow
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
-from proto.writeto import _writeto_field_number_before
+from proto.writeto import field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.eval_tokens import SELF, READER, OPAQUE, opaque
 from proto.protocore import _SCALAR_ENC
@@ -219,7 +219,7 @@ def _writer_insns(ctx, entry: int) -> List:
                 if t is not None:
                     work.append(t)
             elif mn == 'b':
-                if _writeto_field_number_before(block, k) is not None:
+                if field_number_at(arm64_eval.Flow(ctx, block[:k + 1]), k) is not None:
                     break                                   # tail-called write helper
                 t = _branch_target(ins)
                 if t is not None and abs(t - entry) < _WRITER_LOCAL_SPAN:
@@ -339,7 +339,7 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     slot = _scratch_slot_of(flow, begin_idx)
     if begin.mnemonic != 'bl' or slot is None:
         return None
-    number = _writeto_field_number_before(insns, begin_idx)
+    number = field_number_at(flow, begin_idx)
     if number is None or number < 1:
         return None
     at = {ins.addr: k for k, ins in enumerate(insns)}
@@ -358,7 +358,7 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
                 return None                          # a path with no end mark
             if mn in ('bl', 'b'):
                 j_slot = _scratch_slot_of(flow, k) if mn == 'bl' else None
-                fn = _writeto_field_number_before(insns, k)
+                fn = field_number_at(flow, k)
                 target = _branch_target(ins)
                 if j_slot is not None:
                     if fn is None and j_slot == slot:

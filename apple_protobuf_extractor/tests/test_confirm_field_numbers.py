@@ -166,99 +166,80 @@ class TestConfirmFieldNumbersBoundary(unittest.TestCase):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# _writeto_field_number_before — tail-call write detection
+# field_number_at — the number a write call is handed, by reaching definitions
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestWriteToFieldNumberBefore(unittest.TestCase):
-    """The field number for a write call is the `mov w2,#N` before it — directly
-    for a `bl`, or past the hoisted epilogue (`ldp`/`stp`/`unk`) for a tail-call
-    `b`.  Regression cover for locationd ALSCellTower.psc / ALSLocation.infoMask
-    (last field, tail-call `b _PBDataWriterWrite…Field`)."""
+class TestFieldNumberAt(unittest.TestCase):
+    """The field number for a write call is the constant w2 holds there -- directly for a
+    `bl`, or past the hoisted epilogue (`ldp`/`stp`/`unk`) for a tail-call `b`.  Regression
+    cover for locationd ALSCellTower.psc / ALSLocation.infoMask (last field, tail-call
+    `b _PBDataWriterWrite…Field`)."""
 
-    def setUp(self):
-        from proto.writeto import _writeto_field_number_before
+    def fn(self, lines, idx):
+        from proto.arm64_eval import Flow
+        from proto.writeto import field_number_at
         from macho.disasm import Insn
-        self.fn = _writeto_field_number_before
-        self.Insn = Insn
-
-    def _i(self, mnem, op=''):
-        return self.Insn(addr=0, mnemonic=mnem, op_str=op, size=4, raw=b'\x00\x00\x00\x00')
+        insns = [Insn(addr=0x1000 + 4 * n, mnemonic=mn, op_str=op, size=4,
+                      raw=b'\x00\x00\x00\x00') for n, (mn, op) in enumerate(lines)]
+        return field_number_at(Flow(None, insns), idx)
 
     def test_bl_field_number_immediately_before(self):
-        insns = [self._i('mov', 'x0, x19'),
-                 self._i('movz', 'w2, #0x3'),
-                 self._i('bl', '#0x1000')]
-        self.assertEqual(self.fn(insns, 2), 3)
+        self.assertEqual(self.fn([('mov', 'x0, x19'), ('movz', 'w2, #0x3'),
+                                  ('bl', '#0x9000')], 2), 3)
 
     def test_tailcall_b_with_epilogue_between(self):
         # mov w2,#0xc ; ldp ; ldp ; <unk post-indexed ldp> ; b helper
-        insns = [self._i('movz', 'w2, #0xc'),
-                 self._i('ldp', 'x29, x30, [sp, #0x20]'),
-                 self._i('ldp', 'x20, x19, [sp, #0x10]'),
-                 self._i('unk', '#0xa8c357f6'),
-                 self._i('b', '#0x10138dacc')]
-        self.assertEqual(self.fn(insns, 4), 12)
+        self.assertEqual(self.fn([('movz', 'w2, #0xc'), ('ldp', 'x29, x30, [sp, #0x20]'),
+                                  ('ldp', 'x20, x19, [sp, #0x10]'), ('unk', '#0xa8c357f6'),
+                                  ('b', '#0x10138dacc')], 4), 12)
 
     def test_double_field_uses_w1(self):
         # A double field's number is in w1 and its VALUE in d0, so the call has an FP
-        # argument (without one `mov w1,#N` is just a constant argument — see
-        # test_newer_toolchain_ios27.TestFieldNumberInW1NeedsAnFpValue).
-        insns = [self._i('ldr', 'd0, [x8]'),
-                 self._i('movz', 'w1, #0x7'),
-                 self._i('ldp', 'x29, x30, [sp, #0x20]'),
-                 self._i('b', '#0x2000')]
-        self.assertEqual(self.fn(insns, 3), 7)
+        # argument (without one `mov w1,#N` is just a constant argument).
+        self.assertEqual(self.fn([('ldr', 'd0, [x8]'), ('movz', 'w1, #0x7'),
+                                  ('ldp', 'x29, x30, [sp, #0x20]'), ('b', '#0x9000')], 3), 7)
 
     def test_w1_constant_without_an_fp_value_is_not_a_field_number(self):
-        insns = [self._i('movz', 'w1, #0x7'),
-                 self._i('ldp', 'x29, x30, [sp, #0x20]'),
-                 self._i('b', '#0x2000')]
-        self.assertIsNone(self.fn(insns, 2))
+        self.assertIsNone(self.fn([('movz', 'w1, #0x7'), ('ldp', 'x29, x30, [sp, #0x20]'),
+                                   ('b', '#0x9000')], 2))
+
+    def test_fp_value_of_an_earlier_call_does_not_count(self):
+        # d0 was set for the PREVIOUS call, which clobbers it
+        self.assertIsNone(self.fn([('ldr', 'd0, [x8]'), ('movz', 'w1, #0x7'), ('bl', '#0x9000'),
+                                   ('movz', 'w1, #0x10000'), ('bl', '#0x9100')], 4))
 
     def test_control_flow_branch_returns_none(self):
-        # A `b` with no field-number setup before it (after skipping non-epilogue
-        # instructions) must yield None — not a spurious field write.
-        insns = [self._i('ldr', 'w1, [x20, x8]'),
-                 self._i('b', '#0x3000')]
-        self.assertIsNone(self.fn(insns, 1))
+        self.assertIsNone(self.fn([('ldr', 'w1, [x20, x8]'), ('b', '#0x9000')], 1))
 
     def test_any_number_of_restores_between_number_and_tail_call(self):
-        # The number is the definition reaching the call, however many epilogue restores
-        # (here also an arm64e `autibsp`) sit between: no skip bound.
-        insns = [self._i('movz', 'w2, #0x5')] + \
-                [self._i('ldp', f'x{n}, x{n+1}, [sp]') for n in range(19, 29, 2)] + \
-                [self._i('autibsp'), self._i('b', '#0x4000')]
-        self.assertEqual(self.fn(insns, len(insns) - 1), 5)
-
-    def test_number_set_up_further_back_than_three_instructions(self):
-        insns = [self._i('movz', 'w2, #0x9'), self._i('mov', 'x0, x19'),
-                 self._i('mov', 'x1, x20'), self._i('mov', 'x3, #0'), self._i('mov', 'x4, #0'),
-                 self._i('bl', '#0x1000')]
-        self.assertEqual(self.fn(insns, 5), 9)
+        # no skip bound: however many restores (and an arm64e `autibsp`) sit between
+        lines = [('movz', 'w2, #0x5')] + [('ldp', f'x{n}, x{n+1}, [sp]') for n in range(19, 29, 2)] \
+            + [('autibsp', ''), ('b', '#0x9000')]
+        self.assertEqual(self.fn(lines, len(lines) - 1), 5)
 
     def test_a_restore_of_x2_is_its_definition(self):
-        insns = [self._i('movz', 'w2, #0x5'), self._i('ldp', 'x1, x2, [sp]'),
-                 self._i('b', '#0x4000')]
-        self.assertIsNone(self.fn(insns, 2))
+        self.assertIsNone(self.fn([('movz', 'w2, #0x5'), ('ldp', 'x1, x2, [sp]'),
+                                   ('b', '#0x9000')], 2))
 
-    def test_the_run_starts_after_a_branch_that_does_not_fall_through(self):
+    def test_code_after_a_branch_that_does_not_fall_through_is_not_reached(self):
         # `mov w2,#3; b elsewhere` -- the call after the `b` is reached from somewhere else
-        insns = [self._i('movz', 'w2, #0x3'), self._i('b', '#0x5000'),
-                 self._i('mov', 'x0, x19'), self._i('bl', '#0x1000')]
-        self.assertIsNone(self.fn(insns, 3))
+        self.assertIsNone(self.fn([('movz', 'w2, #0x3'), ('b', '#0x5000'),
+                                   ('mov', 'x0, x19'), ('bl', '#0x9000')], 3))
 
-    def test_the_run_starts_after_the_previous_call(self):
-        insns = [self._i('movz', 'w2, #0x3'), self._i('bl', '#0x1000'),
-                 self._i('mov', 'x0, x19'), self._i('bl', '#0x1000')]
-        self.assertEqual(self.fn(insns, 1), 3)
-        self.assertIsNone(self.fn(insns, 3))
+    def test_a_call_clobbers_the_number(self):
+        lines = [('movz', 'w2, #0x3'), ('bl', '#0x9000'), ('mov', 'x0, x19'), ('bl', '#0x9000')]
+        self.assertEqual(self.fn(lines, 1), 3)
+        self.assertIsNone(self.fn(lines, 3))
 
-    def test_a_register_copy_is_not_a_field_number(self):
-        # `mov x2, x21` with x21 a loop counter set to 0 before the loop: along this run it
-        # looks constant, but the back edge redefines it.
-        insns = [self._i('mov', 'x21, #0'), self._i('mov', 'x0, x19'),
-                 self._i('mov', 'x2, x21'), self._i('bl', '#0x1000')]
-        self.assertIsNone(self.fn(insns, 3))
+    def test_a_loop_counter_is_not_a_field_number(self):
+        # `mov x2, x21` with x21 a loop counter: 0 on entry, x21+1 on the back edge
+        lines = [('mov', 'x21, #0'), ('mov', 'x0, x19'), ('mov', 'x2, x21'), ('bl', '#0x9000'),
+                 ('add', 'x21, x21, #1'), ('cmp', 'x21, #4'), ('b.lo', '#0x1004'), ('ret', '')]
+        self.assertIsNone(self.fn(lines, 3))
+
+    def test_a_copy_of_a_constant_is_that_constant(self):
+        self.assertEqual(self.fn([('mov', 'x21, #0x6'), ('mov', 'x2, x21'),
+                                  ('bl', '#0x9000')], 2), 6)
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────

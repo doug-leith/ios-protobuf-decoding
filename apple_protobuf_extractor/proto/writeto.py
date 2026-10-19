@@ -25,60 +25,29 @@ from typing import Dict, List, Optional, Set
 
 from macho.memory import BinaryContext
 from macho.classlist import ObjcClass, ObjcIvar
-from macho.disasm import _parse_imm
-from proto.arm64cfg import split_ops
-from proto.arm64_operands import writes
 from proto.models import record_analysis_failure
 
 
-# Instructions execution does not fall through: the straight-line run that ends at a call
-# starts after the last of them (or after the previous call).
-_NO_FALL_THROUGH = frozenset(('b', 'br', 'braa', 'brab', 'ret', 'retaa', 'retab', 'eret',
-                              'brk', 'udf'))
+_CALLS = ('bl', 'blr')
 
 
-def _run_definition(insns: List, idx: int, reg: str) -> Optional[int]:
-    """Index of the instruction that defines *reg* (``xN`` / ``vN`` form) for ``insns[idx]``
-    along the straight-line run ending there -- conditional branches fall through, a call
-    (which clobbers the caller-saved registers) or an instruction that does not fall through
-    ends the run -- or None when nothing in the run defines it."""
-    for j in range(idx - 1, -1, -1):
-        ins = insns[j]
-        if ins.mnemonic in _NO_FALL_THROUGH:
-            return None
-        if reg in writes(ins):
-            return j
-    return None
-
-
-def _immediate_in(insns: List, idx: int, reg: str) -> Optional[int]:
-    """The immediate *reg* holds at ``insns[idx]`` when its definition in the run
-    (:func:`_run_definition`) is a ``mov`` / ``movz`` of one into it; else None.  Only the
-    move itself counts: a copy from another register (``mov x2, x21``) may carry a loop
-    counter whose other definitions sit on a back edge this run does not see."""
-    d = _run_definition(insns, idx, reg)
-    if d is None or insns[d].mnemonic not in ('mov', 'movz'):
-        return None
-    ops = split_ops(insns[d].op_str)
-    return _parse_imm(ops[1]) if len(ops) == 2 and ops[1].startswith('#') else None
-
-
-def _writeto_field_number_before(insns: List, idx: int) -> Optional[int]:
-    """The proto field number of the field-write call (``bl``, or tail-call ``b``) at
-    ``insns[idx]``: the immediate w2 holds there -- or, for a float/double writer, whose
-    value travels in v0 and number in w1, the immediate w1 holds when the run sets v0 -- by
-    the definition reaching the call along its straight-line run (:func:`_immediate_in`).
-    So epilogue restores hoisted between the number and a tail call, or argument set-up in
-    any order, read the same.  A float/double writer takes no third argument, so an
-    immediate in w2 means an integer writer.  Without an FP value a constant w1 is just an
-    argument (``os_unfair_lock_lock_with_options(lock, 0x10000)``), not a field number; nor
-    does a call ending the run count as setting v0 (it only clobbers it).  None when no
-    such immediate reaches the call."""
-    n = _immediate_in(insns, idx, 'x2')
+def field_number_at(flow, k: int) -> Optional[int]:
+    """The proto field number the field-write call (``bl``, or tail-call ``b``) at
+    ``flow.insns[k]`` is handed: the constant w2 holds there (:meth:`Flow.const_before`:
+    exactly one constant definition reaches it over the listing's CFG) -- or, for a
+    float/double writer, whose value travels in v0 and number in w1, the constant w1 holds
+    when the one definition of v0 reaching the call is not a call (an FP argument set up for
+    it; a call only clobbers v0).  A float/double writer takes no third argument, so a
+    constant in w2 means an integer writer; without an FP value a constant w1 is just an
+    argument (``os_unfair_lock_lock_with_options(lock, 0x10000)``).  None when no such
+    constant reaches the call."""
+    n = flow.const_before(k, 'x2')
     if n is None:
-        v0 = _run_definition(insns, idx, 'v0')
-        if v0 is not None and insns[v0].mnemonic not in ('bl', 'blr'):
-            n = _immediate_in(insns, idx, 'x1')
+        defs = flow.defs_before(k, 'v0')
+        if len(defs) == 1:
+            (d,) = defs
+            if d >= 0 and flow.insns[d].mnemonic not in _CALLS:
+                n = flow.const_before(k, 'x1')
     return n
 
 
