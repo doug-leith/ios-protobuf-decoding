@@ -46,10 +46,11 @@ from proto.arm64cfg import split_ops
 from proto.arm64_eval import Objects, _STACK_TOP, _is_stack
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, decoded_flow
 from proto.dispatch_eval import _function_insns
-from proto.callees import (callee_name, stub_selector, call_reads, RUNTIME_CONTRACTS as _ARC,
-                           NORETURN as _NORETURN)
+from proto.callees import (callee_name, stub_selector, call_reads, call_clobbers,
+                           RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
 from proto.arm64_operands import (writes, reg_name, operand_regs, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
-                                  PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED)
+                                  PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
+                                  CALLS, INDIRECT_BRANCHES)
 
 log = logging.getLogger(__name__)
 
@@ -400,14 +401,22 @@ class WriterFlow:
                 res.ret |= st.p('x0') | st.p('v0')
                 return True
             tgt = _parse_imm(ops[0]) if (mn in ('b', 'bl') and ops) else None
+            if mn in CALLS:
+                callee = (tgt if mn == 'bl'
+                          else self._const(ins.addr, _norm_reg(ops[0]) if ops else None))
+                clobbers = call_clobbers(self.ctx, callee)
+                if clobbers is not None:             # changes only these (the stack probe)
+                    for r in clobbers:
+                        st.r.pop(r, None)
+                    continue
             out_of_window = mn == 'b' and tgt is not None and not (lo <= tgt < hi)
-            if mn in ('bl', 'blr') or out_of_window:
+            if mn in CALLS or out_of_window or (mn in INDIRECT_BRANCHES and mn != 'br'):
                 if out_of_window and not self._is_function(tgt):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
                     return True
                 if self._call(st, tgt, res, depth, top, ins.addr):
                     return True                      # no-return callee
-                if mn == 'b':
+                if mn not in CALLS:                  # a tail call
                     res.ret |= st.p('x0') | st.p('v0')
                     return True
                 continue

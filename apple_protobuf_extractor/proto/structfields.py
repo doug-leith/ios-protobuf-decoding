@@ -49,7 +49,7 @@ from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
-from proto.arm64_operands import (CALLER_SAVED_GPRS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
+from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
                                   reg_name)
 from proto import arm64_eval, dictrep_flow
 from proto.callees import callee_name, stub_selector
@@ -402,13 +402,13 @@ def _load_width(ins, mem) -> int:
     return 4 if mem[0][0] in 'wsf' else 8
 
 
-def _struct_load_step(ins, k: int, state: Dict[str, tuple], pages: Dict[str, int],
+def _struct_load_step(flow, ins, k: int, state: Dict[str, tuple], pages: Dict[str, int],
                       is_ivar_offset, is_array: bool) -> Optional[Tuple[int, int]]:
-    """One instruction's effect on the struct-addressing state (see
+    """One instruction (``flow.insns[k]``) of the struct-addressing state (see
     :func:`track_struct_loads`); returns ``(member offset, width)`` when *ins* loads a member."""
     mn, ops = ins.mnemonic, split_ops(ins.op_str)
-    if mn in ('bl', 'blr'):
-        for r in CALLER_SAVED_GPRS:
+    if mn in CALLS:
+        for r in flow.call_clobbers(k) or CALLER_SAVED_GPRS:
             state.pop(r, None)
             pages.pop(r, None)
         return None
@@ -497,7 +497,7 @@ def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array
         b = work.pop()
         state, pages = dict(states[b][0]), dict(states[b][1])
         for ins in cfg.blocks[b]:
-            _struct_load_step(ins, at[ins.addr], state, pages, is_ivar_offset, is_array)
+            _struct_load_step(flow, ins, at[ins.addr], state, pages, is_ivar_offset, is_array)
         for s in cfg.succ.get(b, []):
             cur = states.get(s)
             nxt = (dict(state), dict(pages)) if cur is None else \
@@ -510,7 +510,7 @@ def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array
         state, pages = dict(st0), dict(pg0)
         for ins in cfg.blocks[b]:
             k = at[ins.addr]
-            member = _struct_load_step(ins, k, state, pages, is_ivar_offset, is_array)
+            member = _struct_load_step(flow, ins, k, state, pages, is_ivar_offset, is_array)
             if member is not None and k <= last and (window is None or k in window):
                 out[k] = member
     return out

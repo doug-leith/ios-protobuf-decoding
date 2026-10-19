@@ -108,9 +108,16 @@ RETURNS = frozenset(('ret', 'retaa', 'retab'))
 COMPARE_BRANCHES = frozenset(('cbz', 'cbnz', 'tbz', 'tbnz'))
 
 
+# Calls: ``bl``, and through a register (arm64e: authenticating it first).
+CALLS = frozenset(('bl', 'blr', 'blraa', 'blrab', 'blraaz', 'blrabz'))
+
+
+# Branches through a register (arm64e: authenticating it first).  A jump table's is a plain ``br``.
+INDIRECT_BRANCHES = frozenset(('br', 'braa', 'brab', 'braaz', 'brabz'))
+
+
 # Every branch but ``b.cond`` (:func:`is_cond_branch`): what ends a straight-line run.
-BLOCK_ENDS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab')) \
-    | RETURNS | COMPARE_BRANCHES
+BLOCK_ENDS = frozenset(('b',)) | CALLS | INDIRECT_BRANCHES | RETURNS | COMPARE_BRANCHES
 
 
 def is_cond_branch(mn: str) -> bool:
@@ -179,7 +186,7 @@ def writeback_base(ops: List[str]) -> Optional[str]:
 def writes(ins: Insn) -> List[str]:
     """Registers (xN / vN form) *ins* overwrites."""
     mn = ins.mnemonic
-    if mn in ('bl', 'blr'):
+    if mn in CALLS:
         return list(CALLER_SAVED)
     if is_cond_branch(mn):
         return []

@@ -26,9 +26,9 @@ from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder, split_ops)
 from macho.strings import read_cfstring_text
-from proto.callees import call_reads
+from proto.callees import call_reads, call_clobbers as callee_clobbers
 from proto.arm64_operands import (
-    CALLER_SAVED_GPRS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
+    CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
     parse_mem, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
     operand2,
@@ -258,10 +258,19 @@ class _Machine:
             self.escaped = True
             self.escape_lo = v if self.escape_lo is None else min(self.escape_lo, v)
 
-    def call(self, args: Tuple[str, ...] = None) -> None:
+    def call(self, args: Tuple[str, ...] = None, clobbers: Optional[Tuple[str, ...]] = None
+             ) -> None:
         """A call: the caller-saved registers and the flags are the callee's, and the frame
         slots too once a callee can reach them (*handed*: a stack address in a register it
-        reads -- *args*, default x0-x8 -- now, or handed out before)."""
+        reads -- *args*, default x0-x8 -- now, or handed out before).  A callee that changes
+        fewer (*clobbers*: :data:`proto.callees.CALL_CLOBBERS`) changes only those and the
+        flags."""
+        if clobbers is not None:
+            for r in clobbers:
+                self.regs.pop(r, None)
+            self.top.update(clobbers)
+            self.flags = None
+            return
         for r in (_CALL_ARGS if args is None else args):
             v = self.regs.get(r)
             if v is None and r not in self.top and self.fallback is not None:
@@ -410,6 +419,7 @@ class Flow:
         self._in: Optional[Dict[int, Dict[str, FrozenSet[int]]]] = None
         self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
         self._ivar_memo: Dict[int, Optional[int]] = {}
+        self._reg_targets: Optional[Dict[int, int]] = None   # :meth:`_register_call_targets`
 
     # ── reaching definitions ────────────────────────────────────────────────
 
@@ -418,6 +428,11 @@ class Flow:
         the predecessors' OUT sets, until nothing changes (a few sweeps for a reducible CFG)."""
         cfg = self.cfg
         self._wr = [writes(i) for i in self.insns]
+        for k, ins in enumerate(self.insns):
+            if ins.mnemonic in CALLS:
+                clobbers = self.call_clobbers(k)
+                if clobbers is not None:
+                    self._wr[k] = list(clobbers)
         self._in = {}
         if cfg.entry is None:
             return
@@ -633,8 +648,13 @@ class Flow:
         def run(blk: int, st: Dict[str, int], lo: int) -> bool:
             hi = self._first_in_block[blk] + len(self.cfg.blocks[blk])
             for k in range(lo, hi):
-                if self.insns[k].mnemonic in ('bl', 'blr'):
-                    return False
+                if self.insns[k].mnemonic in CALLS:
+                    clobbers = self.call_clobbers(k)
+                    if clobbers is None:
+                        return False
+                    for r in clobbers:
+                        st.pop(r, None)
+                    continue
                 self._candidate_step(scan, st, k)
             for succ in self.cfg.succ.get(blk, []):
                 push(succ, st)
@@ -762,7 +782,11 @@ class Flow:
             ins = self.insns[k]
             mn, ops = ins.mnemonic, split_ops(ins.op_str)
             nxt = k + 1
-            if mn in ('bl', 'blr', 'ret', 'retaa', 'retab'):
+            clobbers = (self.call_clobbers(k, self._call_target(m, ins), evaluated=True)
+                        if mn in CALLS else None)
+            if clobbers is not None:
+                m.call((), clobbers)
+            elif mn in CALLS or mn in RETURNS:
                 if where is not None:
                     where.append(k)
                 return self._string_args(m.get, direct)
@@ -822,8 +846,10 @@ class Flow:
                     nxt = self.addr_idx.get(target)
                     if nxt is None:
                         return None
-            elif mn in ('bl', 'blr', 'br', 'braa', 'brab', 'blraa', 'blrab',
-                        'ret', 'retaa', 'retab'):
+            elif mn in CALLS and (clobbers := self.call_clobbers(
+                    k, self._call_target(m, ins), evaluated=True)) is not None:
+                m.call((), clobbers)
+            elif mn in CALLS or mn in INDIRECT_BRANCHES or mn in RETURNS:
                 return None
             else:
                 self._exec(m, ins)
@@ -1070,6 +1096,43 @@ class Flow:
                 self._propagate_step(st, k, objects.call_result)
         return out
 
+    @staticmethod
+    def _call_target(m: "_Machine", ins: Insn) -> Optional[int]:
+        """The address the call ``ins`` reaches under *m*: a ``bl`` immediate, or its register."""
+        if ins.mnemonic == 'bl':
+            return _parse_imm(ins.op_str)
+        ops = split_ops(ins.op_str)
+        return m.get(ops[0]) if ops else None
+
+    def call_clobbers(self, k: int, target: Optional[int] = None, evaluated: bool = False
+                      ) -> Optional[Tuple[str, ...]]:
+        """The registers the call ``insns[k]`` changes when its callee changes fewer than a call
+        may (:func:`proto.callees.call_clobbers`: the stack probe), else None.  A call through a
+        register reaches *target* when *evaluated* (an evaluator's value there), else the value
+        :meth:`propagate` gives that register (a pointer loaded from a GOT slot)."""
+        if self.ctx is None:
+            return None
+        ins = self.insns[k]
+        if ins.mnemonic == 'bl':
+            target = _parse_imm(ins.op_str)
+        elif not evaluated:
+            target = self._register_call_targets().get(k)
+        return callee_clobbers(self.ctx, target)
+
+    def _register_call_targets(self) -> Dict[int, int]:
+        """``{index: target}`` of the calls through a register whose register :meth:`propagate`
+        evaluates, solved once (propagation reads no reaching definitions)."""
+        if self._reg_targets is None:
+            ks = [k for k, i in enumerate(self.insns) if i.mnemonic in CALLS and i.mnemonic != 'bl']
+            values = self.propagate({}, ks) if ks else {}
+            self._reg_targets = {}
+            for k in ks:
+                ops = split_ops(self.insns[k].op_str)
+                v = values.get(k, {}).get(_norm_reg(ops[0])) if ops else None
+                if v is not None and not _is_stack(v):
+                    self._reg_targets[k] = v
+        return self._reg_targets
+
     def _call_reads(self, target: Optional[int]) -> Optional[Tuple[str, ...]]:
         """The registers a call to *target* reads (:func:`proto.callees.call_reads`: e.g.
         ``objc_retain_x19`` reads x19 only); None (x0-x8) without an image to name it by."""
@@ -1080,19 +1143,22 @@ class Flow:
     def _propagate_step(self, m: "_Machine", k: int, call_result=None) -> None:
         ins = self.insns[k]
         mn = ins.mnemonic
-        if mn in ('bl', 'blr'):
+        if mn in CALLS:
+            target = self._call_target(m, ins)
+            clobbers = self.call_clobbers(k, target, evaluated=True)
+            if clobbers is not None:
+                m.call((), clobbers)
+                return
             if call_result is None:
-                m.call(self._call_reads(_parse_imm(ins.op_str) if mn == 'bl' else None))
+                m.call(self._call_reads(target if mn == 'bl' else None))
                 return
             x0 = m.copy_of('x0')
-            ops = split_ops(ins.op_str)
-            target = _parse_imm(ins.op_str) if mn == 'bl' else (m.get(ops[0]) if ops else None)
             m.call(self._call_reads(target))
             v = call_result(k, target, x0)
             if v is not None:
                 m.put('x0', v)
-        elif mn in ('b', 'br', 'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz') \
-                or is_cond_branch(mn):
+        elif (mn == 'b' or mn in INDIRECT_BRANCHES or mn in RETURNS
+              or mn in ('cbz', 'cbnz', 'tbz', 'tbnz') or is_cond_branch(mn)):
             return
         else:
             self._exec(m, ins)
@@ -1153,14 +1219,18 @@ class Flow:
             mn = ins.mnemonic
             tgt = _parse_imm(ins.op_str) if mn == 'b' else None
             tail = tgt is not None and (tgt not in self.addr_idx or tgt in tail_targets)
-            if mn in ('bl', 'blr') or tail:
+            if mn in CALLS and (clobbers := self.call_clobbers(
+                    k, self._call_target(st, ins), evaluated=True)) is not None:
+                st.call((), clobbers)
+            elif mn in CALLS or tail:
                 if record:
-                    target = (m_get_target(st, ins) if mn == 'blr' else _parse_imm(ins.op_str))
+                    target = (_parse_imm(ins.op_str) if mn in ('bl', 'b')
+                              else m_get_target(st, ins))
                     args = {f"x{n}": v for n in range(8) if (v := st.copy_of(f"x{n}")) is not None}
                     region.calls.append(CallSite(k, ins.addr, target, args, tail))
                 if mn != 'b':
                     x0 = st.copy_of('x0')
-                    target = (m_get_target(st, ins) if mn == 'blr' else _parse_imm(ins.op_str))
+                    target = (m_get_target(st, ins) if mn != 'bl' else _parse_imm(ins.op_str))
                     st.call(self._call_reads(target))
                     cr = objects.call_result
                     v = cr(k, target, x0) if cr is not None else None

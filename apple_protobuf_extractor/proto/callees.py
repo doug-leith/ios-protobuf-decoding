@@ -28,7 +28,7 @@ from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import BinaryContext, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, writes, operand_regs, STORE_BYTES,
                                   PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
-                                  is_cond_branch)
+                                  INDIRECT_BRANCHES, is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
 
@@ -68,10 +68,6 @@ class Stub(NamedTuple):
     the GOT slot it loads the address from (*slot*).  Exactly one is set."""
     target: Optional[int] = None
     slot: Optional[int] = None
-
-
-#: Register-indirect branches a stub ends in (``br``, and the arm64e authenticated forms).
-_STUB_BRANCHES = frozenset(('br', 'braa', 'brab', 'braaz', 'brabz'))
 
 
 def stub_target(ctx, va: Optional[int]) -> Optional[Stub]:
@@ -117,7 +113,7 @@ def stub_target(ctx, va: Optional[int]) -> Optional[Stub]:
             if not ins:
                 break
             mn, ops = ins[0].mnemonic, split_ops(ins[0].op_str)
-            if mn in _STUB_BRANCHES:
+            if mn in INDIRECT_BRANCHES:
                 res = regs.get(_norm_reg(ops[0])) if ops else None
                 break
             dst = _norm_reg(ops[0]) if ops and ops[0].startswith('x') else None
@@ -227,7 +223,7 @@ def stub_selector(ctx, va: Optional[int]) -> Optional[str]:
                     and callee_name(ctx, _parse_imm(ins[2].op_str)) == '_objc_msgSend'):
                 sel = ctx.read_cstring(pa[1] + _parse_imm(ops[2]))
         elif pa is not None and pa[0] == 'x1' and len(ins) >= 2 and ins[1].mnemonic == 'ldr' \
-                and any(i.mnemonic in _STUB_BRANCHES for i in ins[2:]):
+                and any(i.mnemonic in INDIRECT_BRANCHES for i in ins[2:]):
             ops = split_ops(ins[1].op_str)
             pm = parse_mem(ops[1]) if len(ops) == 2 else None
             if (pm is not None and _norm_reg(ops[0]) == 'x1' and pm.base == 'x1'
@@ -261,8 +257,24 @@ for _name in ("_objc_release", "_objc_sync_enter", "_objc_sync_exit",
               "_os_unfair_lock_assert_owner", "_os_unfair_lock_assert_not_owner"):
     RUNTIME_CONTRACTS[_name] = (("x0",), None)
 RUNTIME_CONTRACTS["_os_unfair_lock_lock_with_options"] = (("x0", "x1"), None)
+RUNTIME_CONTRACTS["____chkstk_darwin"] = (("x9",), None)
+
+#: Callees that change fewer registers than AAPCS64 lets a call change (every caller-saved one,
+#: and the frame slots it can reach): the registers each changes; none writes memory its caller
+#: owns.  The stack probe a frame over a page calls first (``mov w9, #size ; adrp x17 ;
+#: add x17 ; ldr x16, [x17] ; blraa x16, x17``) saves and restores its scratch registers below
+#: sp, so the caller's x0 (self) survives it.
+CALL_CLOBBERS: Dict[str, Tuple[str, ...]] = {"____chkstk_darwin": ("x16", "x17", "x30")}
 for _name in ("_objc_opt_class", "_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
     RUNTIME_CONTRACTS[_name] = (("x0", "x1"), None)
+
+
+def call_clobbers(ctx, target: Optional[int]) -> Optional[Tuple[str, ...]]:
+    """The registers a call to *target* changes when its callee changes fewer than a call may
+    (:data:`CALL_CLOBBERS`); None for any other callee, or an unknown target (every
+    caller-saved register, and the frame slots handed to it)."""
+    name = callee_name(ctx, target) if target is not None else None
+    return CALL_CLOBBERS.get(name) if name else None
 
 #: AAPCS64 argument registers (x8: an indirect result's address): what a function with a
 #: calling convention reads.

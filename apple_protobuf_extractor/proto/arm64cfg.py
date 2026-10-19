@@ -10,7 +10,7 @@ from collections import deque
 
 from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS as TERMINALS
 from proto.arm64_operands import split_ops, parse_mem, writes  # noqa: F401  (re-export)
-from proto.arm64_operands import COMPARE_BRANCHES
+from proto.arm64_operands import CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES
 
 
 # [cap:INPUT-SANITY] 0x4000 — only used when an imp is the LAST method in the
@@ -80,17 +80,17 @@ def _next_imp(imps_sorted, imp):
 
 def _succ_addrs(ins, fallthrough, lo, hi):
     """Successor instruction-addresses of a block ending at *ins*. Out-of-[lo,hi)
-    `b` targets (tail calls) are dropped; `bl`/`blr` are calls (fall through); `br`
-    is indirect (arms injected separately)."""
+    `b` targets (tail calls) are dropped; calls fall through; an indirect branch has none
+    (a jump table's `br` arms are injected separately)."""
     mn = ins.mnemonic
     if mn in TERMINALS:
         return []
-    if mn in ('bl', 'blr'):
+    if mn in CALLS:
         return [fallthrough] if fallthrough is not None else []
     if mn == 'b':
         t = _parse_imm(ins.op_str)
         return [t] if (t is not None and lo <= t < hi) else []
-    if mn == 'br':
+    if mn in INDIRECT_BRANCHES:
         return []
     if _is_cond(mn):
         out = []
@@ -104,7 +104,8 @@ def _succ_addrs(ins, fallthrough, lo, hi):
 
 
 def _is_block_end(ins):
-    return ins.mnemonic in TERMINALS or ins.mnemonic in ('b', 'br') or _is_cond(ins.mnemonic)
+    return (ins.mnemonic in TERMINALS or ins.mnemonic == 'b' or ins.mnemonic in INDIRECT_BRANCHES
+            or _is_cond(ins.mnemonic))
 
 
 class CFG:

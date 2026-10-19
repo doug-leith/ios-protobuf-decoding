@@ -31,6 +31,7 @@ from proto.dictrep_flow import Flow
 from proto.dispatch_eval import _in_image_text
 from proto.eval_tokens import SELF, OPAQUE, opaque
 from proto.arm64cfg   import _next_imp
+from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, RETURNS
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
 
@@ -264,8 +265,8 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     except Exception:
         return None
     end = next((k for k, i in enumerate(insns)
-                if i.mnemonic in ('b', 'br', 'braa', 'brab', 'ret', 'retaa', 'retab', 'udf',
-                                  'bl', 'blr', 'blraa', 'blrab')), None)
+                if i.mnemonic in ('b', 'udf') or i.mnemonic in CALLS
+                or i.mnemonic in INDIRECT_BRANCHES or i.mnemonic in RETURNS), None)
     if end is None:
         return None
     try:

@@ -70,6 +70,8 @@ _SOURCE_FIRST_MNEMONICS = frozenset({
     'cbz',  'cbnz',
     'tbz',  'tbnz',
     'blr',  'br',
+    'blraa', 'blrab', 'blraaz', 'blrabz',     # arm64e: through a pointer-authenticated
+    'braa',  'brab',  'braaz',  'brabz',      # register (the second operand: its modifier)
     'ret',  'retaa', 'retab',
 })
 

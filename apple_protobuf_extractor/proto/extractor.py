@@ -87,7 +87,7 @@ from proto.config    import _class_to_proto_name
 from proto.defaults  import DEFAULT_PREFIXES
 from proto.arm64_eval import Flow
 from proto.arm64cfg  import _is_block_end
-from proto.arm64_operands import parse_mem, split_ops
+from proto.arm64_operands import CALLS, parse_mem, split_ops
 from macho.disasm    import _norm_reg, _parse_imm
 
 log = logging.getLogger(__name__)
@@ -532,7 +532,7 @@ def _straight_line(ctx: BinaryContext, va: int) -> List:
         if not ins:
             raise ValueError(f"no instruction at 0x{va + 4 * len(out):x}")
         out.append(ins[0])
-        if _is_block_end(ins[0]) or ins[0].mnemonic in ('bl', 'blr'):
+        if _is_block_end(ins[0]) or ins[0].mnemonic in CALLS:
             return out
 
 

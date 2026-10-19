@@ -26,9 +26,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from macho.memory import BinaryContext
 from macho.classlist import ObjcClass, ObjcIvar
 from proto.models import record_analysis_failure
-
-
-_CALLS = ('bl', 'blr')
+from proto.arm64_operands import CALLS
 
 
 def field_number_at(flow, k: int) -> Optional[int]:
@@ -46,7 +44,7 @@ def field_number_at(flow, k: int) -> Optional[int]:
         defs = flow.defs_before(k, 'v0')
         if len(defs) == 1:
             (d,) = defs
-            if d >= 0 and flow.insns[d].mnemonic not in _CALLS:
+            if d >= 0 and flow.insns[d].mnemonic not in CALLS:
                 n = flow.const_before(k, 'x1')
     return n
 

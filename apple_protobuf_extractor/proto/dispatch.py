@@ -21,7 +21,8 @@ from macho.classlist import ObjcClass
 from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.arm64_operands import NO_DEST, PAIR_LOADS, imm_operand, is_cond_branch, split_ops
+from proto.arm64_operands import (NO_DEST, PAIR_LOADS, INDIRECT_BRANCHES, RETURNS, imm_operand,
+                                  is_cond_branch, split_ops)
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -61,7 +62,8 @@ def _find_readfrom_c_func(
     except Exception:
         return None
     end = next((k for k, i in enumerate(insns)
-                if i.mnemonic in ('b', 'br', 'ret', 'retaa', 'retab', 'udf')), None)
+                if i.mnemonic in ('b', 'udf') or i.mnemonic in INDIRECT_BRANCHES
+                or i.mnemonic in RETURNS), None)
     insns = insns[:end + 1] if end is not None else insns
     if not insns:
         return None
