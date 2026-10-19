@@ -17,6 +17,8 @@ test: monkeypatching _trace_hoisted_self_value to always return None
 leaves field `a`'s NUMBER unchanged (1) but flips number_confirmed to
 False -- the ivar binding is lost even though the literal field-number
 immediate is still readable, exactly what the function exists to recover.
+Re-verified on the 2026-10-19 rebuild, which writes to the real writer
+(see fixture.m's header).
 """
 
 EXPECTED = {

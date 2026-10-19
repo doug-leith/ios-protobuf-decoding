@@ -6,8 +6,10 @@ into "no name", which in turn relaxed the objc_msgSend check of the shared selec
 still gets None; a broken reader raises.
 """
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-from proto.callees import callee_name
+from proto.callees import callee_name, stub_selector
 
 
 class _NoNamesCtx:
@@ -54,6 +56,38 @@ class TestCalleeName(unittest.TestCase):
             pass
         with self.assertRaises(AttributeError):
             callee_name(_CacheCtx(Broken()), 0x1000)
+
+
+class _SelrefCtx:
+    """__objc_selrefs slot 0x2008 -> selector string at 0x3000."""
+    def read_ptr(self, va):
+        return {0x2008: 0x3000}.get(va)
+
+    def read_cstring(self, va):
+        return {0x3000: "count"}.get(va)
+
+
+def _ins(mnemonic, op_str):
+    return SimpleNamespace(mnemonic=mnemonic, op_str=op_str)
+
+
+class TestStubSelector(unittest.TestCase):
+    def _sel(self, tail):
+        stub = [_ins('adrp', 'x1, #0x2000'), _ins('ldr', 'x1, [x1, #8]')] + tail
+        with mock.patch('proto.callees.disasm', return_value=stub):
+            return stub_selector(_SelrefCtx(), 0x1000)
+
+    def test_selref_stub(self):
+        self.assertEqual(self._sel([_ins('adrp', 'x16, #0x4000'), _ins('ldr', 'x16, [x16]'),
+                                    _ins('br', 'x16')]), "count")
+
+    def test_arm64e_selref_stub_branches_authenticated(self):
+        self.assertEqual(self._sel([_ins('adrp', 'x17, #0x4000'), _ins('add', 'x17, x17, #0'),
+                                    _ins('ldr', 'x16, [x17]'), _ins('braa', 'x16, x17')]),
+                         "count")
+
+    def test_no_indirect_branch_is_not_a_stub(self):
+        self.assertIsNone(self._sel([_ins('ret', '')]))
 
 
 if __name__ == "__main__":

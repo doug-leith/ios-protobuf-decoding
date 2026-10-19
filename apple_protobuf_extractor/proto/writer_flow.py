@@ -36,6 +36,7 @@ not settle.  Undecided never drops anything: callers keep their fallback.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
@@ -120,19 +121,29 @@ def _regs(tokens: Iterable[str]) -> List[str]:
 class _St:
     """May-state at a program point: origin sets per register / stack slot, plus the
     must-known frame addresses (``sv``: register -> offset from entry sp), page constants
-    (``cv``) and whether the writer has escaped into a call with no contract."""
-    __slots__ = ('r', 'sl', 'sv', 'cv', 'esc', 'fl')
+    (``cv``), immediates (``kv``: a register's value when every path into the point gives it
+    the same ``mov #imm`` -- a field number), whether the writer has escaped into a call
+    with no contract, the length-delimited marks open at the point (``om``: every stack of
+    ``(frame slot, begin-mark address)`` a path into it can have), and whether every path
+    sets v0 by an instruction other than a call since its last call (``fv``: a floating-point
+    argument is being passed)."""
+    __slots__ = ('r', 'sl', 'sv', 'cv', 'kv', 'esc', 'fl', 'om', 'fv')
 
-    def __init__(self, r=None, sl=None, sv=None, cv=None, esc=False, fl=None):
+    def __init__(self, r=None, sl=None, sv=None, cv=None, esc=False, fl=None, kv=None,
+                 om=frozenset({()}), fv=False):
         self.r = dict(r or {})
         self.sl = dict(sl or {})      # 8-byte frame granule (offset from entry sp) -> origins
         self.sv = dict(sv or {})
         self.cv = dict(cv or {})
+        self.kv = dict(kv or {})
         self.esc = esc
         self.fl = dict(fl or {})      # a callee was handed the frame from here up: origins
+        self.om = om
+        self.fv = fv
 
     def copy(self) -> "_St":
-        return _St(self.r, self.sl, self.sv, self.cv, self.esc, self.fl)
+        return _St(self.r, self.sl, self.sv, self.cv, self.esc, self.fl, self.kv, self.om,
+                   self.fv)
 
     def join(self, o: "_St") -> "_St":
         return _St({k: self.r.get(k, E) | o.r.get(k, E) for k in set(self.r) | set(o.r)},
@@ -140,11 +151,14 @@ class _St:
                    {k: v for k, v in self.sv.items() if o.sv.get(k) == v},
                    {k: v for k, v in self.cv.items() if o.cv.get(k) == v},
                    self.esc or o.esc,
-                   {k: self.fl.get(k, E) | o.fl.get(k, E) for k in set(self.fl) | set(o.fl)})
+                   {k: self.fl.get(k, E) | o.fl.get(k, E) for k in set(self.fl) | set(o.fl)},
+                   {k: v for k, v in self.kv.items() if o.kv.get(k) == v},
+                   self.om | o.om, self.fv and o.fv)
 
     def same(self, o: "_St") -> bool:
         return (self.r == o.r and self.sl == o.sl and self.sv == o.sv and self.cv == o.cv
-                and self.esc == o.esc and self.fl == o.fl)
+                and self.kv == o.kv and self.esc == o.esc and self.fl == o.fl
+                and self.om == o.om and self.fv == o.fv)
 
     def frame_read(self, a: int, size: int) -> FrozenSet:
         """Origins of *size* bytes at frame address *a*: every granule they touch, plus what
@@ -184,14 +198,79 @@ class _St:
         self.r[reg] = prov
         self.sv.pop(reg, None)
         self.cv.pop(reg, None)
+        self.kv.pop(reg, None)
+
+
+_ARG_REGS = tuple(f"x{i}" for i in range(8))
+
+
+@dataclass(frozen=True)
+class WriteSite:
+    """A call in ``writeTo:`` that may be handed the writer (a field write, a begin / end
+    mark, a struct serialiser ``f(&struct, writer)``, ...), as the fixpoint leaves it: the
+    callee, the register holding the writer, the immediates x1 / x2 hold on every path into
+    the call, where the values in the argument registers and v0 come from
+    (:class:`WriterFlow`'s origins), and the length-delimited marks open at it."""
+    addr: int
+    target: Optional[int]
+    name: Optional[str]                 # the callee's ABI symbol, when it has one
+    writer_reg: str                     # the first argument register that may hold the writer
+    x1: Optional[int]
+    x2: Optional[int]
+    args: Tuple[Tuple[str, FrozenSet], ...]   # (x0..x7, origins), non-empty ones
+    v0_origins: FrozenSet
+    slot: Optional[int]                 # x1 as a frame address (a mark's scratch), else None
+    open_marks: FrozenSet = frozenset({()})   # stacks of (slot, begin-mark addr) open here
+    fp_value: bool = False              # every path sets v0 for this call (an FP argument)
+
+    def origins(self, reg: str) -> FrozenSet:
+        return dict(self.args).get(reg, frozenset())
+
+    @property
+    def x1_origins(self) -> FrozenSet:
+        return self.origins("x1")
+
+    @property
+    def _value_reg(self) -> Optional[str]:
+        """Where the serialised value travels: the writer contract's register; for a callee
+        without one, the AAPCS64 positions -- ``(writer, value, field)`` in x0 / x1 / w2, or,
+        with a float / double value set up in v0, ``(writer, value, field)`` in x0 / v0 / w1."""
+        pb = _PB_WRITE.get(self.name) if self.name else None
+        if pb is not None:
+            return pb[1]
+        return "v0" if self.x2 is None and self.fp_value and self.x1 is not None else "x1"
+
+    @property
+    def number(self) -> Optional[int]:
+        """The field number the call is handed: w1 when the value travels in v0, none for a
+        recall mark, else w2."""
+        if self.name == "_PBDataWriterRecallMark":
+            return None
+        return self.x1 if self._value_reg == "v0" else self.x2
+
+    @property
+    def is_mark(self) -> bool:
+        """A begin / end mark: handed the writer in x0 and a frame scratch in x1."""
+        return self.writer_reg == "x0" and self.slot is not None
+
+    @property
+    def value_origins(self) -> FrozenSet:
+        """Origins of the data the call serialises: a writer-in-x0 call's contract value
+        register (x1 without a contract), else every argument but the writer (``f(&struct,
+        writer)``)."""
+        if self.writer_reg != "x0":
+            return frozenset().union(*(o for r, o in self.args if r != self.writer_reg))
+        reg = self._value_reg
+        return self.v0_origins if reg == "v0" else self.origins(reg) if reg else frozenset()
 
 
 class _Result:
-    __slots__ = ('ser', 'ret', 'complete', 'why')
+    __slots__ = ('ser', 'ret', 'complete', 'why', 'sites')
 
     def __init__(self):
         self.ser: Set = set()
         self.ret: Set = set()
+        self.sites: Dict[int, WriteSite] = {}
         self.complete = True
         self.why: List[str] = []
 
@@ -215,14 +294,34 @@ class WriterFlow:
         self.slot_to_ivar: Dict[int, str] = {}
         self.off_to_ivar: Dict[int, str] = {}
         self.text = _image_text_range(ctx)
+        self._analysed: Dict[int, tuple] = {}
 
     # ── public entry ─────────────────────────────────────────────────────────
     def reachable_ivars(self, cls: ObjcClass) -> Tuple[Optional[FrozenSet[str]], List[str]]:
         """``(ivars whose values can reach the writer, reasons)``; the set is None when
         undecided (the reasons say why)."""
+        reach, why, _sites = self.analyse(cls)
+        return reach, why
+
+    def write_sites(self, cls: ObjcClass) -> Optional[List[WriteSite]]:
+        """The calls of *cls*'s own ``writeTo:`` that may be handed the writer, in address
+        order; None when the body is not decoded or the fixpoint does not go through (control
+        leaves the function window, an indirect jump is unresolved, ...)."""
+        return self.analyse(cls)[2]
+
+    def analyse(self, cls: ObjcClass
+                ) -> Tuple[Optional[FrozenSet[str]], List[str], Optional[List[WriteSite]]]:
+        """``(reachable ivars, reasons, write sites)`` of *cls*'s ``writeTo:`` (see
+        :meth:`reachable_ivars` / :meth:`write_sites`), memoised per class."""
+        hit = self._analysed.get(cls.vmaddr)
+        if hit is None:
+            hit = self._analysed[cls.vmaddr] = self._analyse(cls)
+        return hit
+
+    def _analyse(self, cls: ObjcClass):
         m = cls.get_method("writeTo:")
         if m is None or not m.imp:
-            return None, ["no writeTo:"]
+            return None, ["no writeTo:"], None
         chain = self._chain(cls)
         self.cls = cls
         self.own_imps = {mm.imp: mm.name for c in chain for mm in c.methods if mm.imp and mm.name}
@@ -232,13 +331,15 @@ class WriterFlow:
         self._summary_memo = {}
         res = self._run(m.imp, {'x0': frozenset({_S}), 'x2': frozenset({_W})}, 0, m.imp)
         if res is None:
-            return None, ["writeTo: body not decoded"]
+            return None, ["writeTo: body not decoded"], None
         if not res.complete:
-            return None, res.why
+            return None, res.why, None
+        sites = [res.sites[a] for a in sorted(res.sites)]
         bad = sorted(str(x) for x in res.ser if not isinstance(x, tuple) or x[0] != 'I')
         if any(x in (_S, _T) for x in res.ser):
-            return None, [f"self reaches the writer ({', '.join(bad)})"]
-        return frozenset(x[1] for x in res.ser if isinstance(x, tuple) and x[0] == 'I'), []
+            return None, [f"self reaches the writer ({', '.join(bad)})"], sites
+        return (frozenset(x[1] for x in res.ser if isinstance(x, tuple) and x[0] == 'I'), [],
+                sites)
 
     def _chain(self, cls: ObjcClass) -> List[ObjcClass]:
         out, c = [], cls
@@ -300,7 +401,7 @@ class WriterFlow:
                 if out_of_window and not self._is_function(tgt):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
                     return True
-                if self._call(st, tgt, res, depth, top):
+                if self._call(st, tgt, res, depth, top, ins.addr):
                     return True                      # no-return callee
                 if mn == 'b':
                     res.ret |= st.p('x0') | st.p('v0')
@@ -334,14 +435,52 @@ class WriterFlow:
             return None
         return (r, t) if ins.mnemonic == 'cbz' else (r, ins.addr + 4)
 
+    def _pointer_at(self, va: int) -> Optional[int]:
+        try:
+            return self.ctx.read_ptr(va)
+        except (NameError, ImportError):
+            raise
+        except Exception:
+            return None
+
+    def _cstring(self, va: int) -> Optional[str]:
+        try:
+            return self.ctx.read_cstring(va)
+        except (NameError, ImportError):
+            raise
+        except Exception:
+            return None
+
     def _is_function(self, va: int) -> bool:
         return (va in self.entry_set or callee_name(self.ctx, va) is not None
                 or stub_selector(self.ctx, va) is not None)
 
     # ── calls ────────────────────────────────────────────────────────────────
-    def _call(self, st: _St, tgt: Optional[int], res: _Result, depth: int, top: int) -> bool:
+    def _call(self, st: _St, tgt: Optional[int], res: _Result, depth: int, top: int,
+              addr: Optional[int] = None) -> bool:
         name = callee_name(self.ctx, tgt) if tgt is not None else None
         sel = stub_selector(self.ctx, tgt) if tgt is not None else None
+        if sel is None and name == "_objc_msgSend" and 'x1' in st.cv:
+            sel = self._cstring(st.cv['x1'])   # the generic send: x1 is the selector
+        wreg = next((r for r in _ARG_REGS if _W in st.p(r)), None) if depth == 0 else None
+        if wreg is not None and addr is not None:
+            # the last visit of a call is the fixpoint's
+            slot = st.sv.get('x1')
+            res.sites[addr] = WriteSite(
+                addr, tgt, name, wreg, st.kv.get('x1'), st.kv.get('x2'),
+                tuple((r, st.p(r)) for r in _ARG_REGS if st.p(r)), st.p('v0'), slot, st.om,
+                st.fv)
+        if wreg == 'x0' and addr is not None:
+            slot = st.sv.get('x1')
+            # A length-delimited mark is handed the writer and a frame scratch: with a field
+            # number it opens one (PlaceMark), without one it closes the one open on that
+            # scratch (RecallMark).
+            if slot is not None:
+                if st.kv.get('x2') is not None:
+                    st.om = frozenset(stk + ((slot, addr),) for stk in st.om)
+                else:
+                    st.om = frozenset(stk[:-1] if stk and stk[-1][0] == slot else stk
+                                      for stk in st.om)
         if name in _NORETURN:
             return True
         if sel == _FAST_ENUMERATION and 'x2' in st.sv and _W not in st.p('x0'):
@@ -351,9 +490,11 @@ class WriterFlow:
                 st.r.pop(r, None)
                 st.sv.pop(r, None)
                 st.cv.pop(r, None)
+                st.kv.pop(r, None)
             st.frame_write(state, _FAST_ENUMERATION_STATE_BYTES, recv)
             st.r['x0'] = recv
             st.r['v0'] = E
+            st.fv = False
             return False
         contract = _ARC.get(name) if name else None
         pb = _PB_WRITE.get(name) if name else None
@@ -396,8 +537,10 @@ class WriterFlow:
             st.r.pop(r, None)
             st.sv.pop(r, None)
             st.cv.pop(r, None)
+            st.kv.pop(r, None)
         st.r['x0'] = frozenset(rp)
         st.r['v0'] = frozenset(rp - {_W, _S})        # an object is never returned in v0
+        st.fv = False
         return False
 
     def _call_result(self, st: _St, tgt, sel, argp, depth, top) -> FrozenSet:
@@ -497,6 +640,8 @@ class WriterFlow:
 
     def _exec(self, st: _St, ins, mn: str, ops: List[str], res: _Result) -> None:
         dsts = [d for d in writes(ins) if d != 'sp']
+        if 'v0' in dsts:
+            st.fv = True
         if mn == 'adrp':
             pa = parse_adrp(ins.op_str)
             for d in dsts:
@@ -547,12 +692,18 @@ class WriterFlow:
                 src |= {('I', n) for n in names}
         for d in dsts:
             st.kill(d, frozenset(src))
+        if mn in ('mov', 'movz') and len(ops) == 2 and dsts and ops[1].strip().startswith('#'):
+            v = _parse_imm(ops[1])
+            if v is not None:
+                st.kv[dsts[0]] = v
         if mn in ('mov', 'orr') and len(ops) == 2 and dsts:
             s = _norm_reg(ops[1])
             if s in st.sv:
                 st.sv[dsts[0]] = st.sv[s]
             if s in st.cv:
                 st.cv[dsts[0]] = st.cv[s]
+            if s in st.kv:
+                st.kv[dsts[0]] = st.kv[s]
 
     def _load(self, st: _St, mn: str, ops: List[str], dsts: List[str]) -> None:
         mem = next((o for o in ops if '[' in o), None)
@@ -586,6 +737,10 @@ class WriterFlow:
                 st.kill(d)
             for d, iv in zip(outs, ivs):
                 st.kill(d, frozenset({('O', iv)}) if iv else E)
+            if len(outs) == 1 and not ivs[0] and width == 8:
+                v = self._pointer_at(addr)           # e.g. a selref: the selector it holds
+                if v is not None:
+                    st.cv[outs[0]] = v
             return
         bp = st.p(base) | (st.p(idx) if idx else E)
         out: Set = set()

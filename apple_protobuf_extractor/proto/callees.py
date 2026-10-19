@@ -180,7 +180,7 @@ def stub_selector(ctx, va: Optional[int]) -> Optional[str]:
 
         adrp  x1, <page>
         ldr   x1, [x1, #off]      ; the __objc_selrefs slot -> x1 = the selector
-        ... ; br x16              ; to objc_msgSend
+        ... ; br x16              ; to objc_msgSend (arm64e: braa x16, x17)
 
         adrp  x1, <page>          ; newer caches (iOS 27 / macOS 27): one shared stub per
         add   x1, x1, #off        ; selector, x1 = the selector string itself
@@ -205,7 +205,7 @@ def stub_selector(ctx, va: Optional[int]) -> Optional[str]:
                     and callee_name(ctx, _parse_imm(ins[2].op_str)) == '_objc_msgSend'):
                 sel = ctx.read_cstring(pa[1] + _parse_imm(ops[2]))
         elif pa is not None and pa[0] == 'x1' and len(ins) >= 2 and ins[1].mnemonic == 'ldr' \
-                and any(i.mnemonic == 'br' for i in ins[2:]):
+                and any(i.mnemonic in _STUB_BRANCHES for i in ins[2:]):
             ops = split_ops(ins[1].op_str)
             pm = parse_mem(ops[1]) if len(ops) == 2 else None
             if (pm is not None and _norm_reg(ops[0]) == 'x1' and pm.base == 'x1'
