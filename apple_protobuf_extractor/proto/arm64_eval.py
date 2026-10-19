@@ -506,8 +506,8 @@ class Flow:
         ins = self.insns[d]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         res: Optional[int] = None
-        if mn == 'ldrsw' and len(ops) == 2:              # the ivar-offset slot itself
-            addr = self._mem_const_addr(d, ops[1])
+        if mn == 'ldrsw':                                # the ivar-offset slot itself
+            addr = self.slot_load_address(d)
             if addr is not None:
                 try:
                     res = self.ctx.read_s32(addr)
@@ -529,9 +529,16 @@ class Flow:
         self._ivar_memo[d] = res
         return res
 
-    def _mem_const_addr(self, k: int, mem: str) -> Optional[int]:
-        """Address of ``[Rn, #imm]`` / ``[Rn]`` when Rn is a constant, else None."""
-        m = mem_regs(mem)
+    def slot_load_address(self, k: int) -> Optional[int]:
+        """Address of the ivar-offset variable the 4-byte load ``insns[k]`` reads
+        (``ldrsw Xd, [Xb, #o]`` / ``[Xb]``), the base taken from its reaching definitions
+        (:meth:`const_before`: the ``adrp`` of the offset page is often hoisted); None for any
+        other instruction or a base that is not a constant."""
+        ins = self.insns[k]
+        ops = split_ops(ins.op_str)
+        if ins.mnemonic != 'ldrsw' or len(ops) != 2:
+            return None
+        m = mem_regs(ops[1])
         if not m or m[0] is None or m[1] is not None:
             return None
         base = self.const_before(k, m[0])

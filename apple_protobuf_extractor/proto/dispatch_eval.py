@@ -53,7 +53,6 @@ from macho.classlist import class_name_at
 from proto.arm64cfg import build_blocks_with_br_arms, dominators, dominates, ivar_slot_loads, split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
-from proto.arm64_operands import parse_mem
 from proto.callees import callee_name, stub_selector
 from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, ret_value,
                                object_model)
@@ -488,16 +487,9 @@ def _block_slot_loads(flow: Flow, blocks: Set[int]) -> Set[int]:
     for b in blocks:
         first = flow._first_in_block[b]
         for k in range(first, first + len(flow.cfg.blocks[b])):
-            ins = flow.insns[k]
-            if ins.mnemonic != 'ldrsw':
-                continue
-            ops = split_ops(ins.op_str)
-            pm = parse_mem(ops[1]) if len(ops) == 2 else None
-            if pm is None or pm.index is not None:
-                continue
-            page = flow.const_before(k, pm.base)
-            if page is not None:
-                out.add(page + pm.disp)
+            addr = flow.slot_load_address(k)
+            if addr is not None:
+                out.add(addr)
     return out
 
 
