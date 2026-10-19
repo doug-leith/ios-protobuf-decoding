@@ -36,6 +36,10 @@ _IMPORT = (0x10138cbd8, [('adrp', 'x16, #0x101b3c000'), ('ldr', 'x16, [x16, #0x3
 # iOS 27 GeoServices: the arm64e stub island (adrp+add a GOT slot into x17, ldr, braa).
 _ISLAND = (0x198104920, [('adrp', 'x17, #0x1ea4fb000'), ('add', 'x17, x17, #0x828'),
                          ('ldr', 'x16, [x17]'), ('braa', 'x16, x17')])
+# iOS 27 MessageProtection, more than 4 GB past the cache base: a far branch island that
+# computes a target below it (_objc_release).
+_FAR_ISLAND = (0x290065a10, [('adr', 'x16, #0x290005964'), ('mov', 'x17, #0x87e'),
+                             ('sub', 'x16, x16, x17, lsl #21'), ('br', 'x16')])
 # locationd: an objc selector stub -- x1 = the selector, then through objc_msgSend's slot.
 _SELECTOR = (0x101391460, [('adrp', 'x1, #0x101c54000'), ('ldr', 'x1, [x1, #0xfc0]'),
                            ('adrp', 'x16, #0x101b40000'), ('ldr', 'x16, [x16, #0x200]'),
@@ -66,7 +70,8 @@ class _Ctx:
 class TestStubTarget(unittest.TestCase):
     def setUp(self):
         orig = C.disasm
-        C.disasm = _memory(_PLT, _IMPORT, _ISLAND, _SELECTOR, _NOT_STUB, _UNKNOWN_REG)
+        C.disasm = _memory(_PLT, _IMPORT, _ISLAND, _FAR_ISLAND, _SELECTOR, _NOT_STUB,
+                           _UNKNOWN_REG)
         self.addCleanup(setattr, C, 'disasm', orig)
 
     def test_plt_stub_computes_its_target(self):
@@ -80,6 +85,11 @@ class TestStubTarget(unittest.TestCase):
     def test_stub_island_branches_through_its_slot(self):
         self.assertEqual(C.stub_target(_Ctx(True), 0x198104920),
                          C.Stub(slot=0x1ea4fb000 + 0x828))
+
+    def test_far_branch_island_computes_its_target(self):
+        self.assertEqual(C.stub_target(_Ctx(True), 0x290065a10),
+                         C.Stub(target=0x290005964 - (0x87e << 21)))
+        self.assertEqual(C.real_target(_Ctx(True), 0x290065a10), 0x180405964)
 
     def test_selector_stub_branches_through_objc_msgsend_slot(self):
         self.assertEqual(C.stub_target(_Ctx(False), 0x101391460),
