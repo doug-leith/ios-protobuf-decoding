@@ -4,10 +4,8 @@ tests/test_disasm.py — tests for macho/disasm.py.
 Structure
 ---------
 Unit tests (no binary, no capstone):
-  - Analysis primitives: find_adrp_add_target, find_adrp_ldr_target,
-    iter_bl_targets, find_mov_imm
+  - iter_bl_targets / iter_branch_targets
   - _norm_reg and _parse_imm helpers
-  - Edge cases: empty input, wrong register, clobbered register, …
 
 Integration tests (use build_text_binary from conftest):
   - disasm() encoding → decoding round-trips
@@ -15,8 +13,8 @@ Integration tests (use build_text_binary from conftest):
   - max_insns cap
   - Graceful handling at segment boundary
   - Unaligned vmaddr raises ValueError
-  - Full adrp+add pipeline against synthetic code
-  - Full adrp+ldr pipeline against synthetic code
+  - Full adrp+add / adrp+ldr / movz pipelines against synthetic code, the registers'
+    values read by proto.arm64_eval.Flow (the extractor's one evaluator)
   - BL targets from synthetic code
 """
 
@@ -32,10 +30,6 @@ from macho.disasm import (
     _norm_reg,
     _parse_imm,
     disasm,
-    find_adrp_add_target,
-    find_adrp_ldr_target,
-    find_indexed_load_base,
-    find_mov_imm,
     iter_bl_targets,
 )
 from macho.memory import BinaryContext
@@ -64,6 +58,28 @@ TEXT_VA = 0x4000    # canonical vmaddr used in integration tests
 
 def ctx_from_code(code: bytes, vmaddr: int = TEXT_VA) -> BinaryContext:
     return BinaryContext(build_text_binary(code, vmaddr=vmaddr))
+
+def value_after(insns: List[Insn], reg: str):
+    """*reg*'s value before the listing's final instruction (its ``ret``), by the
+    extractor's one evaluation of register values (:meth:`proto.arm64_eval.Flow.const_before`)."""
+    from proto.arm64_eval import Flow
+    return Flow(None, list(insns)).const_before(len(insns) - 1, reg)
+
+
+def load_address(insns: List[Insn], reg: str):
+    """The address the load into *reg* reads: its base register's value there plus the
+    displacement."""
+    from proto.arm64_eval import Flow
+    from proto.arm64_operands import mem_regs, split_ops
+    flow = Flow(None, list(insns))
+    for k, ins in enumerate(insns):
+        ops = split_ops(ins.op_str)
+        if ins.mnemonic == 'ldr' and len(ops) == 2 and _norm_reg(ops[0]) == _norm_reg(reg):
+            m = mem_regs(ops[1])
+            base = flow.const_before(k, m[0]) if m and m[0] else None
+            return None if base is None else base + m[2]
+    return None
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -121,231 +137,6 @@ class TestParseImm:
     def test_missing(self):
         assert _parse_imm('') is None
         assert _parse_imm('x8, x0') is None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# find_adrp_add_target
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestFindAdrpAdd:
-    def _insns(self, page: int, offset: int, reg: str = 'x8') -> List[Insn]:
-        return [
-            make_insn(0x1000, 'adrp', f'{reg}, #{page:#x}'),
-            make_insn(0x1004, 'add',  f'{reg}, {reg}, #{offset:#x}'),
-            make_insn(0x1008, 'ret',  ''),
-        ]
-
-    def test_basic(self):
-        insns = self._insns(page=0x5000, offset=0x20)
-        assert find_adrp_add_target(insns, 'x8') == 0x5020
-
-    def test_zero_offset(self):
-        insns = self._insns(page=0x8000, offset=0)
-        assert find_adrp_add_target(insns, 'x8') == 0x8000
-
-    def test_w_prefix_equivalent(self):
-        """w8 and x8 refer to the same architectural register."""
-        insns = self._insns(page=0x2000, offset=0x10)
-        assert find_adrp_add_target(insns, 'w8') == 0x2010
-
-    def test_different_register(self):
-        insns = self._insns(page=0x5000, offset=0x20, reg='x0')
-        assert find_adrp_add_target(insns, 'x8') is None
-
-    def test_adrp_but_no_add(self):
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'ret',  ''),
-        ]
-        assert find_adrp_add_target(insns, 'x8') is None
-
-    def test_empty(self):
-        assert find_adrp_add_target([], 'x8') is None
-
-    def test_clobber_before_add(self):
-        """If x8 is clobbered between adrp and add, skip that pair."""
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'ldr',  'x8, [x0, #0x0]'),   # clobbers x8
-            make_insn(0x1008, 'add',  'x8, x8, #0x20'),
-            make_insn(0x100c, 'ret',  ''),
-        ]
-        assert find_adrp_add_target(insns, 'x8') is None
-
-    def test_gap_within_limit(self):
-        """An instruction between adrp and add that does NOT clobber x8 is OK."""
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'mov',  'x9, x0'),            # irrelevant
-            make_insn(0x1008, 'add',  'x8, x8, #0x20'),
-            make_insn(0x100c, 'ret',  ''),
-        ]
-        assert find_adrp_add_target(insns, 'x8') == 0x5020
-
-    def test_second_pair_found(self):
-        """When first pair is for a different reg, second pair is found."""
-        insns = [
-            make_insn(0x1000, 'adrp', 'x9, #0x3000'),
-            make_insn(0x1004, 'add',  'x9, x9, #0x10'),
-            make_insn(0x1008, 'adrp', 'x8, #0x5000'),
-            make_insn(0x100c, 'add',  'x8, x8, #0x20'),
-            make_insn(0x1010, 'ret',  ''),
-        ]
-        assert find_adrp_add_target(insns, 'x8') == 0x5020
-
-    def test_invalid_reg(self):
-        insns = [make_insn(0x1000, 'adrp', 'x8, #0x1000')]
-        assert find_adrp_add_target(insns, 'q8') is None
-
-    def test_add_wrong_source(self):
-        """add x8, x0, #imm — source is x0, not x8; should not match."""
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'add',  'x8, x0, #0x20'),
-            make_insn(0x1008, 'ret',  ''),
-        ]
-        assert find_adrp_add_target(insns, 'x8') is None
-
-    def test_unrelated_add_different_reg_skipped(self):
-        """An add to a DIFFERENT register between adrp and the matching add
-        must be skipped (continue), not treated as a clobber (break).
-
-        Pattern: adrp x8 / add x9,x9,#50 / add x8,x8,#0x100
-        The middle instruction touches x9, not x8 — x8 is still live.
-        This was the confirmed bug: the old code did 'break' here, returning
-        None instead of the correct target address.
-        """
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'add',  'x9, x9, #0x50'),   # unrelated — different reg
-            make_insn(0x1008, 'add',  'x8, x8, #0x100'),  # this is the one
-        ]
-        assert find_adrp_add_target(insns, 'x8') == 0x5100
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# find_adrp_ldr_target
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestFindAdrpLdr:
-    def test_basic(self):
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'ldr',  'x8, [x8, #0x10]'),
-            make_insn(0x1008, 'ret',  ''),
-        ]
-        assert find_adrp_ldr_target(insns, 'x8') == 0x5010
-
-    def test_zero_offset(self):
-        insns = [
-            make_insn(0x1000, 'adrp', 'x0, #0x2000'),
-            make_insn(0x1004, 'ldr',  'x0, [x0]'),
-            make_insn(0x1008, 'ret',  ''),
-        ]
-        assert find_adrp_ldr_target(insns, 'x0') == 0x2000
-
-    def test_wrong_reg(self):
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'ldr',  'x8, [x8, #0x10]'),
-        ]
-        assert find_adrp_ldr_target(insns, 'x9') is None
-
-    def test_no_ldr(self):
-        insns = [make_insn(0x1000, 'adrp', 'x8, #0x5000')]
-        assert find_adrp_ldr_target(insns, 'x8') is None
-
-    def test_clobber_before_ldr(self):
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'mov',  'x8, x0'),   # clobbers x8
-            make_insn(0x1008, 'ldr',  'x8, [x8, #0x10]'),
-        ]
-        assert find_adrp_ldr_target(insns, 'x8') is None
-
-    def test_gap_within_limit(self):
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'nop',  ''),
-            make_insn(0x1008, 'nop',  ''),
-            make_insn(0x100c, 'ldr',  'x8, [x8, #0x18]'),
-        ]
-        assert find_adrp_ldr_target(insns, 'x8') == 0x5018
-
-    def test_unrelated_ldr_different_reg_skipped(self):
-        """An ldr that writes to a DIFFERENT register must be skipped (continue),
-        not treated as a clobber (break).
-
-        Pattern: adrp x8 / ldr x9,[x0] / ldr x8,[x8,#0x38]
-        The middle ldr loads into x9, not x8 — x8 is still live.
-        Same class of bug as the adrp+add case.
-        """
-        insns = [
-            make_insn(0x1000, 'adrp', 'x8, #0x5000'),
-            make_insn(0x1004, 'ldr',  'x9, [x0]'),        # unrelated — different reg
-            make_insn(0x1008, 'ldr',  'x8, [x8, #0x38]'), # this is the one
-        ]
-        assert find_adrp_ldr_target(insns, 'x8') == 0x5038
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# find_indexed_load_base
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestFindIndexedLoadBase:
-    """The principled enum-table anchor: the base register of the scaled-index
-    load `ldr x0, [x8, w2, sxtw #3]` is the pointer-table base (→ 'x8')."""
-
-    def test_sxtw_scale3(self):
-        insns = [
-            make_insn(0x1000, 'cmp',  'w2, #4'),
-            make_insn(0x1004, 'b.hs', '#0x1100'),
-            make_insn(0x1008, 'adrp', 'x8, #0x5000'),
-            make_insn(0x100c, 'add',  'x8, x8, #0xdb0'),
-            make_insn(0x1010, 'ldr',  'x0, [x8, w2, sxtw #3]'),
-            make_insn(0x1014, 'ret',  ''),
-        ]
-        assert find_indexed_load_base(insns, scale=3) == 'x8'
-
-    def test_lsl_scale3(self):
-        insns = [make_insn(0x1000, 'ldr', 'x0, [x10, x2, lsl #3]')]
-        assert find_indexed_load_base(insns, scale=3) == 'x10'
-
-    def test_uxtw_scale3(self):
-        insns = [make_insn(0x1000, 'ldr', 'x0, [x9, w1, uxtw #3]')]
-        assert find_indexed_load_base(insns, scale=3) == 'x9'
-
-    def test_wrong_scale_skipped(self):
-        # byte-indexed table (scale 0) must not match the pointer-table query.
-        insns = [make_insn(0x1000, 'ldr', 'x0, [x8, w2, sxtw #0]')]
-        assert find_indexed_load_base(insns, scale=3) is None
-
-    def test_any_scale_when_none(self):
-        insns = [make_insn(0x1000, 'ldr', 'x0, [x8, w2, sxtw #2]')]
-        assert find_indexed_load_base(insns, scale=None) == 'x8'
-
-    def test_immediate_offset_load_ignored(self):
-        # plain immediate-offset load is not a register-offset (index) load.
-        insns = [make_insn(0x1000, 'ldr', 'x0, [x8, #0xa58]')]
-        assert find_indexed_load_base(insns, scale=3) is None
-
-    def test_no_load(self):
-        insns = [make_insn(0x1000, 'adrp', 'x8, #0x5000')]
-        assert find_indexed_load_base(insns) is None
-
-    def test_first_match_wins(self):
-        insns = [
-            make_insn(0x1000, 'ldr', 'x0, [x8, #0x10]'),       # immediate — skip
-            make_insn(0x1004, 'ldr', 'x0, [x12, x2, lsl #3]'), # first index load
-            make_insn(0x1008, 'ldr', 'x0, [x13, x3, lsl #3]'),
-        ]
-        assert find_indexed_load_base(insns, scale=3) == 'x12'
-
-    def test_native_unk_load_returns_none(self):
-        # When the native mini-decoder cannot decode a register-offset load it
-        # emits 'unk', so there is no base register to read (callers fall back).
-        insns = [make_insn(0x1000, 'unk', '#0xf862d900')]
-        assert find_indexed_load_base(insns, scale=3) is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -495,35 +286,6 @@ class TestIterBranchTargets:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# find_mov_imm
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestFindMovImm:
-    def test_movz(self):
-        insns = [
-            make_insn(0x1000, 'movz', 'x0, #0x42'),
-            make_insn(0x1004, 'ret',  ''),
-        ]
-        assert find_mov_imm(insns, 'x0') == 0x42
-
-    def test_mov_reg_form_skipped(self):
-        """mov x0, x1 has no immediate; should not match."""
-        insns = [make_insn(0x1000, 'mov', 'x0, x1')]
-        assert find_mov_imm(insns, 'x0') is None
-
-    def test_wrong_reg(self):
-        insns = [make_insn(0x1000, 'movz', 'x0, #5')]
-        assert find_mov_imm(insns, 'x1') is None
-
-    def test_first_occurrence_returned(self):
-        insns = [
-            make_insn(0x1000, 'movz', 'x0, #0x10'),
-            make_insn(0x1004, 'movz', 'x0, #0x20'),
-        ]
-        assert find_mov_imm(insns, 'x0') == 0x10
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # disasm() integration tests  (use real encoded instruction bytes)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -611,7 +373,7 @@ class TestDisasmSegmentBoundary:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestAdrpAddPipeline:
-    """End-to-end: hand-encode adrp+add, disassemble, run find_adrp_add_target."""
+    """End-to-end: hand-encode adrp+add, disassemble, evaluate the register."""
 
     def _build_and_disasm(
         self,
@@ -633,27 +395,27 @@ class TestAdrpAddPipeline:
     def test_finds_target_x8(self):
         target = 0x5020
         insns  = self._build_and_disasm(rd=8, target_vmaddr=target)
-        assert find_adrp_add_target(insns, 'x8') == target
+        assert value_after(insns, 'x8') == target
 
     def test_finds_target_x0(self):
         target = 0x8010
         insns  = self._build_and_disasm(rd=0, target_vmaddr=target)
-        assert find_adrp_add_target(insns, 'x0') == target
+        assert value_after(insns, 'x0') == target
 
     def test_wrong_reg_not_found(self):
         insns = self._build_and_disasm(rd=8, target_vmaddr=0x5020)
-        assert find_adrp_add_target(insns, 'x9') is None
+        assert value_after(insns, 'x9') is None
 
     def test_zero_within_page_offset(self):
         """Target is exactly on a page boundary (offset = 0)."""
         target = 0x3000   # page-aligned
         insns  = self._build_and_disasm(rd=8, target_vmaddr=target)
-        assert find_adrp_add_target(insns, 'x8') == target
+        assert value_after(insns, 'x8') == target
 
     def test_max_page_offset(self):
         target = 0x5FFF   # max 12-bit offset = 0xFFF
         insns  = self._build_and_disasm(rd=8, target_vmaddr=target)
-        assert find_adrp_add_target(insns, 'x8') == target
+        assert value_after(insns, 'x8') == target
 
     def test_different_insn_vmaddr(self):
         """The analysis must be portable: target derived from PC, not from any
@@ -662,7 +424,7 @@ class TestAdrpAddPipeline:
         target  = 0xA020
         insns   = self._build_and_disasm(rd=8, target_vmaddr=target,
                                           insn_vmaddr=insn_va)
-        assert find_adrp_add_target(insns, 'x8') == target
+        assert value_after(insns, 'x8') == target
 
 
 class TestAdrpLdrPipeline:
@@ -691,16 +453,16 @@ class TestAdrpLdrPipeline:
     def test_finds_got_slot_x8(self):
         got = 0x5008
         insns = self._build_and_disasm(rd=8, got_vmaddr=got)
-        assert find_adrp_ldr_target(insns, 'x8') == got
+        assert load_address(insns, 'x8') == got
 
     def test_finds_got_slot_zero_offset(self):
         got = 0x6000   # offset = 0
         insns = self._build_and_disasm(rd=0, got_vmaddr=got)
-        assert find_adrp_ldr_target(insns, 'x0') == got
+        assert load_address(insns, 'x0') == got
 
     def test_wrong_reg_not_found(self):
         insns = self._build_and_disasm(rd=8, got_vmaddr=0x5008)
-        assert find_adrp_ldr_target(insns, 'x9') is None
+        assert load_address(insns, 'x9') is None
 
 
 class TestBlPipeline:
@@ -744,14 +506,14 @@ class TestMovzPipeline:
         code  = encode_movz(rd=0, imm16=42) + RET_BYTES
         ctx   = ctx_from_code(code)
         insns = disasm(ctx, TEXT_VA)
-        val   = find_mov_imm(insns, 'x0')
+        val   = value_after(insns, 'x0')
         assert val == 42
 
     def test_movz_large_imm(self):
         code  = encode_movz(rd=8, imm16=0x1234) + RET_BYTES
         ctx   = ctx_from_code(code)
         insns = disasm(ctx, TEXT_VA)
-        val   = find_mov_imm(insns, 'x8')
+        val   = value_after(insns, 'x8')
         assert val == 0x1234
 
 
@@ -951,14 +713,16 @@ class TestPortability:
         insns_a = [
             make_insn(base_insn_va,           'adrp', f'x8, #{base_target & ~0xFFF:#x}'),
             make_insn(base_insn_va + 4,        'add',  f'x8, x8, #{base_target & 0xFFF:#x}'),
+            make_insn(base_insn_va + 8,        'ret',  ''),
         ]
         insns_b = [
             make_insn(base_insn_va + delta,   'adrp', f'x8, #{(base_target + delta) & ~0xFFF:#x}'),
             make_insn(base_insn_va + delta + 4,'add',  f'x8, x8, #{(base_target + delta) & 0xFFF:#x}'),
+            make_insn(base_insn_va + delta + 8,'ret',  ''),
         ]
 
-        result_a = find_adrp_add_target(insns_a, 'x8')
-        result_b = find_adrp_add_target(insns_b, 'x8')
+        result_a = value_after(insns_a, 'x8')
+        result_b = value_after(insns_b, 'x8')
         assert result_a is not None
         assert result_b is not None
         assert result_b - result_a == delta
@@ -980,8 +744,8 @@ class TestPortability:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestStrDoesNotClobber:
-    """STR and STP read their first operand, they do not clobber it.
-    A STR x8, [x9] between adrp x8 and add x8 must not terminate the search."""
+    """STR and STP read their first operand, they do not clobber it: a STR x8, [x9] between
+    adrp x8 and add x8 leaves x8 the page (the decoder must not report them as writes)."""
 
     def test_str_between_adrp_and_add(self):
         insns = [
@@ -990,7 +754,7 @@ class TestStrDoesNotClobber:
             make_insn(0x1008, 'add',  'x8, x8, #0x20'),
             make_insn(0x100c, 'ret',  ''),
         ]
-        assert find_adrp_add_target(insns, 'x8') == 0x5020
+        assert value_after(insns, 'x8') == 0x5020
 
     def test_stp_between_adrp_and_add(self):
         insns = [
@@ -1000,33 +764,36 @@ class TestStrDoesNotClobber:
             make_insn(0x100c, 'add',  'x8, x8, #0x10'),
             make_insn(0x1010, 'ret',  ''),
         ]
-        assert find_adrp_add_target(insns, 'x8') == 0x3010
+        assert value_after(insns, 'x8') == 0x3010
 
     def test_cmp_between_adrp_and_add(self):
         insns = [
             make_insn(0x1000, 'adrp', 'x8, #0x4000'),
             make_insn(0x1004, 'cmp',  'x8, x0'),            # compares x8, no write
             make_insn(0x1008, 'add',  'x8, x8, #0x8'),
+            make_insn(0x100c, 'ret',  ''),
         ]
-        assert find_adrp_add_target(insns, 'x8') == 0x4008
+        assert value_after(insns, 'x8') == 0x4008
 
     def test_mov_still_clobbers(self):
-        """mov xN writes xN — must still terminate the search."""
+        """mov xN writes xN: x8 is x0 + 0x20, not the page."""
         insns = [
             make_insn(0x1000, 'adrp', 'x8, #0x5000'),
             make_insn(0x1004, 'mov',  'x8, x0'),            # overwrites x8
             make_insn(0x1008, 'add',  'x8, x8, #0x20'),
+            make_insn(0x100c, 'ret',  ''),
         ]
-        assert find_adrp_add_target(insns, 'x8') is None
+        assert value_after(insns, 'x8') is None
 
     def test_ldr_still_clobbers(self):
-        """ldr xN writes xN — within the gap check it terminates the adrp+add search."""
+        """ldr xN writes xN: x8 is the loaded value + 0x20, not the page."""
         insns = [
             make_insn(0x1000, 'adrp', 'x8, #0x5000'),
             make_insn(0x1004, 'ldr',  'x8, [x9, #0x0]'),   # loads into x8
             make_insn(0x1008, 'add',  'x8, x8, #0x20'),
+            make_insn(0x100c, 'ret',  ''),
         ]
-        assert find_adrp_add_target(insns, 'x8') is None
+        assert value_after(insns, 'x8') is None
 
     def test_str_between_adrp_and_ldr_does_not_clobber(self):
         insns = [
@@ -1034,7 +801,7 @@ class TestStrDoesNotClobber:
             make_insn(0x1004, 'str',  'x8, [x9]'),
             make_insn(0x1008, 'ldr',  'x8, [x8, #0x10]'),
         ]
-        assert find_adrp_ldr_target(insns, 'x8') == 0x6010
+        assert load_address(insns, 'x8') == 0x6010
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1063,13 +830,13 @@ class TestMovkDecoder:
         assert '0x1234' in ops
         assert 'lsl #16' in ops or 'lsl' in ops
 
-    def test_movz_movk_sequence_find_mov_imm(self):
-        """find_mov_imm returns only the MOVZ (first) when MOVK follows."""
+    def test_movz_movk_sequence_builds_the_64_bit_value(self):
         insns = [
             make_insn(0x1000, 'movz', 'x0, #0xabcd'),
             make_insn(0x1004, 'movk', 'x0, #0x1234, lsl #16'),
+            make_insn(0x1008, 'ret', ''),
         ]
-        assert find_mov_imm(insns, 'x0') == 0xabcd   # first movz wins
+        assert value_after(insns, 'x0') == 0x1234abcd
 
     def test_movk_pipeline(self):
         """Encode MOVK bytes, disassemble, verify mnemonic and operands."""

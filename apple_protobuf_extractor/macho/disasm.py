@@ -19,11 +19,11 @@ Architecture
 Public API
 ----------
     disasm(ctx, vmaddr, max_insns=512, stop_at_ret=True) → List[Insn]
-    find_adrp_add_target(insns, reg)   → Optional[int]   # adrp+add → vmaddr
-    find_adrp_ldr_target(insns, reg)   → Optional[int]   # adrp+ldr/ldrsw → slot addr
-    find_indexed_load_base(insns, scale=3) → Optional[str]  # base reg of ldr [Xn,Rm,#s]
     iter_bl_targets(insns)             → Iterator[int]   # all BL call targets
-    find_mov_imm(insns, reg)           → Optional[int]   # movz/mov constant
+    iter_branch_targets(insns)         → Iterator[int]   # BL and B targets
+
+Register values (an adrp+add address, a loaded slot, a movz constant) are read by
+:class:`proto.arm64_eval.Flow`, not here.
 """
 
 from __future__ import annotations
@@ -54,30 +54,14 @@ class Insn:
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 _STOP_MNEMONICS  = frozenset(('ret', 'retaa', 'retab', 'eret'))
-_MAX_ADRP_GAP    = 4    # max instructions between adrp and its add/ldr
 # [cap:INPUT-SANITY — leave as-is] Only the *default* max_insns for callers that don't
 # pass one.  Every decode-critical disassembly in the extractor passes an EXPLICIT cap
 # (the proto/extractor.py Tier-1/2 constants), so this default governs only don't-care
 # / early-terminating reads and is never the binding limit for any field/enum/number.
 _DEFAULT_MAX     = 512
 
-# Regex for LDR operands: "Xt, [Xn]" or "Xt, [Xn, #offset]"
-_LDR_RE = re.compile(
-    r'^(\w+),\s*\[(\w+)(?:,\s*#(-?0x[0-9a-fA-F]+|-?\d+))?\]'
-)
-
-# Regex for register-offset (scaled-index) LDR operands:
-#   "Xt, [Xn, Wm, sxtw #3]" / "Xt, [Xn, Xm, lsl #3]" / "Xt, [Xn, Xm]"
-# Groups: 1=dest, 2=base, 3=index, 4=extend (lsl/sxtw/uxtw/…), 5=shift amount.
-_LDR_REG_OFF_RE = re.compile(
-    r'^(\w+),\s*\[(\w+),\s*(\w+)'
-    r'(?:,\s*(lsl|sxtw|uxtw|sxtx|uxtx|asr|lsr)\s*#(\d+))?\]'
-)
-
-# Mnemonics whose first register operand is a SOURCE (read), not a destination.
-# When one of these appears between an adrp and its add, the target register
-# is NOT clobbered, so the search must continue rather than break.
-# Examples: 'str x8, [x9]' reads x8; 'cmp x8, #0' reads x8.
+# Mnemonics whose first register operand is a SOURCE (read), not a destination
+# ('str x8, [x9]' reads x8; 'cmp x8, #0' reads x8): proto.arm64_operands.writes.
 _SOURCE_FIRST_MNEMONICS = frozenset({
     'str',  'strb',  'strh',  'stur',  'sturb',  'sturh',
     'sttr', 'sttrb', 'sttrh',
@@ -123,169 +107,6 @@ def _parse_imm(s: str) -> Optional[int]:
         return None
 
 
-def _first_reg(op_str: str) -> Optional[str]:
-    """Return the normalised first register in op_str."""
-    tok = op_str.split(',', 1)[0].strip()
-    return _norm_reg(tok)
-
-
-# ─── Analysis primitives (operate on List[Insn], no binary needed) ────────────
-
-def find_adrp_add_target(
-    insns: Sequence[Insn], reg: str
-) -> Optional[int]:
-    """
-    Scan *insns* for the first ``adrp+add`` pair that populates *reg* and
-    return the combined target vmaddr, or None.
-
-    The ``add`` must follow the ``adrp`` within _MAX_ADRP_GAP instructions
-    without *reg* being clobbered.  Register names are normalised (x8 ≡ w8).
-    """
-    target = _norm_reg(reg)
-    if target is None:
-        return None
-
-    for i, insn in enumerate(insns):
-        if insn.mnemonic != 'adrp':
-            continue
-        parts = insn.op_str.split(',', 1)
-        if len(parts) < 2 or _norm_reg(parts[0]) != target:
-            continue
-        page = _parse_imm(parts[1])
-        if page is None:
-            continue
-
-        # Scan ahead for a matching add, watching for clobbers.
-        # A clobber is when the target register is the DESTINATION of a
-        # non-add instruction.  Instructions in _SOURCE_FIRST_MNEMONICS use
-        # their first operand as a source (e.g. 'str x8, [x9]' reads x8),
-        # so they must not trigger a break.
-        window = insns[i + 1 : i + 1 + _MAX_ADRP_GAP]
-        for next_insn in window:
-            dst = _first_reg(next_insn.op_str)
-            is_dest_write = (dst == target
-                             and next_insn.mnemonic not in _SOURCE_FIRST_MNEMONICS
-                             and next_insn.mnemonic != 'add')
-            if is_dest_write:
-                break   # register clobbered before add
-            if next_insn.mnemonic != 'add':
-                continue
-            add_parts = next_insn.op_str.split(',')
-            if len(add_parts) < 3:
-                continue
-            if _norm_reg(add_parts[0]) != target:
-                continue   # add to a different register — not a clobber, keep scanning
-            if _norm_reg(add_parts[1]) != target:
-                continue
-            offset = _parse_imm(add_parts[2])
-            if offset is not None:
-                return page + offset
-
-    return None
-
-
-def find_adrp_ldr_target(
-    insns: Sequence[Insn], reg: str
-) -> Optional[int]:
-    """
-    Scan *insns* for the first ``adrp+load`` pair that populates *reg* and
-    return the address of the slot being loaded from (page base + offset).
-
-    Handles all unsigned-offset load mnemonics: ``ldr``, ``ldrb``, ``ldrh``
-    (zero-extending) and ``ldrsw``, ``ldrsb``, ``ldrsh`` (sign-extending).
-    The signed variants are used in GeoServices-style binaries when loading
-    ivar-offset variables from ``__DATA_CONST``.
-
-    Typical patterns::
-
-        adrp  x8, #<page>
-        ldr   x8, [x8, #<off>]    ; 64-bit — GOT pointer
-        adrp  x8, #<page>
-        ldrsw x8, [x8, #<off>]    ; 32→64-bit signed — ivar byte offset
-    """
-    # All load mnemonics whose operand syntax matches _LDR_RE.
-    _LOAD_MNEMONICS = frozenset(
-        ('ldr', 'ldrb', 'ldrh', 'ldrsw', 'ldrsb', 'ldrsh')
-    )
-
-    target = _norm_reg(reg)
-    if target is None:
-        return None
-
-    for i, insn in enumerate(insns):
-        if insn.mnemonic != 'adrp':
-            continue
-        parts = insn.op_str.split(',', 1)
-        if len(parts) < 2 or _norm_reg(parts[0]) != target:
-            continue
-        page = _parse_imm(parts[1])
-        if page is None:
-            continue
-
-        window = insns[i + 1 : i + 1 + _MAX_ADRP_GAP]
-        for next_insn in window:
-            dst = _first_reg(next_insn.op_str)
-            # Clobber check: reg is written by a non-load, non-source instruction.
-            if (dst == target
-                    and next_insn.mnemonic not in _LOAD_MNEMONICS
-                    and next_insn.mnemonic not in _SOURCE_FIRST_MNEMONICS):
-                break   # clobbered before the load
-            if next_insn.mnemonic not in _LOAD_MNEMONICS:
-                continue
-            m = _LDR_RE.match(next_insn.op_str)
-            if not m:
-                continue
-            if _norm_reg(m.group(1)) != target:
-                continue   # load into a different register — keep scanning
-            if _norm_reg(m.group(2)) != target:
-                continue
-            raw_off = m.group(3)
-            if raw_off is None:
-                offset = 0
-            elif '0x' in raw_off.lower():
-                offset = int(raw_off, 16)
-            else:
-                offset = int(raw_off)
-            return page + offset
-
-    return None
-
-
-def find_indexed_load_base(
-    insns: Sequence[Insn], scale: Optional[int] = 3
-) -> Optional[str]:
-    """Return the base register of the first register-offset (scaled-index)
-    load, e.g. ``ldr x0, [x8, w2, sxtw #3]`` → ``"x8"``.
-
-    This is the principled anchor for a jump-/pointer-table dispatch: the table
-    base lives in the load's base register, and the index is the value being
-    switched on.  When *scale* is given (default 3 = ×8, a pointer table), only
-    loads with that shift amount match, which pins it to pointer-width tables and
-    ignores byte/half-word indexed loads.  Pass ``scale=None`` to match any
-    register-offset load.
-
-    Returns the normalised base register (``"x8"``) or ``None`` when no such
-    load is present (e.g. the native decoder could not decode a register-offset
-    load — capstone decodes these, the mini-decoder emits ``unk``).
-    """
-    for insn in insns:
-        if not insn.mnemonic.startswith('ldr'):
-            continue
-        m = _LDR_REG_OFF_RE.match(insn.op_str)
-        if not m:
-            continue
-        base, index, shift = m.group(2), m.group(3), m.group(5)
-        # A register index is required (group 3 must be a register, not absent).
-        if _norm_reg(index) is None:
-            continue
-        if scale is not None and (shift is None or int(shift) != scale):
-            continue
-        base_n = _norm_reg(base)
-        if base_n is not None:
-            return base_n
-    return None
-
-
 def iter_bl_targets(insns: Sequence[Insn]) -> Iterator[int]:
     """Yield the vmaddr targets of every ``bl`` (branch-and-link) instruction."""
     for insn in insns:
@@ -310,30 +131,6 @@ def iter_branch_targets(insns: Sequence[Insn]) -> Iterator[int]:
             if t is not None:
                 yield t
 
-
-def find_mov_imm(insns: Sequence[Insn], reg: str) -> Optional[int]:
-    """
-    Return the immediate value of the first ``movz`` or ``mov`` instruction
-    that loads a constant into *reg*, or None.
-    """
-    target = _norm_reg(reg)
-    if target is None:
-        return None
-    for insn in insns:
-        if insn.mnemonic not in ('movz', 'mov'):
-            continue
-        parts = insn.op_str.split(',', 1)
-        if len(parts) < 2:
-            continue
-        if _norm_reg(parts[0]) != target:
-            continue
-        val = _parse_imm(parts[1])
-        if val is not None:
-            return val
-    return None
-
-
-# ─── Disassembler ─────────────────────────────────────────────────────────────
 
 def disasm(
     ctx: BinaryContext,

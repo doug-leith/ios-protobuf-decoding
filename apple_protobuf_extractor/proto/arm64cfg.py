@@ -1,9 +1,9 @@
 """proto/arm64cfg.py — shared arm64 control-flow / operand-parsing helpers.
 
-Pure, serializer-agnostic primitives shared by the writeTo: field-number walk and the
-evaluator (:mod:`proto.arm64_eval`): basic blocks, dominators, the lazy block walk, and
-operand helpers.  They carry no writeTo: or readFrom: meaning and operate on decoded
-``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
+Pure, serializer-agnostic primitives shared by the evaluator (:mod:`proto.arm64_eval`),
+the writer flow and the decoders: basic blocks, predecessors / reverse postorder,
+dominators, and operand helpers.  They carry no writeTo: or readFrom: meaning and operate
+on decoded ``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
 """
 import bisect
 from collections import deque
@@ -26,17 +26,8 @@ def _is_cond(mn: str) -> bool:
 
 
 # ── Operand toolkit ───────────────────────────────────────────────────────────
-# One place that turns capstone's operand TEXT into structured pieces, so the walk
-# and binding code stop re-implementing ad-hoc `op_str.split(',')` parses (each of
-# which only handled the forms it happened to need).
-
-
-
-def dst_reg(op_str):
-    """Normalised destination (first-operand) GPR, or None (SIMD/empty operand).
-    The reg written by a `mov`/`add`/`ldr`/… — used for clobber detection."""
-    ops = split_ops(op_str)
-    return _norm_reg(ops[0]) if ops else None
+# Capstone's operand TEXT as structured pieces (register VALUES are the evaluator's,
+# :class:`proto.arm64_eval.Flow`).
 
 
 def parse_adrp(op_str):
@@ -64,110 +55,6 @@ def mem_operand(op_str):
     if pm is None:
         return None
     return ops[0], pm.base, pm.index, pm.disp, pm.shift
-
-
-def ivar_slot_loads(insns):
-    """``[(insn_index, slot_vmaddr)]`` for every ivar-offset-variable load in
-    *insns*: ``adrp Xn,#page; … ldrsw Xm,[Xn,#off]`` where ``page+off`` is the
-    slot holding a field's ivar byte offset.  ``insn_index`` is the ``ldrsw``.
-
-    The ``adrp`` need not lie close to (or even before, within a window) its
-    ``ldrsw`` — a compiler may hoist one page register across several loads — so
-    the page map is function-wide.  Immediate/no-offset form only (a
-    register-offset ``ldrsw`` is not a slot load)."""
-    pages = {}
-    out = []
-    for i, ins in enumerate(insns):
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None:
-                pages[pa[0]] = pa[1]
-        elif ins.mnemonic == 'ldrsw':
-            mo = mem_operand(ins.op_str)
-            if mo is not None and mo[2] is None and mo[1] in pages:
-                out.append((i, pages[mo[1]] + mo[3]))
-    return out
-
-
-def _parse_load(op_str):
-    """Back-compat shim: (value, base, index|None) for a register/immediate-indexed
-    load.  Thin wrapper over :func:`mem_operand` (kept for existing call sites and
-    tests)."""
-    m = mem_operand(op_str)
-    return (m[0], m[1], m[2]) if m is not None else None
-
-
-def _same_reg(a, b):
-    """True if *a* and *b* name the same physical register, treating the w/x views
-    of a GPR as equal (``w20`` == ``x20``) and matching SIMD regs (``d8``/``s8``,
-    which _norm_reg leaves as None) by exact name."""
-    na, nb = _norm_reg(a), _norm_reg(b)
-    if na is not None and nb is not None:
-        return na == nb
-    return a == b
-
-
-def _adrp_page(pre, reg):
-    for ins in reversed(pre):
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            if pa is not None and pa[0] == reg:
-                return pa[1]
-    return None
-
-
-def _value_before(pre, reg, entry):
-    """Value of *reg* at the end of *pre*, from its NEAREST definition in *pre*: an ``adrp``
-    gives its page, ``add reg, src, #imm`` the value of *src* there plus *imm*; any other
-    definition is not a constant (None).  With no definition in *pre* the register holds its
-    value on entry to *pre*: ``entry.get(reg)``."""
-    for i in range(len(pre) - 1, -1, -1):
-        ins = pre[i]
-        if reg not in writes(ins):
-            continue
-        if ins.mnemonic == 'adrp':
-            pa = parse_adrp(ins.op_str)
-            return pa[1] if pa is not None and pa[0] == reg else None
-        ops = split_ops(ins.op_str)
-        if ins.mnemonic == 'add' and len(ops) == 3 and ops[2].startswith('#'):
-            src = _norm_reg(ops[1])
-            v = _value_before(pre[:i], src, entry) if src is not None else None
-            return None if v is None else v + _parse_imm(ops[2])
-        return None
-    return entry.get(reg)
-
-
-def _resolve_offset_addr(pre, off, base_regs):
-    """Address of the ivar-offset variable held in register *off* at the end of the block
-    prefix *pre*.  Follows the defining ``ld* off,[base,#k]`` and takes *base* from its
-    NEAREST definition before the load (:func:`_value_before`: an ``adrp`` [+ ``add``] chain),
-    so a register reused for another page later in the block resolves to its CURRENT value,
-    not an earlier one; a base not defined by such a chain is the walk's tracked value
-    (*base_regs*: a callee-saved table base set up in the prologue).  Also the PC-relative
-    LITERAL form (``ldrsw x8, #ADDR``) a standalone image uses instead of the cache's
-    ``adrp+ldrsw[base,#k]``."""
-    for i in range(len(pre) - 1, -1, -1):
-        ins = pre[i]
-        if ins.mnemonic not in ('ldrsw', 'ldr', 'ldrsh', 'ldrh', 'ldrb', 'ldrsb'):
-            continue
-        m = mem_operand(ins.op_str)
-        if m is None:
-            # PC-relative literal load `ld* off, #ADDR` (no `[...]`): the immediate
-            # IS the absolute address of the ivar-offset variable, so return it
-            # directly — there is no base register to resolve.
-            ops = split_ops(ins.op_str)
-            if (len(ops) == 2 and _norm_reg(ops[0]) == off
-                    and ops[1].startswith('#')):
-                return _parse_imm(ops[1])
-            continue
-        if _norm_reg(m[0]) != off:
-            continue
-        base, imm = m[1], m[3]
-        val = _value_before(pre[:i], base, base_regs)
-        if val is None:
-            val = base_regs.get(base)
-        return None if val is None else val + imm
-    return None
 
 
 def _cond_target(ins):

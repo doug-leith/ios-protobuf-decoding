@@ -925,7 +925,7 @@ class _NullClassList:
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestDisasmAdrpAdd(unittest.TestCase):
-    """Verify encode_adrp + encode_add → find_adrp_add_target roundtrip."""
+    """Verify encode_adrp + encode_add, disassembled, evaluate to the target address."""
 
     def _roundtrip(self, text_va: int, target: int, rd: int = 26) -> Optional[int]:
         import struct as _struct
@@ -938,9 +938,10 @@ class TestDisasmAdrpAdd(unittest.TestCase):
         adrp_w   = 0x90000000 | (immlo << 29) | (immhi << 5) | (rd & 0x1F)
         add_w    = 0x91000000 | (page_off << 10) | (rd << 5) | rd
 
-        raw = _struct.pack('<II', adrp_w, add_w)
+        raw = _struct.pack('<III', adrp_w, add_w, 0xD65F03C0)          # ... ; ret
 
-        from macho.disasm import disasm as _disasm, find_adrp_add_target
+        from macho.disasm import disasm as _disasm
+        from proto.arm64_eval import Flow
 
         class _FakeCtx:
             def read_bytes(self, va, length):
@@ -956,7 +957,7 @@ class TestDisasmAdrpAdd(unittest.TestCase):
                 return off
 
         insns = _disasm(_FakeCtx(), text_va, max_insns=4)
-        return find_adrp_add_target(insns, f'x{rd}')
+        return Flow(None, insns).const_before(len(insns) - 1, f'x{rd}')
 
     def test_same_page_offset(self):
         text_va, target = 0x18c000000, 0x18c000123

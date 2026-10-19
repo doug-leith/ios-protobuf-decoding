@@ -206,10 +206,8 @@ def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
     """Address of the ivar-offset variable whose value is in *offreg* at ``insns[i]``:
     the reaching ``ldrsw offreg,[base,#k]`` with ``base`` the reaching ``adrp`` page
     (``+ add``) — or the PC-relative literal ``ldrsw offreg, #ADDR`` a standalone image
-    uses.  Reaching definitions only: unlike :func:`proto.arm64cfg._resolve_offset_addr`
-    (which scans a block prefix for the FIRST matching ``adrp+add``) this is safe over a
-    whole function, where an earlier unrelated ``adrp x8 ; add x8,x8,#o`` would shadow the
-    page actually feeding this load."""
+    uses.  Reaching definitions only, so over a whole function an earlier unrelated
+    ``adrp x8 ; add x8,x8,#o`` cannot shadow the page actually feeding this load."""
     insns = flow.insns
     d = _reaching_def(flow, i, offreg)
     if d is None or insns[d].mnemonic not in ('ldrsw', 'ldr'):
