@@ -18,10 +18,7 @@ Usage:
 import sys
 
 from macho.dyld_cache import DyldCacheReader
-from macho.memory import BinaryContext
-from macho.strings import build_string_table
-from macho import classlist as CL
-from macho.local_symbols import apply_to_classes
+from macho.load import load_cache_image
 from macho import disasm
 import proto.extractor as E
 
@@ -32,13 +29,8 @@ CACHE = artifacts.cache_file()
 def load(fw):
     reader = DyldCacheReader(CACHE)
     mv = reader.find_image_header(fw)
-    ctx = BinaryContext.from_cache(reader, mv)
-    st = build_string_table(ctx)
-    cl = CL.build_class_list(ctx, st)
-    syms = reader.image_local_symbols(mv)
-    if syms:
-        apply_to_classes(cl, syms)
-    return ctx, st, cl
+    img = load_cache_image(reader, mv)
+    return img.ctx, img.st, img.cl
 
 
 def _ivar_by_offset(c):

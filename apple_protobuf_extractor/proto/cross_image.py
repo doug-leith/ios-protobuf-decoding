@@ -63,23 +63,19 @@ class CrossImageResult:
 
 
 def extract_cache_image(reader, mach_va: int, prefixes=None) -> Tuple[List[ProtoMessage], object]:
-    """Extract the PBCodable messages of the cache image at *mach_va* exactly as the CLI
-    does for ``--framework`` (string table, class list, ``.symbols`` method names,
-    :func:`extract_all`).  Returns ``(messages, ctx)``; the ctx carries the run's
+    """Extract the PBCodable messages of the cache image at *mach_va* through the same front
+    end as the CLI's ``--framework`` (:func:`macho.load.load_cache_image`) and
+    :func:`extract_all`.  Returns ``(messages, ctx)``; the ctx carries the run's
     diagnostics."""
-    from macho.classlist import build_class_list
-    from macho.local_symbols import apply_to_classes
-    from macho.memory import BinaryContext
-    from macho.strings import build_string_table
+    from macho.load import load_cache_image
     from proto.extractor import extract_all
 
-    ctx = BinaryContext.from_cache(reader, mach_va)
-    st = build_string_table(ctx)
-    cl = build_class_list(ctx, st)
-    syms = reader.image_local_symbols(mach_va)
-    if syms:
-        apply_to_classes(cl, syms)
-    return extract_all(ctx, st, cl, prefixes=prefixes), ctx
+    img = load_cache_image(reader, mach_va)
+    if img.symbol_counts is None:
+        hit = reader.image_containing(mach_va)
+        log.warning("cross-image: %s has no .symbols local symbols; its selector names "
+                    "may be incomplete", hit[1] if hit else f"<image @ {mach_va:#x}>")
+    return extract_all(img.ctx, img.st, img.cl, prefixes=prefixes), img.ctx
 
 
 class _Locator:

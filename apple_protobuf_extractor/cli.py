@@ -71,6 +71,7 @@ import argparse
 import logging
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional
 
@@ -369,19 +370,18 @@ def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native)
     return 0
 
 
-def _recover_method_names_from_symbols(cache, mach_va, cl) -> None:
-    """Cache-native only: restore -[Class selector] method names from the
-    .symbols sub-cache.  Preoptimised "direct selector" method lists strip the
-    selector name field (it points at unrelated binary data), so most method
-    names resolve to null or false positives; the .symbols local symbols are
-    keyed by a reliable impOffset, restoring correct names and adding methods
-    absent from the optimised list.  Mutates *cl* in place; logs to stderr."""
-    t = _step("recovering method names from .symbols")
-    syms = cache.image_local_symbols(mach_va)
-    if syms:
-        from macho.local_symbols import apply_to_classes
-        counts = apply_to_classes(cl, syms)
-        _done(t)
+@contextmanager
+def _stage(label: str):
+    """A progress line for one stage of the run and its time (see _step / _done)."""
+    t = _step(label)
+    yield
+    _done(t)
+
+
+def _report_symbol_recovery(counts) -> None:
+    """Cache-native: what the .symbols local symbols did to the method names
+    (:func:`macho.load.load_classes`), or that the sub-cache does not list the image."""
+    if counts is not None:
         print(
             f"    method names: {counts['renamed']} resolved, "
             f"{counts['corrected']} corrected, "
@@ -390,7 +390,6 @@ def _recover_method_names_from_symbols(cache, mach_va, cl) -> None:
             file=sys.stderr,
         )
     else:
-        _done(t)
         print(
             "    no local symbols found (.symbols file absent or "
             "image not listed) — selector names may be incomplete",
@@ -739,8 +738,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging(args.verbose)
 
     from macho.memory    import BinaryContext
-    from macho.strings   import build_string_table
-    from macho.classlist import build_class_list
+    from macho.load      import load_classes
     from proto.extractor import extract_all, SelectorsUnresolvedError
     from proto.emitter   import (
         configure_prefix_packages,
@@ -785,18 +783,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # note.  (Cache images report as dylibs; _CACHE_ACTIVE takes precedence.)
     _configure_emitter_is_executable(ctx.is_executable)
 
-    # ── String table ──────────────────────────────────────────────────────────
-    t = _step("building string table")
-    st = build_string_table(ctx)
-    _done(t)
-
-    # ── ObjC class list ───────────────────────────────────────────────────────
-    # In both modes selector cstrings are read through ctx: cache-native routes
-    # ctx.read_cstring to the cache's unified selector pool; binary-only reads
-    # the binary's own sections.  No cache argument is threaded into the parser.
-    t = _step("parsing ObjC class list")
-    cl = build_class_list(ctx, st)
-    _done(t)
+    # ── String table, ObjC class list, .symbols method names ─────────────────
+    # The one front end every image extraction runs (macho.load), so the images the
+    # cross-image resolver pulls messages from load exactly like this one.  In both modes
+    # selector cstrings are read through ctx: cache-native routes ctx.read_cstring to the
+    # cache's unified selector pool; binary-only reads the binary's own sections.
+    img = load_classes(ctx, cache if cache_native else None, mach_va, step=_stage)
+    st, cl = img.st, img.cl
+    if cache_native:
+        _report_symbol_recovery(img.symbol_counts)
 
     # ── Quick serializer inventory (--list-serializers) ───────────────────────
     # Print which protobuf runtimes are present and their message names, then
@@ -807,16 +802,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.list_serializers:
         return _cmd_list_serializers(
             ctx, cl, data, source_name, cache, cache_native)
-
-    # ── Local-symbol name recovery (cache-native only) ────────────────────────
-    # Preoptimised "direct selector" method lists strip the selector name field
-    # (it points at unrelated binary data), so most method names resolve to null
-    # or false positives.  The .symbols sub-cache carries the original
-    # -[Class selector] local symbols keyed by implementation address; the
-    # impOffset field is reliable, so this restores correct names and adds
-    # methods absent from the optimised list.
-    if cache_native and cache is not None:
-        _recover_method_names_from_symbols(cache, mach_va, cl)
 
     # ── Proto extraction ──────────────────────────────────────────────────────
     t = _step("extracting proto schemas")
