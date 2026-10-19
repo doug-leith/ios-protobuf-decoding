@@ -125,6 +125,19 @@ def parse_mem(op: str):
     return MemOperand(base, index, disp, ext, shift, idx_w)
 
 
+def operand_regs(tokens) -> List[str]:
+    """The registers (``xN`` / ``vN`` form) named by operand tokens -- memory operands'
+    bases and indices included -- other than ``xzr`` / ``sp``."""
+    out = []
+    for t in tokens:
+        t = t.strip().strip('[]!')
+        t = t.split()[0] if t else t
+        r = reg_name(t) if t else None
+        if r and r not in ('xzr', 'sp'):
+            out.append(r)
+    return out
+
+
 def mem_regs(op: str):
     """(base, index or None, displacement) of a memory operand, or None."""
     pm = parse_mem(op)

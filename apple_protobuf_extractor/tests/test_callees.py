@@ -90,5 +90,32 @@ class TestStubSelector(unittest.TestCase):
         self.assertIsNone(self._sel([_ins('ret', '')]))
 
 
+class TestCallReads(unittest.TestCase):
+    """proto.callees.call_reads: one answer to "what may this call read" for both
+    interpreters (WriterFlow and arm64_eval.Flow)."""
+
+    def _reads(self, name=None, sel=None, body=()):
+        import proto.callees as C
+        insns = [_ins(mn, op) for mn, op in body]
+        for i, ins in enumerate(insns):
+            ins.addr = 0x9000 + 4 * i
+        with mock.patch.object(C, 'callee_name', lambda ctx, va: name), \
+                mock.patch.object(C, 'stub_selector', lambda ctx, va: sel), \
+                mock.patch.object(C, 'disasm', lambda ctx, va, max_insns=0, stop_at_ret=True: insns):
+            return C.call_reads(SimpleNamespace(), 0x9000)
+
+    def test_a_runtime_contract_is_what_it_reads(self):
+        self.assertEqual(self._reads("_objc_retain_x19"), ("x19",))
+
+    def test_a_named_function_or_a_send_reads_the_abi_arguments(self):
+        from proto.callees import ABI_ARGS
+        self.assertEqual(self._reads("_memcpy"), ABI_ARGS)
+        self.assertEqual(self._reads(sel="count"), ABI_ARGS)
+
+    def test_an_outlined_fragment_reads_what_its_entry_path_reads_before_writing(self):
+        got = self._reads(body=[('mov', 'x0, x21'), ('add', 'x1, x22, #8'), ('ret', '')])
+        self.assertEqual(set(got), {'x21', 'x22'})       # x0 written before it returns
+
+
 if __name__ == "__main__":
     unittest.main()

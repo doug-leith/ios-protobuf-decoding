@@ -26,7 +26,8 @@ from typing import Dict, NamedTuple, Optional, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import BinaryContext, _ctx_cache
-from proto.arm64_operands import parse_mem, split_ops
+from proto.arm64_operands import (parse_mem, split_ops, writes, operand_regs, STORE_BYTES,
+                                  is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
 
@@ -261,6 +262,66 @@ for _name in ("_objc_release", "_objc_sync_enter", "_objc_sync_exit",
 RUNTIME_CONTRACTS["_os_unfair_lock_lock_with_options"] = (("x0", "x1"), None)
 for _name in ("_objc_opt_class", "_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
     RUNTIME_CONTRACTS[_name] = (("x0", "x1"), None)
+
+#: AAPCS64 argument registers (x8: an indirect result's address): what a function with a
+#: calling convention reads.
+ABI_ARGS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
+#: Every register a callee could read.
+_ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
+_CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
+_STORES = frozenset(STORE_BYTES) | {'stp', 'stnp'}
+_COMPARES = ('cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'ccmp')
+_RETURNS = ('ret', 'retaa', 'retab')
+# [cap:INPUT-SANITY] runaway backstop for the entry scan below (it stops at the first branch).
+_ENTRY_SCAN_INSNS = 64
+
+
+def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
+    """The registers a call to *target* may read: a runtime function's ABI contract
+    (:data:`RUNTIME_CONTRACTS`: ``objc_retain_x19`` reads x19); any other named function or
+    message send -- or an unknown target -- the AAPCS64 argument registers
+    (:data:`ABI_ARGS`); an unnamed function of the image (possibly a machine-outlined
+    fragment with no calling convention), what its entry path reads before writing it, and,
+    once it branches, every register not yet written.  Memoised on *ctx*."""
+    name = callee_name(ctx, target) if target is not None else None
+    contract = RUNTIME_CONTRACTS.get(name) if name else None
+    if contract is not None:
+        return contract[0]
+    if target is None or name is not None or stub_selector(ctx, target) is not None:
+        return ABI_ARGS
+    memo = _ctx_cache(ctx, "_call_reads", dict)
+    if target in memo:
+        return memo[target]
+    res: Tuple[str, ...] = _ALL_REGS
+    try:
+        written, read = set(), set()
+        for ins in disasm(ctx, target, max_insns=_ENTRY_SCAN_INSNS, stop_at_ret=True):
+            mn = ins.mnemonic
+            ops = split_ops(ins.op_str)
+            if mn in _RETURNS:
+                res = tuple(r for r in _ALL_REGS if r in read or (r == 'x0' and r not in written))
+                break
+            if mn in ('b', 'bl', 'blr', 'br', 'cbz', 'cbnz', 'tbz', 'tbnz') or is_cond_branch(mn):
+                if mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                    read |= set(operand_regs(ops[:1])) - written
+                res = tuple(r for r in _ALL_REGS if r in read or r not in written)
+                break
+            dst = set(writes(ins))
+            if mn in _STORES or mn in _COMPARES:
+                src = set(operand_regs(ops))
+                if mn in _STORES and '[sp' in ins.op_str:
+                    src -= _CALLEE_SAVED                # a prologue spill is not a use
+            else:
+                src = set(operand_regs(ops[1:] if dst else ops))
+            read |= src - written
+            written |= dst
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        res = _ALL_REGS
+    memo[target] = res
+    return res
+
 
 #: Functions that never return.
 NORETURN = frozenset(("___stack_chk_fail", "__Unwind_Resume", "_objc_exception_throw",

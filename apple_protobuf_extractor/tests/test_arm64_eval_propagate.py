@@ -108,8 +108,9 @@ class TestStackSlots(unittest.TestCase):
                         'add x8, sp, #8', f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}',
                         *EPILOGUE)
         k = at_mark(insns)
-        for name, want in (("_objc_retain_x19", PLAIN), (None, None)):
-            with mock.patch.object(AE, 'callee_name', lambda ctx, va, n=name: n):
+        from proto.callees import ABI_ARGS, RUNTIME_CONTRACTS
+        for reads, want in ((RUNTIME_CONTRACTS["_objc_retain_x19"][0], PLAIN), (ABI_ARGS, None)):
+            with mock.patch.object(AE, 'call_reads', lambda ctx, va, r=reads: r):
                 self.assertEqual(Flow(object(), insns).propagate({}, [k])[k].get('x3'), want)
 
     def test_a_stack_address_handed_once_exposes_the_frame_to_every_later_call(self):

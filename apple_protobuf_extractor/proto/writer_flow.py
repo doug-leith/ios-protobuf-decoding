@@ -19,10 +19,10 @@ A call's inputs are what its callee reads.  Calls into the Objective-C runtime a
 ProtocolBuffer runtime are named by their exported / imported ABI symbol
 (:func:`proto.callees.callee_name`) and have fixed contracts (:data:`proto.callees.RUNTIME_CONTRACTS`, :data:`_PB_WRITE`):
 ``objc_retain_x2`` reads x2 and returns it; ``PBDataWriterWriteInt32Field(writer, value,
-field)`` serialises x1.  Any other callee is assumed to read the AAPCS64 argument registers
-(x0-x8, v0-v7) -- for a function of the image itself (possibly a machine-outlined fragment
-with no calling convention), every register its entry path has not yet written -- and to
-return a value derived from all of them.
+field)`` serialises x1.  Any other callee reads what :func:`proto.callees.call_reads` says
+(the AAPCS64 argument registers, or for a function of the image itself, possibly a
+machine-outlined fragment with no calling convention, every register its entry path has
+not yet written) and returns a value derived from all of them.
 
 A call that receives the writer serialises its contract's value argument, or -- with no
 contract -- everything it reads.  The writer handed to a call with no contract may be kept
@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
@@ -45,8 +45,9 @@ from macho.memory import BinaryContext, _ctx_store
 from proto.arm64cfg import build_blocks_with_br_arms, parse_adrp, split_ops
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs
 from proto.dispatch_eval import _function_insns
-from proto.callees import callee_name, stub_selector, RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN
-from proto.arm64_operands import (writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
+from proto.callees import (callee_name, stub_selector, call_reads, RUNTIME_CONTRACTS as _ARC,
+                           NORETURN as _NORETURN)
+from proto.arm64_operands import (writes, reg_name, operand_regs, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   CALLER_SAVED_GPRS, CALLER_SAVED_FPRS)
 
 log = logging.getLogger(__name__)
@@ -54,11 +55,7 @@ log = logging.getLogger(__name__)
 E: FrozenSet = frozenset()
 _W, _S, _T = 'W', 'S', 'T'
 
-# AAPCS64 argument registers (x8: indirect result) and every register a callee could read.
-_ARGS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
-_ALL = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
 _CALLER_SAVED = CALLER_SAVED_GPRS + CALLER_SAVED_FPRS
-_CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
 _LOADS = frozenset(LOAD_BYTES)
 _PAIR_LOADS = frozenset(('ldp', 'ldpsw', 'ldnp'))
 _STORES = frozenset(STORE_BYTES)
@@ -69,7 +66,6 @@ _RET = ('ret', 'retaa', 'retab')
 # [cap:INPUT-SANITY] runaway backstops (a writeTo: settles in a few sweeps of its blocks).
 _MAX_BLOCK_VISITS = 50_000
 _MAX_SUMMARY_DEPTH = 3
-_ENTRY_SCAN_INSNS = 64
 
 
 # ── ABI contracts ─────────────────────────────────────────────────────────────
@@ -120,17 +116,6 @@ def _image_text_range(ctx):
     except AttributeError:
         pass
     return None
-
-
-def _regs(tokens: Iterable[str]) -> List[str]:
-    out = []
-    for t in tokens:
-        t = t.strip().strip('[]!')
-        t = t.split()[0] if t else t
-        r = reg_name(t) if t else None
-        if r and r not in ('xzr', 'sp'):
-            out.append(r)
-    return out
 
 
 class _St:
@@ -304,7 +289,6 @@ class WriterFlow:
         self.ctx, self.cl = ctx, cl
         self.entries = FunctionEntries(m.imp for c in cl for m in c.methods if m.imp)
         self.entry_set = self.entries.members
-        self._live_memo: Dict[int, Tuple[str, ...]] = {}
         self._summary_memo: Dict[int, FrozenSet] = {}
         self.cls: Optional[ObjcClass] = None
         self.own_imps: Dict[int, str] = {}
@@ -532,7 +516,7 @@ class WriterFlow:
         elif contract is not None:
             reads, value = contract[0], None
         else:
-            reads, value = self._live_in(tgt, sel, name), None
+            reads, value = call_reads(self.ctx, tgt), None
         argp: Set = set()
         for r in reads:
             argp |= st.p(r)
@@ -609,47 +593,6 @@ class WriterFlow:
         self._summary_memo[imp] = out
         return out
 
-    def _live_in(self, tgt: Optional[int], sel: Optional[str], name: Optional[str]
-                 ) -> Tuple[str, ...]:
-        """Registers a callee with no contract may read."""
-        if tgt is None or sel is not None or name is not None:
-            return _ARGS                             # a method / library function: the ABI
-        if tgt in self._live_memo:
-            return self._live_memo[tgt]
-        res: Tuple[str, ...] = _ALL
-        try:
-            # A function of this image (possibly a machine-outlined fragment with no calling
-            # convention): what its entry path reads before writing, and -- once it
-            # branches -- every register not yet written.
-            written: Set[str] = set()
-            read: Set[str] = set()
-            for ins in disasm(self.ctx, tgt, max_insns=_ENTRY_SCAN_INSNS, stop_at_ret=True):
-                mn = ins.mnemonic
-                ops = split_ops(ins.op_str)
-                if mn in _RET:
-                    res = tuple(r for r in _ALL if r in read or (r == 'x0' and r not in written))
-                    break
-                if mn in ('b', 'bl', 'blr', 'br') or mn.startswith('b.') or mn in _COND:
-                    if mn in _COND:
-                        read |= set(_regs(ops[:1])) - written
-                    res = tuple(r for r in _ALL if r in read or r not in written)
-                    break
-                dst = set(writes(ins))
-                if mn in _STORES or mn in _PAIR_STORES or mn in ('cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'ccmp'):
-                    src = set(_regs(ops))
-                    if (mn in _STORES or mn in _PAIR_STORES) and '[sp' in ins.op_str:
-                        src -= _CALLEE_SAVED       # a prologue spill is not a use
-                else:
-                    src = set(_regs(ops[1:] if dst else ops))
-                read |= src - written
-                written |= dst
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            res = _ALL
-        self._live_memo[tgt] = res
-        return res
-
     # ── one instruction ──────────────────────────────────────────────────────
     def _frame_addr(self, st: _St, base: str) -> Optional[int]:
         if base == 'sp':
@@ -709,7 +652,7 @@ class WriterFlow:
             return
         # anything else: each destination derives from every source register
         src: Set = set()
-        for r in _regs(ops[1:] if dsts else ops):
+        for r in operand_regs(ops[1:] if dsts else ops):
             src |= st.p(r)
             if r in st.sv:
                 src.add('STK')

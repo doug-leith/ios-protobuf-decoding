@@ -26,7 +26,7 @@ from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder, split_ops)
 from macho.strings import read_cfstring_text
-from proto.callees import RUNTIME_CONTRACTS, callee_name
+from proto.callees import call_reads
 from proto.arm64_operands import (
     CALLER_SAVED_GPRS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
@@ -1058,13 +1058,11 @@ class Flow:
         return out
 
     def _call_reads(self, target: Optional[int]) -> Optional[Tuple[str, ...]]:
-        """The registers a call to *target* reads: a runtime function's ABI contract
-        (:data:`proto.callees.RUNTIME_CONTRACTS`, e.g. ``objc_retain_x19`` reads x19 only),
-        else None (the AAPCS64 argument registers)."""
+        """The registers a call to *target* reads (:func:`proto.callees.call_reads`: e.g.
+        ``objc_retain_x19`` reads x19 only); None (x0-x8) without an image to name it by."""
         if target is None or self.ctx is None:
             return None
-        contract = RUNTIME_CONTRACTS.get(callee_name(self.ctx, target))
-        return contract[0] if contract is not None else None
+        return call_reads(self.ctx, target)
 
     def _propagate_step(self, m: "_Machine", k: int, call_result=None) -> None:
         ins = self.insns[k]
