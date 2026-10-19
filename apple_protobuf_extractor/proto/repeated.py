@@ -15,7 +15,7 @@ from typing import Dict, FrozenSet, Optional, Tuple
 from macho.memory    import BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm    import disasm, _norm_reg
-from proto.arm64cfg  import ivar_slot_loads, mem_operand, parse_adrp
+from proto.arm64cfg  import mem_operand, parse_adrp
 from proto.callees   import callee_name
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
@@ -101,7 +101,7 @@ def _adder_array_ivar(
     the next method -- e.g. CoreParsec ``-[_CPVisibleResultsFeedback setGoTakeoverResult:]``
     into ``setUniqueIdsOfVisibleButtons:``, binding a singular field's setter to an array.
     """
-    from proto.dispatch import function_entries
+    from proto.dispatch import function_entries, listing_flow
     if imp_va == 0 or not array_offsets:
         return None
     try:
@@ -113,7 +113,13 @@ def _adder_array_ivar(
     nxt = function_entries(ctx).next_after(imp_va)
     if nxt is not None:
         insns = [ins for ins in insns if ins.addr < nxt]
-    for _k, slot_va in ivar_slot_loads(insns):
+    if not insns:
+        return None
+    flow = listing_flow(ctx, insns)
+    for k in range(len(flow.insns)):
+        slot_va = flow.slot_load_address(k)
+        if slot_va is None:
+            continue
         try:
             val = int.from_bytes(ctx.read_bytes(slot_va, 4), 'little')
         except (NameError, ImportError):

@@ -50,7 +50,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import _ctx_cache, _ctx_store
 from macho.classlist import class_name_at
-from proto.arm64cfg import build_blocks_with_br_arms, dominators, dominates, ivar_slot_loads, split_ops
+from proto.arm64cfg import build_blocks_with_br_arms, dominators, dominates, split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.callees import callee_name, stub_selector
@@ -468,14 +468,17 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
 
 
 def _slots_loaded(ctx, va: Optional[int]) -> FrozenSet[int]:
-    """The ivar-offset-variable addresses the function at *va* loads (``adrp`` + ``ldrsw``),
-    over its whole body (:func:`_function_insns`, bounded by the image's function index)."""
+    """The ivar-offset-variable addresses the function at *va* loads (``ldrsw`` from a base
+    whose reaching definition is a constant page, :meth:`Flow.slot_load_address`), over its
+    whole body (:func:`_function_insns`, bounded by the image's function index)."""
     if va is None:
         return frozenset()
     memo = _ctx_cache(ctx, "_dispatch_eval_slot_loads", dict)
     if va not in memo:
         ins = _function_insns(ctx, va, entries=D.function_entries(ctx))
-        memo[va] = frozenset(sl for _i, sl in ivar_slot_loads(ins))
+        flow = D.decoded_flow(ctx, ins) if ins else None
+        memo[va] = frozenset(sl for k in range(len(ins)) if flow is not None
+                             and (sl := flow.slot_load_address(k)) is not None)
     return memo[va]
 
 
