@@ -116,7 +116,7 @@ def _listing(*lines, base=0x1000):
 
 class TestSelfLoadOffset(unittest.TestCase):
     """`_writeto_self_load_offset`: the ivar of self in x0 at the tail call, by reaching
-    definitions (TODO #81 (3)) -- not by the literal registers x8 / x0."""
+    definitions (TODO #83 (3)) -- not by the literal registers x8 / x0."""
 
     CTX = _SlotCtx({0x10040: 8})
 

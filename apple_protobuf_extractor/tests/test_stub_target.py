@@ -1,5 +1,5 @@
 """proto/callees.py: the one call-stub decoder (:func:`proto.callees.stub_target`) and the
-callers built on it (:func:`real_target`, :func:`import_name`; TODO #81).
+callers built on it (:func:`real_target`, :func:`import_name`; TODO #83).
 
 The listings are copied from real disassembly; ``disasm`` is routed to them.  The decoder
 evaluates the stub's straight-line code up to its branch, so each stub form is told by what

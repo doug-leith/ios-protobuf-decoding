@@ -141,7 +141,7 @@ class TestResolveOffsetAddr(unittest.TestCase):
         self.assertIsNone(_resolve_offset_addr(pre, 'x8', {}))
 
     def test_base_is_its_nearest_definition(self):
-        # iOS 27 -[GEOPairedDeviceSubscriptionStatesSummary writeTo:] (TODO #81): x8 first
+        # iOS 27 -[GEOPairedDeviceSubscriptionStatesSummary writeTo:] (TODO #83): x8 first
         # holds a block descriptor (adrp+add), then the ivar-offset page.  The load reads
         # _isUpdateAvailable's slot 0x1e4567114, not descriptor page + add + 0x114.
         pre = [_ins(0x191a891b0, 'adrp', 'x8, #0x1e0a94000'),

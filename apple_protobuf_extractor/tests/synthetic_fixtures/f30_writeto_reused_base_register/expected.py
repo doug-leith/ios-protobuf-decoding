@@ -9,7 +9,7 @@ testrb_e) -- authored by hand in fixture.m, not derived from any tool output.
 `items` is an NSArray whose element class the binary does not show, so it is
 `repeated bytes` (LIMITATIONS.md (7)).
 
-Differential-checked (TODO #81 (2)): with the first-adrp+add base resolver
+Differential-checked (TODO #83 (2)): with the first-adrp+add base resolver
 (d7e55516's _resolve_offset_addr) both numbers come out number_confirmed=False
 (ivar order); with the nearest-definition base both are read from the binary.
 """
