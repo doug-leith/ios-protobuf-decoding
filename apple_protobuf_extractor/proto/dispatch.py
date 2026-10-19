@@ -5,8 +5,7 @@ starts from:
   each proto class's ``-readFrom:`` tail-calls, indexed by address (an element core a parent's
   handler calls names the element class);
 * :func:`_jump_table_arm_addrs` -- decoded ``br`` jump tables, the CFG completion every
-  :class:`proto.arm64_eval.Flow` user seeds its graph with;
-* :func:`_find_field_count` -- the ``cmp wN,#N ; b.hi`` gate reader (enum diagnostics).
+  :class:`proto.arm64_eval.Flow` user seeds its graph with.
 
 Never imports proto.extractor or proto.dispatch_eval (which imports this module); the
 evaluator (:mod:`proto.arm64_eval`) is imported inside the functions that run it.
@@ -15,14 +14,11 @@ from __future__ import annotations
 import bisect
 import logging
 import re
-import struct
 from typing import Dict, List, Optional
 
 from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ObjcClass
 from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
-from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_HS,
-                               range_from_unsigned_gate)
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
 from proto.arm64_operands import NO_DEST, PAIR_LOADS, imm_operand, is_cond_branch, split_ops
@@ -76,40 +72,6 @@ def _find_readfrom_c_func(
     if first.args.get('x0') == SELF and first.args.get('x1') == READER:
         return first.target
     return None
-
-
-def _read_raw_word(ctx: BinaryContext, va: int) -> Optional[int]:
-    """Read a 4-byte little-endian word at va, returning None on error."""
-    try:
-        raw = ctx.read_bytes(va, 4)
-        return struct.unpack_from("<I", raw)[0]
-    except (ValueError, struct.error):
-        return None
-
-
-def _find_field_count(ctx: BinaryContext, func_va: int) -> int:
-    """
-    Find the proto field count for a C ReadFrom function by scanning its raw
-    instruction stream for the `cmp wN, #N ; b.hi/b.hs` dispatch gate.
-
-    Returns 0 if the count cannot be determined.
-    """
-    MAX_SCAN = 256
-    va = func_va
-    for _ in range(MAX_SCAN):
-        word = _read_raw_word(ctx, va)
-        if word is None:
-            break
-        result = _decode_cmp_imm(word)
-        if result is not None:
-            _, imm = result
-            next_word = _read_raw_word(ctx, va + 4)
-            if next_word is not None:
-                cond = _decode_bcond(next_word)
-                if cond in (_COND_HS, _COND_HI):
-                    return range_from_unsigned_gate(cond, imm)
-        va += 4
-    return 0
 
 
 def _section_name(ctx: BinaryContext, va: int) -> Optional[str]:

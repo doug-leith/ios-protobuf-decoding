@@ -45,9 +45,9 @@ from macho.strings    import StringTable
 from macho.classlist  import ObjcClass, ObjcIvar
 from proto.models     import ProtoField
 from proto.protocore  import _proto_name
-from proto.dispatch   import _find_field_count
 from proto.config     import _dbg_enum
-from proto.enums      import _ASSTRING_INT_TYPES, _extract_enum_values, _enum_name_from_pairs
+from proto.enums      import (_ASSTRING_INT_TYPES, _extract_enum_values, _enum_name_from_pairs,
+                              _xasstring_gate_span)
 
 
 def _gather_asstring_methname_hits(
@@ -118,7 +118,7 @@ def _gather_type_compatible_methods(
         }
         # Try to extract a handful of enum values for identification
         try:
-            max_v = _find_field_count(ctx, m.imp)
+            max_v = _xasstring_gate_span(ctx, m.imp)
             entry["field_count"] = max_v
             if 1 <= max_v <= 512:
                 pairs_sample, _, _ = _extract_enum_values(ctx, m.imp, None)
@@ -221,7 +221,7 @@ def _emit_mode_c_debug(ctx: BinaryContext, cls: ObjcClass, fld: ProtoField,
         if mc.types and mc.types not in _ASSTRING_INT_TYPES:
             continue
         try:
-            fc = _find_field_count(ctx, mc.imp)
+            fc = _xasstring_gate_span(ctx, mc.imp)
             if fc < 2:
                 continue
             _cand_pairs, _cand_conf, _cand_trunc = _extract_enum_values(ctx, mc.imp, st)

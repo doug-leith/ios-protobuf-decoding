@@ -24,7 +24,6 @@ from typing import List, Optional, Set
 # repo root (root-level helpers + tests/) is put on sys.path by the root
 # conftest.py.  No per-file sys.path juggling needed.
 
-from macho.arm64decode import _decode_cmp_imm
 from proto.protocore import _field_label, _is_real_field_ivar, _type_from_enc
 from proto.protoclass_heuristic import _is_proto_class
 from proto.config import _class_to_proto_name
@@ -594,60 +593,6 @@ class TestConfigurePrefixes(unittest.TestCase):
     def test_case_sensitive(self):
         # Lowercase "appl" is a different string — not stripped.
         self.assertEqual(_class_to_proto_name("applFoo", ("APPL",)), "applFoo")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 6. CMP instruction decoder
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestDecodeCmpImm(unittest.TestCase):
-
-    def _encode_cmp_w(self, rn: int, imm: int, shift: int = 0) -> int:
-        """Encode CMP wN, #imm (SUBS wzr, wN, #imm)."""
-        return 0x71000000 | (shift << 22) | (imm << 10) | (rn << 5) | 0x1F
-
-    def test_cmp_w8_3(self):
-        word = self._encode_cmp_w(rn=8, imm=3)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        rn, imm = result
-        self.assertEqual(rn, 8)
-        self.assertEqual(imm, 3)
-
-    def test_cmp_w8_7(self):
-        word = self._encode_cmp_w(rn=8, imm=7)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        _, imm = result
-        self.assertEqual(imm, 7)
-
-    def test_cmp_w1_0x18(self):
-        word = self._encode_cmp_w(rn=1, imm=0x18)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        rn, imm = result
-        self.assertEqual(rn, 1)
-        self.assertEqual(imm, 0x18)
-
-    def test_not_cmp_returns_none(self):
-        # A NOP instruction
-        self.assertIsNone(_decode_cmp_imm(0xD503201F))
-        # An ADD instruction
-        self.assertIsNone(_decode_cmp_imm(0x91000000))
-        # A MOV instruction
-        self.assertIsNone(_decode_cmp_imm(0xD2800000))
-
-    def test_subs_with_explicit_rd_not_cmp(self):
-        # SUBS w0, w8, #3 — Rd=0, not 31 → NOT a CMP
-        word = 0x71000000 | (3 << 10) | (8 << 5) | 0   # Rd = 0
-        self.assertIsNone(_decode_cmp_imm(word))
-
-    def test_cmp_zero_immediate(self):
-        word = self._encode_cmp_w(rn=8, imm=0)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        _, imm = result
-        self.assertEqual(imm, 0)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

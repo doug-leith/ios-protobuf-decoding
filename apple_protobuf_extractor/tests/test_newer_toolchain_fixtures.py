@@ -20,7 +20,7 @@ from macho.memory import BinaryContext
 from macho.strings import build_string_table
 from macho.classlist import build_class_list
 from serializers.swift_descriptor_extract import load_macho_slice
-from proto.dispatch import _build_readfrom_core_index, _find_field_count
+from proto.dispatch import _build_readfrom_core_index, decoded_flow, function_entries
 from proto import dispatch_eval as E
 
 _FIXTURE_DIR = os.path.join(
@@ -123,7 +123,13 @@ class _GuardlessEngineChecks:
         return E.evaluate_class(self.ctx, self.cl.find(name), self.core_index)
 
     def test_engine_has_no_range_guard_and_still_dispatches(self):
-        self.assertEqual(_find_field_count(self.ctx, self.engine), 0)
+        # no ordered gate on the field number (``tag >> 3``): only compares for equality
+        flow = decoded_flow(self.ctx, E._function_insns(
+            self.ctx, self.engine, entries=function_entries(self.ctx)))
+        sites = E._lsr3_sites(flow)
+        self.assertTrue(sites)
+        for k, dest in sites:
+            self.assertEqual(flow.candidates(k, dest, (1, 1 << 29)).intervals, [])
         ev = self.ev("TestGrContainer")
         self.assertEqual(ev.cores, [self.engine])
         self.assertEqual(ev.elements(), {5: "TestGrElemA", 6: "TestGrElemB"})

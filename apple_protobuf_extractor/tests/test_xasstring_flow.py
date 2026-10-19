@@ -13,7 +13,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from proto.enums import _extract_xasstring
+from proto.enums import _extract_xasstring, _xasstring_gate_span
 from tests.test_dictrep_inline_enums import _enum_ctx
 
 NAMES = {0x9000 + 0x20 * i: f'K_{i}' for i in range(6)}
@@ -186,6 +186,41 @@ class TestDisclosure(unittest.TestCase):
         ctx, _ = _enum_ctx(['ret'], strings=NAMES)
         self.assertEqual(_extract_xasstring(ctx, 0).pairs, [])
 
+
+
+class TestGateSpan(unittest.TestCase):
+    """``_xasstring_gate_span``: how many values the range gate on the argument admits (the
+    ``--debug-enums`` field count), read off the same Flow as the values."""
+
+    def _span(self, code):
+        ctx, _ = _enum_ctx(code, strings=NAMES)
+        return _xasstring_gate_span(ctx, 0x1000)
+
+    def test_b_hi_admits_the_bound(self):
+        self.assertEqual(self._span(['cmp w2, #3', 'b.hi dflt', 'mov x0, #1', 'ret',
+                                     'dflt:', 'mov x0, #0', 'ret']), 4)
+
+    def test_b_hs_excludes_the_bound(self):
+        self.assertEqual(self._span(['cmp w2, #3', 'b.hs dflt', 'mov x0, #1', 'ret',
+                                     'dflt:', 'mov x0, #0', 'ret']), 3)
+
+    def test_a_bias_shifts_the_range_without_widening_it(self):
+        self.assertEqual(self._span(['sub w8, w2, #1', 'cmp w8, #3', 'b.hi dflt',
+                                     'mov x0, #1', 'ret', 'dflt:', 'mov x0, #0', 'ret']), 4)
+
+    def test_a_gate_on_another_register_is_not_the_arguments(self):
+        # the first `cmp ; b.hi` in address order guards w3, not the value
+        self.assertEqual(self._span(['cmp w3, #100', 'b.hi dflt', 'cmp w2, #3', 'b.hi dflt',
+                                     'mov x0, #1', 'ret', 'dflt:', 'mov x0, #0', 'ret']), 4)
+
+    def test_a_compare_chain_has_no_gate(self):
+        self.assertEqual(self._span(['cbz w2, zero', 'cmp w2, #7', 'b.eq seven',
+                                     'mov x0, #0', 'ret', 'zero:', 'mov x0, #1', 'ret',
+                                     'seven:', 'mov x0, #2', 'ret']), 0)
+
+    def test_imp_zero_has_no_gate(self):
+        ctx, _ = _enum_ctx(['ret'], strings=NAMES)
+        self.assertEqual(_xasstring_gate_span(ctx, 0), 0)
 
 if __name__ == '__main__':
     unittest.main()

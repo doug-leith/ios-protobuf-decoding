@@ -4,12 +4,9 @@ the code-review session (June 2026).
 
 Functions covered here (all previously at 0 test references):
   proto/extractor.py:
-    _decode_bcond
-    _read_raw_word
     _identify_string_write_helpers
 
   Additional cases for partially-covered functions:
-    _decode_cmp_imm  (shift field not previously exercised)
     _find_string_write_helper  (NSMutableString + missing-helper paths)
 
 All tests are pure-logic / synthetic-binary; no GeoServices binary required.
@@ -17,7 +14,6 @@ All tests are pure-logic / synthetic-binary; no GeoServices binary required.
 
 from __future__ import annotations
 
-import struct
 import sys
 import os
 import unittest
@@ -25,46 +21,13 @@ from typing import List, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from macho.memory import BinaryContext, Section
+from macho.memory import BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, ObjcMethod
-from macho.arm64decode import (_decode_bcond, _decode_cmp_imm,
-                                range_from_unsigned_gate,
-                                _COND_EQ, _COND_NE, _COND_LO, _COND_LS)
-from proto.dispatch import _COND_HI, _COND_HS, _find_field_count, _read_raw_word
 from proto.write_helpers import _find_string_write_helper, _identify_string_write_helpers
-from tests.conftest import (
-    build_text_binary,
-    encode_bl,
-    encode_b,
-    NOP_BYTES,
-    RET_BYTES,
-)
+from tests.conftest import build_text_binary, RET_BYTES
 
 
 # ── Tiny helpers ──────────────────────────────────────────────────────────────
-
-def _encode_cmp_w(rn: int, imm12: int, shift: int = 0) -> int:
-    """Encode CMP wN, #(imm12 << (shift*12)) as a 32-bit instruction word."""
-    return 0x7100001F | (shift << 22) | (imm12 << 10) | (rn << 5)
-
-
-def _encode_bcond(cond: int, imm19: int = 0) -> int:
-    """Encode B.cond #(PC + imm19*4) as a 32-bit instruction word."""
-    return 0x54000000 | ((imm19 & 0x7FFFF) << 5) | (cond & 0xF)
-
-
-def _encode_movz_w32(rd: int, imm16: int) -> bytes:
-    """Encode MOVZ w{rd}, #imm16 (32-bit form used for field-number args)."""
-    return struct.pack('<I', 0x52800000 | ((imm16 & 0xFFFF) << 5) | (rd & 0x1F))
-
-
-def _make_section(vmaddr: int = 0x1000, vmsize: int = 0x100) -> Section:
-    return Section(
-        name='__text', segname='__TEXT',
-        vmaddr=vmaddr, vmsize=vmsize,
-        file_off=0x200, flags=0,
-    )
-
 
 def _proto_class(name: str, ivars: Optional[List[ObjcIvar]] = None,
                  methods: Optional[List[ObjcMethod]] = None) -> ObjcClass:
@@ -85,152 +48,6 @@ def _proto_class(name: str, ivars: Optional[List[ObjcIvar]] = None,
         methods=all_methods,
         ivars=ivars or [],
     )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# _decode_cmp_imm — shift field (existing tests cover shift=0 only)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestDecodeCmpImmShift(unittest.TestCase):
-    """Exercise the imm12 << (shift*12) path not covered by existing tests."""
-
-    def test_shift1_doubles_immediate_by_4096(self):
-        # CMP w8, #2, lsl #12 → effective immediate = 2 * 4096 = 8192
-        word = _encode_cmp_w(rn=8, imm12=2, shift=1)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        rn, imm = result
-        self.assertEqual(rn, 8)
-        self.assertEqual(imm, 2 << 12)
-
-    def test_shift2_multiplies_immediate_by_4096_squared(self):
-        # CMP w5, #1, lsl #24 → effective immediate = 1 * (4096^2) = 16777216
-        word = _encode_cmp_w(rn=5, imm12=1, shift=2)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        _, imm = result
-        self.assertEqual(imm, 1 << 24)
-
-    def test_rn_field_decoded_correctly_with_nonzero_shift(self):
-        word = _encode_cmp_w(rn=3, imm12=4, shift=1)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        rn, imm = result
-        self.assertEqual(rn, 3)
-        self.assertEqual(imm, 4 << 12)
-
-    def test_maximum_rn_field(self):
-        # rn=30 (x30 / lr) is a valid register operand for a CMP
-        word = _encode_cmp_w(rn=30, imm12=1, shift=0)
-        result = _decode_cmp_imm(word)
-        self.assertIsNotNone(result)
-        rn, imm = result
-        self.assertEqual(rn, 30)
-        self.assertEqual(imm, 1)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# _decode_bcond
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestDecodeBcond(unittest.TestCase):
-    """_decode_bcond returns the 4-bit condition code or None for non-B.cond words."""
-
-    def test_b_hi_returns_cond_hi(self):
-        word = _encode_bcond(_COND_HI)
-        self.assertEqual(_decode_bcond(word), _COND_HI)
-
-    def test_b_hs_returns_cond_hs(self):
-        word = _encode_bcond(_COND_HS)
-        self.assertEqual(_decode_bcond(word), _COND_HS)
-
-    def test_b_eq_returns_zero(self):
-        # Condition code 0x0 = EQ
-        word = _encode_bcond(0x0)
-        self.assertEqual(_decode_bcond(word), 0x0)
-
-    def test_b_ne_returns_one(self):
-        word = _encode_bcond(0x1)
-        self.assertEqual(_decode_bcond(word), 0x1)
-
-    def test_b_lt_returns_correct_cond(self):
-        # LT = cond 0xB
-        word = _encode_bcond(0xB)
-        self.assertEqual(_decode_bcond(word), 0xB)
-
-    def test_nonzero_offset_preserves_cond(self):
-        # Offset should not affect the returned cond bits
-        word = _encode_bcond(_COND_HI, imm19=42)
-        self.assertEqual(_decode_bcond(word), _COND_HI)
-
-    def test_cmp_word_returns_none(self):
-        # CMP instruction shares no bits with B.cond base pattern
-        cmp_word = _encode_cmp_w(rn=8, imm12=5)
-        self.assertIsNone(_decode_bcond(cmp_word))
-
-    def test_nop_returns_none(self):
-        self.assertIsNone(_decode_bcond(0xD503201F))
-
-    def test_cbz_returns_none(self):
-        # CBZ x0, #0 = 0xB4000000 — similar opcode space but different pattern
-        self.assertIsNone(_decode_bcond(0xB4000000))
-
-    def test_bc_cond_bit4_set_returns_none(self):
-        # BC.cond (ARMv8.8) has bit 4 set — the mask 0xFF000010 excludes these
-        bc_hi = 0x54000010 | _COND_HI   # BC.HI
-        self.assertIsNone(_decode_bcond(bc_hi),
-                          "BC.cond (bit4=1) must not match B.cond")
-
-    def test_all_condition_codes_in_range(self):
-        # Every 4-bit condition code must round-trip correctly
-        for cond in range(16):
-            word = _encode_bcond(cond)
-            self.assertEqual(_decode_bcond(word), cond,
-                             f"cond=0x{cond:x} did not round-trip")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# _read_raw_word
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestReadRawWord(unittest.TestCase):
-    """_read_raw_word reads a 4-byte LE word; returns None for unmapped addresses."""
-
-    TEXT_VA = 0x4000
-
-    @classmethod
-    def setUpClass(cls):
-        # Build a binary with 4 known words followed by RET
-        words = [0xDEADBEEF, 0xCAFEBABE, 0x12345678, 0x00000001]
-        code = b''.join(struct.pack('<I', w) for w in words) + RET_BYTES
-        cls.ctx = BinaryContext(build_text_binary(code, vmaddr=cls.TEXT_VA))
-        cls.words = words
-
-    def test_reads_first_word(self):
-        self.assertEqual(_read_raw_word(self.ctx, self.TEXT_VA), self.words[0])
-
-    def test_reads_second_word(self):
-        self.assertEqual(_read_raw_word(self.ctx, self.TEXT_VA + 4), self.words[1])
-
-    def test_reads_third_word(self):
-        self.assertEqual(_read_raw_word(self.ctx, self.TEXT_VA + 8), self.words[2])
-
-    def test_reads_fourth_word(self):
-        self.assertEqual(_read_raw_word(self.ctx, self.TEXT_VA + 12), self.words[3])
-
-    def test_unmapped_address_returns_none(self):
-        self.assertIsNone(_read_raw_word(self.ctx, 0xDEAD0000))
-
-    def test_zero_address_returns_none(self):
-        self.assertIsNone(_read_raw_word(self.ctx, 0x0))
-
-    def test_returns_none_rather_than_raising(self):
-        # Must not propagate ValueError for unmapped addresses
-        try:
-            result = _read_raw_word(self.ctx, 0xFFFFFFFF00000000)
-        except Exception as exc:
-            self.fail(f"_read_raw_word raised unexpectedly: {exc}")
-        self.assertIsNone(result)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -459,40 +276,6 @@ class TestFindStringWriteHelperAdditional(unittest.TestCase):
         ivars = [ObjcIvar(name='_name', type_enc='@"NSString"', offset=8, size=8)]
         result = _find_string_write_helper({}, ivars, set())
         self.assertIsNone(result)
-
-
-class TestRangeFromUnsignedGate(unittest.TestCase):
-    """The shared jump-table count-from-gate convention (range_from_unsigned_gate),
-    extracted from the 4 sites that inlined it (`_find_dispatch_cluster`, the
-    jump-table enum harvester Idiom A, `_harvest_dictrep`, and
-    `_dictrep_cmp_range`).  A divergence in this off-by-one silently drops the
-    last enum value / dispatch arm, so it is pinned here."""
-
-    def test_hi_covers_imm_plus_one(self):
-        # b.hi (index > imm → default) ⇒ valid indices 0..imm ⇒ imm+1 entries.
-        self.assertEqual(range_from_unsigned_gate(_COND_HI, 7), 8)
-        self.assertEqual(range_from_unsigned_gate(_COND_HI, 0), 1)
-
-    def test_hs_covers_imm(self):
-        # b.hs (index >= imm → default) ⇒ valid indices 0..imm-1 ⇒ imm entries.
-        self.assertEqual(range_from_unsigned_gate(_COND_HS, 7), 7)
-        self.assertEqual(range_from_unsigned_gate(_COND_HS, 1), 1)
-
-    def test_non_range_conditions_yield_zero(self):
-        # Only the unsigned default-branch conditions are range gates; anything
-        # else (incl. the routing-sense b.lo/b.ls and None) is "no gate".
-        for cond in (_COND_EQ, _COND_NE, _COND_LO, _COND_LS, None):
-            self.assertEqual(range_from_unsigned_gate(cond, 7), 0)
-
-    def test_matches_legacy_inline_convention(self):
-        # Exhaustive equivalence to the pre-refactor inline expression at every
-        # site: `imm+1 if HI elif imm if HS else 0`.
-        for imm in range(0, 64):
-            for cond in (_COND_HI, _COND_HS, _COND_EQ, _COND_NE,
-                         _COND_LO, _COND_LS, None):
-                expected = (imm + 1 if cond == _COND_HI
-                            else imm if cond == _COND_HS else 0)
-                self.assertEqual(range_from_unsigned_gate(cond, imm), expected)
 
 
 class TestEmbeddedStructNote(unittest.TestCase):

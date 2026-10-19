@@ -40,6 +40,8 @@ log = logging.getLogger(__name__)
 _ENTRY = -1                                   # pseudo-definition: value on function entry
 _REGS = tuple(f"x{n}" for n in range(0, 31)) + tuple(f"v{n}" for n in range(0, 32))
 _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
+# The ordered conditions whose bound belongs to the upper side (``cmp w8, #3 ; b.hs`` admits 0..2).
+_STRICT_CONDS = frozenset(('hs', 'cs', 'lo', 'cc', 'ge', 'lt'))
 
 # [cap:INPUT-SANITY] An ordered gate (`cmp w, #imm12; b.hi`) spans at most 2^12 values by the
 # encoding of the immediate; a wider span cannot come from one unshifted compare.  Only a gate
@@ -667,6 +669,8 @@ class Flow:
                     cands.add(point)
                     if cond in _ORDERED_CONDS:
                         lo, hi = sorted((-st[r], point))
+                        if cond in _STRICT_CONDS and hi == point:
+                            hi -= 1
                         st[f"gate_lo:{st[r]}"], st[f"gate_hi:{st[r]}"] = lo, hi   # keyed by the VALUE's offset: a register copy keeps it
                         scan.intervals.append((lo, hi))
         elif mn in ('cbz', 'cbnz') and ops:

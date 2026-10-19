@@ -4,7 +4,7 @@ Carved from proto.extractor (#11 split, step 5b, final): enum-value recovery and
 enum-name derivation.  The number->name maps are recovered by evaluating the code that
 produces the names (:mod:`proto.dictrep_flow`) for both sources: the ``xAsString:`` method
 (:func:`_extract_xasstring`) and the converter inlined into ``_dictionaryRepresentation:``
-(:func:`_harvest_dictrep`).  Imports macho.* + arm64decode + protocore + dispatch + config (never
+(:func:`_harvest_dictrep`).  Imports macho.* + protocore + dispatch + config (never
 proto.extractor) -> cycle-free; extractor re-imports the surface so call sites +
 tests are unchanged.
 
@@ -509,6 +509,38 @@ def _branches_past_end(insns: List[Insn]) -> bool:
                for i in insns)
 
 
+def _xasstring_flow(ctx: BinaryContext, imp: int) -> Tuple[Optional[Flow], bool]:
+    """``(flow, truncated)`` of the ``xAsString:`` body at *imp* (``(None, False)`` when it
+    is empty); raises when it cannot be disassembled."""
+    insns = disasm(ctx, imp, max_insns=_XAS_PROBE_INSNS)
+    if not insns:
+        return None, False
+    truncated = _disasm_truncated(insns, _XAS_PROBE_INSNS)
+    if truncated or _branches_past_end(insns):
+        # the probe stopped at the budget, or at a `ret` that a branch jumps over (out-of-line
+        # default / case blocks): re-read the method by its true extent (SOUND for xAsString:
+        # bodies, which are contiguous)
+        body = _function_body_extent(ctx, imp, _SPARSE_HARD_CAP)
+        if body:
+            insns = body
+            truncated = _disasm_truncated(insns, _SPARSE_HARD_CAP)
+    return Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns)), truncated
+
+
+def _xasstring_gate_span(ctx: BinaryContext, imp: int) -> int:
+    """Number of values the widest ordered gate on the argument of ``-[C xAsString:]`` at
+    *imp* (``w2``) admits, along the CFG from the entry (:meth:`Flow.candidates`):
+    ``cmp w2, #N ; b.hi`` admits N + 1, ``b.hs`` N, a bias (``sub w8, w2, #k``) shifts the
+    range without widening it.  0 when no gate guards the value."""
+    if imp == 0:
+        return 0
+    flow, _ = _xasstring_flow(ctx, imp)
+    if flow is None:
+        return 0
+    scan = flow.candidates(-1, 'x2', (-(1 << 31), 1 << 31))
+    return max((hi - lo + 1 for lo, hi in scan.intervals), default=0)
+
+
 def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
     """Recover ``(value, name)`` pairs from ``-[C xAsString:]`` at *imp*.
 
@@ -522,25 +554,15 @@ def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
     if imp == 0:
         return XasResult([], False, False)
     try:
-        insns = disasm(ctx, imp, max_insns=_XAS_PROBE_INSNS)
+        flow, truncated = _xasstring_flow(ctx, imp)
     except (NameError, ImportError):
         raise
     except Exception as exc:
         log.warning("xAsString: at 0x%x could not be disassembled (%s); its enum values "
                     "are not recovered", imp, exc)
         return XasResult([], False, True, f"the method could not be disassembled ({exc})")
-    if not insns:
+    if flow is None:
         return XasResult([], False, False)
-    truncated = _disasm_truncated(insns, _XAS_PROBE_INSNS)
-    if truncated or _branches_past_end(insns):
-        # the probe stopped at the budget, or at a `ret` that a branch jumps over (out-of-line
-        # default / case blocks): re-read the method by its true extent (SOUND for xAsString:
-        # bodies, which are contiguous)
-        body = _function_body_extent(ctx, imp, _SPARSE_HARD_CAP)
-        if body:
-            insns = body
-            truncated = _disasm_truncated(insns, _SPARSE_HARD_CAP)
-    flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
     res = flow.analyse_root(-1, 'x2', 4, frozenset(), direct=True)
     problems = list(res.problems)
     if truncated:
