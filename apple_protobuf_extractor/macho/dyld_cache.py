@@ -762,17 +762,6 @@ class DyldCacheReader:
         except OSError:
             return None
 
-    def vmaddr_to_file_info(self, vmaddr: int) -> 'Optional[tuple]':
-        """Return ``(basename, file_offset)`` for *vmaddr*, or ``None``.
-
-        Useful for diagnostics: shows exactly which file and byte offset a
-        vmaddr translates to, so the mapping can be verified independently.
-        """
-        mapping = self._find_mapping(vmaddr)
-        if mapping is None:
-            return None
-        return (os.path.basename(mapping.path), mapping.translate(vmaddr))
-
     def mapping_count(self) -> int:
         """Total number of mapped regions across all files."""
         return len(self._mappings)

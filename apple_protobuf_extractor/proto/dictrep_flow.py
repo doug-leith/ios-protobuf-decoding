@@ -32,7 +32,8 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from proto.arm64_eval import Flow as _EvalFlow
-from proto.arm64_eval import _Abort, _ENTRY, _LOADS, _MAX_GATE_SPAN, _norm_reg, mem_regs, split_ops
+from proto.arm64_eval import _Abort, _ENTRY, _MAX_GATE_SPAN, _norm_reg, mem_regs, split_ops
+from proto.arm64_operands import LOAD_BYTES
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class Flow(_EvalFlow):
         ivar-offset slot (the field-value loads, and the container derefs/counts behind them)."""
         out = []
         for k, ins in enumerate(self.insns):
-            if ins.mnemonic not in _LOADS or k not in self._block_of:
+            if ins.mnemonic not in LOAD_BYTES or k not in self._block_of:
                 continue
             ops = split_ops(ins.op_str)
             if len(ops) != 2:
@@ -125,10 +126,10 @@ class Flow(_EvalFlow):
         ``insns[k]`` does not load an integer of at most 4 bytes."""
         ins = self.insns[k]
         ops = split_ops(ins.op_str)
-        if ins.mnemonic not in _LOADS or len(ops) != 2:
+        if ins.mnemonic not in LOAD_BYTES or len(ops) != 2:
             return None
         dest = _norm_reg(ops[0])
-        size = _LOADS[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
+        size = LOAD_BYTES[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
         if dest is None or size == 8:
             return None
         return self.analyse_root(k, dest, size, stop)
@@ -155,7 +156,7 @@ class Flow(_EvalFlow):
             ins = self.insns[k]
             ops = split_ops(ins.op_str)
             dest = _norm_reg(ops[0])
-            size = _LOADS[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
+            size = LOAD_BYTES[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
             if size == 8 or dest is None:
                 continue                                  # a pointer load, not an enum value
             res = self.analyse_root(k, dest, size, every_root - {k})

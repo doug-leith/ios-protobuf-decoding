@@ -45,6 +45,8 @@ from __future__ import annotations
 import re
 from typing import List, Optional, Tuple
 
+from macho.disasm import _parse_imm
+
 _SAME_NEXT, _SAME_DELTA = 1, 2
 _STD_NEXT, _STD_DELTA = 3, 4
 _UNIQUE_NEXT, _UNIQUE_DELTA = 5, 6
@@ -169,10 +171,10 @@ def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[byt
         parts = [x.strip() for x in o.split(",")]
         dst = parts[0] if parts else ""
         if m == "adrp":
-            page[dst] = _imm(o)
+            page[dst] = _parse_imm(o)
             addr.pop(dst, None)
         elif m == "adr":
-            addr[dst] = _imm(o)
+            addr[dst] = _parse_imm(o)
         elif m == "add":
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
             if mm and mm.group(2) in page and page[mm.group(2)] is not None:
@@ -180,7 +182,7 @@ def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[byt
             else:
                 addr.pop(dst, None)
         elif m in ("mov", "movz") and len(parts) == 2:
-            v = _imm(parts[1])
+            v = _parse_imm(parts[1])
             wdst = dst.replace("x", "w")
             if v is not None:
                 imm[wdst] = v
@@ -218,7 +220,3 @@ def _read(ctx, va, length) -> Optional[bytes]:
     except Exception:
         return None
 
-
-def _imm(op_str: str) -> Optional[int]:
-    m = re.search(r"#(-?0x[0-9a-fA-F]+|-?\d+)", op_str)
-    return int(m.group(1), 0) if m else None

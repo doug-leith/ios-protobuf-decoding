@@ -36,7 +36,7 @@ common SCREAMING_SNAKE prefix, verified before writing this file).
 
 No field has an xAsString:/StringAsX: companion, so every enum here can ONLY
 be recovered from the dictionaryRepresentation body — the compare-chain
-harvest (_harvest_dictrep_enums' third pass). All four fields of TestNewEnums
+harvest (_harvest_dictrep's third pass). All four fields of TestNewEnums
 sit in ONE function, so this also checks each chain is attributed to its OWN
 ivar: a mis-anchored window would hand a chain to the wrong field (or, as
 found while building this fixture, lose it entirely — the first field's gated

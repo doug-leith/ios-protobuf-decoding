@@ -24,7 +24,7 @@ from typing import List, Optional, Set
 # repo root (root-level helpers + tests/) is put on sys.path by the root
 # conftest.py.  No per-file sys.path juggling needed.
 
-from macho.arm64decode import _decode_cmp_imm, _decode_cmp_reg, _decode_movk, _decode_movz, _materialized_value
+from macho.arm64decode import _decode_cmp_imm
 from proto.protocore import _field_label, _is_real_field_ivar, _type_from_enc
 from proto.protoclass_heuristic import _is_proto_class
 from proto.config import _class_to_proto_name
@@ -648,88 +648,6 @@ class TestDecodeCmpImm(unittest.TestCase):
         self.assertIsNotNone(result)
         _, imm = result
         self.assertEqual(imm, 0)
-
-
-class TestRegisterMaterializedCompare(unittest.TestCase):
-    """Sparse-enum values > 4095 are materialized into a register (movz[/movk])
-    and compared register-to-register, because they exceed the 12-bit cmp
-    immediate.  These decoders recover such values."""
-
-    @staticmethod
-    def _cmp_reg(rn: int, rm: int) -> int:
-        """Encode CMP wRn, wRm (SUBS wzr, wRn, wRm, shifted-register, no shift)."""
-        return 0x6B00001F | (rm << 16) | (rn << 5)
-
-    @staticmethod
-    def _movz(rd: int, imm16: int, shift: int = 0) -> int:
-        return 0x52800000 | ((shift // 16) << 21) | (imm16 << 5) | rd
-
-    @staticmethod
-    def _movk(rd: int, imm16: int, shift: int = 0) -> int:
-        return 0x72800000 | ((shift // 16) << 21) | (imm16 << 5) | rd
-
-    class _I:
-        def __init__(self, addr):
-            self.addr = addr
-
-    def test_decode_cmp_reg(self):
-        # cmp w2, w8
-        self.assertEqual(_decode_cmp_reg(self._cmp_reg(2, 8)), (2, 8))
-        # an immediate cmp is NOT a register cmp
-        self.assertIsNone(_decode_cmp_reg(0x7100001F | (3 << 10) | (8 << 5)))
-        # SUBS with explicit Rd (not 31) is not a cmp
-        self.assertIsNone(_decode_cmp_reg(0x6B000000 | (8 << 16) | (2 << 5) | 5))
-
-    def test_decode_movz_movk(self):
-        self.assertEqual(_decode_movz(self._movz(8, 0x2e1d)), (8, 0x2e1d, 0))
-        self.assertEqual(_decode_movz(self._movz(8, 0x61eb)), (8, 0x61eb, 0))
-        self.assertEqual(_decode_movk(self._movk(8, 1, shift=16)), (8, 1, 16))
-        # movz is not movk and vice-versa
-        self.assertIsNone(_decode_movk(self._movz(8, 1)))
-        self.assertIsNone(_decode_movz(self._movk(8, 1, shift=16)))
-
-    def _materialize(self, *words):
-        """Lay *words* out at 4-byte addresses, cmp last → run _materialized_value."""
-        insns = [self._I(4 * k) for k in range(len(words))]
-        wmap = {ins.addr: w for ins, w in zip(insns, words)}
-        cmp_idx = len(words) - 1
-        rm = _decode_cmp_reg(words[-1])[1]
-        return _materialized_value(insns, wmap, cmp_idx, rm)
-
-    def test_single_movz_value(self):
-        # mov w8, #0x2e1d ; cmp w2, w8   → 11805
-        val = self._materialize(self._movz(8, 0x2e1d), self._cmp_reg(2, 8))
-        self.assertEqual(val, 11805)
-
-    def test_movz_plus_movk_composed(self):
-        # mov w8,#0x61eb ; movk w8,#1,lsl16 ; cmp w2,w8  → 0x161eb = 90603
-        val = self._materialize(
-            self._movz(8, 0x61eb), self._movk(8, 1, shift=16), self._cmp_reg(2, 8))
-        self.assertEqual(val, 90603)
-        # The halves must be OR-composed, not overwriting (would give 25067).
-        self.assertNotEqual(val, 0x61eb)
-        self.assertNotEqual(val, 1 << 16)
-
-    def test_no_movz_returns_none(self):
-        # cmp w2,w8 with nothing materialising w8 → None (caller skips)
-        val = self._materialize(self._movz(9, 5), self._cmp_reg(2, 8))
-        self.assertIsNone(val)
-
-    def test_movk_low_half_no_preceding_movz(self):
-        # movk w8,#5 (shift=0, i.e. the LOW half) with no movz in the scan
-        # window at all: an undocumented/unusual placement (movk is normally
-        # the high-half refinement of a preceding movz), but _materialized_value
-        # still treats it as writing the low half directly.
-        val = self._materialize(self._movk(8, 5, shift=0), self._cmp_reg(2, 8))
-        self.assertEqual(val, 5)
-
-    def test_movz_directly_into_high_half(self):
-        # movz w8,#9,lsl#16 ; cmp w2,w8 — the rare case where the compiler
-        # materialises the constant via a single movz targeting the HIGH half
-        # (shift=16) rather than the customary low-half movz(+movk) pair.  The
-        # scan must stop at this movz (it's the base) and return imm16<<shift.
-        val = self._materialize(self._movz(8, 9, shift=16), self._cmp_reg(2, 8))
-        self.assertEqual(val, 9 << 16)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

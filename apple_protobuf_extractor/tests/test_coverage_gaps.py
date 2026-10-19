@@ -6,8 +6,6 @@ Functions covered here (all previously at 0 test references):
   proto/extractor.py:
     _decode_bcond
     _read_raw_word
-    _is_in_section
-    _is_in_any_section
     _identify_string_write_helpers
 
   Additional cases for partially-covered functions:
@@ -34,7 +32,6 @@ from macho.arm64decode import (_decode_bcond, _decode_cmp_imm,
                                 _COND_EQ, _COND_NE, _COND_LO, _COND_LS)
 from proto.dispatch import _COND_HI, _COND_HS, _find_field_count, _read_raw_word
 from proto.write_helpers import _find_string_write_helper, _identify_string_write_helpers
-from macho.memory import _is_in_section, _is_in_any_section
 from tests.conftest import (
     build_text_binary,
     encode_bl,
@@ -234,76 +231,6 @@ class TestReadRawWord(unittest.TestCase):
         except Exception as exc:
             self.fail(f"_read_raw_word raised unexpectedly: {exc}")
         self.assertIsNone(result)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# _is_in_section
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestIsInSection(unittest.TestCase):
-    """_is_in_section: half-open interval [vmaddr, vmaddr+vmsize)."""
-
-    def setUp(self):
-        self.sect = _make_section(vmaddr=0x1000, vmsize=0x100)
-
-    def test_address_inside_range(self):
-        self.assertTrue(_is_in_section(0x1050, self.sect))
-
-    def test_address_at_start(self):
-        self.assertTrue(_is_in_section(0x1000, self.sect))
-
-    def test_address_at_last_byte(self):
-        self.assertTrue(_is_in_section(0x10FF, self.sect))
-
-    def test_address_one_past_end_is_false(self):
-        self.assertFalse(_is_in_section(0x1100, self.sect))
-
-    def test_address_well_past_end_is_false(self):
-        self.assertFalse(_is_in_section(0x2000, self.sect))
-
-    def test_address_before_start_is_false(self):
-        self.assertFalse(_is_in_section(0x0FFF, self.sect))
-
-    def test_none_section_always_false(self):
-        self.assertFalse(_is_in_section(0x1050, None))
-
-    def test_zero_vmsize_section_always_false(self):
-        empty = _make_section(vmaddr=0x1000, vmsize=0)
-        self.assertFalse(_is_in_section(0x1000, empty))
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# _is_in_any_section
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestIsInAnySection(unittest.TestCase):
-
-    def setUp(self):
-        self.s1 = _make_section(vmaddr=0x1000, vmsize=0x100)
-        self.s2 = _make_section(vmaddr=0x2000, vmsize=0x200)
-
-    def test_address_in_first_section(self):
-        self.assertTrue(_is_in_any_section(0x1050, [self.s1, self.s2]))
-
-    def test_address_in_second_section(self):
-        self.assertTrue(_is_in_any_section(0x2100, [self.s1, self.s2]))
-
-    def test_address_between_sections_is_false(self):
-        self.assertFalse(_is_in_any_section(0x1200, [self.s1, self.s2]))
-
-    def test_address_past_both_sections_is_false(self):
-        self.assertFalse(_is_in_any_section(0x5000, [self.s1, self.s2]))
-
-    def test_empty_list_always_false(self):
-        self.assertFalse(_is_in_any_section(0x1050, []))
-
-    def test_single_section_list(self):
-        self.assertTrue(_is_in_any_section(0x1000, [self.s1]))
-        self.assertFalse(_is_in_any_section(0x2000, [self.s1]))
-
-    def test_with_none_entry_in_list(self):
-        # _is_in_section handles None gracefully; the any() should too
-        self.assertTrue(_is_in_any_section(0x1050, [None, self.s1]))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -537,7 +464,7 @@ class TestFindStringWriteHelperAdditional(unittest.TestCase):
 class TestRangeFromUnsignedGate(unittest.TestCase):
     """The shared jump-table count-from-gate convention (range_from_unsigned_gate),
     extracted from the 4 sites that inlined it (`_find_dispatch_cluster`, the
-    jump-table enum harvester Idiom A, `_harvest_dictrep_enums`, and
+    jump-table enum harvester Idiom A, `_harvest_dictrep`, and
     `_dictrep_cmp_range`).  A divergence in this off-by-one silently drops the
     last enum value / dispatch arm, so it is pinned here."""
 

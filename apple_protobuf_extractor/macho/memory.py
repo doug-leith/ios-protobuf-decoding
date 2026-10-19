@@ -147,18 +147,6 @@ def _chain_next_stride(raw: int, fmt: int) -> int:
     return 0
 
 
-def _is_in_section(va: int, section: Optional[Section]) -> bool:
-    """True if *va* falls within *section*'s [vmaddr, vmaddr+vmsize) range."""
-    if section is None:
-        return False
-    return section.vmaddr <= va < section.vmaddr + section.vmsize
-
-
-def _is_in_any_section(va: int, sections: List[Section]) -> bool:
-    """True if *va* falls within any of *sections*."""
-    return any(_is_in_section(va, s) for s in sections)
-
-
 def _ctx_cache(ctx, attr, factory):
     """Return ``getattr(ctx, attr)``, lazily creating it via ``factory()`` and
     memoising it on *ctx* under *attr*.

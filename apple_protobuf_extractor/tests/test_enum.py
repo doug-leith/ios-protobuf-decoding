@@ -35,7 +35,8 @@ from proto.models import (
     ProtoEnum, ProtoEnumValue, _enum_prefix,
 )
 from proto.protocore import _type_from_enc
-from proto.enums import _is_valid_enum_string, _normalize_enum_value_name, _read_enum_string
+from proto.enums import _is_valid_enum_string, _normalize_enum_value_name
+from macho.strings import read_cfstring_text
 from proto.emitter import (
     ProtoFile,
     _compute_imports,
@@ -216,11 +217,12 @@ class TestIsValidEnumString(unittest.TestCase):
         self.assertTrue(_is_valid_enum_string("_PRIVATE"))
 
 
-# ── TestReadEnumStringCFStringLayouts ─────────────────────────────────────────
+# ── TestReadCfstringTextLayouts ───────────────────────────────────────────────
 
-class TestReadEnumStringCFStringLayouts(unittest.TestCase):
-    """`_read_enum_string` must decode CFStringRef constant-string structs in
-    BOTH section layouts and via the context's pointer decoder:
+class TestReadCfstringTextLayouts(unittest.TestCase):
+    """`read_cfstring_text` (which reads enum value strings) must decode CFStringRef
+    constant-string structs in BOTH section layouts and via the context's pointer
+    decoder:
 
       • `__DATA_CONST/__cfstring` — shared-cache-extracted dylibs (GeoServices).
       • `__DATA/__cfstring`       — standalone binaries (locationd).
@@ -273,17 +275,17 @@ class TestReadEnumStringCFStringLayouts(unittest.TestCase):
     def test_standalone_data_cfstring_resolved_via_read_ptr(self):
         # Tagged raw word a 36-bit mask would corrupt; read_ptr returns the truth.
         ctx = self._fake_ctx(cfstring_seg="__DATA", plus16_raw=0x200000017ba8ca)
-        self.assertEqual(_read_enum_string(ctx, self.STRUCT_VA),
+        self.assertEqual(read_cfstring_text(ctx, self.STRUCT_VA),
                          "kRadioAccessTechnologyGSM")
 
     def test_cache_data_const_cfstring_still_resolved(self):
         ctx = self._fake_ctx(cfstring_seg="__DATA_CONST", plus16_raw=0x4018d88981a)
-        self.assertEqual(_read_enum_string(ctx, self.STRUCT_VA),
+        self.assertEqual(read_cfstring_text(ctx, self.STRUCT_VA),
                          "kRadioAccessTechnologyGSM")
 
     def test_pointer_outside_cfstring_section_returns_none(self):
         ctx = self._fake_ctx(cfstring_seg="__DATA", plus16_raw=0x200000017ba8ca)
-        self.assertIsNone(_read_enum_string(ctx, 0x900000))
+        self.assertIsNone(read_cfstring_text(ctx, 0x900000))
 
 
 # ── TestProtoEnumModel ────────────────────────────────────────────────────────

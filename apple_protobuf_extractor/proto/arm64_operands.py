@@ -74,6 +74,9 @@ CALLER_SAVED_GPRS = tuple(f"x{n}" for n in range(0, 19)) + ("x30",)
 CALLER_SAVED_FPRS = tuple(f"v{n}" for n in range(0, 8)) + tuple(f"v{n}" for n in range(16, 32))
 
 
+CALLER_SAVED = CALLER_SAVED_GPRS + CALLER_SAVED_FPRS
+
+
 # Mnemonics whose first operand is NOT a destination (and calls, handled separately).
 NO_DEST = _SOURCE_FIRST_MNEMONICS | {
     'b', 'bl', 'blr', 'br', 'nop', 'ccmp', 'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz', 'cmp', 'cmn', 'tst',
@@ -91,6 +94,23 @@ SIGNED_LOADS = frozenset(('ldrsw', 'ldrsb', 'ldrsh', 'ldursw', 'ldursb', 'ldursh
 
 
 STORE_BYTES = {'str': None, 'stur': None, 'strb': 1, 'sturb': 1, 'strh': 2, 'sturh': 2}
+
+
+PAIR_LOADS = frozenset(('ldp', 'ldpsw', 'ldnp'))
+
+
+PAIR_STORES = frozenset(('stp', 'stnp'))
+
+
+RETURNS = frozenset(('ret', 'retaa', 'retab'))
+
+
+COMPARE_BRANCHES = frozenset(('cbz', 'cbnz', 'tbz', 'tbnz'))
+
+
+# Every branch but ``b.cond`` (:func:`is_cond_branch`): what ends a straight-line run.
+BLOCK_ENDS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab')) \
+    | RETURNS | COMPARE_BRANCHES
 
 
 def is_cond_branch(mn: str) -> bool:
@@ -160,7 +180,7 @@ def writes(ins: Insn) -> List[str]:
     """Registers (xN / vN form) *ins* overwrites."""
     mn = ins.mnemonic
     if mn in ('bl', 'blr'):
-        return list(CALLER_SAVED_GPRS + CALLER_SAVED_FPRS)
+        return list(CALLER_SAVED)
     if is_cond_branch(mn):
         return []
     ops = split_ops(ins.op_str)
@@ -174,7 +194,7 @@ def writes(ins: Insn) -> List[str]:
         r = reg_name(ops[0])
         if r is not None and r != 'xzr' and r != 'sp':
             out.append(r)
-    if mn in ('ldp', 'ldnp', 'ldpsw') and len(ops) > 1:
+    if mn in PAIR_LOADS and len(ops) > 1:
         r = reg_name(ops[1])
         if r is not None and r != 'xzr' and r != 'sp':
             out.append(r)

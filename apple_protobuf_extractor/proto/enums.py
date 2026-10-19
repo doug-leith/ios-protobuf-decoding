@@ -23,7 +23,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 from macho.memory     import BinaryContext, _ctx_cache, _ctx_store
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
-from macho.disasm     import disasm, Insn
+from macho.disasm     import disasm, Insn, _STOP_MNEMONICS
 from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs
@@ -41,8 +41,8 @@ def _is_valid_enum_string(s: str) -> bool:
     """Return True if *s* looks like a valid enum value name (a C identifier).
 
     This is purely a **sanity check**, not a decision-maker.  It does NOT pick
-    between storage formats — :func:`_read_enum_string` dispatches on section
-    membership for that — and it is not load-bearing on the structured read path
+    between storage formats — :func:`macho.strings.read_cfstring_text` dispatches
+    on section membership for that — and it is not load-bearing on the structured read path
     (which already yields real strings).  Its only job is to reject garbage for
     the *probe-and-filter* callers that legitimately can't know in advance whether
     a candidate pointer targets a string at all: the data-flow evaluator's
@@ -104,53 +104,6 @@ def _normalize_enum_value_name(enum_name: str, raw: str, camel: Optional[bool] =
     return f"{prefix}_{s}"
 
 
-def _read_enum_string(ctx: BinaryContext, ptr: int) -> Optional[str]:
-    """
-    Read the string value from an enum pointer-table entry.
-
-    Two storage formats are used in Apple's ObjC proto runtime, distinguished
-    **structurally by which section *ptr* lands in** rather than by trial-and-error:
-
-    1. **CFStringRef pointer** — *ptr* points to a ``__cfstring`` constant-string
-       struct (``isa, flags, cstring_ptr, length``, 8 bytes each); the
-       ``cstring_ptr`` field is decoded through :meth:`BinaryContext.read_ptr`.
-       Shared-cache-extracted dylibs (e.g. GeoServices) place these in
-       ``__DATA_CONST/__cfstring``; standalone binaries (e.g. locationd) use
-       ``__DATA/__cfstring``.
-    2. **Direct C-string pointer** — *ptr* points straight at the UTF-8 bytes in
-       ``__TEXT/__cstring`` or ``__objc_methname`` (the else case).
-
-    Dispatching on section membership avoids misreading a CFString struct as a
-    direct C-string (that read would land on the struct's ``isa`` field and
-    return ``''``); ``_is_valid_enum_string`` is only a final sanity check, not
-    the format selector.  Returns None when *ptr* resolves to no valid enum string.
-    """
-    # CFStringRef struct?  Decide by section membership before reading.
-    for seg in ("__DATA_CONST", "__DATA", "__AUTH_CONST"):
-        if ctx.has_section(seg, "__cfstring"):
-            sec = ctx.section(seg, "__cfstring")
-            if sec.vmaddr <= ptr < sec.vmaddr + sec.vmsize:
-                try:
-                    real_ptr = ctx.read_ptr(ptr + 16)   # cstring_ptr field
-                    s = ctx.read_cstring(real_ptr, max_len=128)
-                except (ValueError, UnicodeDecodeError, KeyError):
-                    return None
-                return s if _is_valid_enum_string(s) else None
-
-    # Otherwise: a direct C-string pointer.
-    try:
-        s = ctx.read_cstring(ptr, max_len=128)
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return s if _is_valid_enum_string(s) else None
-
-
-# Mnemonics that legitimately end a method body (mirrors macho.disasm._STOP_MNEMONICS,
-# at which `disasm` stops early).  A bounded disassembly that returns its full
-# instruction cap WITHOUT ending on one of these was cut off mid-method.
-_TERMINAL_MNEMONICS = frozenset(('ret', 'retaa', 'retab', 'eret'))
-
-
 def _disasm_truncated(insns: List[Insn], cap: int) -> bool:
     """Return True if a ``disasm(..., max_insns=cap)`` result was budget-truncated.
 
@@ -163,7 +116,7 @@ def _disasm_truncated(insns: List[Insn], cap: int) -> bool:
     undefined value, which is not a truncation at all)."""
     return (len(insns) >= cap
             and bool(insns)
-            and insns[-1].mnemonic not in _TERMINAL_MNEMONICS)
+            and insns[-1].mnemonic not in _STOP_MNEMONICS)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -172,7 +125,7 @@ def _disasm_truncated(insns: List[Insn], cap: int) -> bool:
 
 
 # [cap:COSMETIC — verified 2026-06-11, TODO #40] Fast-path probe length only; its value
-# does NOT determine the harvest result.  _harvest_dictrep_enums first decodes this many
+# does NOT determine the harvest result.  _harvest_dictrep first decodes this many
 # instructions (stop_at_ret); if the body closed (ret reached) that IS the whole
 # serializer.  If not, it recomputes the body by its true FUNCTION EXTENT
 # (_function_body_extent) — so 8000 only chooses fast-path-vs-extent, and both yield
@@ -240,7 +193,7 @@ def _function_body_extent(
         t = _direct_branch_target(ins)
         if t is not None and imp <= t < imp + span and t > hi:
             hi = t
-        if ins.mnemonic in _TERMINAL_MNEMONICS and ins.addr >= hi:
+        if ins.mnemonic in _STOP_MNEMONICS and ins.addr >= hi:
             return insns[:k + 1]
     return insns
 
@@ -346,20 +299,6 @@ def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
     return c.target, (_ARG_UNTOUCHED if flow.entry_arg(c.k, 'x1') == 'x1' else None)
 
 
-def _harvest_dictrep_enums(
-    ctx: BinaryContext, cls: ObjcClass, st: Optional[StringTable],
-    wanted: Optional[Set[int]] = None,
-) -> Dict[int, List[Tuple[int, str]]]:
-    """Extract the enums inlined into ``-[cls _dictionaryRepresentation:]``.
-
-    Returns ``{ivar_offset: [(value, name), …]}`` for each enum field whose
-    int→name map is recovered.  Empty when the method is absent or has no
-    recoverable switches.  *wanted* (ivar offsets) only limits the work to those
-    fields; it never changes a result.  (:func:`_harvest_dictrep` also reports what
-    could not be settled.)"""
-    return _harvest_dictrep(ctx, cls, st, wanted)[0]
-
-
 def _dictrep_body(ctx: BinaryContext, imp: int) -> Optional[List[Insn]]:
     """The dictRep function at *imp* as the linear range ``[imp, next method IMP)`` -- or
     None when the method-IMP set is not on *ctx* (it is built once by ``extract_all``;
@@ -392,7 +331,9 @@ def _harvest_dictrep(
 ) -> Tuple[Dict[int, List[Tuple[int, str]]], Dict[int, str], Dict[int, str]]:
     """``(enums, incomplete, unevaluated)``, each keyed by ivar offset.
 
-    *enums* is :func:`_harvest_dictrep_enums`'s result.  *incomplete* maps a RECOVERED enum
+    *enums* is ``{ivar_offset: [(value, name), …]}`` for each enum field whose int→name map
+    is recovered (empty when the method is absent); *wanted* (ivar offsets) only limits the
+    work to those fields, never changes a result.  *incomplete* maps a RECOVERED enum
     to why some of its values may be missing (a value that could not be evaluated, a table
     gate too wide to enumerate).  *unevaluated* maps an enum-like switch that yielded
     nothing to why: that field may be an enum and stays an untyped int."""

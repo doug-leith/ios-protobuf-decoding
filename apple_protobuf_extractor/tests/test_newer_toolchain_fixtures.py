@@ -43,22 +43,6 @@ def _symbol_addrs(ctx):
     return out
 
 
-def _bl_sites_to(ctx, func_va, target_va, max_words=256):
-    """VAs of every ``bl target_va`` inside the function starting at *func_va*
-    (bounded by its own first ``ret``)."""
-    sites = []
-    for i in range(max_words):
-        va = func_va + 4 * i
-        w = _read_raw_word(ctx, va)
-        if w is None:
-            break
-        if _decode_b_bl_target(w, va) == target_va and (w >> 26) == 0b100101:
-            sites.append(va)
-        if w == 0xD65F03C0:      # ret
-            break
-    return sites
-
-
 def _load(binary):
     if not os.path.exists(binary):
         raise unittest.SkipTest(f"{binary} not built — run tests/synthetic_fixtures/build_fixtures.sh")

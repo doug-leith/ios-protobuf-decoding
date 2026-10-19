@@ -74,13 +74,19 @@ def _build_static_blob(entries, stride):
 
 
 class TestMangledNameParse(unittest.TestCase):
+    @staticmethod
+    def _type(sym):
+        """``(module, type_name)`` of a ``…_protobuf_nameMap`` symbol, or None."""
+        parsed = S._parse_namemap_symbol(sym)
+        return parsed and parsed[:2]
+
     def test_oracle_and_device_forms(self):
         self.assertEqual(
-            S._type_from_namemap_symbol(
+            self._type(
                 "_$s6oracle9Ora_MultiV17_protobuf_nameMap13SwiftProtobuf05_NameG0VvgZ"),
             ("oracle", "Ora_Multi"))
         self.assertEqual(
-            S._type_from_namemap_symbol(
+            self._type(
                 "_$s14bookdatastored15PBPropertyValueV17_protobuf_nameMap"
                 "21InternalSwiftProtobuf05_NameF0VvgZ"),
             ("bookdatastored", "PBPropertyValue"))
@@ -88,13 +94,13 @@ class TestMangledNameParse(unittest.TestCase):
     def test_nested_type_is_dotted(self):
         # module=M, Outer.Inner
         self.assertEqual(
-            S._type_from_namemap_symbol(
+            self._type(
                 "_$s1M5OuterV5InnerV17_protobuf_nameMap13SwiftProtobufXX"),
             ("M", "Outer.Inner"))
 
     def test_non_namemap_returns_none(self):
-        self.assertIsNone(S._type_from_namemap_symbol("_OBJC_CLASS_$_NSString"))
-        self.assertIsNone(S._type_from_namemap_symbol("_$s1MV17_protobuf_nameMap"))  # <2 idents
+        self.assertIsNone(self._type("_OBJC_CLASS_$_NSString"))
+        self.assertIsNone(self._type("_$s1MV17_protobuf_nameMap"))  # <2 idents
 
     def test_split_idents(self):
         self.assertEqual(S._split_idents("6oracle9Ora_Multi"), ["oracle", "Ora_Multi"])
@@ -109,9 +115,9 @@ class TestMangledNameParse(unittest.TestCase):
                  "17_protobuf_nameMap21InternalSwiftProtobuf05_NameJ0VvgZ")
         parent = ("_$s18TrustedPeersHelper17EscrowInformationV8MetadataV"
                   "17_protobuf_nameMap21InternalSwiftProtobuf05_NameI0VvgZ")
-        self.assertEqual(S._type_from_namemap_symbol(child),
+        self.assertEqual(self._type(child),
                          ("TrustedPeersHelper", "EscrowInformation.Metadata.ClientMetadata"))
-        self.assertEqual(S._type_from_namemap_symbol(parent),
+        self.assertEqual(self._type(parent),
                          ("TrustedPeersHelper", "EscrowInformation.Metadata"))
 
     def test_word_substituted_wkt_name(self):
@@ -119,7 +125,7 @@ class TestMangledNameParse(unittest.TestCase):
         # substitution (B = 'Protobuf' from 'SwiftProtobuf'); the full name must
         # be recovered, not 'Google_._Any'.
         self.assertEqual(
-            S._type_from_namemap_symbol(
+            self._type(
                 "_$s13SwiftProtobuf07Google_B4_AnyV17_protobuf_nameMap"
                 "AA05_NameG0VvgZ"),
             ("SwiftProtobuf", "Google_Protobuf_Any"))
@@ -967,7 +973,7 @@ class TestLiveIos27PackedBytecode(unittest.TestCase):
         from serializers import swift_type_recovery as TR
         from macho.memory import BinaryContext
         ctx = BinaryContext.from_cache(self.reader, self.reader.resolve_image("CipherML"))
-        by_type, _ = TR._collect_field_types(ctx)
+        by_type, _, _ = TR.collect_field_types(ctx)
         checked = 0
         for name, m in self.msgs["CipherML"].items():
             fm = {k.replace("_", "").lower() for k, t in by_type.get(name, {}).items()
@@ -1336,7 +1342,7 @@ class TestLiveCacheNative(unittest.TestCase):
         from serializers import swift_type_recovery as TR
         scalar = {"int32", "int64", "uint32", "uint64", "sint32", "sint64",
                   "bool", "float", "double", "string", "bytes"}
-        fmd = TR.recover_field_types(self.ctx)
+        fmd = TR.collect_field_types(self.ctx)[0]
         nm_by = {}
         for m in self.msgs.values():
             nm_by[m.name] = m

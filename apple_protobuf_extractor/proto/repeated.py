@@ -15,7 +15,7 @@ from typing import Dict, FrozenSet, Optional, Tuple
 from macho.memory    import BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
 from macho.disasm    import disasm, _parse_imm
-from proto.arm64_operands import mem_regs, split_ops
+from proto.arm64_operands import RETURNS, mem_regs, split_ops
 from proto.callees   import callee_name, RETURNS_ARGUMENT
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
@@ -208,7 +208,7 @@ def _returned_class_ref(ctx: BinaryContext, imp: int) -> Optional[Tuple[str, int
             t = _parse_imm(ins.op_str)
             if t is not None and imp <= t < end:
                 continue                                    # a block of this method
-        elif ins.mnemonic not in ('ret', 'retaa', 'retab'):
+        elif ins.mnemonic not in RETURNS:
             continue
         d = _x0_source(ctx, flow, k)
         if d is _UNREACHED:

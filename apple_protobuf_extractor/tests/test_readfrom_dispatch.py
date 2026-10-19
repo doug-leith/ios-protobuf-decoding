@@ -4,18 +4,13 @@ Tests for the principled ``repeated <message>`` element-type resolver
 each repeated field's element class by the ReadAllFrom callee address its
 dispatch arm invokes.
 
-Two layers:
-
-* **Synthetic** — the raw-word arm64 decoders the readers are recognised with
-  (``tag >> 3``, ``b.cond`` / ``b`` / ``bl`` targets).  The dispatch itself is decoded
-  by evaluation (proto.dispatch_eval; tests/test_dispatch_eval.py) -- the shape
-  decoders these classes used to cover were retired 2026-10-15.
-* **Live** — the full resolver against the real GeoServices cache, gated on the
-  cache being present.  Ground truth (cross-checked against the hand-decoded
-  ``GEOPDPlaceResponse.proto``): ``GEOPDComponent.values`` (field 8) ->
-  ``GEOPDComponentValue`` and ``GEOPDComponent.commingledAttributions``
-  (field 14) -> ``GEOPDAttribution`` — both of which the name-suffix heuristics
-  mis-resolve to ``repeated bytes``.
+The dispatch itself is decoded by evaluation (proto.dispatch_eval; synthetic
+tests in tests/test_dispatch_eval.py).  Here: the full resolver against the real
+GeoServices cache, gated on the cache being present.  Ground truth
+(cross-checked against the hand-decoded ``GEOPDPlaceResponse.proto``):
+``GEOPDComponent.values`` (field 8) -> ``GEOPDComponentValue`` and
+``GEOPDComponent.commingledAttributions`` (field 14) -> ``GEOPDAttribution`` —
+both of which the name-suffix heuristics mis-resolve to ``repeated bytes``.
 """
 
 import os
@@ -24,116 +19,6 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-
-import struct
-
-from macho.arm64decode import _decode_bcond_target, _decode_lsr_imm
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Synthetic raw-word decoders (no binary needed)
-# ══════════════════════════════════════════════════════════════════════════════
-
-from tests.conftest import (WordCtx as _WordCtx, build_text_binary, encode_bl,
-    encode_b, encode_adrp, encode_add_imm64, encode_ldr_imm64, RET_BYTES, NOP_BYTES,
-    put_ptr)
-from macho.memory import BinaryContext
-
-
-def _int_word(encoded_bytes: bytes) -> int:
-    """Unpack a conftest ``encode_*`` helper's 4-byte little-endian result back
-    to a raw instruction word, for use in a `WordCtx` word list."""
-    return struct.unpack('<I', encoded_bytes)[0]
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Compare-chain dispatch decoders (the few-field / hybrid encoding)
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestDecodeLsrImm(unittest.TestCase):
-    """`_decode_lsr_imm` decodes the `field# = tag >> 3` derivation."""
-
-    def test_decode_64bit_lsr_x23_x8_3(self):
-        # lsr x23, x8, #3  (UBFM 64-bit, immr=3, imms=63) — the real GeoServices
-        # GEOPDPlaceGlobalCommonResult field-number derivation word.
-        self.assertEqual(_decode_lsr_imm(0xD343FD17), (23, 8, 3))
-
-    def test_decode_32bit_lsr_w0_w1_3(self):
-        # lsr w0, w1, #3  (UBFM 32-bit, immr=3, imms=31)
-        self.assertEqual(_decode_lsr_imm(0x53037C20), (0, 1, 3))
-
-    def test_non_lsr_returns_none(self):
-        self.assertIsNone(_decode_lsr_imm(0xD503201F))   # nop
-        self.assertIsNone(_decode_lsr_imm(0x7100351F))   # cmp w8,#0xd
-
-    def test_ubfm_that_is_not_an_lsr_alias_rejected(self):
-        # 64-bit UBFM with imms != 63 is a bitfield extract, not lsr → None.
-        self.assertIsNone(_decode_lsr_imm(0xD3400000 | (3 << 16) | (10 << 10)))
-
-
-class TestWrapperRawWordDecoders(unittest.TestCase):
-    """Raw-word decoders used to bound and scan a ReadAllFrom wrapper for the
-    call to its separate dispatch core (no binary needed)."""
-
-    def test_decode_bl_forward(self):
-        from macho.arm64decode import _decode_b_bl_target
-        # bl #+0x10 : imm26 = 4
-        word = 0x94000000 | 0x4
-        self.assertEqual(_decode_b_bl_target(word, 0x1000), 0x1010)
-
-    def test_decode_b_backward(self):
-        from macho.arm64decode import _decode_b_bl_target
-        # b #-0x10 : imm26 = -4 (0x03FFFFFC)
-        word = 0x14000000 | 0x03FFFFFC
-        self.assertEqual(_decode_b_bl_target(word, 0x1000), 0x0FF0)
-
-    def test_decode_non_branch_is_none(self):
-        from macho.arm64decode import _decode_b_bl_target
-        self.assertIsNone(_decode_b_bl_target(0xD503201F, 0x1000))   # nop
-
-    def test_ret_words(self):
-        from macho.arm64decode import _is_ret_word
-        self.assertTrue(_is_ret_word(0xD65F03C0))   # ret
-        self.assertTrue(_is_ret_word(0xD65F0BFF))   # retaa
-        self.assertTrue(_is_ret_word(0xD65F0FFF))   # retab
-        self.assertFalse(_is_ret_word(0xD61F0000))  # br (indirect, not ret)
-
-    def test_func_prologue_words(self):
-        from macho.arm64decode import _is_func_prologue_word
-        self.assertTrue(_is_func_prologue_word(0xD10143FF))   # sub sp, sp, #0x50
-        self.assertTrue(_is_func_prologue_word(0xA9BF7BFD))   # stp x29,x30,[sp,#-0x10]!
-        self.assertTrue(_is_func_prologue_word(0xD503237F))   # pacibsp
-        self.assertTrue(_is_func_prologue_word(0xD503233F))   # paciasp
-        self.assertFalse(_is_func_prologue_word(0xD503201F))  # nop
-        self.assertFalse(_is_func_prologue_word(0x94000004))  # bl
-        self.assertFalse(_is_func_prologue_word(0xD50323FF))  # autibsp (epilogue, not prologue)
-
-
-class TestCompareChainBlocks(unittest.TestCase):
-    """Control-flow block attribution for the compare-chain dispatch decoder
-    (no binary needed).  Guards against the linear-adjacency regression where a
-    forward-branched handler was mis-tagged with the textually-preceding field."""
-
-    @staticmethod
-    def _cmp(rn, imm):                       # cmp wRn, #imm  (SUBS WZR,Wn,#imm)
-        return 0x7100001F | ((imm & 0xFFF) << 10) | ((rn & 0x1F) << 5)
-
-    @staticmethod
-    def _bcond(cond, va, target):            # b.cond target
-        imm19 = ((target - va) // 4) & 0x7FFFF
-        return 0x54000000 | (imm19 << 5) | (cond & 0xF)
-
-    def test_decode_bcond_target_forward(self):
-        # b.eq +0x1C from 0x1000
-        word = self._bcond(0x0, 0x1000, 0x101C)
-        self.assertEqual(_decode_bcond_target(word, 0x1000), 0x101C)
-
-    def test_decode_bcond_target_backward(self):
-        word = self._bcond(0x1, 0x1000, 0x0FF0)   # b.ne -0x10
-        self.assertEqual(_decode_bcond_target(word, 0x1000), 0x0FF0)
-
-    def test_decode_bcond_target_rejects_non_bcond(self):
-        self.assertIsNone(_decode_bcond_target(0x94000004, 0x1000))  # bl
 
 
 # ══════════════════════════════════════════════════════════════════════════════

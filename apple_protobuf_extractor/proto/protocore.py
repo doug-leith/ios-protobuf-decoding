@@ -85,14 +85,6 @@ def _proto_name(ivar_name: str) -> str:
     return ivar_name.lstrip("_")
 
 
-def _setter_for(ivar_name: str) -> str:
-    """Return the expected ObjC setter selector for an ivar ('foo' → 'setFoo:')."""
-    n = _proto_name(ivar_name)
-    if not n:
-        return ""
-    return "set" + n[0].upper() + n[1:] + ":"
-
-
 # Names that denote the proto has-bits / presence bitfield rather than a real
 # field, when it is stored as a plain integer ivar rather than the named-bit
 # struct caught by _is_proto_flags_ivar (e.g. '_hasBits', '_has').  Matched on

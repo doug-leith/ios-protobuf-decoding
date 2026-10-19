@@ -65,7 +65,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 from macho.memory import BinaryContext
-from macho.disasm import disasm
+from macho.disasm import disasm, _parse_imm
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, decode_namemap_bytecode)
@@ -250,34 +250,11 @@ def _parse_namemap_symbol(sym: str) -> Optional[Tuple[str, str, bool]]:
     return idents[0], ".".join(idents[1:]), m.group(2) == "O"
 
 
-def _type_from_namemap_symbol(sym: str) -> Optional[Tuple[str, str]]:
-    """``…_protobuf_nameMap`` symbol → ``(module, type_name)`` (type may be
-    dotted for nested types), or None."""
-    m = re.search(r"_\$[sS](.*?)V" + _NAMEMAP_MARKER, sym)
-    if not m:
-        return None
-    idents = _split_idents(m.group(1))
-    if len(idents) < 2:
-        return None
-    return idents[0], ".".join(idents[1:])
-
-
 # ── small disasm helpers ──────────────────────────────────────────────────────
-
-def _imm(op_str: str) -> Optional[int]:
-    m = re.search(r"#(-?0x[0-9a-fA-F]+|-?\d+)", op_str)
-    if not m:
-        return None
-    v = m.group(1)
-    try:
-        return int(v, 16) if "0x" in v.lower() else int(v)
-    except ValueError:
-        return None
-
 
 def _adr_target(insn) -> Optional[int]:
     if insn.mnemonic in ("adr", "adrp"):
-        return _imm(insn.op_str)
+        return _parse_imm(insn.op_str)
     return None
 
 
@@ -306,7 +283,7 @@ def _adrp_add_targets(insns) -> List[int]:
             continue
         for nxt in insns[i + 1:i + 5]:
             if nxt.mnemonic == "add" and nxt.op_str.split(",", 1)[0].strip() == reg:
-                off = _imm(nxt.op_str)
+                off = _parse_imm(nxt.op_str)
                 if off is not None:
                     out.append(page + off)
                 break
@@ -463,7 +440,7 @@ def _walk_inline_closure(ctx: BinaryContext, insns, enum: bool = False) -> List[
         if m in ("mov", "movz"):
             parts = o.split(",")
             if len(parts) == 2:
-                v = _imm(parts[1])
+                v = _parse_imm(parts[1])
                 if v is not None:
                     dst = parts[0].strip().replace("x", "w")
                     reg_imm[dst] = v
@@ -485,7 +462,7 @@ def _walk_inline_closure(ctx: BinaryContext, insns, enum: bool = False) -> List[
             # adrp/add page+offset -> resolve to the name cstring it points at.
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
             if mm and mm.group(2) in adrp_page:
-                off = _imm("#" + mm.group(3))
+                off = _parse_imm("#" + mm.group(3))
                 if off is not None:
                     reg_str[mm.group(1)] = _cstr(ctx, adrp_page[mm.group(2)] + off)
         elif m == "str":
@@ -564,7 +541,7 @@ def _walk_namemap_builder(ctx: BinaryContext, insns, enum: bool = False) -> List
             if len(parts) == 2:
                 dst_raw, src_raw = parts[0].strip(), parts[1].strip()
                 dst = dst_raw.replace("x", "w")
-                v = _imm(src_raw)
+                v = _parse_imm(src_raw)
                 if v is not None:
                     _clear(dst)
                     reg_imm[dst] = v
@@ -594,7 +571,7 @@ def _walk_namemap_builder(ctx: BinaryContext, insns, enum: bool = False) -> List
         elif m == "add":
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
             if mm and mm.group(2) in adrp_page:
-                off = _imm("#" + mm.group(3))
+                off = _parse_imm("#" + mm.group(3))
                 if off is not None:
                     s = _cstr(ctx, adrp_page[mm.group(2)] + off)
                     _clear(mm.group(1))
@@ -688,7 +665,7 @@ def _shared_once_init_targets(insns) -> List[int]:
         elif m == "add":
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
             if mm and mm.group(2) in page:
-                off = _imm("#" + mm.group(3))
+                off = _parse_imm("#" + mm.group(3))
                 if off is not None:
                     out.append(page[mm.group(2)] + off)
         elif m == "b":
@@ -723,7 +700,7 @@ def _walk_namemap_builder_hop(ctx: BinaryContext, va: int,
     setup: List = []
     for ins in body:
         if ins.mnemonic == "b":
-            t = _imm(ins.op_str)
+            t = _parse_imm(ins.op_str)
             if t is None or t == va:
                 return []
             try:
@@ -777,7 +754,7 @@ def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
         elif ins.mnemonic == "add" and reg in _CLOSURE_ARG_REGS:
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
             if mm and mm.group(2) in page:
-                off = _imm("#" + mm.group(3))
+                off = _parse_imm("#" + mm.group(3))
                 if off is not None and _in_executable_text(ctx, page[mm.group(2)] + off):
                     out.append(page[mm.group(2)] + off)
     return out
@@ -804,7 +781,7 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     targets: List[int] = []
     for ins in getter_insns:
         if ins.mnemonic.startswith("b.") or ins.mnemonic in ("b", "cbz", "cbnz"):
-            t = _imm(ins.op_str)
+            t = _parse_imm(ins.op_str)
             if t is not None:
                 targets.append(t)
     targets += _closure_arg_targets(ctx, getter_insns)
@@ -877,8 +854,8 @@ def _single_entry_stub(ctx: BinaryContext, va: int) -> List[SwiftField]:
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", o)
             if mm and page.get(mm.group(2)) is not None:
                 regs[mm.group(1)] = page[mm.group(2)] + int(mm.group(3), 0)
-        elif m in ("mov", "movz") and len(parts) == 2 and _imm(parts[1]) is not None:
-            imm[parts[0]] = _imm(parts[1])
+        elif m in ("mov", "movz") and len(parts) == 2 and _parse_imm(parts[1]) is not None:
+            imm[parts[0]] = _parse_imm(parts[1])
         elif m == "b":
             break
         elif m != "nop":
@@ -940,7 +917,7 @@ def _decode_message_numbers(ctx: BinaryContext, decode_va: int) -> List[int]:
         return nums
     for ins in insns:
         if ins.mnemonic == "cmp":
-            v = _imm(ins.op_str)
+            v = _parse_imm(ins.op_str)
             if v is not None and 1 <= v <= _MAX_FIELD_NUMBER and v not in nums:
                 nums.append(v)
     return nums
@@ -974,7 +951,7 @@ def _traverse_field_numbers(ctx: BinaryContext, traverse_va: int) -> List[int]:
         if m in ("mov", "movz") and "," in ins.op_str:
             dst, _, src = ins.op_str.partition(",")
             dst = dst.strip()
-            v = _imm(src)
+            v = _parse_imm(src)
             if v is not None and dst.startswith("w") and 1 <= v <= _MAX_FIELD_NUMBER:
                 pend[dst] = v
         elif m in ("bl", "blr"):
@@ -1001,7 +978,7 @@ def _single_field_tail_call(ctx: BinaryContext, insns, decode_va: Optional[int],
     adrp_page: Dict[str, int] = {}
     for ins in insns:
         if ins.mnemonic in ("mov", "movz"):
-            v = _imm(ins.op_str.split(",", 1)[1]) if "," in ins.op_str else None
+            v = _parse_imm(ins.op_str.split(",", 1)[1]) if "," in ins.op_str else None
             if v is not None:
                 imms.add(v)
         elif ins.mnemonic == "adrp":
@@ -1017,7 +994,7 @@ def _single_field_tail_call(ctx: BinaryContext, insns, decode_va: Optional[int],
         elif ins.mnemonic == "add":
             mm = re.match(r"(\w+),\s*(\w+),\s*#(-?0x[0-9a-fA-F]+|-?\d+)$", ins.op_str)
             if mm and mm.group(2) in adrp_page:
-                off = _imm("#" + mm.group(3))
+                off = _parse_imm("#" + mm.group(3))
                 if off is not None:
                     s = _cstr(ctx, adrp_page[mm.group(2)] + off)
                     if s:
@@ -1071,7 +1048,7 @@ def _is_dispatch_stub(insns, max_len: int = 16) -> bool:
         if ins.mnemonic == "b":
             # `b <next instruction>` is a fall-through the linker left behind, not a
             # tail call: the code that follows is this function's own body.
-            addr, tgt = getattr(ins, "addr", None), _imm(ins.op_str)
+            addr, tgt = getattr(ins, "addr", None), _parse_imm(ins.op_str)
             if addr is not None and tgt == addr + 4:
                 continue
             return i > 0
@@ -1330,12 +1307,12 @@ _REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single", "single-stub"})
 def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
     """Recover field TYPES from Swift field metadata and bind them onto the
     name+number fields by normalised field name (best-effort; leaves proto_type
-    None where metadata is absent).  ``recover_field_types`` supplies types from
-    the message struct, its COW ``_StorageClass``, and its ``OneOf_*`` enums (#60),
-    so oneof/storage-backed fields are now covered too."""
+    None where metadata is absent).  ``swift_type_recovery.collect_field_types``
+    supplies types from the message struct, its COW ``_StorageClass``, and its
+    ``OneOf_*`` enums (#60), so oneof/storage-backed fields are now covered too."""
     try:
         from serializers import swift_type_recovery
-        by_type, incomplete, fieldless = swift_type_recovery._collect_field_types_ex(ctx)
+        by_type, incomplete, fieldless = swift_type_recovery.collect_field_types(ctx)
     except (NameError, ImportError):
         raise
     except Exception as exc:
@@ -1385,8 +1362,8 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
 
 
 def _type_from_namemap_symbol_like(sym: str, marker: str) -> Optional[Tuple[str, str]]:
-    """Like :func:`_type_from_namemap_symbol` but for an arbitrary ``V<marker>``
-    boundary (e.g. ``V13decodeMessage``)."""
+    """``(module, type_name)`` like :func:`_parse_namemap_symbol`, for an arbitrary
+    ``V<marker>`` boundary (e.g. ``V13decodeMessage``)."""
     m = re.search(r"_\$[sS](.*?)" + re.escape(marker), sym)
     if not m:
         return None

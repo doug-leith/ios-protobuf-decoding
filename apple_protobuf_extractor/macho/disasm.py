@@ -19,8 +19,6 @@ Architecture
 Public API
 ----------
     disasm(ctx, vmaddr, max_insns=512, stop_at_ret=True) → List[Insn]
-    iter_bl_targets(insns)             → Iterator[int]   # all BL call targets
-    iter_branch_targets(insns)         → Iterator[int]   # BL and B targets
 
 Register values (an adrp+add address, a loaded slot, a movz constant) are read by
 :class:`proto.arm64_eval.Flow`, not here.
@@ -32,7 +30,7 @@ import logging
 import re
 import struct
 from dataclasses import dataclass
-from typing import Iterator, List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 from .memory import BinaryContext
 
@@ -105,31 +103,6 @@ def _parse_imm(s: str) -> Optional[int]:
         return int(val, 16) if '0x' in val.lower() else int(val)
     except ValueError:
         return None
-
-
-def iter_bl_targets(insns: Sequence[Insn]) -> Iterator[int]:
-    """Yield the vmaddr targets of every ``bl`` (branch-and-link) instruction."""
-    for insn in insns:
-        if insn.mnemonic == 'bl':
-            t = _parse_imm(insn.op_str)
-            if t is not None:
-                yield t
-
-
-def iter_branch_targets(insns: Sequence[Insn]) -> Iterator[int]:
-    """Yield the vmaddr targets of every ``bl`` or ``b`` instruction.
-
-    Extends :func:`iter_bl_targets` to also capture unconditional branch
-    (``b``) instructions.  Apple's ObjC proto runtime readFrom: wrappers
-    commonly use a tail-call ``b _ClsReadFrom`` rather than ``bl``, so
-    analysing only ``bl`` misses them.  Conditional branches (``b.hi``,
-    ``b.ne``, etc.) are excluded — their mnemonics never equal ``'b'``.
-    """
-    for insn in insns:
-        if insn.mnemonic in ('bl', 'b'):
-            t = _parse_imm(insn.op_str)
-            if t is not None:
-                yield t
 
 
 def disasm(

@@ -28,7 +28,7 @@ value-string common prefix).
 Neither `_category` nor `_cacheControl` has an xAsString: companion
 selector anywhere in this binary — both enums can ONLY be recovered via
 `-[TestDictRep _dictionaryRepresentation:]`'s table dispatches
-(_harvest_dictrep_enums: `category` via the jump-table idiom,
+(_harvest_dictrep: `category` via the jump-table idiom,
 `cacheControl` via the pointer-table idiom). `category` is a plain 8-case
 switch — REAL COMPILED CODE (gotcha 13); 8 cases needed since fewer
 lowers to isolated compares instead of a jump table. `cacheControl` stays

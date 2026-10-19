@@ -4,7 +4,6 @@ tests/test_disasm.py — tests for macho/disasm.py.
 Structure
 ---------
 Unit tests (no binary, no capstone):
-  - iter_bl_targets / iter_branch_targets
   - _norm_reg and _parse_imm helpers
 
 Integration tests (use build_text_binary from conftest):
@@ -30,7 +29,6 @@ from macho.disasm import (
     _norm_reg,
     _parse_imm,
     disasm,
-    iter_bl_targets,
 )
 from macho.memory import BinaryContext
 from tests.conftest import (
@@ -51,6 +49,11 @@ def make_insn(addr: int, mnemonic: str, op_str: str) -> Insn:
     """Create a mock Insn for unit tests (raw bytes are dummy)."""
     return Insn(addr=addr, mnemonic=mnemonic, op_str=op_str,
                 size=4, raw=b'\x00\x00\x00\x00')
+
+
+def _branch_targets(insns, mnemonics=('bl',)):
+    """Immediate targets of the *mnemonics* branches in *insns*, in order."""
+    return [_parse_imm(i.op_str) for i in insns if i.mnemonic in mnemonics]
 
 
 TEXT_VA = 0x4000    # canonical vmaddr used in integration tests
@@ -137,152 +140,6 @@ class TestParseImm:
     def test_missing(self):
         assert _parse_imm('') is None
         assert _parse_imm('x8, x0') is None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# iter_bl_targets
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestIterBlTargets:
-    def test_single_bl(self):
-        insns = [
-            make_insn(0x1000, 'mov', 'x0, #0x1'),
-            make_insn(0x1004, 'bl',  '#0xdeadbeef'),
-            make_insn(0x1008, 'ret', ''),
-        ]
-        assert list(iter_bl_targets(insns)) == [0xdeadbeef]
-
-    def test_multiple_bls(self):
-        insns = [
-            make_insn(0x1000, 'bl', '#0x1234'),
-            make_insn(0x1004, 'nop', ''),
-            make_insn(0x1008, 'bl', '#0x5678'),
-            make_insn(0x100c, 'bl', '#0xabcd'),
-        ]
-        assert list(iter_bl_targets(insns)) == [0x1234, 0x5678, 0xabcd]
-
-    def test_no_bl(self):
-        insns = [make_insn(0x1000, 'ret', '')]
-        assert list(iter_bl_targets(insns)) == []
-
-    def test_empty(self):
-        assert list(iter_bl_targets([])) == []
-
-    def test_blr_not_included(self):
-        """blr (indirect branch) has no immediate target; must not appear."""
-        insns = [
-            make_insn(0x1000, 'blr', 'x8'),
-            make_insn(0x1004, 'bl',  '#0x2000'),
-        ]
-        assert list(iter_bl_targets(insns)) == [0x2000]
-
-    def test_order_preserved(self):
-        targets = [0x100, 0x200, 0x300]
-        insns = [make_insn(i * 4, 'bl', f'#{t:#x}') for i, t in enumerate(targets)]
-        assert list(iter_bl_targets(insns)) == targets
-
-    def test_unconditional_b_not_included(self):
-        """iter_bl_targets must NOT yield unconditional 'b' targets (only 'bl')."""
-        insns = [
-            make_insn(0x1000, 'mov', 'x1, x2'),
-            make_insn(0x1004, 'b',   '#0x5000'),   # tail-call branch
-        ]
-        assert list(iter_bl_targets(insns)) == [], (
-            "iter_bl_targets must exclude 'b' — use iter_branch_targets for that"
-        )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# iter_branch_targets
-# ══════════════════════════════════════════════════════════════════════════════
-
-class TestIterBranchTargets:
-    """iter_branch_targets captures both 'bl' (call) and 'b' (tail call)."""
-
-    def _targets(self, insns):
-        from macho.disasm import iter_branch_targets
-        return list(iter_branch_targets(insns))
-
-    def test_bl_captured(self):
-        insns = [make_insn(0x1000, 'bl', '#0x5000')]
-        assert self._targets(insns) == [0x5000]
-
-    def test_b_captured(self):
-        """Unconditional 'b' (tail call) must be yielded."""
-        insns = [
-            make_insn(0x1000, 'mov', 'x1, x2'),
-            make_insn(0x1004, 'b',   '#0x6000'),
-        ]
-        assert self._targets(insns) == [0x6000]
-
-    def test_both_bl_and_b_in_sequence(self):
-        insns = [
-            make_insn(0x1000, 'bl',  '#0x1111'),
-            make_insn(0x1004, 'nop', ''),
-            make_insn(0x1008, 'b',   '#0x2222'),
-        ]
-        assert self._targets(insns) == [0x1111, 0x2222]
-
-    def test_conditional_branch_not_captured(self):
-        """b.cond mnemonics (b.hi, b.ne, etc.) are never 'b' or 'bl'."""
-        insns = [
-            make_insn(0x1000, 'b.hi', '#0x9000'),
-            make_insn(0x1004, 'b.ne', '#0x9004'),
-            make_insn(0x1008, 'bl',   '#0xAAAA'),
-        ]
-        assert self._targets(insns) == [0xAAAA]
-
-    def test_blr_not_captured(self):
-        """blr (indirect) has no imm target; must not appear."""
-        insns = [
-            make_insn(0x1000, 'blr', 'x8'),
-            make_insn(0x1004, 'b',   '#0x3000'),
-        ]
-        assert self._targets(insns) == [0x3000]
-
-    def test_empty_input(self):
-        assert self._targets([]) == []
-
-    def test_no_branches(self):
-        insns = [
-            make_insn(0x1000, 'mov', 'x1, x2'),
-            make_insn(0x1004, 'ret', ''),
-        ]
-        assert self._targets(insns) == []
-
-    def test_order_preserved(self):
-        insns = [
-            make_insn(0x1000, 'b',  '#0xAAA'),
-            make_insn(0x1004, 'bl', '#0xBBB'),
-            make_insn(0x1008, 'b',  '#0xCCC'),
-        ]
-        assert self._targets(insns) == [0xAAA, 0xBBB, 0xCCC]
-
-    def test_b_roundtrip_via_encode_b(self):
-        """encode_b + disasm + iter_branch_targets → correct target vmaddr."""
-        from tests.conftest import encode_b
-        BASE_VA = 0x4000
-        TARGET_OFFSET = +20   # 5 instructions ahead
-        code = encode_b(TARGET_OFFSET)
-        ctx  = ctx_from_code(code, vmaddr=BASE_VA)
-        insns = disasm(ctx, BASE_VA, max_insns=2)
-        targets = self._targets(insns)
-        assert targets == [BASE_VA + TARGET_OFFSET], (
-            f"Expected [{BASE_VA + TARGET_OFFSET:#x}], got {targets}"
-        )
-
-    def test_b_and_bl_roundtrip_mixed(self):
-        """Mixed bl+b sequence decoded by disasm and collected by iter_branch_targets."""
-        from tests.conftest import encode_b
-        BASE_VA   = 0x4000
-        bl_bytes  = encode_bl(+12)   # BL → BASE_VA + 12
-        b_bytes   = encode_b(+16)    # B  → BASE_VA + 4 + 16 = BASE_VA + 20
-        code      = bl_bytes + b_bytes + NOP_BYTES * 8
-        ctx       = ctx_from_code(code, vmaddr=BASE_VA)
-        insns     = disasm(ctx, BASE_VA, max_insns=4, stop_at_ret=False)
-        targets   = self._targets(insns)
-        assert BASE_VA + 12 in targets, "BL target must be captured"
-        assert BASE_VA + 20 in targets, "B target must be captured"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -473,7 +330,7 @@ class TestBlPipeline:
         code  = encode_bl(+8) + NOP_BYTES + RET_BYTES
         ctx   = ctx_from_code(code)
         insns = disasm(ctx, TEXT_VA)
-        targets = list(iter_bl_targets(insns))
+        targets = _branch_targets(insns)
         assert targets == [TEXT_VA + 8]
 
     def test_two_bls(self):
@@ -487,7 +344,7 @@ class TestBlPipeline:
         )
         ctx   = ctx_from_code(code)
         insns = disasm(ctx, TEXT_VA)
-        targets = list(iter_bl_targets(insns))
+        targets = _branch_targets(insns)
         assert targets == [TEXT_VA + 12, TEXT_VA + 16]
 
     def test_bl_backward(self):
@@ -496,9 +353,35 @@ class TestBlPipeline:
         code = NOP_BYTES + NOP_BYTES + encode_bl(-8) + RET_BYTES
         ctx  = ctx_from_code(code)
         insns = disasm(ctx, TEXT_VA)
-        targets = list(iter_bl_targets(insns))
+        targets = _branch_targets(insns)
         # bl is at TEXT_VA+8; target = TEXT_VA+8 + (-8) = TEXT_VA
         assert targets == [TEXT_VA]
+
+    def test_b_roundtrip_via_encode_b(self):
+        """encode_b + disasm → the b's target vmaddr."""
+        from tests.conftest import encode_b
+        BASE_VA = 0x4000
+        TARGET_OFFSET = +20   # 5 instructions ahead
+        code = encode_b(TARGET_OFFSET)
+        ctx  = ctx_from_code(code, vmaddr=BASE_VA)
+        insns = disasm(ctx, BASE_VA, max_insns=2)
+        targets = _branch_targets(insns, ('bl', 'b'))
+        assert targets == [BASE_VA + TARGET_OFFSET], (
+            f"Expected [{BASE_VA + TARGET_OFFSET:#x}], got {targets}"
+        )
+
+    def test_b_and_bl_roundtrip_mixed(self):
+        """Mixed bl+b sequence decoded by disasm: both targets."""
+        from tests.conftest import encode_b
+        BASE_VA   = 0x4000
+        bl_bytes  = encode_bl(+12)   # BL → BASE_VA + 12
+        b_bytes   = encode_b(+16)    # B  → BASE_VA + 4 + 16 = BASE_VA + 20
+        code      = bl_bytes + b_bytes + NOP_BYTES * 8
+        ctx       = ctx_from_code(code, vmaddr=BASE_VA)
+        insns     = disasm(ctx, BASE_VA, max_insns=4, stop_at_ret=False)
+        targets   = _branch_targets(insns, ('bl', 'b'))
+        assert BASE_VA + 12 in targets, "BL target must be captured"
+        assert BASE_VA + 20 in targets, "B target must be captured"
 
 
 class TestMovzPipeline:
@@ -735,7 +618,7 @@ class TestPortability:
         for pc in (pc_a, pc_b):
             ctx   = ctx_from_code(code, vmaddr=pc)
             insns = disasm(ctx, pc)
-            tgts  = list(iter_bl_targets(insns))
+            tgts  = _branch_targets(insns)
             assert tgts == [pc + 8], f"wrong target at pc={pc:#x}"
 
 
@@ -1067,7 +950,7 @@ class TestDisasmCacheNativeMode:
         code  = encode_bl(+8) + NOP_BYTES + RET_BYTES
         ctx   = _make_cache_ctx(code, self.CACHE_VA)
         insns = disasm(ctx, self.CACHE_VA)
-        targets = list(iter_bl_targets(insns))
+        targets = _branch_targets(insns)
         assert targets == [self.CACHE_VA + 8]
 
     def test_disasm_stops_at_ret_in_cache_mode(self):

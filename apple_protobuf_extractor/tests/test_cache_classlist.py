@@ -46,7 +46,6 @@ from macho.cache_classlist import (
     _decode_cache_ptr,
     read_objc_class_name,
     iter_class_names,
-    class_names_for_image,
 )
 
 
@@ -627,21 +626,6 @@ class TestClassNamesLive(unittest.TestCase):
                 self.reader.has_vmaddr(class_va),
                 f"{name!r}: class_va 0x{class_va:x} not in any mapped cache region"
             )
-
-    # ── class_names_for_image ─────────────────────────────────────────────────
-
-    def test_class_names_for_image_returns_dict(self):
-        """class_names_for_image('GeoServices') returns a dict when DATA loaded."""
-        self._require_data()
-        result = class_names_for_image(self.reader, 'GeoServices')
-        self.assertIsNotNone(result)
-        self.assertIsInstance(result, dict)
-        self.assertIn('GEOPDPlaceRequest', result.values())
-
-    def test_class_names_for_unknown_image_returns_none(self):
-        """Unknown image name → None."""
-        result = class_names_for_image(self.reader, 'ZZZNonexistentXYZ')
-        self.assertIsNone(result)
 
 
 # ─── TestEnumStringsFromCacheLive ─────────────────────────────────────────────

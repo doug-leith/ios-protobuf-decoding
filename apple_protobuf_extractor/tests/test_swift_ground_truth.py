@@ -239,13 +239,13 @@ class TestRuntimeNameMap(unittest.TestCase):
         self.assertIsNone(byname["fields"].type_note)           # repeated <msg> ok
 
     def test_qualified_keys_avoid_short_name_collision(self):
-        # #68: recover_field_types keys by QUALIFIED name, so the three distinct
+        # #68: the field-type map keys by QUALIFIED name, so the three distinct
         # `Details` nested types (Migrate/StartMigration/Unmigrate Response) stay
         # separate instead of merging.  UnmigrateResponse.Details genuinely differs
         # (only timeElapsed) — short-name keying would have merged the other two's
         # fields onto it.
         from serializers import swift_type_recovery as TR
-        bt = TR.recover_field_types(self.ctx)
+        bt = TR.collect_field_types(self.ctx)[0]
         details = {k: v for k, v in bt.items() if k.split(".")[-1] == "Details"}
         self.assertGreaterEqual(len(details), 2, "Details types should not be merged")
         self.assertIn("MigrateResponse.Details", details)

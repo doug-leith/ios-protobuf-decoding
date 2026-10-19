@@ -141,7 +141,7 @@ class TestLocationdBinaryOnly(unittest.TestCase):
     def test_enum_values_recovered_from_data_cfstring(self):
         # Regression for the CFString-reader fix: locationd stores enum value
         # strings as __DATA/__cfstring constant-string structs whose +16 char*
-        # field is a chained-fixup pointer.  Before the fix _read_enum_string
+        # field is a chained-fixup pointer.  Before the fix the enum-string reader
         # only handled __DATA_CONST/__cfstring with a 36-bit cache mask, so every
         # enum reverted to a placeholder.  ALSNearbyRequest.technology is a
         # bitmask enum (1,2,4,8) — assert the real values came back.

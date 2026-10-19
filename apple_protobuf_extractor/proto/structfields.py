@@ -49,7 +49,8 @@ from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
-from proto.arm64_operands import CALLER_SAVED_GPRS, LOAD_BYTES, reg_name
+from proto.arm64_operands import (CALLER_SAVED_GPRS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
+                                  reg_name)
 from proto import arm64_eval, dictrep_flow
 from proto.callees import callee_name, stub_selector
 from macho.strings import read_cfstring_text
@@ -171,8 +172,6 @@ _WRITER_MAX_BLOCKS = 64
 _WRITER_BLOCK_INSNS = 128
 
 _LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
-_BRANCH_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
-                               'ret', 'retaa', 'retab', 'cbz', 'cbnz', 'tbz', 'tbnz'))
 
 
 @dataclass(frozen=True)
@@ -360,7 +359,7 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
                 return None
             seen.add(k)
             ins, mn, nxt = insns[k], insns[k].mnemonic, k + 1
-            if mn in ('ret', 'retaa', 'retab'):
+            if mn in RETURNS:
                 return None                          # a path with no end mark
             if mn in ('bl', 'b'):
                 j_slot = _scratch_slot_of(flow, k) if mn == 'bl' else None
@@ -403,22 +402,17 @@ def _load_width(ins, mem) -> int:
     return 4 if mem[0][0] in 'wsf' else 8
 
 
-_CALLER_SAVED = CALLER_SAVED_GPRS
-_LOAD_MNEMONICS = ('ldrsw', 'ldr', 'ldrb', 'ldrh', 'ldur')
-_NO_DEST_MNEMONICS = ('cmp', 'cmn', 'tst', 'tbz', 'tbnz', 'cbz', 'cbnz', 'b')
-
-
 def _struct_load_step(ins, k: int, state: Dict[str, tuple], pages: Dict[str, int],
                       is_ivar_offset, is_array: bool) -> Optional[Tuple[int, int]]:
     """One instruction's effect on the struct-addressing state (see
     :func:`track_struct_loads`); returns ``(member offset, width)`` when *ins* loads a member."""
     mn, ops = ins.mnemonic, split_ops(ins.op_str)
-    if mn == 'bl':
-        for r in _CALLER_SAVED:
+    if mn in ('bl', 'blr'):
+        for r in CALLER_SAVED_GPRS:
             state.pop(r, None)
             pages.pop(r, None)
         return None
-    if not ops or mn.startswith('st') or mn in _NO_DEST_MNEMONICS:
+    if not ops or mn in NO_DEST:
         return None
     dst = _norm_reg(ops[0])
     new, member = None, None
@@ -426,7 +420,7 @@ def _struct_load_step(ins, k: int, state: Dict[str, tuple], pages: Dict[str, int
         pages[dst] = _parse_imm(ops[1])
         state.pop(dst, None)
         return None
-    if mn in _LOAD_MNEMONICS or mn.startswith('ldrs'):
+    if mn in LOAD_BYTES:
         mem = mem_operand(ins.op_str)
         if mem is None:                                             # PC-relative literal
             if mn == 'ldrsw' and len(ops) == 2 and is_ivar_offset(_parse_imm(ops[1])):
@@ -780,7 +774,7 @@ def decode_dictrep_members(ctx, entry: int, offsets) -> Dict[int, MemberDict]:
     insns = _writer_insns(ctx, entry)
     base = {'x0'}
     for ins in insns:
-        if ins.mnemonic in _BRANCH_MNEMONICS:
+        if ins.mnemonic in BLOCK_ENDS:
             break
         ops = split_ops(ins.op_str)
         if ins.mnemonic == 'mov' and len(ops) == 2 and _norm_reg(ops[1]) == 'x0' and _norm_reg(ops[0]):
@@ -788,7 +782,7 @@ def decode_dictrep_members(ctx, entry: int, offsets) -> Dict[int, MemberDict]:
 
     def member_at(k):
         ins = insns[k]
-        if ins.mnemonic in _LOAD_MNEMONICS:
+        if ins.mnemonic in LOAD_BYTES:
             mem = mem_operand(ins.op_str)
             if mem is not None and mem[2] is None and mem[1] in base and mem[3] in offsets:
                 return mem[3]
@@ -796,12 +790,6 @@ def decode_dictrep_members(ctx, entry: int, offsets) -> Dict[int, MemberDict]:
 
     members, unpaired = _pair_members(ctx, insns, member_at)
     return members if not unpaired else {}
-
-
-def decode_dictrep_names(ctx, entry: int, offsets) -> Dict[int, str]:
-    """``{member offset: dictionary key}`` — :func:`decode_dictrep_members` reduced to the keys."""
-    return {off: md.key for off, md in decode_dictrep_members(ctx, entry, offsets).items()
-            if md.key}
 
 
 def decode_inline_dictrep_members(ctx, insns: Sequence, is_ivar_offset,
@@ -815,13 +803,6 @@ def decode_inline_dictrep_members(ctx, insns: Sequence, is_ivar_offset,
     members, _unpaired = _pair_members(
         ctx, insns, lambda k: loads[k][0] if k in loads and loads[k][0] in want else None)
     return members
-
-
-def decode_inline_dictrep_names(ctx, insns: Sequence, is_ivar_offset,
-                                layout: StructLayout) -> Dict[int, str]:
-    """:func:`decode_inline_dictrep_members` reduced to the keys."""
-    return {off: md.key for off, md in
-            decode_inline_dictrep_members(ctx, insns, is_ivar_offset, layout).items() if md.key}
 
 
 # ── recording sites during extraction, resolving them afterwards ──────────────

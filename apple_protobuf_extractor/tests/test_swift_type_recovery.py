@@ -98,7 +98,7 @@ class TestOracleExactTypes(unittest.TestCase):
     """The oracle is built from a known .proto; recovered base types must match."""
     @classmethod
     def setUpClass(cls):
-        cls.t = TR.recover_field_types(_ctx(_swift_oracle()))
+        cls.t = TR.collect_field_types(_ctx(_swift_oracle()))[0]
 
     def test_scalars_messages_repeated_map(self):
         self.assertEqual(self.t.get("Ora_Single7"), {"only": "string"})
@@ -117,13 +117,13 @@ class TestOracleExactTypes(unittest.TestCase):
 
 @unittest.skipUnless(_remindd(), "remindd binary not available")
 class TestLiveDeviceTypes(unittest.TestCase):
-    """recover_field_types on a real device swift-protobuf binary (remindd):
+    """The field-type map on a real device swift-protobuf binary (remindd):
     scalars, nested/repeated messages, oneofs, and full (un-truncated) WKT names.
     (Replaces the retired bookdatastored corpus, which this dump's build no longer
     ships as swift-protobuf; remindd exercises the same code more richly.)"""
     @classmethod
     def setUpClass(cls):
-        cls.t = TR.recover_field_types(_ctx(_remindd()))
+        cls.t = TR.collect_field_types(_ctx(_remindd()))[0]
 
     def test_scalar_types(self):
         mr = self.t["MigrateRequest"]

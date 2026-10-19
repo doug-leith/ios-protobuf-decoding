@@ -77,9 +77,9 @@ def _enum_ctx(code, *, strings=None, slots=None, ptrs=None, tables=None, base=0x
 
 
 def _harvest(ctx, base, ivars):
-    from proto.enums import _harvest_dictrep_enums
-    return _harvest_dictrep_enums(
-        ctx, _FakeCls(base, [_FakeIvar(n, o) for n, o in ivars]), None)
+    from proto.enums import _harvest_dictrep
+    return _harvest_dictrep(
+        ctx, _FakeCls(base, [_FakeIvar(n, o) for n, o in ivars]), None)[0]
 
 
 # CFString / table addresses used by the synthetic code below
@@ -459,11 +459,11 @@ class TestInlinedDictRepEnumsLive(unittest.TestCase):
             self.skipTest('GeoServices not present in this cache')
 
     def _pairs(self, class_name, field):
-        from proto.enums import _harvest_dictrep_enums
+        from proto.enums import _harvest_dictrep
         from proto.protocore import _proto_name
         c = self.by_name[class_name]
         if class_name not in self._harvest_cache:
-            self._harvest_cache[class_name] = _harvest_dictrep_enums(self.ctx, c, self.st)
+            self._harvest_cache[class_name] = _harvest_dictrep(self.ctx, c, self.st)[0]
         off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}[field]
         return self._harvest_cache[class_name].get(off, [])
 

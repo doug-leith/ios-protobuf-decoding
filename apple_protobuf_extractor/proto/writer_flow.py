@@ -49,20 +49,13 @@ from proto.dispatch_eval import _function_insns
 from proto.callees import (callee_name, stub_selector, call_reads, RUNTIME_CONTRACTS as _ARC,
                            NORETURN as _NORETURN)
 from proto.arm64_operands import (writes, reg_name, operand_regs, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
-                                  CALLER_SAVED_GPRS, CALLER_SAVED_FPRS)
+                                  PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED)
 
 log = logging.getLogger(__name__)
 
 E: FrozenSet = frozenset()
 _W, _S, _T = 'W', 'S', 'T'
 
-_CALLER_SAVED = CALLER_SAVED_GPRS + CALLER_SAVED_FPRS
-_LOADS = frozenset(LOAD_BYTES)
-_PAIR_LOADS = frozenset(('ldp', 'ldpsw', 'ldnp'))
-_STORES = frozenset(STORE_BYTES)
-_PAIR_STORES = frozenset(('stp', 'stnp'))
-_COND = ('cbz', 'cbnz', 'tbz', 'tbnz')
-_RET = ('ret', 'retaa', 'retab')
 
 # [cap:INPUT-SANITY] runaway backstops (a writeTo: settles in a few sweeps of its blocks).
 _MAX_BLOCK_VISITS = 50_000
@@ -217,10 +210,6 @@ class WriteSite:
 
     def origins(self, reg: str) -> FrozenSet:
         return dict(self.args).get(reg, frozenset())
-
-    @property
-    def x1_origins(self) -> FrozenSet:
-        return self.origins("x1")
 
     @property
     def _value_reg(self) -> Optional[str]:
@@ -407,7 +396,7 @@ class WriterFlow:
         for ins in blk:
             mn = ins.mnemonic
             ops = split_ops(ins.op_str)
-            if mn in _RET:
+            if mn in RETURNS:
                 res.ret |= st.p('x0') | st.p('v0')
                 return True
             tgt = _parse_imm(ops[0]) if (mn in ('b', 'bl') and ops) else None
@@ -426,7 +415,7 @@ class WriterFlow:
                 if not arms.get(ins.addr):
                     res.fail(f"unresolved indirect jump at {ins.addr:#x}")
                 return False
-            if mn == 'b' or mn.startswith('b.') or mn in _COND:
+            if mn == 'b' or mn.startswith('b.') or mn in COMPARE_BRANCHES:
                 t = _parse_imm(ops[-1]) if ops else None
                 if t is not None and not (lo <= t < hi):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
@@ -499,7 +488,7 @@ class WriterFlow:
         state = self._frame(addr, 'x2')
         if sel == _FAST_ENUMERATION and state is not None and _W not in st.p('x0'):
             recv = st.p('x0')
-            for r in _CALLER_SAVED:
+            for r in CALLER_SAVED:
                 st.r.pop(r, None)
             st.frame_write(state, _FAST_ENUMERATION_STATE_BYTES, recv)
             st.r['x0'] = recv
@@ -543,7 +532,7 @@ class WriterFlow:
         if frames and contract is None and pb is None:
             m = min(frames.values())                 # the callee may write the frame upward
             st.fl[m] = st.fl.get(m, E) | frozenset(argp)
-        for r in _CALLER_SAVED:
+        for r in CALLER_SAVED:
             st.r.pop(r, None)
         st.r['x0'] = frozenset(rp)
         st.r['v0'] = frozenset(rp - {_W, _S})        # an object is never returned in v0
@@ -635,10 +624,10 @@ class WriterFlow:
             for d in dsts:                           # a frame address
                 st.kill(d, frozenset({'STK'}))
             return
-        if mn in _LOADS or mn in _PAIR_LOADS:
+        if mn in LOAD_BYTES or mn in PAIR_LOADS:
             self._load(st, ins, mn, ops, dsts)
             return
-        if mn in _STORES or mn in _PAIR_STORES:
+        if mn in STORE_BYTES or mn in PAIR_STORES:
             self._store(st, ins, mn, ops, res)
             return
         # anything else: each destination derives from every source register
@@ -668,7 +657,7 @@ class WriterFlow:
             return
         base, idx, disp = pm[0], pm[1], pm[2]
         width = reg_bytes(ops[0]) if ops else 8
-        outs = regs_out[:2] if mn in _PAIR_LOADS else regs_out[:1]
+        outs = regs_out[:2] if mn in PAIR_LOADS else regs_out[:1]
         fa = self._frame(ins.addr, base) if base else None
         if fa is not None and idx is None:
             a0 = self._access(mem, ops, fa, disp)
@@ -709,7 +698,7 @@ class WriterFlow:
         mem = next((o for o in ops if '[' in o), None)
         pm = parse_mem(mem) if mem else None
         srcs = [o for o in ops if '[' not in o and not o.strip().startswith('#')]
-        if mn in _PAIR_STORES:
+        if mn in PAIR_STORES:
             srcs = srcs[:2]
         else:
             srcs = srcs[:1]

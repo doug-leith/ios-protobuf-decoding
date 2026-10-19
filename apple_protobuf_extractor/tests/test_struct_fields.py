@@ -287,26 +287,31 @@ class _CfCtx(_NoStringsMixin):
         raise KeyError(va)                   # like the cache: no mapped bytes there
 
 
-class TestDecodeDictrepNames(_SelectorsPatched):
+def _keys(members):
+    """``{member offset: dictionary key}`` of decoded dictRep members."""
+    return {off: md.key for off, md in members.items() if md.key}
+
+
+class TestDecodeDictrepKeys(_SelectorsPatched):
     def setUp(self):
         self.patch_selectors(_GEO_SELECTORS)
 
     def test_each_key_names_the_member_its_call_files(self):
         _, fake = asm(_WIFI_TIMERANGE_DICTREP, _WIFI_TIMERANGE_DICTREP_2, _WIFI_TIMERANGE_DICTREP_3)
         self.patch(fake)
-        self.assertEqual(SF.decode_dictrep_names(_CfCtx(), 0x18cb8cdb8, {0, 4}), {0: 'from', 4: 'to'})
+        self.assertEqual(_keys(SF.decode_dictrep_members(_CfCtx(), 0x18cb8cdb8, {0, 4})), {0: 'from', 4: 'to'})
 
     def test_a_key_that_is_not_an_identifier_is_ignored(self):
         _, fake = asm(_WIFI_TIMERANGE_DICTREP, _WIFI_TIMERANGE_DICTREP_2, _WIFI_TIMERANGE_DICTREP_3)
         self.patch(fake)
         ctx = _CfCtx()
         ctx.TEXT = {0x1d5fdaae0: (0x2000, b'a b'), 0x1d5fdab00: (0x2010, b'to')}
-        self.assertEqual(SF.decode_dictrep_names(ctx, 0x18cb8cdb8, {0, 4}), {4: 'to'})
+        self.assertEqual(_keys(SF.decode_dictrep_members(ctx, 0x18cb8cdb8, {0, 4})), {4: 'to'})
 
     def test_a_function_with_no_keys_is_not_a_dictionary_representation(self):
         _, fake = asm(_PD_TIMERANGE_WRITER, _PD_TIMERANGE_WRITER_TAIL)
         self.patch(fake)
-        self.assertEqual(SF.decode_dictrep_names(_CfCtx(), 0x18c241b50, {0, 4}), {})
+        self.assertEqual(_keys(SF.decode_dictrep_members(_CfCtx(), 0x18c241b50, {0, 4})), {})
 
     def test_json_dependent_key_takes_the_camel_case_spelling(self):
         # real GEOPBTransitTimeRange dictrep: ``forJSON ? @"startTime" : @"start_time"`` is
@@ -319,7 +324,7 @@ class TestDecodeDictrepNames(_SelectorsPatched):
             ('adrp', 'x9, #0x1d5fda000'), ('add', 'x9, x9, #0xb00'),
             ('cmp', 'w20, #0'), ('csel', 'x3, x9, x8, ne'), ('bl', '#0x3000'), ('ret', '')]))
         self.patch(fake)
-        self.assertEqual(SF.decode_dictrep_names(ctx, 0x1000, {0, 4}), {4: 'startTime'})
+        self.assertEqual(_keys(SF.decode_dictrep_members(ctx, 0x1000, {0, 4})), {4: 'startTime'})
 
 
 # Real listing: -[GEOTransitRouteUpdateRequest writeTo:] field 10, a by-value GEOSessionID
@@ -433,7 +438,7 @@ class TestInlineDictrepNames(_SelectorsPatched):
         ctx.TEXT = {0x1d5fa1260: (0x2000, b'lat'), 0x1d5fa1280: (0x2010, b'lng')}
         layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
         self.assertEqual(
-            SF.decode_inline_dictrep_names(ctx, insns, lambda a: a == 0x1e1dd624c, layout),
+            _keys(SF.decode_inline_dictrep_members(ctx, insns, lambda a: a == 0x1e1dd624c, layout)),
             {0: 'lat', 4: 'lng'})
 
     def test_another_ivars_loop_is_not_paired(self):
@@ -441,7 +446,7 @@ class TestInlineDictrepNames(_SelectorsPatched):
         self.patch(fake)
         layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
         self.assertEqual(
-            SF.decode_inline_dictrep_names(_CfCtx(), insns, lambda a: a == 0xdead0000, layout), {})
+            _keys(SF.decode_inline_dictrep_members(_CfCtx(), insns, lambda a: a == 0xdead0000, layout)), {})
 
 
 # Real listing: -[GEOFlyoverRegionVersions _dictionaryRepresentation:] 0x18c502e6c, the loop that
@@ -512,7 +517,7 @@ class TestKeysReadAtTheDictionaryCall(_SelectorsPatched):
     def test_a_key_hoisted_by_the_json_flag_and_spilled_to_the_stack_names_its_member(self):
         layout = SF.parse_struct_encoding(self.LAYOUT)
         self.assertEqual(
-            SF.decode_inline_dictrep_names(self.ctx, self.insns, lambda a: a == 0x1dcfaf428, layout),
+            _keys(SF.decode_inline_dictrep_members(self.ctx, self.insns, lambda a: a == 0x1dcfaf428, layout)),
             {0: 'dataVersion', 4: 'region', 8: 'version'})
 
 
@@ -568,7 +573,7 @@ class TestDecodeDictrepNamesRejectsLargerStructs(_Patched):
             ('adrp', 'x3, #0x1d5fda000'), ('add', 'x3, x3, #0xae0'), ('bl', '#0x3000'),
             ('ret', '')]))
         self.patch(fake)
-        self.assertEqual(SF.decode_dictrep_names(_CfCtx(), 0x1000, {0, 4}), {})
+        self.assertEqual(_keys(SF.decode_dictrep_members(_CfCtx(), 0x1000, {0, 4})), {})
 
 
 # ── live: the dyld cache's GeoServices ─────────────────────────────────────────

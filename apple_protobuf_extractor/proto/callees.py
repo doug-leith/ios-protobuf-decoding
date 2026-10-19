@@ -27,6 +27,7 @@ from typing import Dict, NamedTuple, Optional, Tuple
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import BinaryContext, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, writes, operand_regs, STORE_BYTES,
+                                  PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
                                   is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
@@ -269,9 +270,6 @@ ABI_ARGS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
 #: Every register a callee could read.
 _ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
-_STORES = frozenset(STORE_BYTES) | {'stp', 'stnp'}
-_COMPARES = ('cmp', 'cmn', 'tst', 'fcmp', 'fcmpe', 'ccmp')
-_RETURNS = ('ret', 'retaa', 'retab')
 # [cap:INPUT-SANITY] runaway backstop for the entry scan below (it stops at the first branch).
 _ENTRY_SCAN_INSNS = 64
 
@@ -298,18 +296,18 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
         for ins in disasm(ctx, target, max_insns=_ENTRY_SCAN_INSNS, stop_at_ret=True):
             mn = ins.mnemonic
             ops = split_ops(ins.op_str)
-            if mn in _RETURNS:
+            if mn in RETURNS:
                 res = tuple(r for r in _ALL_REGS if r in read or (r == 'x0' and r not in written))
                 break
-            if mn in ('b', 'bl', 'blr', 'br', 'cbz', 'cbnz', 'tbz', 'tbnz') or is_cond_branch(mn):
-                if mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+            if mn in BLOCK_ENDS or is_cond_branch(mn):
+                if mn in COMPARE_BRANCHES:
                     read |= set(operand_regs(ops[:1])) - written
                 res = tuple(r for r in _ALL_REGS if r in read or r not in written)
                 break
             dst = set(writes(ins))
-            if mn in _STORES or mn in _COMPARES:
+            if mn in NO_DEST:
                 src = set(operand_regs(ops))
-                if mn in _STORES and '[sp' in ins.op_str:
+                if (mn in STORE_BYTES or mn in PAIR_STORES) and '[sp' in ins.op_str:
                     src -= _CALLEE_SAVED                # a prologue spill is not a use
             else:
                 src = set(operand_regs(ops[1:] if dst else ops))

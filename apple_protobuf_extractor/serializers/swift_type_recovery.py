@@ -502,13 +502,7 @@ def _owner_type_name(ctx, desc) -> Optional[str]:
     return _qualified_name(ctx, _parent_desc(ctx, desc))
 
 
-def _collect_field_types(ctx):
-    """``(types, incomplete)`` -- see :func:`_collect_field_types_ex`."""
-    out, incomplete, _ = _collect_field_types_ex(ctx)
-    return out, incomplete
-
-
-def _collect_field_types_ex(ctx):
+def collect_field_types(ctx):
     """Walk ``__swift5_types`` once and return ``(types, incomplete, fieldless)``:
       * ``types``      — ``{qualified_type_name: {field_name: proto_type}}``
       * ``incomplete`` — ``{qualified_type_name: set(field_names)}`` for fields whose
@@ -566,9 +560,3 @@ def _collect_field_types_ex(ctx):
             continue
     return out, incomplete, structs - set(out)
 
-
-def recover_field_types(ctx) -> Dict[str, Dict[str, str]]:
-    """``{type_name: {field_name: proto_type}}`` from ``__swift5_fieldmd`` — the
-    public type map (see :func:`_collect_field_types` for the full walk + the
-    companion incomplete-field set used to flag ``bytes`` guess fillers)."""
-    return _collect_field_types(ctx)[0]

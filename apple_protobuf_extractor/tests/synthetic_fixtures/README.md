@@ -183,7 +183,7 @@ f18_enum_multi_segment/     MULTI-SEGMENT jump-table enum harvest
                              a one-off real-binary verification before
                              this, no repeatable fixture
 f19_enum_dictrep_switch/    `-[Class _dictionaryRepresentation:]` enum
-                             harvest (_harvest_dictrep_enums), BOTH
+                             harvest (_harvest_dictrep), BOTH
                              idioms: `category` via the JUMP-TABLE form,
                              `cacheControl` via the POINTER-TABLE form —
                              the LARGEST single gap in enums.py before
@@ -280,7 +280,7 @@ f23_writeto_hoisted_value/  writeto.py's `_trace_hoisted_self_value` ("S1"
 f24_dictrep_compare_chain/  `dictionaryRepresentation` enum harvest, the
                              COMPARE-CHAIN / compare-TREE idiom a newer
                              toolchain uses instead of a jump table
-                             (proto/enums.py:_harvest_dictrep_enums' third
+                             (proto/enums.py:_harvest_dictrep's third
                              pass, commit 9d07d15). Ground truth checked
                              against a hand-authored schema, not real-binary
                              output: a 3-value sparse enum (1/5/60, the real
@@ -733,7 +733,7 @@ of budget", which was false here), but a silently incomplete extraction all
 the same, on a real, if untested-until-now, path.
 
 **Closed by adding `_try_pointer_table_in`** (`proto/enums.py`): reuses the
-same `_decode_ldr_reg_off`-based pointer-table read `_harvest_dictrep_enums`
+same `_decode_ldr_reg_off`-based pointer-table read `_harvest_dictrep`
 already uses elsewhere in this file, applied to the already-disassembled
 `insns`/`words` instead of a fresh short probe. The one real wrinkle:
 `_find_field_count` and `_find_index_bias` both take a raw start VA and scan
@@ -1108,7 +1108,7 @@ doesn't have to rediscover the reasoning:
   target as "`+<field>AsString:`/`StringAsX:` ... resolves enum value
   names from an `NSDictionary`-literal construction pattern in the
   metaclass method body" and judged it out of scope as too compiler-
-  fragile. That's not what `_harvest_dictrep_enums` actually does (grep
+  fragile. That's not what `_harvest_dictrep` actually does (grep
   confirms: no `NSDictionary`/dictionary-literal reference anywhere in
   `proto/enums.py`) — the real mechanism is a JUMP-TABLE or POINTER-TABLE
   dispatch inside `-[Class _dictionaryRepresentation:]` (a *different*,

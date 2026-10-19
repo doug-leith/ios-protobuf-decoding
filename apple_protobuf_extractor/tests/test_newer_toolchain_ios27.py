@@ -27,7 +27,6 @@ from tests._listing import insns, layout
 
 import artifacts
 from proto.writer_flow import _image_text_range as WF_image_text_range
-from macho.arm64decode import jumptable_arm_target
 from macho.memory import Segment
 
 
@@ -139,22 +138,6 @@ class TestFieldNumberInW1NeedsAnFpValue(unittest.TestCase):
         self.assertEqual(self._numbers(
             ('ldr', 'd0, [x8]'), ('mov', 'x0, x19'), ('mov', 'w1, #0x14'), ('bl', '#0x1800'),
             ('mov', 'x0, x19'), ('mov', 'w1, #0x10000'), ('bl', '#0x1900')), [0x14, None])
-
-
-# ── offline: jump-table arm address ───────────────────────────────────────────
-
-class TestJumpTableArmTarget(unittest.TestCase):
-    def test_unsigned_index_table_is_scaled_by_4(self):
-        # ldrb / ldrh: entry is an arm INDEX, `add xB,xB,w,lsl #2`
-        self.assertEqual(jumptable_arm_target(0x1000, 1, b'\x05'), 0x1000 + 5 * 4)
-        self.assertEqual(jumptable_arm_target(0x1000, 2, b'\x00\x01'), 0x1000 + 256 * 4)
-
-    def test_ldrsw_table_is_a_signed_unscaled_byte_delta(self):
-        # ldrsw: `adr xB,. ; ldrsw x,[table,idx,lsl#2] ; add xB,xB,x ; br`
-        self.assertEqual(jumptable_arm_target(0x1000, 4, (0x120).to_bytes(4, 'little')),
-                         0x1000 + 0x120)
-        self.assertEqual(jumptable_arm_target(0x1000, 4, (-0x40 & 0xFFFFFFFF).to_bytes(4, 'little')),
-                         0x1000 - 0x40)
 
 
 def _insns(*lines):

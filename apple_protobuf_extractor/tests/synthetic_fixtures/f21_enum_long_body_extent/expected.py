@@ -30,7 +30,7 @@ table, and that read logic lived only in the SEPARATE _extract_enum_values
 function's 80-insn primary probe, which never got a second look at the
 longer, recomputed body. A real production gap, not a fixture artifact:
 _try_pointer_table_in was added to close it -- it reuses the exact same
-_decode_ldr_reg_off-based pointer-table read _harvest_dictrep_enums already
+_decode_ldr_reg_off-based pointer-table read _harvest_dictrep already
 uses elsewhere in this file, anchored on the recomputed insns/words instead
 of a fresh short probe, with _find_field_count/_find_index_bias re-anchored
 near the LOCATED load (not `imp`) since the load can be thousands of

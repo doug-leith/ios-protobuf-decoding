@@ -39,7 +39,6 @@ log = logging.getLogger(__name__)
 
 _ENTRY = -1                                   # pseudo-definition: value on function entry
 _REGS = tuple(f"x{n}" for n in range(0, 31)) + tuple(f"v{n}" for n in range(0, 32))
-_LOADS = {'ldr': None, 'ldrb': 1, 'ldrh': 2, 'ldrsw': 4, 'ldrsb': 1, 'ldrsh': 2}
 _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
 
 # [cap:INPUT-SANITY] An ordered gate (`cmp w, #imm12; b.hi`) spans at most 2^12 values by the
@@ -473,7 +472,9 @@ class Flow:
                 state = frozenset((j,))
         return state
 
-    def _only_def(self, k: int, reg: str) -> Optional[int]:
+    def only_def(self, k: int, reg: str) -> Optional[int]:
+        """Index of the one definition of *reg* reaching ``insns[k]``; None for a live-in,
+        several reaching definitions, or an unreachable ``insns[k]``."""
         d = self.defs_before(k, reg)
         if len(d) != 1:
             return None
@@ -490,7 +491,7 @@ class Flow:
         if key in self._const_memo:
             return self._const_memo[key]
         self._const_memo[key] = None                     # break cycles (loops)
-        d = self._only_def(k, reg)
+        d = self.only_def(k, reg)
         val = self._const_of_def(d) if d is not None else None
         self._const_memo[key] = val
         return val
@@ -576,14 +577,17 @@ class Flow:
         return res
 
     def slot_load_address(self, k: int) -> Optional[int]:
-        """Address of the ivar-offset variable the 4-byte load ``insns[k]`` reads
-        (``ldrsw Xd, [Xb, #o]`` / ``[Xb]``), the base taken from its reaching definitions
-        (:meth:`const_before`: the ``adrp`` of the offset page is often hoisted); None for any
-        other instruction or a base that is not a constant."""
+        """Address of the ivar-offset variable the 4-byte load ``insns[k]`` reads:
+        ``ldrsw Xd, [Xb, #o]`` / ``[Xb]``, the base taken from its reaching definitions
+        (:meth:`const_before`: the ``adrp`` of the offset page is often hoisted), or the
+        PC-relative literal ``ldrsw Xd, #ADDR`` a standalone image uses; None for any other
+        instruction or a base that is not a constant."""
         ins = self.insns[k]
         ops = split_ops(ins.op_str)
         if ins.mnemonic != 'ldrsw' or len(ops) != 2:
             return None
+        if ops[1].startswith('#'):
+            return _parse_imm(ops[1])
         m = mem_regs(ops[1])
         if not m or m[0] is None or m[1] is not None:
             return None
@@ -669,7 +673,7 @@ class Flow:
             r = _norm_reg(ops[0])
             if r in st:
                 cands.add(-st[r])
-        elif mn in _LOADS and len(ops) == 2:
+        elif mn in LOAD_BYTES and len(ops) == 2:
             # A table indexed by a gated register: every index the gate lets through is a
             # distinct case, so the whole interval (not just its end point) is a candidate.
             pm = parse_mem(ops[1])

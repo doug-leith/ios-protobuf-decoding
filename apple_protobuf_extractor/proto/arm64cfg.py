@@ -8,12 +8,9 @@ on decoded ``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`pr
 import bisect
 from collections import deque
 
-from macho.disasm import _parse_imm, _norm_reg
+from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS as TERMINALS
 from proto.arm64_operands import split_ops, parse_mem, writes  # noqa: F401  (re-export)
-
-
-TERMINALS = {'ret', 'retaa', 'retab', 'eret'}
-CONDITIONALS = ('cbz', 'cbnz', 'tbz', 'tbnz')
+from proto.arm64_operands import COMPARE_BRANCHES
 
 
 # [cap:INPUT-SANITY] 0x4000 — only used when an imp is the LAST method in the
@@ -22,7 +19,7 @@ _LAST_METHOD_SPAN = 0x4000
 
 
 def _is_cond(mn: str) -> bool:
-    return mn in CONDITIONALS or mn.startswith('b.')
+    return mn in COMPARE_BRANCHES or mn.startswith('b.')
 
 
 # ── Operand toolkit ───────────────────────────────────────────────────────────

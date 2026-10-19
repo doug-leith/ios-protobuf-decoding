@@ -79,10 +79,6 @@ class StringTable:
     def section_names(self) -> List[str]:
         return list(self._by_section.keys())
 
-    def section_for(self, vmaddr: int) -> Optional[str]:
-        e = self._by_vmaddr.get(vmaddr)
-        return e.section if e else None
-
     def __iter__(self) -> Iterator[StringEntry]:
         return iter(self._by_vmaddr.values())
 
@@ -138,12 +134,11 @@ def build_string_table(ctx: BinaryContext) -> StringTable:
 
 
 def read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
-    """Raw text of the string constant at *va* (up to 128 characters, the same bound as
-    :func:`proto.enums._read_enum_string`): a CFString (32-byte struct: isa, flags,
-    cstring pointer at +16, length at +24) or, in a binary with no ``__cfstring`` section,
-    a direct C string (the two storage formats :func:`proto.enums._read_enum_string` reads).
-    Unlike that function it does NOT require an identifier-shaped string, so it can read
-    format strings such as ``"(unknown: %i)"``.  None if *va* holds neither."""
+    """Raw text of the string constant at *va* (up to 128 characters): a CFString (32-byte
+    struct: isa, flags, cstring pointer at +16, length at +24, the pointer decoded by
+    ``ctx.read_ptr``) or, in a binary with no ``__cfstring`` section, a direct C string.
+    It does NOT require an identifier-shaped string, so it can read format strings such
+    as ``"(unknown: %i)"``.  None if *va* holds neither."""
     has_cfstrings = False
     for seg in ("__DATA_CONST", "__DATA", "__AUTH_CONST"):
         if ctx.has_section(seg, "__cfstring"):

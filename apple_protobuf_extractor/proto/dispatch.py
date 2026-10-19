@@ -25,7 +25,7 @@ from macho.arm64decode import (_decode_bcond, _decode_cmp_imm, _COND_HI, _COND_H
                                range_from_unsigned_gate)
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.arm64_operands import NO_DEST, imm_operand, is_cond_branch, split_ops
+from proto.arm64_operands import NO_DEST, PAIR_LOADS, imm_operand, is_cond_branch, split_ops
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -177,9 +177,9 @@ def _reads(ins) -> set:
     destination(s)."""
     ops = split_ops(ins.op_str)
     mn = ins.mnemonic
-    if mn in NO_DEST or mn == 'movk' or is_cond_branch(mn) or mn in ('ret', 'retaa', 'retab'):
+    if mn in NO_DEST or mn == 'movk' or is_cond_branch(mn):
         src = ops
-    elif mn in ('ldp', 'ldpsw', 'ldnp'):
+    elif mn in PAIR_LOADS:
         src = ops[2:]
     else:
         src = ops[1:]

@@ -54,6 +54,7 @@ from proto.callees import real_target, stub_selector
 from proto.arm64cfg import (
     split_ops, mem_operand, _next_imp,
 )
+from proto.arm64_operands import RETURNS
 from proto.writeto import BoundWrite, field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
@@ -155,20 +156,6 @@ class MapTypes:
 # definition is its reaching definition over the listing's CFG.
 
 
-def _reaching_def(flow, i: int, reg: str) -> Optional[int]:
-    """Index of the one instruction whose definition of register *reg* (normalised ``xN``)
-    reaches ``flow.insns[i]``, by reaching definitions over the listing's CFG.  A call
-    defines every caller-saved register (it clobbers them), so a value held across a call in
-    a caller-saved register is not traced through it.  ``None`` when the register is a
-    live-in, when more than one definition reaches (the value depends on the path), or when
-    ``insns[i]`` is unreachable."""
-    defs = flow.defs_before(i, reg)
-    if len(defs) != 1:
-        return None
-    (d,) = defs
-    return d if d >= 0 else None
-
-
 def _sp_offset(ins) -> Optional[int]:
     """``K`` of ``add xD, sp, #K`` (``0`` for the ``mov xD, sp`` a block at the very
     bottom of the frame compiles to); else None — i.e. the stack offset *xD* points at."""
@@ -180,53 +167,13 @@ def _sp_offset(ins) -> Optional[int]:
     return None
 
 
-def _pc_relative_address(flow, i: int, reg: str) -> Optional[int]:
-    """Address materialised into *reg* at ``insns[i]`` by ``adrp reg,#page ;
-    add reg,reg,#imm`` (the reaching pair — a body re-uses its scratch register for
-    many unrelated pages).  None for any other defining form."""
-    insns = flow.insns
-    d = _reaching_def(flow, i, reg)
-    if d is None:
-        return None
-    add = insns[d]
-    ops = split_ops(add.op_str)
-    if (add.mnemonic != 'add' or len(ops) != 3 or _norm_reg(ops[0]) != reg
-            or _norm_reg(ops[1]) != reg or not ops[2].startswith('#')):
-        return None
-    imm = _parse_imm(ops[2])
-    p = _reaching_def(flow, d, reg)
-    if imm is None or p is None or insns[p].mnemonic != 'adrp':
-        return None
-    pops = split_ops(insns[p].op_str)
-    page = _parse_imm(pops[1]) if len(pops) == 2 else None
-    return None if page is None else page + imm
-
-
 def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
-    """Address of the ivar-offset variable whose value is in *offreg* at ``insns[i]``:
-    the reaching ``ldrsw offreg,[base,#k]`` with ``base`` the reaching ``adrp`` page
-    (``+ add``) — or the PC-relative literal ``ldrsw offreg, #ADDR`` a standalone image
-    uses.  Reaching definitions only, so over a whole function an earlier unrelated
-    ``adrp x8 ; add x8,x8,#o`` cannot shadow the page actually feeding this load."""
-    insns = flow.insns
-    d = _reaching_def(flow, i, offreg)
-    if d is None or insns[d].mnemonic not in ('ldrsw', 'ldr'):
-        return None
-    mem = mem_operand(insns[d].op_str)
-    if mem is None:
-        ops = split_ops(insns[d].op_str)
-        return _parse_imm(ops[1]) if len(ops) == 2 and ops[1].startswith('#') else None
-    if mem[2] is not None:
-        return None
-    b = _reaching_def(flow, d, mem[1])
-    if b is None:
-        return None
-    if insns[b].mnemonic == 'adrp':
-        ops = split_ops(insns[b].op_str)
-        page = _parse_imm(ops[1]) if len(ops) == 2 else None
-        return None if page is None else page + mem[3]
-    base = _pc_relative_address(flow, d, mem[1])
-    return None if base is None else base + mem[3]
+    """Address of the ivar-offset variable whose value is in *offreg* at ``insns[i]``: the
+    one load reaching it (:meth:`Flow.slot_load_address`).  Reaching definitions only, so
+    over a whole function an earlier unrelated ``adrp x8 ; add x8,x8,#o`` cannot shadow the
+    page actually feeding this load."""
+    d = flow.only_def(i, offreg)
+    return None if d is None else flow.slot_load_address(d)
 
 
 def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
@@ -238,7 +185,7 @@ def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
     insns, seen = flow.insns, set()
     while (i, reg) not in seen:
         seen.add((i, reg))
-        d = _reaching_def(flow, i, reg)
+        d = flow.only_def(i, reg)
         if d is None:
             return None
         ins = insns[d]
@@ -254,7 +201,7 @@ def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
                 return _addr_to_name(
                     ctx, _offset_var_address(flow, d, mem[2]), offset_to_name)
             if mem[3] == 0:                             # [Xb] with Xb = add Xself, Xoff
-                a = _reaching_def(flow, d, mem[1])
+                a = flow.only_def(d, mem[1])
                 aops = split_ops(insns[a].op_str) if a is not None else []
                 if (a is not None and insns[a].mnemonic == 'add' and len(aops) == 3
                         and not aops[2].startswith('#') and _norm_reg(aops[2])):
@@ -275,7 +222,7 @@ def _trace_unbox_selector(ctx: BinaryContext, flow, i: int) -> Optional[str]:
     reg, j, seen = 'x1', i, set()
     while (j, reg) not in seen:
         seen.add((j, reg))
-        d = _reaching_def(flow, j, reg)
+        d = flow.only_def(j, reg)
         if d is None:
             return None
         ins = flow.insns[d]
@@ -345,7 +292,7 @@ def _scratch_slot_of(flow, k: int) -> Optional[int]:
     slot is reported as ``-K`` (never equal to an sp-relative one), which is all the
     begin/end pairing needs.  A call between the definition and *k* redefines ``x1``,
     so a stale scratch is never reported."""
-    d = _reaching_def(flow, k, 'x1')
+    d = flow.only_def(k, 'x1')
     if d is None:
         return None
     ins = flow.insns[d]
@@ -404,7 +351,7 @@ def scan_block_enumerated_maps(
             raise
         except Exception:
             continue
-        if not body or body[-1].mnemonic not in ('ret', 'retaa', 'retab'):
+        if not body or body[-1].mnemonic not in RETURNS:
             continue                                    # never analyse a truncated body
         body_flow = listing_flow(ctx, body)
         for k, b in enumerate(body):

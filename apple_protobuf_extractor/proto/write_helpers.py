@@ -33,6 +33,7 @@ from macho.disasm    import disasm, _parse_imm
 from proto.writeto   import _extract_writeto_field_numbers
 from proto.writer_flow import WriterFlow
 from proto.arm64cfg  import split_ops
+from proto.arm64_operands import NO_DEST, RETURNS, BLOCK_ENDS
 from proto.callees   import import_name, real_target
 from proto.models    import record_failed_pass
 from proto.protocore import (
@@ -133,9 +134,6 @@ def _find_string_write_helper(
     return None
 
 
-# Mnemonics that end a straight-line block while reading a write helper's tag build.
-_BLOCK_END_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
-                                  'cbz', 'cbnz', 'tbz', 'tbnz', 'ret', 'retaa', 'retab'))
 # [cap:INPUT-SANITY] _HELPER_FAMILY_MAX_INSNS — a runaway backstop, NOT a tuned bound
 # (TODO #59).  The wire-type family is decided STRUCTURALLY at the helper's tag-build
 # instruction (sint value-shift `lsl #1`, fixed `mov #wt`+`bfi #3`, or the plain varint
@@ -151,12 +149,6 @@ def _reg_num(reg: str):
     if len(reg) >= 2 and reg[0] in "wx" and reg[1:].isdigit():
         return int(reg[1:])
     return None
-
-
-# Mnemonics whose first operand is not a destination register.
-_NO_DEST_MNEMONICS = frozenset(('str', 'strb', 'strh', 'stur', 'stp', 'cmp', 'cmn', 'tst', 'ccmp',
-                                'ccmn', 'cbz', 'cbnz', 'tbz', 'tbnz', 'b', 'bl', 'br', 'blr',
-                                'ret', 'retaa', 'retab', 'nop'))
 
 
 def _varint32_value_extension(insns) -> Optional[str]:
@@ -179,12 +171,12 @@ def _varint32_value_extension(insns) -> Optional[str]:
                 return "uint32"                  # 32-bit move: zero-extends
         if mn == "sxtw" and len(ops) == 2 and _reg_num(ops[1]) in vals:
             return "int32"
-        srcs = ops if mn in _NO_DEST_MNEMONICS else ops[1:]
+        srcs = ops if mn in NO_DEST else ops[1:]
         if any(_reg_num(o.strip("[]! ")) in vals for o in srcs):
             return None                          # first read is not a 32-bit widening
-        if mn not in _NO_DEST_MNEMONICS and ops:
+        if mn not in NO_DEST and ops:
             vals.discard(_reg_num(ops[0]))       # overwritten (e.g. `csel x1, …`)
-        if mn in ('ret', 'retaa', 'retab', 'b', 'br'):
+        if mn in RETURNS or mn in ('b', 'br'):
             return None
     return None
 
@@ -309,7 +301,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
                 continue
             # end of the straight-line block after the tag shift, with no wire-type
             # `bfi` in it: this is the plain varint tag build.
-            if tag_shift_seen and (mn in _BLOCK_END_MNEMONICS or mn.startswith("b.")):
+            if tag_shift_seen and (mn in BLOCK_ENDS or mn.startswith("b.")):
                 break
             if mn == "mov" and len(ops) == 2:
                 src = _reg_num(ops[1])

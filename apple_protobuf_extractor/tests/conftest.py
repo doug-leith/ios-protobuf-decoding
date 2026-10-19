@@ -229,7 +229,7 @@ class WordCtx:
 
     def has_section(self, segname, sectname):
         """Always False: this stand-in models a binary with no named sections,
-        which routes _read_enum_string's cfstring/direct-C-string dispatch to
+        which routes read_cfstring_text's cfstring/direct-C-string dispatch to
         the direct-pointer branch unconditionally."""
         return False
 

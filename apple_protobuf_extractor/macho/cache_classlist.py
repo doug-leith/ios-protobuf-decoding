@@ -159,33 +159,6 @@ def iter_class_names(
             yield class_va, name
 
 
-def class_names_for_image(
-    reader: DyldCacheReader, image_name: str
-) -> Optional[Dict[int, str]]:
-    """
-    Return ``{class_va: class_name}`` for every class in *image_name*.
-
-    Convenience wrapper that calls :func:`find_image_header`,
-    :meth:`~DyldCacheReader.image_sections`, and :func:`iter_class_names` in
-    sequence.
-
-    Returns ``None`` if the image is not found or its classlist section is
-    absent.  Returns an empty dict if the classlist is empty or no sub-caches
-    are loaded (DATA sections unmapped).
-    """
-    va = reader.find_image_header(image_name)
-    if va is None:
-        return None
-
-    sections = reader.image_sections(va)
-    bounds = sections.get('__DATA_CONST/__objc_classlist')
-    if bounds is None:
-        return None
-
-    classlist_start, classlist_end = bounds
-    return dict(iter_class_names(reader, classlist_start, classlist_end))
-
-
 def _image_pointer_sections(reader: DyldCacheReader, mach_va: int, *sectnames: str):
     """``(start, end)`` of every section of the image named one of *sectnames*, in any
     segment (the cache builder moves ``__objc_classrefs`` between ``__DATA`` and
