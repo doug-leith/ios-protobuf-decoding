@@ -57,6 +57,25 @@ class TestZeroEdge(unittest.TestCase):
         self.assertIsNone(WriterFlow._zero_edge(self._I("tbz", "w8, #0, #0x2000")))
 
 
+class TestFastEnumerationContract(unittest.TestCase):
+    """``countByEnumeratingWithState:objects:count:`` refills the NSFastEnumerationState its
+    caller reuses: what a later loop reads through ``itemsPtr`` derives from that call's
+    receiver only, not from the arrays earlier loops enumerated."""
+
+    def test_state_holds_only_the_receiver_after_the_call(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import proto.writer_flow as WF
+        wf = WF.WriterFlow(SimpleNamespace(segments=[]), [])
+        st = WF._St({'x0': frozenset({('I', '_b')})}, sv={'sp': 0, 'x2': 0x40})
+        st.frame_write(0x40, 64, frozenset({('I', '_a')}))      # an earlier loop's state
+        with mock.patch.object(WF, 'stub_selector', lambda ctx, va: WF._FAST_ENUMERATION), \
+                mock.patch.object(WF, 'callee_name', lambda ctx, va: None):
+            wf._call(st, 0x9000, WF._Result(), 0, 0)
+        self.assertEqual(st.frame_read(0x48, 8), frozenset({('I', '_b')}))   # itemsPtr
+        self.assertEqual(st.p('x0'), frozenset({('I', '_b')}))               # the count
+
+
 try:
     import live_artifacts as _V
     _HAVE = artifacts.cache_file() is not None

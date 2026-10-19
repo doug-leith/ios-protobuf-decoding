@@ -97,6 +97,14 @@ for _t in ("Submessage", "Subgroup"):
 # serialises the receiver into the writer it is handed; ``[w writeData:d]`` appends d.
 _SEND_SERIALISES = {"writeTo:": "x0", "writeData:": "x2"}
 
+# NSFastEnumeration (Foundation ABI): ``[c countByEnumeratingWithState:&state objects:buf
+# count:n]`` sets the 64-byte NSFastEnumerationState at x2 -- ``itemsPtr`` among it -- to point
+# at objects of the receiver ``c`` and returns their count.  The loop reads its elements
+# through ``itemsPtr``, so they derive from the receiver alone, whatever an earlier loop left
+# in the reused state.
+_FAST_ENUMERATION = "countByEnumeratingWithState:objects:count:"
+_FAST_ENUMERATION_STATE_BYTES = 64
+
 
 def _regs(tokens: Iterable[str]) -> List[str]:
     out = []
@@ -336,6 +344,17 @@ class WriterFlow:
         sel = stub_selector(self.ctx, tgt) if tgt is not None else None
         if name in _NORETURN:
             return True
+        if sel == _FAST_ENUMERATION and 'x2' in st.sv and _W not in st.p('x0'):
+            recv = st.p('x0')
+            state = st.sv['x2']
+            for r in _CALLER_SAVED:
+                st.r.pop(r, None)
+                st.sv.pop(r, None)
+                st.cv.pop(r, None)
+            st.frame_write(state, _FAST_ENUMERATION_STATE_BYTES, recv)
+            st.r['x0'] = recv
+            st.r['v0'] = E
+            return False
         contract = _ARC.get(name) if name else None
         pb = _PB_WRITE.get(name) if name else None
         if pb is not None:
