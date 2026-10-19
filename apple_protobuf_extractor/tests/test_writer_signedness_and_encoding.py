@@ -16,6 +16,7 @@ import unittest
 from macho.disasm import disasm
 import proto.write_helpers as WH
 from proto.extractor import _repeated_encoding
+from proto.writeto import BoundWrite
 from proto.emitter import build_proto_files
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from tests.test_writeto_helper_family import (
@@ -101,11 +102,11 @@ class TestRepeatedEncodingOffline(unittest.TestCase):
     CLIST = '{?="list"^I"count"Q"size"Q}'
 
     def test_bracket_is_packed(self):
-        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': {'bracket': True}}),
+        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': BoundWrite(3, 0x1000, True)}),
                          'PACKED')
 
     def test_tag_per_element_is_expanded(self):
-        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': {'bracket': False}}),
+        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': BoundWrite(3, 0x1000)}),
                          'EXPANDED')
 
     def test_unseen_write(self):
@@ -114,9 +115,9 @@ class TestRepeatedEncodingOffline(unittest.TestCase):
     def test_object_array_of_scalars_is_read_the_same_way(self):
         # an NSArray whose elements are scalars (written per element with the field's number)
         arr = _Ivar('_a', '@"NSArray"')
-        self.assertEqual(_repeated_encoding(arr, {'_a': {'bracket': False}}, 'uint64'), 'EXPANDED')
+        self.assertEqual(_repeated_encoding(arr, {'_a': BoundWrite(3, 0x1000)}, 'uint64'), 'EXPANDED')
         self.assertEqual(_repeated_encoding(arr, {}, 'int32', 'ENUM:E'), 'UNSEEN')
-        self.assertIsNone(_repeated_encoding(arr, {'_a': {'bracket': False}}, 'string'))
+        self.assertIsNone(_repeated_encoding(arr, {'_a': BoundWrite(3, 0x1000)}, 'string'))
 
     def test_neither_a_clist_nor_an_array(self):
         self.assertIsNone(_repeated_encoding(_Ivar('_a', '@"NSString"'), {}))

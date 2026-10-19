@@ -265,7 +265,7 @@ class BinaryContext:
         self._dictrep_truncated_classes: Optional[set] = None
         # writeTo: pre-pass results, threaded by proto.extractor.extract_all (the set of
         # all method IMPs; the image's WriterFlow is _writer_flow).
-        self._writeto_foreign_imps:  Optional[set]  = None
+        self._method_imps:           Optional[set]  = None
         # Binary-wide field-typing pre-passes, lazily built + cached for standalone
         # extract_proto_message callers (extract_all builds + passes them directly).
         # None == not yet built; an empty set/dict is a valid built result.

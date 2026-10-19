@@ -6,25 +6,13 @@ evaluates the stub's straight-line code up to its branch, so each stub form is t
 its instructions compute, not by their positions or registers.
 """
 import unittest
+from tests._listing import layout
 
 import proto.callees as C
-from macho.disasm import Insn
 
 
 def _memory(*blocks):
-    mem = {}
-    for base, lines in blocks:
-        for n, (mn, op) in enumerate(lines):
-            mem[base + 4 * n] = Insn(addr=base + 4 * n, mnemonic=mn, op_str=op, size=4,
-                                     raw=b'\x00' * 4)
-
-    def fake_disasm(ctx, addr, max_insns=400, stop_at_ret=True):
-        out, a = [], addr
-        while len(out) < max_insns and a in mem:
-            out.append(mem[a])
-            a += 4
-        return out
-    return fake_disasm
+    return layout(*blocks)[1]
 
 
 # iPhone 8 GeoServices: the PLT form, a computed target (_BZ2_bzBuffToBuffCompress).

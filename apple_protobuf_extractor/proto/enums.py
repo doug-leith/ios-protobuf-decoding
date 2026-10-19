@@ -375,7 +375,7 @@ def _dictrep_body(ctx: BinaryContext, imp: int) -> Optional[List[Insn]]:
     walks from the entry and resolves `br` targets by evaluation: pruning the range to a
     static CFG first drops jump-table arms only that evaluation finds (iOS 27
     GEOPDSUserActionMetadataElement lost 8 values that way)."""
-    imps = getattr(ctx, "_writeto_foreign_imps", None)
+    imps = getattr(ctx, "_method_imps", None)
     if not imps:
         return None
     memo = getattr(ctx, "_dictrep_imps_sorted", None)

@@ -58,7 +58,7 @@ from proto.dispatch import _jump_table_arm_addrs, listing_flow
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
-from proto.writeto import field_number_at
+from proto.writeto import BoundWrite, field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.eval_tokens import SELF, READER, OPAQUE, opaque
 from proto.protocore import _SCALAR_ENC
@@ -833,15 +833,15 @@ class StructSite:
 
 
 def record_struct_site(ctx, class_name: str, field_name: str, ivar_name: str,
-                       ivar_offset: int, enc: Optional[str], write: Optional[dict]) -> None:
+                       ivar_offset: int, enc: Optional[str], write: Optional[BoundWrite]) -> None:
     """Remember a struct-typed field's bound begin-mark for :func:`finalize_struct_fields`.
     A no-op unless the ivar is a flat scalar struct and a write binds it."""
-    if write is None or write.get('write_addr') is None or write.get('n') is None:
+    if write is None:
         return
     if parse_struct_encoding(enc) is None:
         return
     _ctx_cache(ctx, "_struct_sites", dict)[(class_name, field_name)] = StructSite(
-        ivar_name, write['write_addr'], ivar_offset, write['n'], enc)
+        ivar_name, write.addr, ivar_offset, write.number, enc)
 
 
 _MEMBER_NAME_MISSING = ("member name not recovered (the struct's @encode names no members); "
@@ -861,7 +861,7 @@ def _method_body(ctx, cls, selector: str) -> Optional[int]:
     return m.imp if m is not None and m.imp else None
 
 
-def _linear_method(ctx, cls, selector: str, foreign_sorted: List[int], memo: dict):
+def _linear_method(ctx, cls, selector: str, imps_sorted: List[int], memo: dict):
     """The class's *selector* method as one linear instruction list (its body .. the next
     method IMP — its structural extent, including out-of-line tail blocks), memoised per
     class."""
@@ -870,7 +870,7 @@ def _linear_method(ctx, cls, selector: str, foreign_sorted: List[int], memo: dic
         imp = _method_body(ctx, cls, selector)
         insns = None
         if imp:
-            end = _next_imp(foreign_sorted, imp)
+            end = _next_imp(imps_sorted, imp)
             try:
                 insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4),
                                stop_at_ret=False)
@@ -896,10 +896,10 @@ def _ivar_offset_test(ctx, site: StructSite):
     return test
 
 
-def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorted, memo):
+def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, imps_sorted, memo):
     """``({offset: field#}, {offset: helper})`` for one site, or ``None`` if its begin-mark
     body does not hold a struct serialiser matching *layout*."""
-    insns = _linear_method(ctx, cls, "writeTo:", foreign_sorted, memo)
+    insns = _linear_method(ctx, cls, "writeTo:", imps_sorted, memo)
     if not insns:
         return None
     idx = next((i for i, x in enumerate(insns) if x.addr == site.write_addr), None)
@@ -926,7 +926,7 @@ def _unique_keys(members: Dict[int, MemberDict]) -> bool:
     return len(set(keys)) == len(keys)
 
 
-def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, foreign_sorted,
+def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, imps_sorted,
                      memo) -> Optional[Dict[int, MemberDict]]:
     """What this owner's ``_dictionaryRepresentation:`` says about *layout*'s members (key and
     enum-ness).
@@ -936,7 +936,7 @@ def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, foreign_s
     different ones mean the owner cannot say which is which), or the compiler inlined it, in
     which case the members are paired through the ivar's offset variable.  ``None`` if neither
     names every member."""
-    insns = _linear_method(ctx, cls, _DICTREP_SELECTOR, foreign_sorted, memo)
+    insns = _linear_method(ctx, cls, _DICTREP_SELECTOR, imps_sorted, memo)
     if not insns:
         return None
     want = {m.offset for m in layout.members}
@@ -1049,7 +1049,7 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
     sites = getattr(ctx, "_struct_sites", None) or {}
     if not sites:
         return
-    foreign_sorted = sorted(getattr(ctx, "_writeto_foreign_imps", None) or ())
+    imps_sorted = sorted(getattr(ctx, "_method_imps", None) or ())
     by_class = {c.name: c for c in cl if not c.is_meta}
     taken_names = {m.name for m in messages}
     taken_classes = {m.class_name for m in messages} | set(by_class)
@@ -1063,9 +1063,9 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
             if site is None or cls is None or fld.type_name != "bytes":
                 continue
             layout = parse_struct_encoding(site.enc)
-            got = _decode_site(ctx, cls, site, layout, foreign_sorted, memo) if layout else None
+            got = _decode_site(ctx, cls, site, layout, imps_sorted, memo) if layout else None
             if got is not None:
-                dmembers = _dictrep_members(ctx, cls, site, layout, foreign_sorted, memo)
+                dmembers = _dictrep_members(ctx, cls, site, layout, imps_sorted, memo)
                 groups.setdefault(layout.tag, []).append((fld, layout, got[0], got[1], dmembers))
 
     for tag, items in sorted(groups.items()):

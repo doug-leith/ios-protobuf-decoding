@@ -52,7 +52,7 @@ from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
 from proto.models    import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics,
                              record_analysis_failure, record_failed_pass, PACKABLE_SCALARS)
-from proto.writeto   import _extract_writeto_field_numbers, writeto_sent_selectors
+from proto.writeto   import BoundWrite, _extract_writeto_field_numbers, writeto_sent_selectors
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
@@ -213,7 +213,7 @@ class _FieldNumberResult:
     map_writers: Dict[str, MapEntryWriter] = field(default_factory=dict)
     # {ivar_name: the writeTo: write that binds it} — the begin-mark of an inline C-struct
     # sub-message is bound here (proto.structfields, #37).
-    bound_writes: Dict[str, dict] = field(default_factory=dict)
+    bound_writes: Dict[str, BoundWrite] = field(default_factory=dict)
 
 
 def _confirm_field_numbers(
@@ -615,7 +615,7 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, bound_wr
       (``{?="list"^<elem>…}``) written UNPACKED (the element writer called per element
       with the real field#): the field-write helper itself (``wt_helpers``);
     * a C-list written PACKED — its binding write is a length-delimited begin-mark
-      (``bound_writes[ivar]['bracket']``, wire type 2, no element family); the wire
+      (``bound_writes[ivar].bracket``, wire type 2, no element family); the wire
       form is that of the no-tag ELEMENT writer called inside the begin/recall bracket
       (``elem_helper_vas``, see :data:`proto.writeto._NO_TAG_FIELD_NUMBER`).  Refined
       only when every element writer in the bracket agrees on one family; none found
@@ -627,11 +627,11 @@ def _refine_int_wire_form(ctx, type_name, type_class, ivar, wt_helpers, bound_wr
     Non-int types are unchanged and decided."""
     if type_class is not None or type_name not in ("int32", "int64", "uint32", "uint64"):
         return type_name, True
-    w = (bound_writes or {}).get(ivar.name) or {}
-    if not w.get('bracket'):
+    w = (bound_writes or {}).get(ivar.name)
+    if w is None or not w.bracket:
         fams = {_classify_write_helper(ctx, wt_helpers.get(ivar.name))}
     else:
-        fams = {_classify_write_helper(ctx, va) for va in w.get('elem_helper_vas', ())}
+        fams = {_classify_write_helper(ctx, va) for va in w.elem_helper_vas}
     if len(fams) != 1 or "unknown" in fams:
         return type_name, False
     return _refine_scalar_by_family(type_name, fams.pop(), f"{owner}.{ivar.name}"), True
@@ -642,7 +642,7 @@ def _repeated_encoding(ivar, bound_writes, type_name=None, type_class=None):
     or an object array whose element type (*type_name* / *type_class*) is packable (a
     scalar or an enum, :mod:`proto.repeated`):
     ``"PACKED"`` when its binding write is a length-delimited begin/recall bracket around no-tag
-    element writes (``bound_writes[ivar]['bracket']``), ``"EXPANDED"`` when it is the
+    element writes (``bound_writes[ivar].bracket``), ``"EXPANDED"`` when it is the
     element writer called with the field's own number (one tag per element), ``"UNSEEN"``
     when no write binds the ivar, None when the ivar is neither.  The emitter declares the
     encoding from this, instead of edition 2023's PACKED default."""
@@ -651,9 +651,9 @@ def _repeated_encoding(ivar, bound_writes, type_name=None, type_class=None):
             or (ivar.type_enc in _OBJECT_ARRAY_ENCS and packable)):
         return None
     w = (bound_writes or {}).get(ivar.name)
-    if not w:
+    if w is None:
         return "UNSEEN"
-    return "PACKED" if w.get('bracket') else "EXPANDED"
+    return "PACKED" if w.bracket else "EXPANDED"
 
 
 def _qualify_field_enum(type_name, type_class, cls, pfx):

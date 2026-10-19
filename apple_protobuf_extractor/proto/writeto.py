@@ -21,7 +21,7 @@ nothing here (the number lives in the block's invoke function — 5 GeoServices 
 flagged ivar-order estimate — fail-safe, never a confident error.
 """
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from macho.memory import BinaryContext
 from macho.classlist import ObjcClass, ObjcIvar
@@ -74,13 +74,23 @@ def _is_field_number(n) -> bool:
     return n is not None and 1 <= n <= _MAX_PROTO_FIELD_NUMBER
 
 
+@dataclass(frozen=True)
+class BoundWrite:
+    """The write call that binds an ivar: the field number it is handed, its address, whether
+    it is a length-delimited begin mark (a packed list or an inline sub-message), and -- for
+    a mark -- the no-tag element writers called directly inside it."""
+    number: int
+    addr: int
+    bracket: bool = False
+    elem_helper_vas: Tuple[int, ...] = ()
+
+
 @dataclass
 class WriteBindings:
     """What ``writeTo:`` binds for one class, per ivar name."""
     numbers: Dict[str, int] = field(default_factory=dict)    # the field number written
     helpers: Dict[str, int] = field(default_factory=dict)    # the write helper's VA
-    # the binding write: {n, write_addr, bracket (a begin mark), elem_helper_vas}
-    writes: Dict[str, dict] = field(default_factory=dict)
+    writes: Dict[str, BoundWrite] = field(default_factory=dict)   # the binding write
     zero_fields: Set[str] = field(default_factory=set)       # written with field# 0 only (#52)
 
 
@@ -134,8 +144,7 @@ def _site_bindings(sites, field_ivars) -> WriteBindings:
             out.numbers[name] = n
             if s.target is not None:
                 out.helpers[name] = s.target
-            out.writes[name] = dict(n=n, write_addr=s.addr, bracket=s.is_mark,
-                                    elem_helper_vas=elem)
+            out.writes[name] = BoundWrite(n, s.addr, s.is_mark, tuple(elem))
     out.zero_fields = zero - set(out.numbers)
     return out
 

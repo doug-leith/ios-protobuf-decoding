@@ -23,31 +23,18 @@ Those runs are NOT golden-guarded; these assertions are the guard.
 """
 import os
 import unittest
+from tests._listing import insns, layout
 
 import artifacts
 from proto.writer_flow import _image_text_range as WF_image_text_range
 from macho.arm64decode import jumptable_arm_target
-from macho.disasm import Insn
 from macho.memory import Segment
 
 
 # ── offline: the writer flow on hand-built code ──────────────────────────────
 
 def _asm(*blocks):
-    mem = {}
-    for base, lines in blocks:
-        a = base
-        for mn, op in lines:
-            mem[a] = Insn(addr=a, mnemonic=mn, op_str=op, size=4, raw=b'\x00\x00\x00\x00')
-            a += 4
-
-    def fake_disasm(ctx, addr, max_insns=400, stop_at_ret=False):
-        out, a = [], addr
-        while len(out) < max_insns and a in mem:
-            out.append(mem[a])
-            a += 4
-        return out
-    return fake_disasm
+    return layout(*blocks)[1]
 
 
 class _ImageCtx:
@@ -169,8 +156,7 @@ class TestJumpTableArmTarget(unittest.TestCase):
 
 
 def _insns(*lines):
-    return [Insn(addr=0x1000 + 4 * i, mnemonic=mn, op_str=op, size=4, raw=b'\0\0\0\0')
-            for i, (mn, op) in enumerate(lines)]
+    return insns(lines)
 
 
 # ── live: the real iOS 27 cache ───────────────────────────────────────────────

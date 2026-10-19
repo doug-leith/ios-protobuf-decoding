@@ -389,7 +389,7 @@ def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
     """Lazily build + cache the binary-wide ``writeTo:`` pre-pass on ``ctx``: the image's
     :class:`proto.writer_flow.WriterFlow` (``_writer_flow``, which the bindings
     :func:`_extract_writeto_field_numbers` read) and the set of every method IMP
-    (``_writeto_foreign_imps``, the method extents the map / struct / enum passes use).
+    (``_method_imps``, the method extents the map / struct / enum passes use).
 
     :func:`proto.extractor.extract_all` builds it once up front, but
     :func:`proto.extractor.extract_proto_message` may also be called standalone
@@ -399,8 +399,8 @@ def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
     wf = getattr(ctx, "_writer_flow", None)
     if wf is None or wf.cl is not cl:
         _ctx_store(ctx, "_writer_flow", WriterFlow(ctx, cl))
-    if getattr(ctx, "_writeto_foreign_imps", None) is None:
-        _ctx_store(ctx, "_writeto_foreign_imps", {m.imp for c in cl for m in c.methods if m.imp})
+    if getattr(ctx, "_method_imps", None) is None:
+        _ctx_store(ctx, "_method_imps", {m.imp for c in cl for m in c.methods if m.imp})
 
 
 def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSet[int]":

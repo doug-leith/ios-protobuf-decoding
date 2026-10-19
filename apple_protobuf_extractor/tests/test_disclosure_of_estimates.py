@@ -76,7 +76,8 @@ class TestUnknownEncodingIsFlagged(unittest.TestCase):
 
     def test_packed_element_writers_that_disagree_are_undecided(self):
         fams = iter(("sint32", "int32"))
-        walk = {"_count": {"bracket": True, "elem_helper_vas": (0x10, 0x20)}}
+        from proto.writeto import BoundWrite
+        walk = {"_count": BoundWrite(3, 0x1000, True, (0x10, 0x20))}
         with mock.patch.object(E, "_classify_write_helper", lambda ctx, va: next(fams)):
             self.assertEqual(E._refine_int_wire_form(_Ctx(), "int32", None, _ivar(), {}, walk),
                              ("int32", False))

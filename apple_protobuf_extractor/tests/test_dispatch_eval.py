@@ -17,11 +17,11 @@ import importlib.util
 import os
 import sys
 import unittest
+from tests._listing import text_listing
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..'))
 
-from macho.disasm import Insn
 from proto.arm64_eval import Flow, Objects, _STACK_TOP
 from proto import dispatch_eval as E
 from proto import eval_tokens as T
@@ -31,23 +31,7 @@ SELF = T.SELF
 _RETURNS = Objects(opaque=T.opaque, call_result=lambda k, target, x0: T.ret_value(k))
 
 
-def listing(*lines, base=0x1000):
-    """``(insns, labels)`` for *lines* (``'mnemonic ops'`` or ``'label:'``) placed at *base*;
-    ``@label`` operands become addresses."""
-    labels, code, pc = {}, [], base
-    for ln in lines:
-        if ln.endswith(':'):
-            labels[ln[:-1]] = pc
-        else:
-            code.append((pc, ln))
-            pc += 4
-    out = []
-    for a, ln in code:
-        mn, _, ops = ln.partition(' ')
-        for name, addr in labels.items():
-            ops = ops.replace('@' + name, hex(addr).replace('0x', '#0x'))
-        out.append(Insn(addr=a, mnemonic=mn, op_str=ops, size=4, raw=b'\0' * 4))
-    return out, labels
+listing = text_listing
 
 
 def calls_by_target(region):

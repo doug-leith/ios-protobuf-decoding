@@ -3,15 +3,13 @@
 hand-built instructions (no binary).  (Split from the writeTo: walk's unit tests when the
 walk was replaced by :mod:`proto.writer_flow`, TODO #85.)"""
 import unittest
+from tests._listing import insns
 
 import proto.arm64cfg as CFG
-from macho.disasm import Insn
 
 
 def ins_list(*pairs, base=0x2000):
-    """Build a list of Insn from (mnemonic, op_str) pairs at sequential addresses."""
-    return [Insn(addr=base + 4 * i, mnemonic=mn, op_str=op, size=4,
-                 raw=b'\x00\x00\x00\x00') for i, (mn, op) in enumerate(pairs)]
+    return insns(pairs, base)
 
 
 class TestParseLoad(unittest.TestCase):

@@ -12,9 +12,10 @@ import os
 import sys
 import unittest
 
+from tests._listing import text_listing
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from macho.disasm import Insn
 from proto.arm64_eval import Flow, _STACK_TOP
 
 PLAIN, JSON = 0x5040, 0x5060           # the two spellings' CFString addresses
@@ -23,20 +24,7 @@ CALL = '#0x9000'                       # some callee outside the listing
 
 def listing(*lines, base=0x1000):
     """``Insn`` list of *lines* (``'mnemonic ops'`` or ``'label:'``) placed at *base*."""
-    labels, code, pc = {}, [], base
-    for ln in lines:
-        if ln.endswith(':'):
-            labels[ln[:-1]] = pc
-        else:
-            code.append((pc, ln))
-            pc += 4
-    out = []
-    for a, ln in code:
-        mn, _, ops = ln.partition(' ')
-        for name, addr in labels.items():
-            ops = ops.replace('@' + name, hex(addr).replace('0x', '#0x'))
-        out.append(Insn(addr=a, mnemonic=mn, op_str=ops, size=4, raw=b'\0' * 4))
-    return out
+    return text_listing(*lines, base=base)[0]
 
 
 def at_mark(insns, mark='bl', nth=-1):

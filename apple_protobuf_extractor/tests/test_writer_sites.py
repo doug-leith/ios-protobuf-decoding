@@ -78,8 +78,7 @@ class TestSiteBindings(unittest.TestCase):
         b = W._site_bindings([_site(0x10, 3, ['_a'])], _field_ivars('_a'))
         self.assertEqual(b.numbers, {'_a': 3})
         self.assertEqual(b.helpers, {'_a': 0x9000})
-        self.assertEqual(b.writes['_a'], dict(n=3, write_addr=0x10, bracket=False,
-                                              elem_helper_vas=[]))
+        self.assertEqual(b.writes['_a'], W.BoundWrite(3, 0x10))
 
     def test_value_from_two_ivars_binds_nothing(self):
         self.assertEqual(W._site_bindings([_site(0x10, 3, ['_a', '_b'])],
@@ -100,8 +99,7 @@ class TestSiteBindings(unittest.TestCase):
                  _site(0x38, None, name="_PBDataWriterRecallMark", slot=0x40, marks=inside)]
         b = W._site_bindings(sites, _field_ivars('_list'))
         self.assertEqual(b.numbers, {'_list': 4})
-        self.assertEqual(b.writes['_list']['bracket'], True)
-        self.assertEqual(b.writes['_list']['elem_helper_vas'], [0x9100])
+        self.assertEqual(b.writes['_list'], W.BoundWrite(4, 0x20, True, (0x9100,)))
 
     def test_a_nested_mark_is_the_elements_own_field(self):
         # message Outer { Sub sub = 7; }  with Sub's packed field 2 written inline
@@ -113,7 +111,7 @@ class TestSiteBindings(unittest.TestCase):
                  _site(0x34, -1, ['_x'], target=0x9100, marks=inner)]
         b = W._site_bindings(sites, _field_ivars('_sub', '_x'))
         self.assertEqual(b.numbers, {'_sub': 7})
-        self.assertEqual(b.writes['_sub']['elem_helper_vas'], [])
+        self.assertEqual(b.writes['_sub'].elem_helper_vas, ())
 
     def test_field_number_zero_is_a_zero_field_unless_also_bound(self):
         b = W._site_bindings([_site(0x10, 0, ['_k']), _site(0x20, 0, ['_a']),

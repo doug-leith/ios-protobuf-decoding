@@ -54,7 +54,7 @@ from proto.callees import real_target, stub_selector
 from proto.arm64cfg import (
     split_ops, mem_operand, _next_imp,
 )
-from proto.writeto import field_number_at
+from proto.writeto import BoundWrite, field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
@@ -422,12 +422,12 @@ def scan_block_enumerated_maps(
 
 
 def entry_from_bound_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
-                          w: dict) -> Optional[MapEntryWriter]:
+                          w: BoundWrite) -> Optional[MapEntryWriter]:
     """The :class:`MapEntryWriter` for a bound ``writeTo:`` write *w* (at *imp*) that is a
     begin-submessage mark (already bound to the dictionary ivar, with its field number).
     The entry body is the code after it in the method's linear listing (``imp`` .. the next
     method IMP)."""
-    if not w.get('bracket'):
+    if not w.bracket:
         return None
     end = _next_imp(imps_sorted, imp)
     try:
@@ -436,18 +436,18 @@ def entry_from_bound_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
         raise
     except Exception:
         return None
-    k = next((i for i, x in enumerate(insns) if x.addr == w['write_addr']), None)
+    k = next((i for i, x in enumerate(insns) if x.addr == w.addr), None)
     if k is None:
         return None
     entry = analyze_entry(ctx, insns, k)
-    if entry is None or entry.number != w.get('n'):
+    if entry is None or entry.number != w.number:
         return None
     return MapEntryWriter(**{**entry.__dict__, 'shape': 'inline-loop'})
 
 
 def find_map_writers(
     ctx: BinaryContext, cls: ObjcClass, map_ivars: Sequence[ObjcIvar],
-    bound_writes: Dict[str, dict], offset_to_name: Dict[int, str],
+    bound_writes: Dict[str, BoundWrite], offset_to_name: Dict[int, str],
     confirmed_numbers: Dict[str, int],
 ) -> Dict[str, MapEntryWriter]:
     """Map-entry writers for *cls*'s dictionary ivars: the inline-loop shape from the
@@ -458,7 +458,7 @@ def find_map_writers(
     if m is None or not m.imp or not map_ivars:
         return {}
     writers: Dict[str, MapEntryWriter] = {}
-    imps_sorted = sorted(getattr(ctx, "_writeto_foreign_imps", None) or ())
+    imps_sorted = sorted(getattr(ctx, "_method_imps", None) or ())
     for iv in map_ivars:
         w = bound_writes.get(iv.name)
         if w is not None:

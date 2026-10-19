@@ -14,6 +14,7 @@ extractor on the dyld cache.
 """
 import os
 import unittest
+from tests._listing import layout
 
 import artifacts
 import proto.extractor as E
@@ -21,35 +22,14 @@ import proto.structfields as SF
 from proto.dispatch import listing_flow
 import live_artifacts as V
 from proto.models import FieldLabel
-from macho.disasm import Insn, disasm
+from macho.disasm import disasm
 from tests._a64asm import assemble, FlowCtx
 
 
 # ── fake instruction memory (same idiom as test_map_fields) ───────────────────
 
 
-def asm(*blocks):
-    """``(base, [(mnemonic, op_str), ...])`` blocks -> ``(insn_list, fake_disasm)``."""
-    mem, order = {}, []
-    for base, lines in blocks:
-        a = base
-        for mn, op in lines:
-            ins = Insn(addr=a, mnemonic=mn, op_str=op, size=4, raw=b'\x00' * 4)
-            mem[a] = ins
-            order.append(ins)
-            a += 4
-
-    def fake_disasm(ctx, addr, max_insns=400, stop_at_ret=True):
-        out, a = [], addr
-        while len(out) < max_insns and a in mem:
-            ins = mem[a]
-            out.append(ins)
-            if stop_at_ret and ins.mnemonic in ('ret', 'retaa', 'retab'):
-                break
-            a += 4
-        return out
-
-    return order, fake_disasm
+asm = layout
 
 
 # Real listing (iPhone 8 GeoServices): the C function that serialises one GEOPDTimeRange

@@ -73,7 +73,7 @@ class TestWriteHelpersStandaloneCall(unittest.TestCase):
 
         # The lazy pre-passes must now be built (not left None/absent).
         self.assertIsNotNone(getattr(ctx, "_writer_flow", None))
-        self.assertIsNotNone(getattr(ctx, "_writeto_foreign_imps", None))
+        self.assertIsNotNone(getattr(ctx, "_method_imps", None))
         got_string_helpers = getattr(ctx, "_string_write_helpers", None)
         self.assertIsNotNone(got_string_helpers)
         # Must match an independent, direct computation -- not just "non-None".

@@ -14,12 +14,12 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from tests._listing import layout
 from pathlib import Path
 
 import proto.mapfields as M
 import proto.callees as C
 import proto.extractor as E
-from macho.disasm import Insn
 from proto.dispatch import listing_flow
 from proto.emitter import build_proto_files, write_from_messages
 from proto.models import FieldLabel, ProtoField, ProtoMessage
@@ -52,30 +52,7 @@ class FakeCtx:
         return self.cstrs[addr]
 
 
-def asm(*blocks):
-    """Lay out ``(base, [(mnemonic, op_str), ...])`` blocks; return ``(insn_list, fake_disasm)``
-    where the list is every instruction in order and ``fake_disasm`` is a drop-in for
-    ``macho.disasm.disasm`` over that memory (honouring ``stop_at_ret``)."""
-    mem, order = {}, []
-    for base, lines in blocks:
-        a = base
-        for mn, op in lines:
-            ins = Insn(addr=a, mnemonic=mn, op_str=op, size=4, raw=b'\x00' * 4)
-            mem[a] = ins
-            order.append(ins)
-            a += 4
-
-    def fake_disasm(ctx, addr, max_insns=400, stop_at_ret=True):
-        out, a = [], addr
-        while len(out) < max_insns and a in mem:
-            ins = mem[a]
-            out.append(ins)
-            if stop_at_ret and ins.mnemonic in ('ret', 'retaa', 'retab'):
-                break
-            a += 4
-        return out
-
-    return order, fake_disasm
+asm = layout
 
 
 def selector_stub(base, sel_slot):
@@ -417,7 +394,7 @@ class TestFindMapWriters(_Patched):
         self.patch(fd)
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8
-        ctx._writeto_foreign_imps = {0x18ce417e8}
+        ctx._method_imps = {0x18ce417e8}
 
         class _Method:
             imp = _MANIFEST_WRITETO[0]

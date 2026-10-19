@@ -178,10 +178,8 @@ class TestFieldNumberAt(unittest.TestCase):
     def fn(self, lines, idx):
         from proto.arm64_eval import Flow
         from proto.writeto import field_number_at
-        from macho.disasm import Insn
-        insns = [Insn(addr=0x1000 + 4 * n, mnemonic=mn, op_str=op, size=4,
-                      raw=b'\x00\x00\x00\x00') for n, (mn, op) in enumerate(lines)]
-        return field_number_at(Flow(None, insns), idx)
+        from tests._listing import insns
+        return field_number_at(Flow(None, insns(lines)), idx)
 
     def test_bl_field_number_immediately_before(self):
         self.assertEqual(self.fn([('mov', 'x0, x19'), ('movz', 'w2, #0x3'),

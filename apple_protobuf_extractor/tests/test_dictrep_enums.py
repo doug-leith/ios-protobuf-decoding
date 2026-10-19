@@ -1008,7 +1008,7 @@ class TestDictRepBodyLive(unittest.TestCase):
         syms = cls.reader.image_local_symbols(mv)
         if syms:
             apply_to_classes(clist, syms)
-        ctx._writeto_foreign_imps = {m.imp for c in clist for m in c.methods if m.imp}
+        ctx._method_imps = {m.imp for c in clist for m in c.methods if m.imp}
         for c in clist:
             if c.is_meta or c.name not in cls.CASES:
                 continue
@@ -1065,7 +1065,7 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
         syms = cls.reader.image_local_symbols(mv)
         if syms:
             apply_to_classes(clist, syms)
-        ctx._writeto_foreign_imps = {m.imp for c in clist for m in c.methods if m.imp}
+        ctx._method_imps = {m.imp for c in clist for m in c.methods if m.imp}
         c = next((c for c in clist
                   if c.name == 'GEOPDSUserActionMetadataElement' and not c.is_meta), None)
         if c is None:
@@ -1127,7 +1127,7 @@ class TestNoArgDictRepLive(unittest.TestCase):
             if syms:
                 apply_to_classes(clist, syms)
             # the method-IMP set extract_all threads onto ctx bounds the body
-            ctx._writeto_foreign_imps = {m.imp for c in clist for m in c.methods if m.imp}
+            ctx._method_imps = {m.imp for c in clist for m in c.methods if m.imp}
             c = next((c for c in clist if c.name == cn and not c.is_meta), None)
             if c is None or c.get_method('_dictionaryRepresentation:') is not None:
                 continue
