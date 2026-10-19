@@ -26,6 +26,7 @@ from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder, split_ops)
 from macho.strings import read_cfstring_text
+from proto.callees import RUNTIME_CONTRACTS, callee_name
 from proto.arm64_operands import (
     CALLER_SAVED_GPRS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
@@ -56,6 +57,22 @@ _STACK_SPAN = 1 << 32
 _FRAME_REGS = ('sp', 'x29')
 # Registers that may carry a flag argument into a function: x0 holds the object / struct.
 _FLAG_ARG_REGS = tuple(f"x{n}" for n in range(1, 8))
+
+
+# arm64e pointer authentication in place (``pacia x16, x8``, ``autibsp``, ``xpaci x0``): the
+# pointer keeps the address it points at -- only its unmodelled PAC bits change -- so a value
+# keeps its identity through it (a signed code pointer is still that function).  Not
+# ``pacga``, which computes a code from two registers.
+_POINTER_AUTH = frozenset((
+    "pacia", "pacib", "pacda", "pacdb", "paciza", "pacizb", "pacdza", "pacdzb",
+    "paciaz", "pacibz", "paciasp", "pacibsp", "pacia1716", "pacib1716",
+    "autia", "autib", "autda", "autdb", "autiza", "autizb", "autdza", "autdzb",
+    "autiaz", "autibz", "autiasp", "autibsp", "autia1716", "autib1716",
+    "xpaci", "xpacd", "xpaclri"))
+
+
+# The registers a callee is handed its arguments in (x8: an indirect result's address).
+_CALL_ARGS = tuple(f"x{i}" for i in range(9))
 
 
 def _is_stack(v: Optional[int]) -> bool:
@@ -123,8 +140,10 @@ class _Machine:
     A register absent from *regs* is asked of *fallback* (the reaching-definition constant at
     the evaluation's root) unless it was since overwritten with something unknown (*top*).
     *slots* maps a stack address to ``(size, value)``.  *escaped* records that a stack address
-    has been put in a register other than sp / x29: from then on a callee, or a store through
-    a pointer the evaluation does not know, may write any slot, so either clears them all.
+    has been put in a register other than sp / x29: from then on a store through a pointer
+    the evaluation does not know may write any slot, so it clears them.  *handed* records that
+    a callee can reach the frame: a stack address was in an argument register (x0-x8) at a
+    call, or was stored outside the frame; from then on every call may write any slot.
     Until then the frame is the function's own and a call leaves its slots alone.
 
     *opaque*, when given, marks values that stand for an object the analysis cannot see into
@@ -136,8 +155,8 @@ class _Machine:
 
     *object_escape* narrows what an escaped stack address exposes: a callee (or a store through
     an unknown pointer) is handed a pointer to an object and may write from it upward, never
-    below it, so only the slots at or above the LOWEST escaped address are cleared
-    (*escape_lo*).  Off by default: then every slot is cleared."""
+    below it, so only the slots at or above the LOWEST escaped (*escape_lo*) or handed
+    (*handed_lo*) address are cleared.  Off by default: then every slot is cleared."""
 
     def __init__(self, regs: Dict[str, int], fallback=None, opaque=None,
                  object_escape: bool = False, field_value=None):
@@ -150,22 +169,30 @@ class _Machine:
         self.slots: Dict[int, Tuple[int, int]] = {}
         self.escaped = False
         self.escape_lo: Optional[int] = None
+        self.handed = False
+        self.handed_lo: Optional[int] = None
         self.flags: Optional[Nzcv] = None
 
     def copy(self) -> "_Machine":
         m = _Machine(self.regs, self.fallback, self.opaque, self.object_escape, self.field_value)
         m.top, m.slots, m.escaped, m.flags = set(self.top), dict(self.slots), self.escaped, self.flags
         m.escape_lo = self.escape_lo
+        m.handed, m.handed_lo = self.handed, self.handed_lo
         return m
 
-    def _clobber_slots(self) -> None:
-        """What a callee / a store through an unknown pointer may have written."""
-        if not self.escaped:
+    def _clobber_slots(self, reached: bool, lo: Optional[int]) -> None:
+        """What a callee / a store through an unknown pointer may have written: nothing
+        unless it can *reach* the frame; with *object_escape*, the slots from *lo* up."""
+        if not reached:
             return
-        if self.object_escape and self.escape_lo is not None:
-            self.slots = {a: v for a, v in self.slots.items() if a + v[0] <= self.escape_lo}
+        if self.object_escape and lo is not None:
+            self.slots = {a: v for a, v in self.slots.items() if a + v[0] <= lo}
         else:
             self.slots.clear()
+
+    def _hand(self, v: int) -> None:
+        self.handed = True
+        self.handed_lo = v if self.handed_lo is None else min(self.handed_lo, v)
 
     def join(self, other: "_Machine") -> "_Machine":
         """What holds on both paths (for :meth:`Flow.propagate`, whose machines have no
@@ -177,13 +204,17 @@ class _Machine:
         m.escaped = self.escaped or other.escaped
         los = [x for x in (self.escape_lo, other.escape_lo) if x is not None]
         m.escape_lo = min(los) if los else None
+        m.handed = self.handed or other.handed
+        los = [x for x in (self.handed_lo, other.handed_lo) if x is not None]
+        m.handed_lo = min(los) if los else None
         m.flags = self.flags if self.flags == other.flags else None
         return m
 
     def same(self, other: "_Machine") -> bool:
         return (self.regs == other.regs and self.slots == other.slots
                 and self.escaped == other.escaped and self.flags == other.flags
-                and self.escape_lo == other.escape_lo)
+                and self.escape_lo == other.escape_lo and self.handed == other.handed
+                and self.handed_lo == other.handed_lo)
 
     def get(self, tok: str) -> Optional[int]:
         r = _norm_reg(tok)
@@ -226,19 +257,29 @@ class _Machine:
             self.escaped = True
             self.escape_lo = v if self.escape_lo is None else min(self.escape_lo, v)
 
-    def call(self) -> None:
-        """A call: the caller-saved registers and the flags are the callee's."""
+    def call(self, args: Tuple[str, ...] = None) -> None:
+        """A call: the caller-saved registers and the flags are the callee's, and the frame
+        slots too once a callee can reach them (*handed*: a stack address in a register it
+        reads -- *args*, default x0-x8 -- now, or handed out before)."""
+        for r in (_CALL_ARGS if args is None else args):
+            v = self.regs.get(r)
+            if v is None and r not in self.top and self.fallback is not None:
+                v = self.fallback(r)
+            if _is_stack(v):
+                self._hand(v)
         regs, top = self.regs, self.top
         for r in CALLER_SAVED_GPRS:                 # canonical names: no _norm_reg round trip
             regs.pop(r, None)
         top.update(CALLER_SAVED_GPRS)
         self.flags = None
-        self._clobber_slots()
+        self._clobber_slots(self.handed, self.handed_lo)
 
     def store(self, addr: Optional[int], size: int, v: Optional[int]) -> None:
         if not _is_stack(addr):
             if addr is None:
-                self._clobber_slots()
+                self._clobber_slots(self.escaped, self.escape_lo)
+            elif _is_stack(v):
+                self._hand(v)                   # stored where a callee may find it
             return                              # memory outside the frame is not modelled
         for a in [a for a, (s, _v) in self.slots.items() if a < addr + size and addr < a + s]:
             del self.slots[a]
@@ -816,6 +857,8 @@ class Flow:
                     ((lit >> 3) & 1, (lit >> 2) & 1, (lit >> 1) & 1, lit & 1)
         elif mn in ('mov', 'movz') and len(ops) == 2:
             put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else m.copy_of(ops[1]))
+        elif mn in _POINTER_AUTH:
+            pass            # signs / authenticates / strips a pointer in place: same address
         elif mn == 'movn' and len(ops) >= 2:
             v = _parse_imm(ops[1])
             put(ops[0], None if v is None else ~(v << ((_parse_imm(ops[2]) or 0) if len(ops) > 2 else 0)))
@@ -1014,17 +1057,26 @@ class Flow:
                 self._propagate_step(st, k, objects.call_result)
         return out
 
+    def _call_reads(self, target: Optional[int]) -> Optional[Tuple[str, ...]]:
+        """The registers a call to *target* reads: a runtime function's ABI contract
+        (:data:`proto.callees.RUNTIME_CONTRACTS`, e.g. ``objc_retain_x19`` reads x19 only),
+        else None (the AAPCS64 argument registers)."""
+        if target is None or self.ctx is None:
+            return None
+        contract = RUNTIME_CONTRACTS.get(callee_name(self.ctx, target))
+        return contract[0] if contract is not None else None
+
     def _propagate_step(self, m: "_Machine", k: int, call_result=None) -> None:
         ins = self.insns[k]
         mn = ins.mnemonic
         if mn in ('bl', 'blr'):
             if call_result is None:
-                m.call()
+                m.call(self._call_reads(_parse_imm(ins.op_str) if mn == 'bl' else None))
                 return
             x0 = m.copy_of('x0')
             ops = split_ops(ins.op_str)
             target = _parse_imm(ins.op_str) if mn == 'bl' else (m.get(ops[0]) if ops else None)
-            m.call()
+            m.call(self._call_reads(target))
             v = call_result(k, target, x0)
             if v is not None:
                 m.put('x0', v)
@@ -1098,7 +1150,7 @@ class Flow:
                 if mn != 'b':
                     x0 = st.copy_of('x0')
                     target = (m_get_target(st, ins) if mn == 'blr' else _parse_imm(ins.op_str))
-                    st.call()
+                    st.call(self._call_reads(target))
                     cr = objects.call_result
                     v = cr(k, target, x0) if cr is not None else None
                     if v is not None:

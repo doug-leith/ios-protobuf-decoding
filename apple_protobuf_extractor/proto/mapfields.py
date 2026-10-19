@@ -60,6 +60,7 @@ from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
 from proto.dispatch import listing_flow
+from proto.arm64_eval import Objects
 from proto.dispatch_eval import evaluate_class
 
 log = logging.getLogger(__name__)
@@ -185,10 +186,6 @@ def _pc_relative_address(flow, i: int, reg: str) -> Optional[int]:
     many unrelated pages).  None for any other defining form."""
     insns = flow.insns
     d = _reaching_def(flow, i, reg)
-    # arm64e signs a code pointer in place (``pacia reg, disc``) before storing it: the
-    # address is unchanged, so look through the signing to the adrp+add that built it.
-    while d is not None and insns[d].mnemonic.startswith('pac'):
-        d = _reaching_def(flow, d, reg)
     if d is None:
         return None
     add = insns[d]
@@ -203,27 +200,6 @@ def _pc_relative_address(flow, i: int, reg: str) -> Optional[int]:
     pops = split_ops(insns[p].op_str)
     page = _parse_imm(pops[1]) if len(pops) == 2 else None
     return None if page is None else page + imm
-
-
-def _stack_store_source(insns: Sequence, i: int, disp: int) -> Optional[Tuple[int, str]]:
-    """``(index, source_reg)`` of the closest store before ``insns[i]`` that writes the
-    8 bytes at ``[sp, #disp]`` (``str xA,[sp,#d]`` or either half of ``stp``)."""
-    for j in range(i - 1, -1, -1):
-        ins = insns[j]
-        if ins.mnemonic not in ('str', 'stp'):
-            continue
-        ops = split_ops(ins.op_str)
-        mem = mem_operand(f"{ops[0]}, {ops[-1]}") if ops else None
-        if mem is None or mem[1] != 'sp' or mem[2] is not None:
-            continue
-        if ins.mnemonic == 'str' and mem[3] == disp:
-            return j, _norm_reg(ops[0])
-        if ins.mnemonic == 'stp' and len(ops) == 3:
-            if mem[3] == disp:
-                return j, _norm_reg(ops[0])
-            if mem[3] + 8 == disp:
-                return j, _norm_reg(ops[1])
-    return None
 
 
 def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
@@ -392,13 +368,14 @@ def scan_block_enumerated_maps(
     """``{ivar_name: MapEntryWriter}`` for every ``[self->_dict
     enumerateKeysAndObjectsUsingBlock:&block]`` in the ``writeTo:`` at *imp*.
 
-    The parent is scanned linearly over its structural extent (``imp`` .. next method
-    IMP — a hard upper bound that includes its out-of-line tail blocks); the match is a
-    LOCAL pattern, so no control-flow reachability is needed.  For each enumerate call:
-    the receiver (``x0``) traces to the dictionary ivar; the block (``x2 = add x2,sp,#B``)
-    has its invoke pointer stored at ``[sp,#B+0x10]`` as an ``adrp+add`` address; the
-    invoke function's own body (to its ``ret``) is then analysed by :func:`analyze_entry`.
-    Unrecognised shapes are simply absent (the field keeps its flagged fallback)."""
+    The parent is its structural extent (``imp`` .. next method IMP — a hard upper bound
+    that includes its out-of-line tail blocks), evaluated over its CFG
+    (:meth:`proto.arm64_eval.Flow.propagate`, which models the stack frame).  For each
+    enumerate call: the receiver (``x0``) traces to the dictionary ivar; ``x2`` is the stack
+    block, whose invoke pointer is the 8-byte slot at ``x2 + 0x10`` as every path into the
+    call leaves it; the invoke function's own body (to its ``ret``) is then analysed by
+    :func:`analyze_entry`.  Unrecognised shapes are simply absent (the field keeps its
+    flagged fallback)."""
     out: Dict[str, MapEntryWriter] = {}
     end = _next_imp(imps_sorted, imp)
     try:
@@ -407,21 +384,21 @@ def scan_block_enumerated_maps(
         raise
     except Exception:
         return out
+    calls = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
+             and stub_selector(ctx, _parse_imm(ins.op_str)) == _ENUMERATE_SELECTOR]
+    if not calls:
+        return out
     flow = listing_flow(ctx, insns)
-    for i, ins in enumerate(insns):
-        if ins.mnemonic != 'bl':
-            continue
-        if stub_selector(ctx, _parse_imm(ins.op_str)) != _ENUMERATE_SELECTOR:
-            continue
+    slots: Dict[int, Dict[int, Tuple[int, int]]] = {}
+    # a callee handed a pointer into the frame (a fast-enumeration state, say) may write
+    # that object and upward, never the slots below it (Objects.object_escape)
+    regs = flow.propagate({}, calls, Objects(object_escape=True), slots_out=slots)
+    for i in calls:
         ivar = _trace_ivar(ctx, flow, i, 'x0', offset_to_name)
-        d = _reaching_def(flow, i, 'x2')
-        blk = _sp_offset(insns[d]) if d is not None else None
-        if ivar is None or blk is None or ivar in out:
-            continue
-        store = _stack_store_source(insns, i, blk + _BLOCK_INVOKE_OFFSET)
-        invoke = (None if store is None
-                  else _pc_relative_address(flow, store[0] + 1, store[1]))
-        if invoke is None:
+        blk = regs.get(i, {}).get('x2')
+        slot = slots.get(i, {}).get(blk + _BLOCK_INVOKE_OFFSET) if blk is not None else None
+        invoke = slot[1] if slot is not None and slot[0] == 8 else None
+        if ivar is None or invoke is None or ivar in out:
             continue
         try:
             body = disasm(ctx, invoke, max_insns=_BLOCK_INVOKE_MAX_INSNS, stop_at_ret=True)

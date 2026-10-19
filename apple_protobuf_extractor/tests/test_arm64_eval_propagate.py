@@ -94,6 +94,36 @@ class TestStackSlots(unittest.TestCase):
             'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',
             'add x1, sp, #8', f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}'))
 
+    def test_a_stack_address_no_callee_is_handed_does_not_expose_the_frame(self):
+        # x17 holds &slot (the block-building idiom) but no call is handed it
+        self.assertEqual(self.known_x3(
+            'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',
+            'add x17, sp, #8', f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}'), PLAIN)
+
+    def test_a_runtime_call_is_handed_only_the_registers_its_contract_reads(self):
+        # objc_retain_x19 reads x19 only: the stack address in x8 (a scratch) is not handed
+        from unittest import mock
+        import proto.arm64_eval as AE
+        insns = listing(*PROLOGUE, 'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',
+                        'add x8, sp, #8', f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}',
+                        *EPILOGUE)
+        k = at_mark(insns)
+        for name, want in (("_objc_retain_x19", PLAIN), (None, None)):
+            with mock.patch.object(AE, 'callee_name', lambda ctx, va, n=name: n):
+                self.assertEqual(Flow(object(), insns).propagate({}, [k])[k].get('x3'), want)
+
+    def test_a_stack_address_handed_once_exposes_the_frame_to_every_later_call(self):
+        self.assertIsNone(self.known_x3(
+            'add x1, sp, #0x10', f'bl {CALL}',
+            'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',
+            f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}'))
+
+    def test_a_stack_address_stored_outside_the_frame_exposes_it(self):
+        self.assertIsNone(self.known_x3(
+            'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',
+            'add x9, sp, #8', 'adrp x10, #0x6000', 'str x9, [x10]',
+            f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}'))
+
     def test_a_narrower_store_over_the_slot_invalidates_it(self):
         self.assertIsNone(self.known_x3(
             'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',

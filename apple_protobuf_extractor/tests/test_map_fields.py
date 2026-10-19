@@ -37,6 +37,14 @@ class FakeCtx:
     def read_u32(self, addr):
         return self.u32[addr]
 
+    def bind_name_for(self, addr):                   # no imports bound by name
+        return None
+
+    def read_bytes(self, addr, size):                # the image, for the evaluator's loads
+        if size == 4 and addr in self.u32:
+            return self.u32[addr].to_bytes(4, 'little', signed=self.u32[addr] < 0)
+        raise ValueError(f"unmapped {addr:#x}")
+
     def read_ptr(self, addr):
         return self.ptrs[addr]
 
