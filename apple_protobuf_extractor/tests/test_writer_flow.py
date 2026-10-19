@@ -90,7 +90,6 @@ class TestCacheExports(unittest.TestCase):
     def test_callee_name_follows_the_image_stub(self):
         # CoreParsec's -[_CPValue writeTo:] retains the writer through a stub island.
         from proto.callees import callee_name
-        from proto.write_helpers import _helper_real_target
         from macho.disasm import disasm, _parse_imm
         ctx, _st, cl = _V.load_cache("CoreParsec")
         imp = cl.find("_CPValue").get_method("writeTo:").imp

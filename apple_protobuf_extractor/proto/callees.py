@@ -12,6 +12,9 @@ rely on them the way it relies on the ``writeTo:`` selector.
 * standalone binary: a call goes through an import stub whose GOT slot the binary binds by
   name (:func:`import_name`).
 
+Every stub is decoded by one reader, :func:`stub_target` (its computed target or its GOT slot);
+:func:`real_target` follows it to the callee.
+
 A function of the image itself (not exported) has no name here: None.
 
 This module is the one owner of call naming (the writeTo: walk, the writer flow, the map and
@@ -19,7 +22,7 @@ struct decoders and the readFrom: evaluator use it).
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, NamedTuple, Optional, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import BinaryContext, _ctx_cache
@@ -40,10 +43,9 @@ def callee_name(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
         if getattr(ctx, "is_cache_backed", False):
             reader = getattr(ctx, "_cache_reader", None)
             if reader is not None:                   # (a cache context always has one)
-                from proto.write_helpers import _helper_real_target   # (import cycle via writeto)
                 name = reader.export_name_at(va)
                 if name is None:
-                    real = _helper_real_target(ctx, va)
+                    real = real_target(ctx, va)
                     if real != va:
                         name = reader.export_name_at(real)
         else:
@@ -59,36 +61,117 @@ def _adrp(ins) -> Optional[Tuple[str, int]]:
     return parse_adrp(ins.op_str) if ins.mnemonic == 'adrp' else None
 
 
-def import_name(ctx, va: Optional[int]) -> Optional[str]:
-    """Symbol a standalone binary's call stub at *va* imports (``adrp x16; ldr x16,[x16,#o];
-    br x16`` -- or the ``add`` + ``ldr [x17]`` + ``braa`` form -- through a GOT slot the binary
-    binds by name), or None.  Memoised on *ctx*."""
+class Stub(NamedTuple):
+    """Where a call stub branches: to the code address it computes (*target*), or through
+    the GOT slot it loads the address from (*slot*).  Exactly one is set."""
+    target: Optional[int] = None
+    slot: Optional[int] = None
+
+
+#: Register-indirect branches a stub ends in (``br``, and the arm64e authenticated forms).
+_STUB_BRANCHES = frozenset(('br', 'braa', 'brab', 'braaz', 'brabz'))
+
+
+def stub_target(ctx, va: Optional[int]) -> Optional[Stub]:
+    """Decode the call stub at *va* by evaluating its straight-line code up to its branch,
+    or None: *va* is not a stub.  A stub only computes the address it branches to::
+
+        adrp  x16, <page>               ; PLT form (dyld cache): the target itself
+        add   x16, x16, #off
+        br    x16                        -> Stub(target=page+off)
+
+        adrp  x16, <page>               ; import stub (standalone binary)
+        ldr   x16, [x16, #off]
+        br    x16                        -> Stub(slot=page+off)
+
+        adrp  x17, <page>               ; arm64e stub island (iOS 27 / macOS 27 caches)
+        add   x17, x17, #off
+        ldr   x16, [x17]
+        braa  x16, x17                   -> Stub(slot=page+off)
+
+    Each instruction is evaluated (``adrp`` a page, ``add #imm`` to a known address, ``ldr``
+    of a pointer from a known address or a PC-relative literal); the first instruction that is
+    none of these ends the decode -- an indirect branch on a register the stub computed is a
+    stub, anything else is not.  No instruction position or register is assumed.  Memoised
+    on *ctx*."""
     if not va:
         return None
-    memo = _ctx_cache(ctx, "_import_names", dict)
+    memo = _ctx_cache(ctx, "_stub_targets", dict)
     if va in memo:
         return memo[va]
-    name = None
+    res: Optional[Stub] = None
+    # reg -> Stub: the address a register holds (target=) or the slot it was loaded from (slot=)
+    regs: Dict[str, Stub] = {}
     try:
-        ins = disasm(ctx, va, max_insns=4, stop_at_ret=False)
-        page = _adrp(ins[0]) if ins else None
-        if page is not None:
-            reg, addr = page
-            for i in ins[1:]:
-                ops = split_ops(i.op_str)
-                if i.mnemonic == 'add' and len(ops) == 3 and _norm_reg(ops[1]) == reg:
-                    addr += int(ops[2].lstrip('#'), 0)
-                elif i.mnemonic == 'ldr' and len(ops) == 2 and '[' in ops[1]:
-                    pm = parse_mem(ops[1])
-                    if pm is not None and pm.base == reg and pm.index is None:
-                        name = ctx.bind_name_for(addr + pm.disp)
+        k = va
+        while True:
+            ins = disasm(ctx, k, max_insns=1, stop_at_ret=False)
+            if not ins:
+                break
+            mn, ops = ins[0].mnemonic, split_ops(ins[0].op_str)
+            if mn in _STUB_BRANCHES:
+                res = regs.get(_norm_reg(ops[0])) if ops else None
+                break
+            dst = _norm_reg(ops[0]) if ops and ops[0].startswith('x') else None
+            if dst is None:
+                break
+            if mn == 'adrp':
+                pa = _adrp(ins[0])
+                if pa is None:
                     break
+                regs[dst] = Stub(target=pa[1])
+            elif mn == 'add' and len(ops) == 3 and ops[2].startswith('#'):
+                src = regs.get(_norm_reg(ops[1]))
+                if src is None or src.target is None:
+                    break
+                regs[dst] = Stub(target=src.target + _parse_imm(ops[2]))
+            elif mn == 'ldr' and len(ops) == 2 and ops[1].startswith('#'):
+                regs[dst] = Stub(slot=_parse_imm(ops[1]))           # PC-relative literal
+            elif mn == 'ldr' and len(ops) == 2 and not ops[1].endswith('!'):
+                pm = parse_mem(ops[1])
+                src = regs.get(pm.base) if pm is not None and pm.index is None else None
+                if src is None or src.target is None:
+                    break
+                regs[dst] = Stub(slot=src.target + pm.disp)
+            else:
+                break
+            k += 4
     except (NameError, ImportError):
         raise
-    except Exception:                               # bytes that are not a stub: no name
-        name = None
-    memo[va] = name
-    return name
+    except Exception:                               # unreadable bytes at va: not a stub
+        res = None
+    memo[va] = res
+    return res
+
+
+def real_target(ctx, va: int) -> int:
+    """The function a call to *va* really reaches: a stub's target (:func:`stub_target`) --
+    computed, or read from its GOT slot through :meth:`BinaryContext.read_ptr` (which decodes
+    an arm64e-authenticated entry) -- else *va* itself (a direct call).  The canonical
+    identity of a callee: a per-callsite stub island has a different address at every call
+    site but one shared target.  In a standalone binary a GOT slot is bound at load time to
+    another image: the stub is the callee there, named by :func:`import_name`."""
+    stub = stub_target(ctx, va)
+    if stub is None:
+        return va
+    if stub.target is not None:
+        return stub.target
+    if not getattr(ctx, "is_cache_backed", False):
+        return va
+    try:
+        return ctx.read_ptr(stub.slot) or va
+    except ValueError:                               # slot not mapped
+        return va
+
+
+def import_name(ctx, va: Optional[int]) -> Optional[str]:
+    """Symbol a standalone binary's call stub at *va* imports: the name the binary binds
+    the stub's GOT slot to (:func:`stub_target`), or None.  A dyld cache binds nothing by
+    name (its calls are named by the callee's export, :func:`callee_name`): None there."""
+    if getattr(ctx, "is_cache_backed", False):
+        return None
+    stub = stub_target(ctx, va)
+    return ctx.bind_name_for(stub.slot) if stub is not None and stub.slot is not None else None
 
 
 def stub_selector(ctx, va: Optional[int]) -> Optional[str]:

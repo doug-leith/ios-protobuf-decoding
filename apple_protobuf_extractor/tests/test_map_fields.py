@@ -436,7 +436,7 @@ class TestHelperVotes(unittest.TestCase):
 
     def setUp(self):
         # Canonicalisation = identity, family = plain, so votes test the table itself.
-        for name, repl in (('_canonical_helper', lambda ctx, va: va),
+        for name, repl in (('real_target', lambda ctx, va: va),
                            ('_classify_write_helper', lambda ctx, va: 'plain')):
             orig = getattr(M, name)
             setattr(M, name, repl)

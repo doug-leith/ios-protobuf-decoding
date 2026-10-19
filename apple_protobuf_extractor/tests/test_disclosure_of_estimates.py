@@ -37,7 +37,7 @@ class TestWriterFamilyFromImportName(unittest.TestCase):
     """A standalone binary's helper is a stub into ProtocolBuffer.framework: its name decides."""
 
     def _family(self, bound):
-        with mock.patch.object(WH, "_helper_real_target", lambda ctx, va: va), \
+        with mock.patch.object(WH, "real_target", lambda ctx, va: va), \
                 mock.patch.object(WH, "import_name", lambda ctx, va: bound):
             return WH._classify_write_helper(_Ctx(), 0x1000)
 

@@ -49,7 +49,7 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from macho.memory import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import disasm, _parse_imm, _norm_reg
-from proto.callees import stub_selector
+from proto.callees import real_target, stub_selector
 
 from proto.arm64cfg import (
     split_ops, mem_operand, _next_imp,
@@ -58,9 +58,7 @@ from proto.writeto import (
     _writeto_field_number_before,
     _addr_to_name,
 )
-from proto.write_helpers import (
-    _helper_real_target, _classify_write_helper, _refine_scalar_by_family,
-)
+from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
@@ -494,21 +492,6 @@ def find_map_writers(
 # ── Write-helper types (binary-wide ground truth) ─────────────────────────────
 
 
-def _canonical_helper(ctx: BinaryContext, helper_va: int) -> int:
-    """Real target of a write helper (see :func:`proto.write_helpers._helper_real_target`),
-    memoised — a per-callsite stub island has a different VA at every call site but one
-    shared target."""
-    memo = _ctx_cache(ctx, "_helper_canon", dict)
-    if helper_va not in memo:
-        try:
-            memo[helper_va] = _helper_real_target(ctx, helper_va)
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            memo[helper_va] = helper_va
-    return memo[helper_va]
-
-
 def _ivar_wire_kind(enc: str, proto_classes: FrozenSet[str]) -> Optional[str]:
     """Wire kind an ivar of encoding *enc* proves for its write helper: a proto scalar
     type, ``string``, ``bytes`` or ``message``; ``None`` for storage that does not pin
@@ -543,13 +526,13 @@ def record_helper_votes(
             if fam == "unknown":
                 continue                    # the writer shows no encoding: no vote
             kind = _refine_scalar_by_family(kind, fam)
-        votes.setdefault(_canonical_helper(ctx, va), Counter())[kind] += 1
+        votes.setdefault(real_target(ctx, va), Counter())[kind] += 1
 
 
 def helper_kind(ctx: BinaryContext, helper_va: int) -> Optional[str]:
     """Wire kind of a write helper: the UNANIMOUS kind of the ivars that use it
     binary-wide, else ``None`` (never seen, or conflicting votes — not guessed)."""
-    votes = (getattr(ctx, "_helper_votes", None) or {}).get(_canonical_helper(ctx, helper_va))
+    votes = (getattr(ctx, "_helper_votes", None) or {}).get(real_target(ctx, helper_va))
     if not votes or len(votes) != 1:
         return None
     return next(iter(votes))

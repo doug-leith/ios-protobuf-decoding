@@ -28,11 +28,11 @@ from typing import Dict, List, Optional, Set
 
 from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcIvar
-from macho.disasm    import disasm, find_adrp_add_target, _parse_imm, _first_reg
+from macho.disasm    import disasm, _parse_imm
 
 from proto.writeto   import _extract_writeto_field_numbers, build_writeto_indegree
 from proto.arm64cfg  import split_ops
-from proto.callees   import import_name
+from proto.callees   import import_name, real_target
 from proto.models    import record_failed_pass
 from proto.protocore import (
     _is_proto_flags_ivar, _type_from_enc, _INTERNAL_PB_IVARS,
@@ -132,24 +132,6 @@ def _find_string_write_helper(
     return None
 
 
-# [cap:AFFECTS-OUTPUT] _HELPER_STUB_INSNS=3 — the adrp/add/br x16 PLT-style stub is
-# exactly 3 insns.
-_HELPER_STUB_INSNS = 3
-# A newer per-callsite "objc_msgSend stub island" shape (arm64e-authenticated,
-# seen on a macOS system dyld cache's GeoServices — a different, more recent
-# Apple-internal toolchain than the one this tool was originally built
-# against): adrp+add materialise a GOT-slot address into x17 (arm64 IP1, the
-# ABI-reserved indirect-branch scratch register), `ldr x16,[x17]` dereferences
-# it, and `braa x16,x17` (PAC-authenticated indirect branch) jumps there.
-# Unlike the plain 3-insn PLT stub (whose target IS the real helper, just one
-# indirection away), this stub's *own* address is unique PER CALL SITE — every
-# writeTo: field-write gets its own freshly emitted stub instance pointing at
-# the same shared real helper — so following it is required for both wire-type
-# classification here and any helper-address-equality comparison elsewhere
-# (e.g. :func:`_find_string_write_helper`).
-_STUB_ISLAND_INSNS = 4
-_STUB_ISLAND_BRANCH_MNEMONICS = frozenset(('braa', 'brab', 'br'))
-
 # Mnemonics that end a straight-line block while reading a write helper's tag build.
 _BLOCK_END_MNEMONICS = frozenset(('b', 'bl', 'br', 'blr', 'braa', 'brab', 'blraa', 'blrab',
                                   'cbz', 'cbnz', 'tbz', 'tbnz', 'ret', 'retaa', 'retab'))
@@ -168,41 +150,6 @@ def _reg_num(reg: str):
     if len(reg) >= 2 and reg[0] in "wx" and reg[1:].isdigit():
         return int(reg[1:])
     return None
-
-
-def _resolve_stub_island(ctx: BinaryContext, helper_va: int) -> Optional[int]:
-    """Follow a per-callsite ``objc_msgSend`` stub-island veneer to its real
-    target, or return ``None`` if *helper_va* isn't one (see
-    :data:`_STUB_ISLAND_INSNS`).
-
-    Structural, no hardcoded VA: reads the GOT-slot address off the stub's own
-    ``adrp+add`` (whichever GPR it uses — Apple's ABI convention is x16/x17,
-    but the register is taken from the instructions themselves, not assumed),
-    then dereferences that slot through :meth:`BinaryContext.read_ptr` — the
-    same cache-aware pointer decode every other pointer field in this tool
-    goes through, so an arm64e-authenticated GOT entry resolves correctly.
-    """
-    try:
-        stub = disasm(ctx, helper_va, max_insns=_STUB_ISLAND_INSNS, stop_at_ret=False)
-    except (NameError, ImportError):
-        raise
-    except Exception:
-        return None
-    if (len(stub) < _STUB_ISLAND_INSNS
-            or stub[0].mnemonic != "adrp"
-            or stub[2].mnemonic != "ldr"
-            or stub[3].mnemonic not in _STUB_ISLAND_BRANCH_MNEMONICS):
-        return None
-    reg = _first_reg(stub[0].op_str)
-    if reg is None:
-        return None
-    got_slot = find_adrp_add_target(stub[:3], reg)
-    if got_slot is None:
-        return None
-    try:
-        return ctx.read_ptr(got_slot) or None
-    except ValueError:
-        return None
 
 
 # Mnemonics whose first operand is not a destination register.
@@ -239,25 +186,6 @@ def _varint32_value_extension(insns) -> Optional[str]:
         if mn in ('ret', 'retaa', 'retab', 'b', 'br'):
             return None
     return None
-
-
-def _helper_real_target(ctx: BinaryContext, helper_va: int) -> int:
-    """The real function behind a ``writeTo:`` field-write helper: follow a 3-insn
-    PLT-style ``adrp/add/br x16`` stub once, else a newer per-callsite stub-island
-    veneer (:func:`_resolve_stub_island`), else *helper_va* itself (a direct, non-stub
-    helper).  The canonical identity of "which write helper is this" — a per-callsite
-    island has a different VA at every call site but one shared real target.  Raises
-    on an unreadable address (the callers decide how to degrade)."""
-    stub = disasm(ctx, helper_va, max_insns=_HELPER_STUB_INSNS, stop_at_ret=False)
-    target = None
-    if (len(stub) >= 3 and stub[0].mnemonic == "adrp"
-            and stub[2].mnemonic == "br"):
-        target = find_adrp_add_target(stub, "x16")   # follow the PLT-style stub
-    if target is None:
-        target = _resolve_stub_island(ctx, helper_va)  # follow the newer stub-island form
-    if target is None:
-        target = helper_va                            # direct (non-stub) helper
-    return target
 
 
 #: The note on an int field whose writer shows no encoding (family ``"unknown"``).
@@ -300,11 +228,10 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
 
     Mechanism — ground-truthed, structural, no hardcoded VA: GeoServices'
     ``0x18dbda*`` helpers are 12-byte ``adrp x16,#p ; add x16,x16,#o ; br x16``
-    stubs into ProtocolBuffer.framework; follow the stub once to the real helper
-    (also covers binaries that call a local helper directly).  A newer
-    per-callsite ``objc_msgSend`` stub-island form (arm64e-authenticated GOT
-    dereference + ``braa``, seen on a macOS system cache's GeoServices) is
-    followed the same way via :func:`_resolve_stub_island`.  Two
+    stubs into ProtocolBuffer.framework; follow the stub to the real helper
+    (:func:`proto.callees.real_target`, which also follows the newer per-callsite
+    arm64e stub island of the iOS 27 / macOS 27 caches, and leaves a helper called
+    directly as it is).  Two
     value-independent signals, checked at the helper's tag-build instruction
     (whichever appears first wins — no scan budget decides the answer):
 
@@ -332,7 +259,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
 
     fam = "unknown"
     try:
-        target = _helper_real_target(ctx, helper_va)
+        target = real_target(ctx, helper_va)
         named = _family_from_import(ctx, target)
         if named is not None:
             cache[helper_va] = named
