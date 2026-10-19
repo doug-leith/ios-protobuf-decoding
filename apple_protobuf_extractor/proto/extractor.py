@@ -85,6 +85,10 @@ from proto.enums     import _qualify_enum_name, _collect_enum_definitions
 from proto.enums_debug import _emit_mode_a_debug
 from proto.config    import _class_to_proto_name
 from proto.defaults  import DEFAULT_PREFIXES
+from proto.arm64_eval import Flow
+from proto.arm64cfg  import _is_block_end
+from proto.arm64_operands import parse_mem, split_ops
+from macho.disasm    import _norm_reg, _parse_imm
 
 log = logging.getLogger(__name__)
 
@@ -495,9 +499,11 @@ def _is_opaque_passthrough(ctx: BinaryContext, cls: ObjcClass) -> bool:
       1. the class declares exactly ONE ivar, ``_unknownFields`` typed
          ``PBUnknownFields`` — so there are no other field ivars we could have
          failed to recover; and
-      2. ``writeTo:`` is the leaf delegating stub: it loads that one ivar into
-         ``x0`` and tail-calls (``b``) ``writeTo:``, with no stack frame and no
-         helper ``bl`` / ``ret`` (either would mean it serialises real fields).
+      2. ``writeTo:`` is the leaf delegating stub: straight-line code from its
+         entry to a tail call (``b``) -- no stack frame and no ``bl`` / ``ret``
+         before it (either would mean it serialises real fields) -- whose
+         receiver (``x0`` at the ``b``) is that one ivar of self
+         (:func:`_writeto_self_load_offset`).
 
     Surveyed on GeoServices: 78 classes match, all with this exact shape, and
     none wraps a *typed* inner message (the loaded ivar is always
@@ -513,55 +519,85 @@ def _is_opaque_passthrough(ctx: BinaryContext, cls: ObjcClass) -> bool:
     m = cls.get_method('writeTo:')
     if m is None:
         return False
-    from macho.disasm import disasm
     try:
-        raw = disasm(ctx, m.imp, max_insns=6, stop_at_ret=True)
+        insns = _straight_line(ctx, m.imp)
     except ValueError:
         return False
-    # `disasm` halts only at a ret-family instruction, not at an unconditional
-    # `b`, so a tail-calling stub's window runs into the NEXT method.  Truncate at
-    # the first terminator (`b` tail-call or `ret`) so we judge only this method.
-    insns = []
-    for ins in raw:
-        insns.append(ins)
-        if ins.mnemonic in ('b', 'ret'):
-            break
-    # A real serializer sets up a frame (`stp`) and/or calls write helpers
-    # (`bl`) and returns (`ret`).  The delegating stub does none of these — it is
-    # a short straight-line load that ends in a tail-call branch.
-    if not insns or insns[-1].mnemonic != 'b':
+    if insns[-1].mnemonic != 'b' or any(i.mnemonic == 'stp' for i in insns):
         return False
-    if any(i.mnemonic in ('bl', 'ret', 'stp') for i in insns):
-        return False
-    # Confirm the value loaded into x0 (and handed to writeTo:) is the
-    # _unknownFields ivar — i.e. the load offset resolves to iv.offset.  Two
-    # encodings: a direct `ldr x0,[x0,#imm]`, or the ivar-offset-table indirection
-    # `adrp x8,#base; ldrsw x8,[x8,#idx]; ldr x0,[x0,x8]`.
-    loaded_off = _writeto_self_load_offset(ctx, insns)
-    return loaded_off == iv.offset
+    return _writeto_self_load_offset(ctx, insns) == iv.offset
+
+
+def _straight_line(ctx: BinaryContext, va: int) -> List:
+    """The instructions from *va* up to and including the first control transfer (a branch,
+    call or return), read one at a time -- no window.  Raises ValueError on unreadable bytes."""
+    from macho.disasm import disasm
+    out = []
+    while True:
+        ins = disasm(ctx, va + 4 * len(out), max_insns=1, stop_at_ret=False)
+        if not ins:
+            raise ValueError(f"no instruction at 0x{va + 4 * len(out):x}")
+        out.append(ins[0])
+        if _is_block_end(ins[0]) or ins[0].mnemonic in ('bl', 'blr'):
+            return out
 
 
 def _writeto_self_load_offset(ctx: BinaryContext, insns) -> Optional[int]:
-    """Byte offset of the ivar that a delegating ``writeTo:`` stub loads into
-    ``x0`` (``ldr x0, [x0, ...]``), or None if the shape is not recognised."""
-    base = idx = None
-    for ins in insns:
-        if ins.mnemonic == 'adrp' and ins.op_str.startswith('x8,'):
-            mm = re.search(r'#(0x[0-9a-fA-F]+)', ins.op_str)
-            base = int(mm.group(1), 16) if mm else None
-        elif ins.mnemonic in ('ldrsw', 'ldr') and ins.op_str.startswith('x8, [x8'):
-            mm = re.search(r'#(0x[0-9a-fA-F]+)', ins.op_str)
-            idx = int(mm.group(1), 16) if mm else 0
-        elif ins.mnemonic == 'ldr' and ins.op_str.startswith('x0, [x0'):
-            mm = re.search(r'\[x0, #(0x[0-9a-fA-F]+)\]', ins.op_str)
-            if mm:                                  # direct immediate offset
-                return int(mm.group(1), 16)
-            if base is not None:                    # offset-table indirection
-                try:
-                    return ctx.read_s32(base + (idx or 0))
-                except ValueError:
-                    return None
-            return None
+    """Byte offset of the ivar of self that a delegating ``writeTo:`` stub hands on in ``x0``
+    (the receiver of its tail call, ``insns[-1]``), or None.  By reaching definitions over the
+    stub (:class:`proto.arm64_eval.Flow`), whatever registers it uses: ``x0``'s one definition
+    is a pointer load from an address that is self (``x0`` on entry) plus an offset
+    (:func:`_self_offset`) -- ``ldr x0,[x0,#imm]``, ``ldr x0,[x0,xB]`` with ``xB`` loaded from
+    an ivar-offset variable, or the iOS 27 / macOS 27 ``add x8,x0,x8 ; ldr x0,[x8]``."""
+    flow = Flow(ctx, insns)
+    d = _one_def(flow, len(insns) - 1, 'x0')
+    if d is None:
+        return None
+    ops = split_ops(insns[d].op_str)
+    if insns[d].mnemonic != 'ldr' or len(ops) != 2 or not ops[0].startswith('x') \
+            or ops[1].endswith('!'):
+        return None
+    pm = parse_mem(ops[1])
+    if pm is None or pm.shift:
+        return None
+    base = _self_offset(flow, d, pm.base, set())
+    if base is None:
+        return None
+    off = pm.disp if pm.index is None else flow.ivar_of_reg(d, pm.index)
+    return None if off is None else base + off
+
+
+def _one_def(flow, k: int, reg: str) -> Optional[int]:
+    """The one instruction whose definition of *reg* reaches ``insns[k]`` (-1: the entry)."""
+    defs = flow.defs_before(k, reg)
+    return next(iter(defs)) if len(defs) == 1 else None
+
+
+def _self_offset(flow, k: int, reg: Optional[str], seen: Set[int]) -> Optional[int]:
+    """*reg* before ``insns[k]`` as self + a constant offset: 0 for self itself (``x0`` on
+    entry), through ``mov`` copies and ``add`` of an immediate or of an ivar-offset variable's
+    value (:meth:`Flow.ivar_of_reg`); None for anything else."""
+    if reg is None:
+        return None
+    d = _one_def(flow, k, reg)
+    if d is None or d in seen:
+        return None
+    if d < 0:
+        return 0 if reg == 'x0' else None
+    seen.add(d)
+    ins = flow.insns[d]
+    ops = split_ops(ins.op_str)
+    if ins.mnemonic == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
+        return _self_offset(flow, d, _norm_reg(ops[1]), seen)
+    if ins.mnemonic == 'add' and len(ops) == 3:
+        if ops[2].startswith('#'):
+            base = _self_offset(flow, d, _norm_reg(ops[1]), seen)
+            return None if base is None else base + _parse_imm(ops[2])
+        for obj, idx in ((ops[1], ops[2]), (ops[2], ops[1])):
+            base = _self_offset(flow, d, _norm_reg(obj), set(seen))
+            off = flow.ivar_of_reg(d, _norm_reg(idx)) if base is not None else None
+            if off is not None:
+                return base + off
     return None
 
 

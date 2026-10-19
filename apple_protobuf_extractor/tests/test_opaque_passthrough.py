@@ -99,5 +99,72 @@ class TestOpaquePassthroughLive(unittest.TestCase):
         self.assertIn('// (no fields recovered)', out)
 
 
+class _SlotCtx:
+    """Just the ivar-offset variables a stub reads."""
+    def __init__(self, s32):
+        self.s32 = s32
+
+    def read_s32(self, addr):
+        return self.s32[addr]
+
+
+def _listing(*lines, base=0x1000):
+    from macho.disasm import Insn
+    return [Insn(addr=base + 4 * i, mnemonic=mn, op_str=op, size=4, raw=b'\x00' * 4)
+            for i, (mn, op) in enumerate(lines)]
+
+
+class TestSelfLoadOffset(unittest.TestCase):
+    """`_writeto_self_load_offset`: the ivar of self in x0 at the tail call, by reaching
+    definitions (TODO #81 (3)) -- not by the literal registers x8 / x0."""
+
+    CTX = _SlotCtx({0x10040: 8})
+
+    def test_offset_table_form(self):
+        insns = _listing(('adrp', 'x8, #0x10000'), ('ldrsw', 'x8, [x8, #0x40]'),
+                         ('ldr', 'x0, [x0, x8]'), ('b', '#0x2000'))
+        self.assertEqual(E._writeto_self_load_offset(self.CTX, insns), 8)
+
+    def test_any_offset_register(self):
+        insns = _listing(('adrp', 'x9, #0x10000'), ('ldrsw', 'x9, [x9, #0x40]'),
+                         ('ldr', 'x0, [x0, x9]'), ('b', '#0x2000'))
+        self.assertEqual(E._writeto_self_load_offset(self.CTX, insns), 8)
+
+    def test_self_through_a_copy(self):
+        insns = _listing(('mov', 'x10, x0'), ('adrp', 'x8, #0x10000'),
+                         ('ldrsw', 'x8, [x8, #0x40]'), ('ldr', 'x0, [x10, x8]'),
+                         ('b', '#0x2000'))
+        self.assertEqual(E._writeto_self_load_offset(self.CTX, insns), 8)
+
+    def test_address_computed_in_a_register(self):
+        # iOS 27 -[GEOPDReverseGeocodingResult writeTo:] (0x190d7bfb0): self + offset is
+        # formed with `add` before the load
+        ctx = _SlotCtx({0x1e4559550: 8})
+        insns = _listing(('adrp', 'x8, #0x1e4559000'), ('ldrsw', 'x8, [x8, #0x550]'),
+                         ('add', 'x8, x0, x8'), ('ldr', 'x0, [x8]'), ('b', '#0x198040bf0'),
+                         base=0x190d7bfb0)
+        self.assertEqual(E._writeto_self_load_offset(ctx, insns), 8)
+
+    def test_added_offset_that_is_not_an_ivar_offset(self):
+        insns = _listing(('mov', 'x8, #0x40'), ('add', 'x8, x0, x8'), ('ldr', 'x0, [x8]'),
+                         ('b', '#0x2000'))
+        self.assertIsNone(E._writeto_self_load_offset(self.CTX, insns))
+
+    def test_immediate_offset(self):
+        insns = _listing(('ldr', 'x0, [x0, #0x10]'), ('b', '#0x2000'))
+        self.assertEqual(E._writeto_self_load_offset(self.CTX, insns), 0x10)
+
+    def test_load_from_another_object_is_not_self(self):
+        # x0 is the WRITER's field here, not self's (the old regex matched `ldr x0, [x0`)
+        insns = _listing(('mov', 'x0, x1'), ('adrp', 'x8, #0x10000'),
+                         ('ldrsw', 'x8, [x8, #0x40]'), ('ldr', 'x0, [x0, x8]'),
+                         ('b', '#0x2000'))
+        self.assertIsNone(E._writeto_self_load_offset(self.CTX, insns))
+
+    def test_x0_not_loaded(self):
+        insns = _listing(('mov', 'x0, x1'), ('b', '#0x2000'))
+        self.assertIsNone(E._writeto_self_load_offset(self.CTX, insns))
+
+
 if __name__ == '__main__':
     unittest.main()
