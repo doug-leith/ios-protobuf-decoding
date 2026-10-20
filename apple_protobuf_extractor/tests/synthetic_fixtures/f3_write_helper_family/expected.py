@@ -13,8 +13,9 @@ fixture.m, not derived from any tool output.
 All six ivars decode to the same canonical @encode default (int32/uint32/
 int64/uint64) — the true wire-type family can ONLY come from disassembling
 the per-field write-helper each field's writeTo: call invokes
-(proto/write_helpers.py:_classify_write_helper: sint32/64 zigzag `lsl
-w|x1,#1`, fixed32/64 tag-build `mov w_,#5|#1; bfi w_,w2,#3,#0x1d`), with
+(proto/write_helpers.py:_classify_write_helper, which runs the helper: the zigzag of its
+value for sint32/64, the wire type 5|1 in the tag `field << 3 | wire type` for
+fixed32/64), with
 signed vs unsigned ivar storage then picking sfixed vs fixed
 (proto/extractor.py:_refine_int_wire_form). A tool that only read the ivar
 @encode would get every one of these fields wrong (or at best "int32/

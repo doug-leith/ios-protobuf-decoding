@@ -172,7 +172,7 @@ class TestReturnedClassRef(unittest.TestCase):
         _o, fd = layout(*blocks)
         names = {self.OPT_CLASS: '_objc_opt_class', self.CLAIM: '_objc_claimAutoreleasedReturnValue'}
         ctx = NoImage(_function_entries=set(entries))
-        with patch.object(R, 'disasm', fd), \
+        with patch('proto.function_body.disasm', fd), \
                 patch.object(R, 'callee_name', lambda c, va: names.get(va)):
             return R._returned_class_ref(ctx, 0x1000)
 

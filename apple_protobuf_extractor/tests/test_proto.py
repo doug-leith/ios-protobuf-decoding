@@ -1162,13 +1162,9 @@ class TestMetaclassTypeMethodResolution(unittest.TestCase):
             slot_va: slot_ptr_bytes,    # class-ref pointer → GEOPDComponentValue
         }
 
-        class _FakeCtx:
-            def has_section(self, seg, sect):
-                return False
+        from tests._fakes import NoImage
 
-            def section(self, seg, sect):
-                raise ValueError(f"no section {seg}/{sect} in test stub")
-
+        class _FakeCtx(NoImage):
             def vmaddr_to_offset(self, va, length=1):
                 # Only the IMP is mapped as executable; everything else raises.
                 if imp_va <= va < imp_va + len(memory[imp_va]):

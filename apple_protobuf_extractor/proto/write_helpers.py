@@ -18,8 +18,8 @@ The two ``_ensure_*`` functions lazily build + cache the binary-wide pre-passes 
 ``ctx`` so a standalone :func:`proto.extractor.extract_proto_message` call (single
 class, unit tests) gets the same result as a full :func:`extract_all` run.
 
-Layering: depends only on ``macho.*`` + ``proto.protocore`` / ``proto.writeto`` /
-``proto.arm64cfg`` (never on ``proto.extractor``) — no import cycle.
+Layering: depends on ``macho.*`` and the ``proto`` analyses below it (the writer flow, the
+evaluator, :mod:`proto.function_body`), never on ``proto.extractor`` -- no import cycle.
 """
 from __future__ import annotations
 
@@ -28,13 +28,12 @@ from typing import Dict, List, Optional, Set
 
 from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcIvar
-from macho.disasm    import disasm, _parse_imm
+from macho.disasm    import disasm
 
 from proto.writeto   import _extract_writeto_field_numbers
 from proto.writer_flow import WriterFlow
-from proto.dispatch  import build_function_index
-from proto.arm64cfg  import split_ops
-from proto.arm64_operands import NO_DEST, RETURNS, BLOCK_ENDS
+from proto.dispatch  import _jump_table_arm_addrs, build_function_index, function_entries
+from proto.function_body import function_body
 from proto.callees   import import_name, real_target
 from proto.models    import record_failed_pass
 from proto.protocore import (
@@ -135,51 +134,69 @@ def _find_string_write_helper(
     return None
 
 
-# [cap:INPUT-SANITY] _HELPER_FAMILY_MAX_INSNS — a runaway backstop, NOT a tuned bound
-# (TODO #59).  The wire-type family is decided STRUCTURALLY at the helper's tag-build
-# instruction (sint value-shift `lsl #1`, fixed `mov #wt`+`bfi #3`, or the plain varint
-# tag `lsl <field#>,#3`), every one of which lands within ~30 insns; the scan stops the
-# moment it classifies.  A helper with no recognized tag-build is "unknown" (the field is
-# flagged), so this bound cannot silently decide the output.
-_HELPER_FAMILY_MAX_INSNS = 48
+# The arguments a write helper is run with (:func:`_family_by_evaluation`): a field number
+# and a value no helper computes on its own.  The value's low word is negative as an int32,
+# so its sign- and zero-extensions to 64 bits differ.
+_PROBE_FIELD = 0x1A5A5A5
+_PROBE_VALUE = 0x9234567887654321
+_MASK32, _MASK64 = (1 << 32) - 1, (1 << 64) - 1
 
 
-def _reg_num(reg: str):
-    """Numeric index of an ARM64 GPR token ('w21'/'x21' -> 21); None for sp/zr/imm."""
-    reg = reg.strip()
-    if len(reg) >= 2 and reg[0] in "wx" and reg[1:].isdigit():
-        return int(reg[1:])
-    return None
+def _zigzag(v: int, bits: int) -> int:
+    """The zigzag encoding of the *bits*-bit two's-complement value *v* (sint32 / sint64)."""
+    v &= (1 << bits) - 1
+    signed = v - (1 << bits) if v >> (bits - 1) else v
+    return ((signed << 1) ^ (signed >> (bits - 1))) & ((1 << bits) - 1)
 
 
-def _varint32_value_extension(insns) -> Optional[str]:
-    """``"int32"`` / ``"uint32"`` for a plain-varint write helper whose FIRST read of its
-    value argument (``x1``, usually copied to a callee-saved register in the prologue)
-    widens it to the 64-bit varint value: ``sxtw xD, wV`` (sign-extend: an ``int32``, whose
-    negative values take 10 bytes) or ``mov wD, wV`` (a 32-bit move zero-extends: a
-    ``uint32``).  None for any other first read -- a 64-bit varint uses the register as is
-    (``cmp xV, #0x80``), a bool stores its byte (``strb wV``) -- or when there is none.
-    PB ``0x1a47ae8cc`` (int32/enum) does ``mov x20,x1 ; ... ; sxtw x8,w20``,
-    ``0x1a47af658`` (uint32) ``mov x20,x1 ; ... ; mov w8,w20``."""
-    vals = {1}                                   # GPR indices holding the value argument
-    for ins in insns:
-        mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        if mn == "mov" and len(ops) == 2 and _reg_num(ops[1]) in vals:
-            if ops[0].startswith("x") and ops[1].startswith("x"):
-                vals.add(_reg_num(ops[0]))       # 64-bit copy: still the value
-                continue
-            if ops[0].startswith("w") and ops[1].startswith("w"):
-                return "uint32"                  # 32-bit move: zero-extends
-        if mn == "sxtw" and len(ops) == 2 and _reg_num(ops[1]) in vals:
-            return "int32"
-        srcs = ops if mn in NO_DEST else ops[1:]
-        if any(_reg_num(o.strip("[]! ")) in vals for o in srcs):
-            return None                          # first read is not a 32-bit widening
-        if mn not in NO_DEST and ops:
-            vals.discard(_reg_num(ops[0]))       # overwritten (e.g. `csel x1, …`)
-        if mn in RETURNS or mn in ('b', 'br'):
-            return None
-    return None
+def _family_by_evaluation(ctx: BinaryContext, target: int) -> str:
+    """The wire-type family the write helper at *target* encodes, from what it computes when
+    run (:meth:`proto.arm64_eval.Flow.propagate` over
+    :func:`proto.function_body.function_body`) with :data:`_PROBE_FIELD` as its field number
+    and :data:`_PROBE_VALUE` as its value, where the writer ABI puts them:
+    ``(writer, value x1, field w2)``, or for a floating-point writer ``(writer, value v0,
+    field w1)``.
+
+    It is ``sint64`` / ``sint32`` when it computes the zigzag of the value / of its low word
+    (the sint encoding, whatever builds the tag).  Otherwise the tag it builds,
+    ``field << 3 | wire type``, gives the wire type: 5 ``fixed32``, 1 ``fixed64``, 2
+    (length-delimited) ``plain``, 0 a varint -- ``int32`` / ``uint32`` when the low word is
+    sign- / zero-extended to the 64-bit varint value (an int32's negative values take 10
+    bytes), else ``plain`` (a 64-bit varint, a bool).  ``"unknown"`` when it computes
+    neither.  How the compiler spells any of this (``lsl`` /
+    ``bfi`` / ``orr``, in which order, through which registers) does not matter."""
+    from proto.arm64_eval import Flow
+    body = function_body(ctx, target, function_entries(ctx))
+    if not body:
+        return "unknown"
+    flow = Flow(ctx, list(body), br_arms=_jump_table_arm_addrs(ctx, list(body), per_br=True))
+
+    def computed(entry):
+        regs = flow.propagate(entry, range(len(flow.insns)))
+        return {v for r in regs.values() for v in r.values()}
+
+    seen = computed({'x1': _PROBE_VALUE, 'x2': _PROBE_FIELD})
+    low = _PROBE_VALUE & _MASK32
+    if _zigzag(_PROBE_VALUE, 64) in seen:
+        return "sint64"
+    if _zigzag(low, 32) in seen:
+        return "sint32"
+    wire = {v & 7 for v in seen if v >> 3 == _PROBE_FIELD}
+    if not wire:                                    # a floating-point writer's field is w1
+        wire = {v & 7 for v in computed({'x1': _PROBE_FIELD}) if v >> 3 == _PROBE_FIELD}
+        if not wire:
+            return "unknown"
+    if 5 in wire:
+        return "fixed32"
+    if 1 in wire:
+        return "fixed64"
+    if 2 in wire:
+        return "plain"
+    if (low | (_MASK64 ^ _MASK32)) in seen:
+        return "int32"
+    if low in seen:
+        return "uint32"
+    return "plain"
 
 
 #: The note on an int field whose writer shows no encoding (family ``"unknown"``).
@@ -207,8 +224,8 @@ def _family_from_import(ctx: BinaryContext, va: int) -> Optional[str]:
 def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     """Classify a ``writeTo:`` field-write helper by the proto *wire-type family* it
     encodes: ``"sint32"``, ``"sint64"``, ``"fixed32"``, ``"fixed64"``, ``"int32"`` /
-    ``"uint32"`` (a plain varint of a 32-bit value, by how it is widened -- see
-    :func:`_varint32_value_extension`), ``"plain"`` (a varint read as such, or a
+    ``"uint32"`` (a plain varint of a 32-bit value, by how it is widened), ``"plain"`` (a
+    varint read as such, or a
     non-int writer: no refinement), or ``"unknown"`` (no helper, or one whose encoding
     neither its code nor its import name shows: the field is flagged).
 
@@ -220,27 +237,16 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
     post-pass, mirroring the string-helper reclassification
     (:func:`_find_string_write_helper`).
 
-    Mechanism — ground-truthed, structural, no hardcoded VA: GeoServices'
-    ``0x18dbda*`` helpers are 12-byte ``adrp x16,#p ; add x16,x16,#o ; br x16``
-    stubs into ProtocolBuffer.framework; follow the stub to the real helper
-    (:func:`proto.callees.real_target`, which also follows the newer per-callsite
-    arm64e stub island of the iOS 27 / macOS 27 caches, and leaves a helper called
-    directly as it is).  Two
-    value-independent signals, checked at the helper's tag-build instruction
-    (whichever appears first wins — no scan budget decides the answer):
-
-    * **zigzag (sint)** — the encoder shifts the value argument with
-      ``lsl (w|x)1, #1`` (textbook ``(n<<1) ^ (n>>k)``); ``w1`` vs ``x1`` gives
-      the width (confirmed: PB ``0x1a47b2dd0``=sint32, ``0x1a47b2ee4``=sint64).
-    * **fixed** — the helper builds the tag as ``mov w_,#wt ; bfi w_,w<field>,
-      #3,#0x1d`` where ``wt`` IS the wire type: ``5``=fixed32, ``1``=fixed64.
-      Plain varint instead builds the tag via ``lsl w_,w<field>,#3`` (wt 0); wire
-      type 2 (length-delimited) is left ``plain``.  The newer toolchain also emits
-      that ``lsl`` first in a fixed-width helper (the tag-size test), so after it the
-      scan continues to the end of the block looking for the ``bfi``.  Shared with float/double, but
-      those ivars decode to float/double and never reach this int-only caller,
-      so fixed32/fixed64 here always means an integer field — sfixed vs. fixed
-      is then picked from the ivar sign, exactly like int32↔uint32.
+    Mechanism -- by evaluation, no hardcoded VA and no instruction idiom: follow the stub
+    to the real helper (:func:`proto.callees.real_target`: GeoServices' ``0x18dbda*``
+    helpers are ``adrp x16 ; add x16 ; br x16`` stubs into ProtocolBuffer.framework, and the
+    iOS 27 / macOS 27 caches add a per-callsite arm64e stub island) and run it with probe
+    arguments (:func:`_family_by_evaluation`): the tag it computes gives the wire type, the
+    zigzag of the value a sint, the widening of a 32-bit value int32 / uint32 (confirmed: PB
+    ``0x1a47b2dd0`` = sint32, ``0x1a47b2ee4`` = sint64, ``0x1a47ae8cc`` int32, ``0x1a47af658``
+    uint32).  fixed32 / fixed64 are shared with float / double, but those ivars decode to
+    float / double and never reach this int-only caller, so they always mean an integer
+    field -- sfixed vs. fixed is then picked from the ivar sign, as int32 vs. uint32.
 
     In standalone ``--binary`` mode the helper is an import stub into ProtocolBuffer.framework,
     whose code is not in the binary; the stub's bound name names the writer
@@ -258,80 +264,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
         if named is not None:
             cache[helper_va] = named
             return named
-        # The family is decided at the helper's TAG-BUILD instruction (#59): whichever
-        # of {sint value-shift, fixed bfi, plain varint tag} appears first wins, and we
-        # STOP there — no scan budget decides the answer.  The field# is the 3rd arg
-        # (w2/x2) and is moved into a callee-saved reg in the prologue; track it so the
-        # plain varint tag-build (`lsl <field#>,#3`) can be told from an unrelated shift.
-        movs: Dict[str, int] = {}          # most-recent `mov Rd,#imm` (fixed wire-type const)
-        field_regs = {2}                   # GPR indices currently holding the field# arg
-        tag_shift_seen = False             # saw `lsl <field#>,#3` (see below)
-        insns = disasm(ctx, target, max_insns=_HELPER_FAMILY_MAX_INSNS, stop_at_ret=True)
-        for ins in insns:
-            mn = ins.mnemonic
-            ops = split_ops(ins.op_str)
-            # lsl <Rd>, <value-arg>, #1  — zigzag shift of the value argument (sint).
-            # (Not looked for once the plain tag shift has been seen: only a fixed-width
-            # `bfi` can still change a verdict then — see below.)
-            if (not tag_shift_seen and mn == "lsl" and len(ops) == 3
-                    and _parse_imm(ops[2]) == 1):
-                if ops[1] == "w1":
-                    fam = "sint32"
-                    break
-                if ops[1] == "x1":
-                    fam = "sint64"
-                    break
-            # lsl <Rd>, <field#-reg>, #3  — the PLAIN varint tag build (tag = field#<<3,
-            # wire-type 0).  Gated on the field# reg so a `lsl Rs,#3` index-scale can't
-            # mis-fire.  This is the structural "plain" terminator (#59) that replaces
-            # running the scan to the budget and defaulting to plain.
-            #
-            # The NEWER toolchain (iOS 27, macOS 27) computes that same `lsl <field#>,#3`
-            # first for EVERY helper — it is the tag's size test (`cmp w,#0x80`) — and
-            # only then builds a fixed-width helper's tag (`mov w,#5 ; bfi w,<field>,#3,
-            # #0x1d`) a few instructions later in the same block.  So the shift is not the
-            # end of the evidence: note it, keep reading to the end of the block (the
-            # first branch/call/return), and let a following wire-type `bfi` decide.
-            # Without one, the helper is plain, as before.  (The sint helpers of that
-            # toolchain still hit their zigzag shift before this one, so that signal is
-            # not needed here — and is deliberately not read past the plain tag shift,
-            # where an unrelated `lsl #1` in the varint body would misfire.)
-            if (mn == "lsl" and len(ops) == 3 and _parse_imm(ops[2]) == 3
-                    and _reg_num(ops[1]) in field_regs):
-                tag_shift_seen = True
-                continue
-            # end of the straight-line block after the tag shift, with no wire-type
-            # `bfi` in it: this is the plain varint tag build.
-            if tag_shift_seen and (mn in BLOCK_ENDS or mn.startswith("b.")):
-                break
-            if mn == "mov" and len(ops) == 2:
-                src = _reg_num(ops[1])
-                if src is not None and src in field_regs:
-                    # mov Rd, <field#-reg>  — propagate the field# to the new reg.
-                    dst = _reg_num(ops[0])
-                    if dst is not None:
-                        field_regs.add(dst)
-                elif ops[1].startswith("#"):
-                    # mov Rd, #imm  — remember; may be a fixed tag wire-type constant.
-                    movs[ops[0]] = _parse_imm(ops[1])
-            # bfi <Rd>, <field-reg>, #3, #0x1d  — tag = (field << 3) | wt, wt in Rd.
-            if mn == "bfi" and len(ops) == 4 and _parse_imm(ops[2]) == 3:
-                wt = movs.get(ops[0])
-                if wt == 5:
-                    fam = "fixed32"
-                    break
-                if wt == 1:
-                    fam = "fixed64"
-                    break
-                if wt in (0, 2):
-                    fam = "plain"      # a varint or length-delimited tag: no int refinement
-                    break
-        if fam == "unknown" and tag_shift_seen:
-            fam = "plain"              # the plain varint tag build, with no wire-type bfi after it
-        if fam == "plain":
-            # A plain varint helper: the signedness of a 32-bit value is in how it is
-            # widened to the 64-bit varint (sxtw = int32, 32-bit mov = uint32).
-            fam = _varint32_value_extension(insns) or "plain"
+        fam = _family_by_evaluation(ctx, target)
     except (NameError, ImportError):
         raise                       # our own wiring bug — never mask it
     except Exception as exc:

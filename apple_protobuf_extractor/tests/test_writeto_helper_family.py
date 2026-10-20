@@ -1,10 +1,10 @@
-"""TODO #38/#44 — `_classify_write_helper`: recover sint32/sint64 (zigzag
-`lsl (w|x)1,#1` shift) and fixed32/fixed64 (tag wire-type `mov w_,#{5,1}` +
-`bfi w_,w<field>,#3,#0x1d`) from the writeTo: write-helper's structural signature.
+"""TODO #38/#44 — `_classify_write_helper`: recover sint32/sint64 and fixed32/fixed64 from
+what the writeTo: write helper computes when run with probe arguments (#112): the zigzag
+of its value argument, and the wire type in the tag ``field << 3 | wire type`` it builds.
 
 Offline unit tests drive the classifier with hand-assembled arm64 (self-checked by
-disassembling first), covering the PLT-style stub follow, the w1/x1 width split, the
-plain fallback, the direct (non-stub) path, and the fixed tag wire-type immediates.
+disassembling first), covering the PLT-style stub follow, the 32- / 64-bit zigzag, the
+plain varint, the direct (non-stub) path, and the fixed tag wire types.
 Live tests assert the real flips on the cache (the helper VA is the wire contract, so
 these are ground truth).
 """
@@ -13,6 +13,7 @@ import struct
 import unittest
 
 from macho.disasm import disasm
+from tests._fakes import NoImage
 import proto.extractor as E
 import proto.write_helpers as WH   # _classify_write_helper now lives here
 
@@ -47,6 +48,17 @@ def _enc_movz(rd, imm):               # MOVZ Wd,#imm  (capstone aliases to `mov`
     return struct.pack('<I', 0x52800000 | ((imm & 0xFFFF) << 5) | rd)
 
 
+def _enc_eor_asr(rd, rn, rm, shift, sf):   # EOR Rd,Rn,Rm,ASR #shift
+    word = (0xCA000000 if sf else 0x4A000000) | (0b10 << 22) | (rm << 16) | (shift << 10) \
+        | (rn << 5) | rd
+    return struct.pack('<I', word)
+
+
+def _zigzag_body(sf):
+    """The zigzag of the value argument, ``(v << 1) ^ (v >> width-1)``: an sint helper."""
+    return _enc_lsl(8, 1, 1, sf=sf) + _enc_eor_asr(8, 8, 1, 63 if sf else 31, sf)
+
+
 def _enc_bfi(rd, rn, lsb, width):     # BFI Wd,Wn,#lsb,#width == BFM Wd,Wn,#immr,#imms
     immr = (-lsb) % 32
     imms = width - 1
@@ -63,7 +75,7 @@ def _enc_ret():
     return struct.pack('<I', 0xD65F03C0)
 
 
-class _RegionCtx:
+class _RegionCtx(NoImage):
     """ctx serving bytes from named regions {base: buffer} (for cross-'image' reads)."""
     def __init__(self, regions):
         self._regions = dict(regions)
@@ -123,112 +135,65 @@ class TestClassifyWriteHelperOffline(unittest.TestCase):
         self.assertEqual(ops[2], '#3')
 
     def test_stub_follow_zigzag32_is_sint32(self):
-        body = _enc_mov(19, 0) + _enc_lsl(8, 1, 1, sf=0) + _enc_ret()
+        body = _enc_mov(19, 0) + _zigzag_body(sf=0) + _enc_ret()
         self.assertEqual(self._classify(body), 'sint32')
 
     def test_stub_follow_zigzag64_is_sint64(self):
-        body = _enc_mov(19, 0) + _enc_lsl(23, 1, 1, sf=1) + _enc_ret()
+        body = _enc_mov(19, 0) + _zigzag_body(sf=1) + _enc_ret()
         self.assertEqual(self._classify(body), 'sint64')
 
     def test_value_passthrough_without_a_tag_build_is_unknown(self):
         body = _enc_mov(20, 1) + _enc_ret()           # value unmodified, no tag built
         self.assertEqual(self._classify(body), 'unknown')
 
-    def test_lsl_on_non_value_reg_is_not_zigzag(self):
-        # A shift of a register that is NOT the value arg (w1/x1) is not zigzag (and with
-        # no tag build after it, nothing shows the encoding).
-        body = _enc_lsl(8, 9, 1, sf=0) + _enc_ret()
-        self.assertEqual(self._classify(body), 'unknown')
+    def test_a_shift_alone_is_not_a_zigzag(self):
+        # `lsl w8, w1, #1` without the `eor` of the sign is not the sint encoding, nor is a
+        # shift of a register that is not the value
+        self.assertEqual(self._classify(_enc_lsl(8, 1, 1, sf=0) + _enc_ret()), 'unknown')
+        self.assertEqual(self._classify(_enc_lsl(8, 9, 1, sf=0) + _enc_ret()), 'unknown')
+
+    def _tag_body(self, wt, pad=24):
+        # the field number (w2) copied to a callee-saved register, then the tag built
+        return (_enc_mov(21, 2) + _enc_mov(8, 9) * pad
+                + _enc_movz(9, wt) + _enc_bfi(9, 21, 3, 29) + _enc_ret())
 
     def test_fixed32_tag_wire_type_5(self):
-        # tag = (field<<3)|5  → 32-bit fixed.  bfi sits ~28 insns in on the real
-        # helper, so pad the body to exercise the scan budget.
-        pad = _enc_mov(8, 9) * 24
-        body = pad + _enc_movz(9, 5) + _enc_bfi(9, 21, 3, 29) + _enc_ret()
-        self.assertEqual(self._classify(body), 'fixed32')
+        self.assertEqual(self._classify(self._tag_body(5)), 'fixed32')
 
     def test_fixed64_tag_wire_type_1(self):
-        pad = _enc_mov(8, 9) * 24
-        body = pad + _enc_movz(9, 1) + _enc_bfi(9, 21, 3, 29) + _enc_ret()
-        self.assertEqual(self._classify(body), 'fixed64')
+        self.assertEqual(self._classify(self._tag_body(1)), 'fixed64')
+
+    def test_a_floating_point_writer_takes_its_field_number_in_w1(self):
+        # PBDataWriterWriteFloatField(writer, value v0, field w1): `mov x20, x1` is the field
+        body = _enc_mov(20, 1) + _enc_movz(9, 5) + _enc_bfi(9, 20, 3, 29) + _enc_ret()
+        self.assertEqual(self._classify(body), 'fixed32')
 
     def test_lendelim_tag_wire_type_2_is_plain(self):
-        # wire type 2 (length-delimited / inline-struct bracket) is NOT fixed.
-        body = _enc_movz(9, 2) + _enc_bfi(9, 21, 3, 29) + _enc_ret()
-        self.assertEqual(self._classify(body), 'plain')
-        # On its own, wt=2 never reaches the mov/bfi fixed32/64 detection at all
-        # (2 matches neither 5 nor 1), so this negative case alone can't tell
-        # whether that detection exists or was reverted.  Pair it with the wt=5
-        # positive case (same mov/bfi shape, real fixed wire type) so this test
-        # alone would have failed on the pre-#44 code.
-        pad = _enc_mov(8, 9) * 24
-        fixed_body = pad + _enc_movz(9, 5) + _enc_bfi(9, 21, 3, 29) + _enc_ret()
-        self.assertEqual(self._classify(fixed_body), 'fixed32')
+        # wire type 2 (length-delimited / inline-struct bracket) is not fixed
+        self.assertEqual(self._classify(self._tag_body(2, pad=0)), 'plain')
 
-    def test_varint_tag_shift_is_plain(self):
-        # Plain varint builds the tag with `lsl w_,w<field>,#3` (no mov+bfi).  The
-        # field# (w2/x2) is moved to a callee-saved reg first, then shifted by 3 — that
-        # tag-build IS the plain terminator (#59), and it must not be mistaken for the
-        # zigzag value shift (`lsl …,w1,#1`).
-        # NOTE: for THIS short (3-insn) body alone, the #59 "stop at the
-        # terminator" mechanism is TAUTOLOGICAL -- the unconditional 'plain'
-        # fallback and the genuine terminator match agree here regardless of
-        # whether #59's early-stop logic fires at all (nothing else in this
-        # short body could flip the verdict either way).  See
-        # test_plain_terminator_stops_at_tag_build_not_budget below (same
-        # class) for a body where a broken/budget-exhausting scan WOULD
-        # disagree with the terminator-match verdict -- that is what actually
-        # discriminates #59's mechanism.
+    def test_varint_tag_is_plain(self):
+        # plain varint: tag = field << 3 (wire type 0), the value encoded as it came
         body = _enc_mov(21, 2) + _enc_lsl(10, 21, 3, sf=0) + _enc_ret()
         self.assertEqual(self._classify(body), 'plain')
-        # This input (register w21/shift 3) never matches the mov/bfi idiom's
-        # register or shift-amount pattern either, so it can't discriminate the
-        # #44 fixed32/64 detection on its own.  Pair with a wt=1 (fixed64)
-        # positive case using the real mov/bfi encoding.
-        pad = _enc_mov(8, 9) * 24
-        fixed_body = pad + _enc_movz(9, 1) + _enc_bfi(9, 21, 3, 29) + _enc_ret()
-        self.assertEqual(self._classify(fixed_body), 'fixed64')
 
-    def test_plain_terminator_stops_at_tag_build_not_budget(self):
-        # #59: the plain verdict comes from the tag-build, NOT from exhausting the
-        # scan budget.  Put a (would-be sint) `lsl w8,w1,#1` AFTER the plain tag-build:
-        # if the scan stopped at the tag-build it stays 'plain'; if it kept scanning to
-        # the budget it would wrongly flip to 'sint32'.
-        body = (_enc_mov(21, 2)               # field# -> x21
-                + _enc_lsl(10, 21, 3, sf=0)   # plain varint tag (wt 0) — STOP here
-                + _enc_lsl(8, 1, 1, sf=0)     # zigzag value shift — must NOT be reached
+    def test_a_value_shift_after_the_varint_tag_is_not_a_zigzag(self):
+        body = (_enc_mov(21, 2) + _enc_lsl(10, 21, 3, sf=0)   # plain varint tag
+                + _enc_lsl(8, 1, 1, sf=0)                      # value << 1: no sign eor
                 + _enc_ret())
-        self.assertEqual(self._classify(body), 'plain')   # NOT 'sint32'
+        self.assertEqual(self._classify(body), 'plain')
 
-    def test_index_scale_lsl3_on_nonfield_reg_does_not_block_fixed(self):
-        # An `lsl Rd,Rs,#3` whose source is NOT the field# reg (e.g. an array
-        # index *8 scale) must be ignored, not treated as the plain tag-build — so a
-        # later fixed `bfi` still classifies as fixed32.
-        body = (_enc_lsl(8, 9, 3, sf=0)       # index scale on w9 (not field#) — ignore
-                + _enc_movz(9, 5)
-                + _enc_bfi(9, 21, 3, 29)      # fixed32 tag
-                + _enc_ret())
+    def test_index_scale_lsl3_on_a_non_field_register_does_not_matter(self):
+        # an `lsl Rd, Rs, #3` of something else (an index * 8) computes no tag
+        body = (_enc_mov(21, 2) + _enc_lsl(8, 9, 3, sf=0)
+                + _enc_movz(9, 5) + _enc_bfi(9, 21, 3, 29) + _enc_ret())
         self.assertEqual(self._classify(body), 'fixed32')
-        # Contrast: the SAME lsl-by-3 shape, but its source IS the field# reg
-        # (w21, set up by the mov below) — the register-gate must actually let
-        # the plain tag-build terminator fire here, confirming the gate is
-        # selective (rejects non-field-reg lsl-by-3, accepts field-reg
-        # lsl-by-3) rather than just absent.  A would-be zigzag `lsl w8,w1,#1`
-        # AFTER the field-reg lsl-by-3 makes this genuinely discriminating:
-        # if the terminator didn't actually fire (fell through to the
-        # unconditional 'plain' default instead), the scan would keep going
-        # and wrongly find the later zigzag, flipping the verdict to 'sint32'.
-        field_reg_body = (_enc_mov(21, 2)             # field# -> x21
-                          + _enc_lsl(10, 21, 3, sf=0)  # lsl on the field reg -> plain terminator
-                          + _enc_lsl(8, 1, 1, sf=0)    # zigzag value shift — must NOT be reached
-                          + _enc_ret())
-        self.assertEqual(self._classify(field_reg_body), 'plain')   # NOT 'sint32'
 
     def test_fixed_tag_after_size_test_shift_newer_toolchain(self):
         # The newer toolchain (iOS 27 / macOS 27) opens EVERY helper with
         # `lsl w10,w21,#3` (the tag-size test, `cmp w10,#0x80`) and only then builds a
-        # fixed-width helper's tag: `mov w9,#5 ; bfi w9,w21,#3,#0x1d`.  The shift must not
-        # end the scan; the `bfi` that follows in the same block decides.
+        # fixed-width helper's tag: `mov w9,#5 ; bfi w9,w21,#3,#0x1d`.  Both values are
+        # computed; the wire type that is not 0 is the helper's.
         pad = _enc_mov(8, 9) * 4
         for wt, want in ((5, 'fixed32'), (1, 'fixed64')):
             body = (_enc_mov(21, 2) + pad
@@ -237,18 +202,15 @@ class TestClassifyWriteHelperOffline(unittest.TestCase):
                     + _enc_ret())
             self.assertEqual(self._classify(body), want)
 
-    def test_size_test_shift_then_block_end_is_plain(self):
-        # Same shift, but the block ends (a `ret`/branch) before any wire-type `bfi`:
-        # a `bfi` in a LATER block belongs to another path and must not be read —
-        # this is the plain varint helper.
+    def test_code_past_the_return_is_not_run(self):
+        # a `bfi` no path from the entry reaches is not the helper's
         body = (_enc_mov(21, 2) + _enc_lsl(10, 21, 3, sf=0) + _enc_ret()
                 + _enc_movz(9, 5) + _enc_bfi(9, 21, 3, 29))
         self.assertEqual(self._classify(body), 'plain')
 
     def test_direct_non_stub_zigzag(self):
         # A helper whose body IS the zigzag (no PLT stub) — the direct-bl shape.
-        body = _enc_lsl(8, 1, 1, sf=0) + _enc_ret()
-        ctx = _RegionCtx({self.TGT: body})
+        ctx = _RegionCtx({self.TGT: _zigzag_body(sf=0) + _enc_ret()})
         self.assertEqual(WH._classify_write_helper(ctx, self.TGT), 'sint32')
 
     def test_falsy_helper_va_short_circuits_before_disasm(self):

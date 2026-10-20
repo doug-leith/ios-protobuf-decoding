@@ -14,7 +14,7 @@ from typing import Dict, FrozenSet, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
-from macho.disasm    import disasm, _parse_imm
+from macho.disasm    import _parse_imm
 from proto.arm64_operands import RETURNS, mem_regs, split_ops
 from proto.callees   import callee_name, RETURNS_ARGUMENT
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
@@ -65,9 +65,6 @@ def _repeated_element_type(ivar: ObjcIvar, metaclass: Optional[ObjcClass]) -> st
     return "bytes"
 
 
-# [cap:INPUT-SANITY] a runaway guard on the disassembly of an _addNoFlags<X>: accessor body:
-# _adder_array_ivar takes the first array-offset load, well before this.
-_ADDER_MAX_INSNS    = 256
 
 
 def _adder_array_ivar(
@@ -95,25 +92,23 @@ def _adder_array_ivar(
     ivar and stops before any later confounding array-offset load.  ``None`` if the
     accessor references no array offset.
 
-    The scan ends at the next known function entry (every method IMP and ReadAllFrom
-    core, stamped on *ctx* by :func:`proto.dispatch._build_readfrom_core_index`): a
-    setter that ends in a tail branch rather than ``ret`` would otherwise run on into
-    the next method -- e.g. CoreParsec ``-[_CPVisibleResultsFeedback setGoTakeoverResult:]``
-    into ``setUniqueIdsOfVisibleButtons:``, binding a singular field's setter to an array.
+    The accessor is what its entry reaches inside its extent
+    (:func:`proto.function_body.function_body`): a setter that ends in a tail branch rather
+    than ``ret`` would otherwise run on into the next method -- e.g. CoreParsec
+    ``-[_CPVisibleResultsFeedback setGoTakeoverResult:]`` into
+    ``setUniqueIdsOfVisibleButtons:``, binding a singular field's setter to an array.
     """
     from proto.dispatch import function_entries, listing_flow
+    from proto.function_body import function_body
     if imp_va == 0 or not array_offsets:
         return None
     try:
-        insns = disasm(ctx, imp_va, max_insns=_ADDER_MAX_INSNS, stop_at_ret=True)
+        insns = function_body(ctx, imp_va, function_entries(ctx))
     except READ_ERRORS:
         return None
-    nxt = function_entries(ctx).next_after(imp_va)
-    if nxt is not None:
-        insns = [ins for ins in insns if ins.addr < nxt]
     if not insns:
         return None
-    flow = listing_flow(ctx, insns)
+    flow = listing_flow(ctx, list(insns))
     for k in range(len(flow.insns)):
         slot_va = flow.slot_load_address(k)
         if slot_va is None:
@@ -178,9 +173,6 @@ def _resolve_repeated_via_dispatch(
 #: Tail calls that return the class they are handed in x0: the ARC return-value handshake,
 #: and ``objc_opt_class`` (a class object's class is itself).
 _RETURNS_CLASS_ARGUMENT = RETURNS_ARGUMENT | {'_objc_opt_class'}
-# [cap:INPUT-SANITY] runaway backstop: a ``+xyzType`` body is three instructions (the
-# listing also ends at the next function entry).
-_TYPE_METHOD_MAX_INSNS = 64
 
 
 def _returned_class_ref(ctx: BinaryContext, imp: int) -> Optional[Tuple[str, int]]:
@@ -189,20 +181,19 @@ def _returned_class_ref(ctx: BinaryContext, imp: int) -> Optional[Tuple[str, int
     (:data:`_RETURNS_CLASS_ARGUMENT`): ``("slot", addr)`` when x0 is loaded from the
     class-reference slot at *addr* (``adrp ; ldr x0, [x8, #off]``), ``("class", addr)`` when
     x0 is the class's own address (``adrp ; add x0, x8, #off``, iOS 27).  None when an exit
-    returns anything else or the exits disagree."""
+    returns anything else or the exits disagree.  The method is what its entry reaches
+    inside its extent (:func:`proto.function_body.function_body`)."""
     from proto.dispatch import function_entries, listing_flow
-    nxt = function_entries(ctx).next_after(imp)
-    insns = [i for i in disasm(ctx, imp, max_insns=_TYPE_METHOD_MAX_INSNS, stop_at_ret=True)
-             if nxt is None or i.addr < nxt]
+    from proto.function_body import function_body
+    insns = list(function_body(ctx, imp, function_entries(ctx)))
     if not insns:
         return None
     flow = listing_flow(ctx, insns)
-    end = insns[-1].addr + 4
+    own = {i.addr for i in insns}
     refs = set()
     for k, ins in enumerate(insns):
         if ins.mnemonic == 'b':
-            t = _parse_imm(ins.op_str)
-            if t is not None and imp <= t < end:
+            if _parse_imm(ins.op_str) in own:
                 continue                                    # a block of this method
         elif ins.mnemonic not in RETURNS:
             continue

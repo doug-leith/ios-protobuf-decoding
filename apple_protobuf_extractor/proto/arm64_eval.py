@@ -121,6 +121,7 @@ def _eval_cond(cond: str, flags: Nzcv) -> Optional[bool]:
 #: Instructions that set the condition flags.  Any of them the evaluator does not model (or
 #: models only in some operand forms) makes the flags unknown, so a later branch on them is
 #: undecided rather than decided on an earlier comparison's flags.
+_SIGN_EXTENDS = {'sxtb': 8, 'sxth': 16, 'sxtw': 32}    # the bits each sign-extends
 _FLAG_SETTERS = frozenset((
     'cmp', 'cmn', 'tst', 'ccmp', 'ccmn', 'adds', 'subs', 'ands', 'bics', 'adcs', 'sbcs',
     'negs', 'ngcs', 'fcmp', 'fcmpe', 'fccmp', 'fccmpe', 'setf8', 'setf16', 'rmif', 'cfinv',
@@ -946,6 +947,15 @@ class Flow:
             a, lsb, width = get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
             put(ops[0], None if a is None or lsb is None or not width
                 else (a >> lsb) & ((1 << width) - 1))
+        elif mn in _SIGN_EXTENDS and len(ops) == 2:     # sxtw xd, wn: the low bits, signed
+            a, bits = get(ops[1]), _SIGN_EXTENDS[mn]
+            put(ops[0], None if a is None else
+                (a & ((1 << bits) - 1)) - ((a >> (bits - 1) & 1) << bits))
+        elif mn == 'bfi' and len(ops) == 4:     # bfi d, n, #lsb, #width: n's low bits into d at lsb
+            d, a, lsb, width = get(ops[0]), get(ops[1]), _parse_imm(ops[2]), _parse_imm(ops[3])
+            mask = (1 << width) - 1 if width else 0
+            put(ops[0], None if d is None or a is None or lsb is None or not width
+                else (d & ~(mask << lsb)) | ((a & mask) << lsb))
         elif mn == 'tst' and len(ops) in (2, 3):     # tst a, b [, shift]: flags of a & b
             a = get(ops[0])
             b = _parse_imm(ops[1]) if ops[1].startswith('#') else operand2(ops, 1, get)

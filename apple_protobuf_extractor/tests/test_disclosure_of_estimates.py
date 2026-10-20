@@ -19,13 +19,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 import proto.extractor as E
 import proto.write_helpers as WH
+from tests._fakes import NoImage
 from macho.classlist import ObjcIvar
 from proto import emitter
 from proto.models import (ExtractionDiagnostics, FieldLabel, ProtoField, ProtoMessage,
                           get_diagnostics, record_analysis_failure, record_failed_pass)
 
 
-class _Ctx:
+class _Ctx(NoImage):
     """A context with nothing mapped: every helper read fails."""
 
 
