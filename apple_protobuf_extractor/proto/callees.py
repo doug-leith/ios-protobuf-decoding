@@ -72,8 +72,9 @@ class Stub(NamedTuple):
 
 
 def stub_target(ctx, va: Optional[int]) -> Optional[Stub]:
-    """Decode the call stub at *va* by evaluating its straight-line code up to its branch,
-    or None: *va* is not a stub.  A stub only computes the address it branches to::
+    """Decode the call stub at *va*, or None: *va* is not a stub.  A stub is a straight line
+    that only computes the address it branches to -- no store, no frame -- ending in an
+    indirect branch::
 
         adrp  x16, <page>               ; PLT form (dyld cache): the target itself
         add   x16, x16, #off
@@ -93,72 +94,58 @@ def stub_target(ctx, va: Optional[int]) -> Optional[Stub]:
         sub   x16, x16, x17, lsl #s
         br    x16                        -> Stub(target=a - (k << s))
 
-    Each instruction is evaluated (``adrp`` a page, ``adr`` an address, ``mov #imm`` a
-    constant, ``add`` / ``sub`` of an immediate or a shifted register to a known value,
-    ``ldr`` of a pointer from a known address or a PC-relative literal); the first instruction
-    that is none of these ends the decode -- an indirect branch on a register the stub computed is a
-    stub, anything else is not.  No instruction position or register is assumed.  Memoised
-    on *ctx*."""
+    The branch register is read by :class:`proto.arm64_eval.Flow` over that line: loaded
+    from a known address, the stub goes through that GOT slot; else its constant value is
+    the target.  Memoised on *ctx*."""
     if not va:
         return None
     memo = _ctx_cache(ctx, "_stub_targets", dict)
     if va in memo:
         return memo[va]
     res: Optional[Stub] = None
-    # reg -> Stub: the address a register holds (target=) or the slot it was loaded from (slot=)
-    regs: Dict[str, Stub] = {}
     try:
-        k = va
+        line = []
         while True:
-            ins = disasm(ctx, k, max_insns=1, stop_at_ret=False)
+            ins = disasm(ctx, va + 4 * len(line), max_insns=1, stop_at_ret=False)
             if not ins:
                 break
-            mn, ops = ins[0].mnemonic, split_ops(ins[0].op_str)
-            if mn in INDIRECT_BRANCHES:
-                res = regs.get(_norm_reg(ops[0])) if ops else None
+            line.append(ins[0])
+            if ins[0].mnemonic in BLOCK_ENDS or is_cond_branch(ins[0].mnemonic):
                 break
-            dst = _norm_reg(ops[0]) if ops and ops[0].startswith('x') else None
-            if dst is None:
+            if not _computes_only(ins[0]):
                 break
-            if mn == 'adrp':
-                pa = _adrp(ins[0])
-                if pa is None:
-                    break
-                regs[dst] = Stub(target=pa[1])
-            elif mn == 'adr' and len(ops) == 2 and ops[1].startswith('#'):
-                regs[dst] = Stub(target=_parse_imm(ops[1]))
-            elif mn in ('mov', 'movz') and len(ops) == 2 and ops[1].startswith('#'):
-                regs[dst] = Stub(target=_parse_imm(ops[1]))
-            elif mn in ('add', 'sub') and len(ops) in (3, 4):
-                src = regs.get(_norm_reg(ops[1]))
-                if ops[2].startswith('#') and len(ops) == 3:
-                    v = _parse_imm(ops[2])
-                else:                               # a register, optionally `lsl #s`
-                    r = regs.get(_norm_reg(ops[2]))
-                    sh = (_parse_imm(ops[3][len('lsl '):])
-                          if len(ops) == 4 and ops[3].startswith('lsl #') else 0 if len(ops) == 3
-                          else None)
-                    v = r.target << sh if r is not None and r.target is not None \
-                        and sh is not None else None
-                if src is None or src.target is None or v is None:
-                    break
-                regs[dst] = Stub(target=(src.target + v if mn == 'add' else src.target - v)
-                                 & 0xFFFFFFFFFFFFFFFF)
-            elif mn == 'ldr' and len(ops) == 2 and ops[1].startswith('#'):
-                regs[dst] = Stub(slot=_parse_imm(ops[1]))           # PC-relative literal
-            elif mn == 'ldr' and len(ops) == 2 and not ops[1].endswith('!'):
-                pm = parse_mem(ops[1])
-                src = regs.get(pm.base) if pm is not None and pm.index is None else None
-                if src is None or src.target is None:
-                    break
-                regs[dst] = Stub(slot=src.target + pm.disp)
-            else:
-                break
-            k += 4
+        if line and line[-1].mnemonic in INDIRECT_BRANCHES:
+            res = _branch_register_stub(ctx, line)
     except READ_ERRORS:                               # unreadable bytes at va: not a stub
         res = None
     memo[va] = res
     return res
+
+
+def _computes_only(ins) -> bool:
+    """*ins* writes registers only: no memory, no sp (a stub keeps no frame)."""
+    ops = split_ops(ins.op_str)
+    return (ins.mnemonic not in STORE_BYTES and ins.mnemonic not in PAIR_STORES
+            and ins.mnemonic not in NO_DEST and bool(ops) and ops[0] not in ('sp', 'wsp')
+            and _norm_reg(ops[0]) is not None and writeback_base(ops) is None)
+
+
+def _branch_register_stub(ctx, line) -> Optional[Stub]:
+    """The :class:`Stub` the indirect branch ending *line* takes: the GOT slot its register
+    was loaded from, or the register's constant value."""
+    from proto.arm64_eval import Flow                  # (arm64_eval imports this module)
+    flow = Flow(ctx, line)
+    k = len(line) - 1
+    ops = split_ops(line[k].op_str)
+    reg = _norm_reg(ops[0]) if ops else None
+    if reg is None:
+        return None
+    d = flow.only_def(k, reg)
+    if d is not None and line[d].mnemonic == 'ldr':
+        slot = flow.load_address(d)
+        return Stub(slot=slot) if slot is not None else None
+    target = flow.const_before(k, reg)
+    return Stub(target=target) if target is not None else None
 
 
 def real_target(ctx, va: int) -> int:

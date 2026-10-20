@@ -603,14 +603,18 @@ class Flow:
         return res
 
     def slot_load_address(self, k: int) -> Optional[int]:
-        """Address of the ivar-offset variable the 4-byte load ``insns[k]`` reads:
-        ``ldrsw Xd, [Xb, #o]`` / ``[Xb]``, the base taken from its reaching definitions
-        (:meth:`const_before`: the ``adrp`` of the offset page is often hoisted), or the
-        PC-relative literal ``ldrsw Xd, #ADDR`` a standalone image uses; None for any other
-        instruction or a base that is not a constant."""
+        """Address of the ivar-offset variable the 4-byte load ``insns[k]`` reads (an
+        ``ldrsw``, :meth:`load_address`); None for any other instruction."""
+        return self.load_address(k) if self.insns[k].mnemonic == 'ldrsw' else None
+
+    def load_address(self, k: int) -> Optional[int]:
+        """Address the single-register load ``insns[k]`` reads: ``[Xb, #o]`` / ``[Xb]``, the
+        base taken from its reaching definitions (:meth:`const_before`: the ``adrp`` of a page
+        is often hoisted), or a PC-relative literal ``#ADDR``; None for any other instruction,
+        an indexed or writeback form, or a base that is not a constant."""
         ins = self.insns[k]
         ops = split_ops(ins.op_str)
-        if ins.mnemonic != 'ldrsw' or len(ops) != 2:
+        if ins.mnemonic not in LOAD_BYTES or len(ops) != 2 or ops[1].endswith('!'):
             return None
         if ops[1].startswith('#'):
             return _parse_imm(ops[1])
