@@ -531,9 +531,14 @@ ipsw download ipsw --device iPhone17,3 --build 24A437 --dyld --dyld-arch arm64e 
 find ios27_data/dylib -mindepth 2 -name 'dyld_shared_cache_arm64e*' -exec mv {} ios27_data/dylib/ \;
 ```
 
-**7. macOS 27 cache (optional).** The macOS 27 tests read the dyld shared cache of a Mac running macOS 27
-(`/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e*`), copied into
-`macos27_data/dylib/` or named by `MACHO_TEST_MACOS27_CACHE`.
+**7. macOS 27 cache (optional; about 7 GB).** Only the macOS 27 tests use it. Like step 6, this extracts
+just the cache from Apple's server.
+
+```sh
+mkdir -p macos27_data/dylib
+ipsw download ipsw --macos --device Mac16,10 --build 26A428 --dyld --dyld-arch arm64e --output macos27_data/dylib --confirm
+find macos27_data/dylib -mindepth 2 -name 'dyld_shared_cache_arm64e*' -exec mv {} macos27_data/dylib/ \;
+```
 
 **8. Run the suite with the live tests enforced.**
 
@@ -544,8 +549,9 @@ MACHO_REQUIRE_LIVE=1 ./venv/bin/python3 -m pytest
 Without steps 6 and 7 the iOS 27 and macOS 27 tests skip. A few tests also read files these steps do not
 produce, and skip without them: `TrustedPeersHelper` from the iPhone 8 firmware, under
 `iphone8_data/disk_image/System/Library/Frameworks/Security.framework/XPCServices/TrustedPeersHelper.xpc/`;
-and from the iOS 27 firmware, the cache's `dyld_shared_cache_arm64e.symbols` (beside the cache) and
-`TrustedPeersHelper`, under `ios27_data/ipsw_extract/24A446__iPhone17,3/` in the firmware's folder layout. The firmware downloaded in step 2
+and from iOS 27, the cache's `dyld_shared_cache_arm64e.symbols` (beside the cache) and `TrustedPeersHelper`
+from the iOS 27.0.1 firmware (build 24A446), under `ios27_data/ipsw_extract/24A446__iPhone17,3/` in the
+firmware's folder layout. The firmware downloaded in step 2
 can be deleted afterwards (`rm -r iphone8_data/ipsw`); the tests do not use it.
 
 ## Provenance
