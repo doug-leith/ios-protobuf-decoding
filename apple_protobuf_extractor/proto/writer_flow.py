@@ -20,9 +20,9 @@ ProtocolBuffer runtime are named by their exported / imported ABI symbol
 (:func:`proto.callees.callee_name`) and have fixed contracts (:data:`proto.callees.RUNTIME_CONTRACTS`, :data:`_PB_WRITE`):
 ``objc_retain_x2`` reads x2 and returns it; ``PBDataWriterWriteInt32Field(writer, value,
 field)`` serialises x1.  Any other callee reads what :func:`proto.callees.call_reads` says
-(the AAPCS64 argument registers, or for a function of the image itself, possibly a
-machine-outlined fragment with no calling convention, every register its entry path has
-not yet written) and returns a value derived from all of them.
+(the AAPCS64 argument registers, or for a function of the image itself, with or without a
+calling convention, the registers it reads before writing them) and returns a value derived
+from all of them.
 
 A call that receives the writer serialises its contract's value argument, or -- with no
 contract -- everything it reads.  The writer handed to a call with no contract may be kept

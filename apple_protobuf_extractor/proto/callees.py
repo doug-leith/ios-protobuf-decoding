@@ -29,7 +29,9 @@ from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, writes, writeback_base, operand_regs, STORE_BYTES,
                                   PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
-                                  INDIRECT_BRANCHES, CALL_ARG_GPRS, ARG_FPRS, is_cond_branch)
+                                  INDIRECT_BRANCHES, CALL_ARG_GPRS, ARG_FPRS, CALLS, CALLER_SAVED,
+                                  LOAD_BYTES, PAIR_LOADS,
+                                  is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
 
@@ -266,8 +268,12 @@ ABI_ARGS = CALL_ARG_GPRS + ARG_FPRS
 #: Every register a callee could read.
 _ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
-# [cap:INPUT-SANITY] runaway backstop for the entry scan below (it stops at the first branch).
-_ENTRY_SCAN_INSNS = 64
+#: What a return hands its caller: the result register (a function that does not write v0
+#: returns no floating-point value).
+_RETURN_REGS = frozenset(("x0",))
+_TRAPS = frozenset(("brk", "udf", "hlt"))
+#: Instructions that read their destination too (they change only some of its bits).
+_READS_DEST = frozenset(("movk", "bfi", "bfxil", "bfm"))
 
 
 def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
@@ -315,9 +321,14 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     """The registers a call to *target* may read: a runtime function's ABI contract
     (:data:`RUNTIME_CONTRACTS`: ``objc_retain_x19`` reads x19); any other named function or
     message send -- or an unknown target -- the AAPCS64 argument registers
-    (:data:`ABI_ARGS`); an unnamed function of the image (possibly a machine-outlined
-    fragment with no calling convention), what its entry path reads before writing it, and,
-    once it branches, every register not yet written.  Memoised on *ctx*."""
+    (:data:`ABI_ARGS`); an unnamed function of the image (with a calling convention, or a
+    machine-outlined fragment with none) the registers it reads before writing them
+    (:func:`_live_in`).  Memoised on *ctx*.
+
+    Unnamed functions that call one another in a cycle are solved together, as the least
+    fixpoint: a call back to a function still being read sees what is known of it so far
+    (nothing, at first), the function the cycle entered at is read again until that stops
+    growing, and only then is any of it memoised."""
     name = callee_name(ctx, target) if target is not None else None
     contract = RUNTIME_CONTRACTS.get(name) if name else None
     if contract is not None:
@@ -327,33 +338,130 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     memo = _ctx_cache(ctx, "_call_reads", dict)
     if target in memo:
         return memo[target]
-    res: Tuple[str, ...] = _ALL_REGS
+    open_ = _ctx_cache(ctx, "_call_reads_open", dict)    # being read: target -> _Open
+    if target in open_:
+        frame = open_[target]
+        _depends_on(open_, frame.index)
+        return frame.reads
+    frame = _Open(len(open_))
+    open_[target] = frame
     try:
-        written, read = set(), set()
-        for ins in disasm(ctx, target, max_insns=_ENTRY_SCAN_INSNS, stop_at_ret=True):
-            mn = ins.mnemonic
-            ops = split_ops(ins.op_str)
-            if mn in RETURNS:
-                res = tuple(r for r in _ALL_REGS if r in read or (r == 'x0' and r not in written))
+        while True:
+            frame.low, frame.cyclic = frame.index, False
+            try:
+                res = _live_in(ctx, target)
+            except READ_ERRORS:
+                res = _ALL_REGS
+            grew = res != frame.reads
+            frame.reads = res
+            if not (frame.cyclic and grew and frame.low == frame.index):
                 break
-            if mn in BLOCK_ENDS or is_cond_branch(mn):
-                if mn in COMPARE_BRANCHES:
-                    read |= set(operand_regs(ops[:1])) - written
-                res = tuple(r for r in _ALL_REGS if r in read or r not in written)
-                break
-            dst = set(writes(ins))
-            if mn in NO_DEST:
-                src = set(operand_regs(ops))
-                if (mn in STORE_BYTES or mn in PAIR_STORES) and '[sp' in ins.op_str:
-                    src -= _CALLEE_SAVED                # a prologue spill is not a use
-            else:
-                src = set(operand_regs(ops[1:] if dst else ops))
-            read |= src - written
-            written |= dst
-    except READ_ERRORS:
-        res = _ALL_REGS
-    memo[target] = res
+    finally:
+        del open_[target]
+    if frame.low < frame.index:
+        _depends_on(open_, frame.low)        # settled only once that outer function is
+    else:
+        memo[target] = res
     return res
+
+
+class _Open:
+    """A function whose reads are being computed (:func:`call_reads`): its depth among those
+    open, what is known of its reads so far, the outermost open function its reading has
+    used, and whether a call came back to it."""
+    __slots__ = ("index", "reads", "low", "cyclic")
+
+    def __init__(self, index: int):
+        self.index, self.reads, self.low, self.cyclic = index, (), index, False
+
+
+def _depends_on(open_: dict, index: int) -> None:
+    """The function being read now (the innermost open one) used the reads of the open
+    function at *index*."""
+    if open_:
+        cur = next(reversed(open_.values()))
+        cur.low = min(cur.low, index)
+        if index == cur.index:
+            cur.cyclic = True
+
+
+def _live_in(ctx, target: int) -> Tuple[str, ...]:
+    """The registers the function at *target* reads before writing them on some path from its
+    entry: a backward fixpoint over its CFG (:func:`proto.function_body.function_body`, each
+    ``br``'s jump table decoded).  A call inside it reads what its callee reads
+    (:func:`call_reads`) and leaves the caller-saved registers to the callee; a call to an
+    outlined fragment runs the fragment's instructions; a tail call reads what its target
+    reads; a return hands back :data:`_RETURN_REGS`; a trap or a call that does not return
+    ends the path.  A prologue spill of a callee-saved register is not a read.  Every
+    register when the body is read only in part or a ``br`` goes somewhere unknown."""
+    from proto.dispatch import decoded_flow, function_entries
+    from proto.function_body import function_body
+    body = function_body(ctx, target, function_entries(ctx))
+    if not body or body.truncated:
+        return _ALL_REGS
+    flow = decoded_flow(ctx, list(body))
+    cfg = flow.cfg
+    own = frozenset(i.addr for i in flow.insns)
+    live_in: Dict[int, frozenset] = {b: frozenset() for b in cfg.order}
+    changed = True
+    while changed:
+        changed = False
+        for b in reversed(cfg.order):
+            succ = cfg.succ.get(b, ())
+            last = cfg.blocks[b][-1]
+            if last.mnemonic in INDIRECT_BRANCHES and not succ:
+                live = set(_ALL_REGS)                   # a jump nothing resolved
+            else:
+                live = set().union(*(live_in[x] for x in succ)) if succ else set()
+            for ins in reversed(cfg.blocks[b]):
+                live = _live_before(ctx, ins, live, own)
+            if frozenset(live) != live_in[b]:
+                live_in[b] = frozenset(live)
+                changed = True
+    entry = live_in.get(cfg.entry)
+    if entry is None:
+        return _ALL_REGS
+    return tuple(r for r in _ALL_REGS if r in entry)
+
+
+def _live_before(ctx, ins, live_after: set, own: frozenset) -> set:
+    """The registers live before *ins* given *live_after* (:func:`_live_in`); *own*: the
+    addresses of the function's own instructions (a ``b`` elsewhere is a tail call)."""
+    mn = ins.mnemonic
+    ops = split_ops(ins.op_str)
+    if mn in RETURNS:
+        return set(_RETURN_REGS)
+    if mn in _TRAPS:
+        return set()
+    if mn == "b":
+        t = _parse_imm(ops[0]) if ops else None
+        return set(live_after) if t in own else set(call_reads(ctx, t))
+    if mn in CALLS:
+        t = _parse_imm(ops[0]) if mn == "bl" and ops else None
+        frag = outlined_fragment(ctx, t) if t is not None else None
+        if frag is not None:
+            live = set(live_after)
+            for fi in reversed(frag):
+                live = _live_before(ctx, fi, live, own)
+            live.discard("x30")
+            return live
+        reads = set(call_reads(ctx, t))
+        if mn != "bl":
+            reads |= {r for r in (_norm_reg(o) for o in ops) if r}   # the target (and modifier)
+        if callee_name(ctx, t) in NORETURN:
+            return reads
+        clob = call_clobbers(ctx, t)
+        return (set(live_after) - set(clob if clob is not None else CALLER_SAVED)) | reads
+    dst = set(writes(ins))
+    if mn in NO_DEST or mn in COMPARE_BRANCHES:
+        src = set(operand_regs(ops[:1] if mn in COMPARE_BRANCHES else ops))
+        if (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
+            src -= _CALLEE_SAVED                        # a prologue spill is not a read
+    elif mn in LOAD_BYTES or mn in PAIR_LOADS:
+        src = set(operand_regs([o for o in ops if "[" in o]))     # the address only
+    else:
+        src = set(operand_regs(ops if mn in _READS_DEST else ops[1:] if dst else ops))
+    return (set(live_after) - dst) | src
 
 
 #: Functions that never return.

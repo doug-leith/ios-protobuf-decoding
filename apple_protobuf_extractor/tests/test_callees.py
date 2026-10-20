@@ -94,27 +94,70 @@ class TestCallReads(unittest.TestCase):
     """proto.callees.call_reads: one answer to "what may this call read" for both
     interpreters (WriterFlow and arm64_eval.Flow)."""
 
-    def _reads(self, name=None, sel=None, body=()):
+    def _reads(self, name=None, sel=None, blocks=(), names=None):
         import proto.callees as C
-        insns = [_ins(mn, op) for mn, op in body]
-        for i, ins in enumerate(insns):
-            ins.addr = 0x9000 + 4 * i
-        with mock.patch.object(C, 'callee_name', lambda ctx, va: name), \
-                mock.patch.object(C, 'stub_selector', lambda ctx, va: sel), \
-                mock.patch.object(C, 'disasm', lambda ctx, va, max_insns=0, stop_at_ret=True: insns):
-            return C.call_reads(SimpleNamespace(), 0x9000)
+        from tests._fakes import NoImage
+        from tests._listing import layout
+        _o, fd = layout(*blocks) if blocks else ([], lambda *a, **k: [])
+        named = names or {}
+        with mock.patch.object(C, 'callee_name',
+                               lambda ctx, va: name if va == 0x9000 else named.get(va)), \
+                mock.patch.object(C, 'stub_selector', lambda ctx, va: sel if va == 0x9000 else None), \
+                mock.patch('proto.function_body.disasm', fd):
+            return set(C.call_reads(NoImage(), 0x9000))
 
     def test_a_runtime_contract_is_what_it_reads(self):
-        self.assertEqual(self._reads("_objc_retain_x19"), ("x19",))
+        self.assertEqual(self._reads("_objc_retain_x19"), {"x19"})
 
     def test_a_named_function_or_a_send_reads_the_abi_arguments(self):
         from proto.callees import ABI_ARGS
-        self.assertEqual(self._reads("_memcpy"), ABI_ARGS)
-        self.assertEqual(self._reads(sel="count"), ABI_ARGS)
+        self.assertEqual(self._reads("_memcpy"), set(ABI_ARGS))
+        self.assertEqual(self._reads(sel="count"), set(ABI_ARGS))
 
-    def test_an_outlined_fragment_reads_what_its_entry_path_reads_before_writing(self):
-        got = self._reads(body=[('mov', 'x0, x21'), ('add', 'x1, x22, #8'), ('ret', '')])
-        self.assertEqual(set(got), {'x21', 'x22'})       # x0 written before it returns
+    def test_an_outlined_fragment_reads_what_it_reads_before_writing(self):
+        got = self._reads(blocks=[(0x9000, [('mov', 'x0, x21'), ('add', 'x1, x22, #8'), ('ret', '')])])
+        self.assertEqual(got, {'x21', 'x22'})            # x0 written before it returns
+
+    def test_a_return_hands_back_x0(self):
+        self.assertEqual(self._reads(blocks=[(0x9000, [('add', 'x1, x22, #8'), ('ret', '')])]),
+                         {'x22', 'x0'})
+
+    def test_every_path_counts(self):
+        got = self._reads(blocks=[(0x9000, [('cbz', 'x2, #0x9010'), ('mov', 'x0, x1'), ('ret', ''),
+                                            ('nop', ''), ('mov', 'x0, x3'), ('ret', '')])])
+        self.assertEqual(got, {'x2', 'x1', 'x3'})
+
+    def test_what_a_call_inside_it_reads(self):
+        # a named callee reads the argument registers this function has not set; its own
+        # spill of x29 / x30 and the callee-saved copy of x0 are not reads
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [
+            ('stp', 'x29, x30, [sp, #-0x10]!'), ('mov', 'x19, x0'), ('mov', 'x0, x19'),
+            ('mov', 'x1, #2'), ('bl', '#0xa000'), ('mov', 'x0, x19'),
+            ('ldp', 'x29, x30, [sp], #0x10'), ('ret', '')])], names={0xa000: '_f'})
+        self.assertEqual(got, (set(ABI_ARGS) - {'x1'}) | {'x0'})
+
+    def test_the_epilogue_restores_are_not_reads(self):
+        # `ldp x20, x19, [sp], #0x10` writes both registers: only sp, its address, is read
+        got = self._reads(blocks=[(0x9000, [
+            ('stp', 'x20, x19, [sp, #-0x10]!'), ('mov', 'x19, x1'), ('mov', 'x0, x19'),
+            ('ldp', 'x20, x19, [sp], #0x10'), ('ret', '')])])
+        self.assertEqual(got, {'x1'})
+
+    def test_functions_calling_each_other_are_solved_together(self):
+        # 0x9000 and 0xa000 call each other: the cycle's reads are what its members read,
+        # not every register
+        got = self._reads(blocks=[(0x9000, [('cbz', 'x2, #0x900c'), ('bl', '#0xa000'),
+                                            ('ret', ''), ('mov', 'x0, x3'), ('ret', '')]),
+                                  (0xa000, [('add', 'x2, x2, #1'), ('mov', 'x4, x5'),
+                                            ('bl', '#0x9000'), ('ret', '')])])
+        self.assertEqual(got, {'x2', 'x3', 'x5'})        # x0: set on both paths to a return
+
+    def test_a_tail_call_reads_what_its_target_reads(self):
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('mov', 'x0, x20'), ('b', '#0xa000')])],
+                          names={0xa000: '_f'})
+        self.assertEqual(got, (set(ABI_ARGS) - {'x0'}) | {'x20'})
 
 
 if __name__ == "__main__":
