@@ -73,7 +73,7 @@ from macho.memory import BinaryContext
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, is_cond_branch,
-                                  parse_mem, split_ops)
+                                  parse_mem, split_ops, writes)
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
@@ -484,52 +484,95 @@ def _sym(flow: Flow, k: int, reg: Optional[str], memo: Dict[int, tuple]) -> tupl
     (d,) = defs
     if d < 0:
         return (("entry", -1, reg),), 0
+    frag = flow.fragment(d)
+    if frag is not None:                            # set by the outlined fragment d runs
+        return _sym_fragment(flow, d, len(frag), reg, memo)
     if d in memo:
         return memo[d]
-    res = memo[d] = (("def", d, ""),), 0           # also what a cycle (a loop counter) sees
-    ins = flow.insns[d]
-    ops = split_ops(ins.op_str)
-    if ins.mnemonic == "mov" and len(ops) == 2 and not ops[1].startswith("#"):
-        res = _sym(flow, d, _norm_reg(ops[1]), memo)
-    elif ins.mnemonic in ("add", "sub") and len(ops) == 3:
-        a = _sym(flow, d, _norm_reg(ops[1]), memo)
-        b = ((), _parse_imm(ops[2])) if ops[2].startswith("#") else \
-            _sym(flow, d, _norm_reg(ops[2]), memo)
-        if b[1] is not None and ins.mnemonic == "add":
-            res = tuple(sorted(a[0] + b[0])), a[1] + b[1]
-        elif b[1] is not None and not b[0]:
-            res = a[0], a[1] - b[1]
+    memo[d] = (("def", d, ""),), 0                  # also what a cycle (a loop counter) sees
+    res = _sym_insn(flow.insns[d], lambda r: _sym(flow, d, r, memo)) or memo[d]
     memo[d] = res
     return res
 
 
+def _sym_fragment(flow: Flow, d: int, j: int, reg: Optional[str], memo: Dict) -> tuple:
+    """:func:`_sym` of *reg* before instruction *j* of the outlined fragment the ``bl``
+    ``insns[d]`` runs (:meth:`Flow.fragment`): set by an earlier instruction of it, or the value
+    the register has at the call."""
+    frag = flow.fragment(d)
+    w = next((i for i in range(j - 1, -1, -1) if reg in writes(frag[i])), None)
+    if w is None:
+        return _sym(flow, d, reg, memo)
+    key = ("frag", d, w, reg)
+    if key in memo:
+        return memo[key]
+    memo[key] = (("frag", d, str(w)),), 0
+    res = _sym_insn(frag[w], lambda r: _sym_fragment(flow, d, w, r, memo)) or memo[key]
+    memo[key] = res
+    return res
+
+
+def _sym_insn(ins, operand) -> Optional[tuple]:
+    """The symbolic address *ins* writes, its register operands read through *operand*: a
+    ``mov`` copy or immediate, an ``add`` / ``sub`` of an immediate or a register; None for
+    anything else (an atom of its own)."""
+    ops = split_ops(ins.op_str)
+    if ins.mnemonic == "mov" and len(ops) == 2:
+        return ((), _parse_imm(ops[1])) if ops[1].startswith("#") else operand(_norm_reg(ops[1]))
+    if ins.mnemonic in ("add", "sub") and len(ops) == 3:
+        a = operand(_norm_reg(ops[1]))
+        b = ((), _parse_imm(ops[2])) if ops[2].startswith("#") else operand(_norm_reg(ops[2]))
+        if b[1] is not None and ins.mnemonic == "add":
+            return tuple(sorted(a[0] + b[0])), a[1] + b[1]
+        if b[1] is not None and not b[0]:
+            return a[0], a[1] - b[1]
+    return None
+
+
+_STORES = ("str", "stur", "stp")
+
+
 def _store_slots(flow: Flow, entry: Optional[Dict[str, int]]) -> List[_Slot]:
     """Every 64- / 32-bit register the listing stores outside its frame (``str`` / ``stur`` /
-    ``stp``), with its address (:func:`_sym`) and value (:meth:`Flow.propagate` from
-    *entry*).  Stores the entry cannot reach are left out."""
-    ks = [k for k, ins in enumerate(flow.insns) if ins.mnemonic in ("str", "stur", "stp")]
-    vals = flow.propagate(dict(entry or {}), at=ks)
-    memo: Dict[int, tuple] = {}
+    ``stp``) -- its own stores and those of the outlined fragments it runs
+    (:meth:`Flow.fragment`) -- with its address (:func:`_sym`) and value
+    (:meth:`Flow.propagate` from *entry*).  Stores the entry cannot reach are left out."""
+    ks = [k for k, ins in enumerate(flow.insns) if ins.mnemonic in _STORES]
+    inside: Dict[int, List[Dict[str, int]]] = {}
+    vals = flow.propagate(dict(entry or {}), at=ks, fragments_out=inside)
+    memo: Dict = {}
     out: List[_Slot] = []
     for k in ks:
-        if k not in vals:
-            continue
-        ops = split_ops(flow.insns[k].op_str)
-        n = 2 if flow.insns[k].mnemonic == "stp" else 1
-        if len(ops) < n + 1 or any(r[:1] not in ("x", "w") for r in ops[:n]):
-            continue
-        pm = parse_mem(ops[n])
-        if pm is None or pm.base in (None, "sp", "x29") or pm.index is not None:
-            continue                         # the frame, or an indexed store: not a table
-        atoms, off = _sym(flow, k, pm.base, memo)
-        if len(ops) == n + 1:                # a post-indexed store writes at the base itself
-            off += pm.disp
-        for r in ops[:n]:
-            width = 8 if r.startswith("x") else 4
-            v = 0 if r in ("xzr", "wzr") else vals[k].get(_norm_reg(r))
-            out.append(_Slot(k, (atoms, off), None if v is None else v & ((1 << 8 * width) - 1),
-                             8 * width))
-            off += width
+        if k in vals:
+            out += _slots_of(flow.insns[k], k, vals[k], lambda r, k=k: _sym(flow, k, r, memo))
+    for k, trace in sorted(inside.items()):
+        for j, fi in enumerate(flow.fragment(k)):
+            if fi.mnemonic in _STORES:
+                out += _slots_of(fi, k, trace[j],
+                                 lambda r, k=k, j=j: _sym_fragment(flow, k, j, r, memo))
+    return out
+
+
+def _slots_of(ins, k: int, regs: Dict[str, int], sym) -> List[_Slot]:
+    """The slots one store *ins* (at listing index *k*) writes, its registers' values *regs*,
+    its base read through *sym*; none for a frame or an indexed store (not a table)."""
+    ops = split_ops(ins.op_str)
+    n = 2 if ins.mnemonic == "stp" else 1
+    if len(ops) < n + 1 or any(r[:1] not in ("x", "w") for r in ops[:n]):
+        return []
+    pm = parse_mem(ops[n])
+    if pm is None or pm.base in (None, "sp", "x29") or pm.index is not None:
+        return []
+    atoms, off = sym(pm.base)
+    if len(ops) == n + 1:                    # a post-indexed store writes at the base itself
+        off += pm.disp
+    out = []
+    for r in ops[:n]:
+        width = 8 if r.startswith("x") else 4
+        v = 0 if r in ("xzr", "wzr") else regs.get(_norm_reg(r))
+        out.append(_Slot(k, (atoms, off), None if v is None else v & ((1 << 8 * width) - 1),
+                         8 * width))
+        off += width
     return out
 
 

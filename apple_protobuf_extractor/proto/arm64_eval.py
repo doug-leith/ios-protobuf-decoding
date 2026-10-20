@@ -26,7 +26,7 @@ from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder, split_ops)
 from macho.strings import read_cfstring_text
-from proto.callees import call_reads, call_clobbers as callee_clobbers
+from proto.callees import call_reads, call_clobbers as callee_clobbers, outlined_fragment
 from proto.arm64_operands import (
     CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
@@ -420,6 +420,7 @@ class Flow:
         self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
         self._ivar_memo: Dict[int, Optional[int]] = {}
         self._reg_targets: Optional[Dict[int, int]] = None   # :meth:`_register_call_targets`
+        self._fragments: Dict[int, Optional[Tuple[Insn, ...]]] = {}   # :meth:`fragment`
 
     # ── reaching definitions ────────────────────────────────────────────────
 
@@ -430,7 +431,7 @@ class Flow:
         self._wr = [writes(i) for i in self.insns]
         for k, ins in enumerate(self.insns):
             if ins.mnemonic in CALLS:
-                clobbers = self.call_clobbers(k)
+                clobbers = self.call_writes(k)
                 if clobbers is not None:
                     self._wr[k] = list(clobbers)
         self._in = {}
@@ -509,11 +510,18 @@ class Flow:
             return self._const_memo[key]
         self._const_memo[key] = None                     # break cycles (loops)
         d = self.only_def(k, reg)
-        val = self._const_of_def(d) if d is not None else None
+        val = self._const_of_def(d, reg) if d is not None else None
         self._const_memo[key] = val
         return val
 
-    def _const_of_def(self, d: int) -> Optional[int]:
+    def _const_of_def(self, d: int, reg: str) -> Optional[int]:
+        frag = self.fragment(d)
+        if frag is not None:                             # *reg* as the fragment leaves it
+            m = _Machine({}, fallback=lambda r: self.const_before(d, r))
+            for fi in frag:
+                self._exec(m, fi)
+            v = m.get(reg)
+            return None if v is None or _is_stack(v) else v
         ins = self.insns[d]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         if mn == 'adrp':
@@ -649,7 +657,7 @@ class Flow:
             hi = self._first_in_block[blk] + len(self.cfg.blocks[blk])
             for k in range(lo, hi):
                 if self.insns[k].mnemonic in CALLS:
-                    clobbers = self.call_clobbers(k)
+                    clobbers = self.call_writes(k)
                     if clobbers is None:
                         return False
                     for r in clobbers:
@@ -782,9 +790,10 @@ class Flow:
             ins = self.insns[k]
             mn, ops = ins.mnemonic, split_ops(ins.op_str)
             nxt = k + 1
-            clobbers = (self.call_clobbers(k, self._call_target(m, ins), evaluated=True)
-                        if mn in CALLS else None)
-            if clobbers is not None:
+            if self.fragment(k) is not None:
+                self._run_fragment(m, k)
+            elif mn in CALLS and (clobbers := self.call_clobbers(
+                    k, self._call_target(m, ins), evaluated=True)) is not None:
                 m.call((), clobbers)
             elif mn in CALLS or mn in RETURNS:
                 if where is not None:
@@ -846,6 +855,8 @@ class Flow:
                     nxt = self.addr_idx.get(target)
                     if nxt is None:
                         return None
+            elif self.fragment(k) is not None:
+                self._run_fragment(m, k)
             elif mn in CALLS and (clobbers := self.call_clobbers(
                     k, self._call_target(m, ins), evaluated=True)) is not None:
                 m.call((), clobbers)
@@ -1055,7 +1066,8 @@ class Flow:
     # ── constant propagation over the whole function ────────────────────────
 
     def propagate(self, entry: Dict[str, int], at: Iterable[int], objects: Objects = NO_OBJECTS,
-                  slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None
+                  slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None,
+                  fragments_out: Optional[Dict[int, List[Dict[str, int]]]] = None
                   ) -> Dict[int, Dict[str, int]]:
         """``{k: {register: value}}``: the registers known before each ``insns[k]`` in *at*
         when the function is entered with *entry* (say a flag argument's value) and sp at
@@ -1066,7 +1078,9 @@ class Flow:
         or the flags is known at a block iff every path into it that can execute agrees.  A
         branch whose condition is known follows only the side taken, so code that depends on
         *entry* is resolved the same way whether it was compiled to a ``csel`` or a branch.
-        *objects*: see :class:`Objects`; *slots_out*, when given, receives the stack slots known
+        *objects*: see :class:`Objects`; *fragments_out*, when given, receives for each outlined
+        fragment a ``bl`` runs (:meth:`fragment`) the registers before each of its instructions;
+        *slots_out*, when given, receives the stack slots known
         before each ``insns[k]`` in *at*."""
         cfg = self.cfg
         want = set(at)
@@ -1093,7 +1107,10 @@ class Flow:
                     out[k] = dict(st.regs)
                     if slots_out is not None:
                         slots_out[k] = dict(st.slots)
-                self._propagate_step(st, k, objects.call_result)
+                trace = [] if fragments_out is not None and self.fragment(k) is not None else None
+                self._propagate_step(st, k, objects.call_result, trace)
+                if trace is not None:
+                    fragments_out[k] = trace
         return out
 
     @staticmethod
@@ -1119,6 +1136,34 @@ class Flow:
             target = self._register_call_targets().get(k)
         return callee_clobbers(self.ctx, target)
 
+    def fragment(self, k: int) -> Optional[Tuple[Insn, ...]]:
+        """The instructions the ``bl`` ``insns[k]`` runs as part of this function (an outlined
+        fragment, :func:`proto.callees.outlined_fragment`), else None."""
+        if k not in self._fragments:
+            ins = self.insns[k]
+            self._fragments[k] = (outlined_fragment(self.ctx, _parse_imm(ins.op_str))
+                                  if ins.mnemonic == 'bl' and self.ctx is not None else None)
+        return self._fragments[k]
+
+    def call_writes(self, k: int) -> Optional[Tuple[str, ...]]:
+        """The registers the call ``insns[k]`` writes when fewer than a call may: an outlined
+        fragment's own (and the link register), a contract's (:meth:`call_clobbers`); else
+        None (every caller-saved register)."""
+        frag = self.fragment(k)
+        if frag is not None:
+            return tuple(sorted({r for fi in frag for r in writes(fi)} | {'x30'}))
+        return self.call_clobbers(k)
+
+    def _run_fragment(self, m: "_Machine", k: int,
+                      trace: Optional[List[Dict[str, int]]] = None) -> None:
+        """Run the outlined fragment the ``bl`` ``insns[k]`` calls in *m*, its stores included;
+        *trace* receives the registers before each of its instructions."""
+        m.put('x30', None)
+        for fi in self.fragment(k):
+            if trace is not None:
+                trace.append(dict(m.regs))
+            self._exec(m, fi)
+
     def _register_call_targets(self) -> Dict[int, int]:
         """``{index: target}`` of the calls through a register whose register :meth:`propagate`
         evaluates, solved once (propagation reads no reaching definitions)."""
@@ -1140,9 +1185,13 @@ class Flow:
             return None
         return call_reads(self.ctx, target)
 
-    def _propagate_step(self, m: "_Machine", k: int, call_result=None) -> None:
+    def _propagate_step(self, m: "_Machine", k: int, call_result=None,
+                        trace: Optional[List[Dict[str, int]]] = None) -> None:
         ins = self.insns[k]
         mn = ins.mnemonic
+        if self.fragment(k) is not None:
+            self._run_fragment(m, k, trace)
+            return
         if mn in CALLS:
             target = self._call_target(m, ins)
             clobbers = self.call_clobbers(k, target, evaluated=True)
@@ -1219,7 +1268,9 @@ class Flow:
             mn = ins.mnemonic
             tgt = _parse_imm(ins.op_str) if mn == 'b' else None
             tail = tgt is not None and (tgt not in self.addr_idx or tgt in tail_targets)
-            if mn in CALLS and (clobbers := self.call_clobbers(
+            if self.fragment(k) is not None:
+                self._run_fragment(st, k)
+            elif mn in CALLS and (clobbers := self.call_clobbers(
                     k, self._call_target(st, ins), evaluated=True)) is not None:
                 st.call((), clobbers)
             elif mn in CALLS or tail:

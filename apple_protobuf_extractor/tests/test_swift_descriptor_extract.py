@@ -1270,7 +1270,9 @@ def _pegasus_path():
 class TestLivePegasusSingleEntryStub(unittest.TestCase):
     """Builders that are only an arg-setup stub for the shared single-entry template:
     ``adrp/add x1,<slot>; adrp/add x3,<name>; mov w2,#<number>; mov w4,#<len>; b <tmpl>``.
-    The number is a literal (here 2, not 1, so it is not a default)."""
+    The number is a literal (here 2, not 1, so it is not a default).  The template is read
+    with the stub's arguments (shape D), through the outlined fragment that moves them into
+    callee-saved registers (TODO #97)."""
     @classmethod
     def setUpClass(cls):
         cls.msgs = {m.name: m for m in S.swift_messages(_load_ctx(_pegasus_path()))}
@@ -1278,8 +1280,34 @@ class TestLivePegasusSingleEntryStub(unittest.TestCase):
     def test_number_is_read_from_the_stub(self):
         m = self.msgs["Searchfoundation_ReferentialCommand"]
         self.assertEqual(_fieldset(m), {(2, "referenceIdentifier")})
-        self.assertEqual(m.shape, "single-stub")
+        self.assertEqual(m.shape, "shared-once")
         self.assertEqual(m.fields[0].proto_type, "string")
+
+
+@unittest.skipUnless(_pegasus_path(), "PegasusAPI image not available")
+class TestLivePegasusOutlinedFragments(unittest.TestCase):
+    """Shape-D builders whose entries go through machine-outlined fragments (TODO #97): the
+    name slot is computed in one (``ldrsw x9, [x23, #0x30] ; add x0, x8, x9 ; ret``), the last
+    entry is stored inside another, and a third moves the stub's arguments into callee-saved
+    registers.  Expected tables are the binary's own stores."""
+    @classmethod
+    def setUpClass(cls):
+        ctx = _load_ctx(_pegasus_path())
+        cls.msgs = {m.name: m for m in S.swift_messages(ctx)}
+        cls.enums = {m.name: m for m in S.swift_enums(ctx)}
+
+    def test_every_entry_of_watch_now_card_section(self):
+        self.assertEqual(
+            [(f.number, f.name) for f in self.msgs["Searchfoundation_WatchNowCardSection"].fields],
+            [(1, "punchoutOptions"), (2, "punchoutPickerTitle"), (3, "punchoutPickerDismissText"),
+             (4, "canBeHidden"), (5, "hasTopPadding"), (6, "hasBottomPadding"), (7, "type"),
+             (8, "separatorStyle"), (9, "backgroundColor"), (51, "sectionTitle"),
+             (52, "watchListItem")])
+
+    def test_the_one_case_of_null_value(self):
+        self.assertEqual(
+            [(f.number, f.name) for f in self.enums["Apple_Parsec_Feedback_V2_NullValue"].fields],
+            [(0, "NULL_VALUE")])
 
 
 class TestFieldlessMarker(unittest.TestCase):

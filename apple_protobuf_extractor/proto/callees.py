@@ -22,11 +22,12 @@ struct decoders and the readFrom: evaluator use it).
 """
 from __future__ import annotations
 
+import bisect
 from typing import Dict, NamedTuple, Optional, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import BinaryContext, _ctx_cache
-from proto.arm64_operands import (parse_mem, split_ops, writes, operand_regs, STORE_BYTES,
+from proto.arm64_operands import (parse_mem, split_ops, writes, writeback_base, operand_regs, STORE_BYTES,
                                   PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
                                   INDIRECT_BRANCHES, is_cond_branch)
 from proto.arm64cfg import parse_adrp
@@ -285,6 +286,49 @@ _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" fo
 # [cap:INPUT-SANITY] runaway backstop for the entry scan below (it stops at the first branch).
 _ENTRY_SCAN_INSNS = 64
 
+
+def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
+    """The instructions a ``bl`` to *target* runs as part of its caller (its ``ret`` left out),
+    when the callee is a straight line of this image's ``__text`` that returns inside its own
+    extent (up to the next function start) with no branch, call, or write to sp or the link
+    register: the machine outliner's fragments (``ldrsw x9, [x23, #0x30] ; add x0, x8, x9 ;
+    ret``) keep no calling convention.  Running them in the caller's state is what the call
+    does, so a caller evaluates through them rather than assume the AAPCS64 clobber.  None
+    for any other callee, or without a function index to bound it.  Memoised on *ctx*."""
+    if target is None or ctx is None:
+        return None
+    memo = _ctx_cache(ctx, "_outlined_fragments", dict)
+    if target in memo:
+        return memo[target]
+    res = None
+    try:
+        text = ctx.section("__TEXT", "__text") if ctx.has_section("__TEXT", "__text") else None
+        starts = ctx.function_starts() if text is not None else []
+        if text is not None and text.vmaddr <= target < text.vmaddr + text.vmsize and starts:
+            i = bisect.bisect_right(starts, target)
+            end = starts[i] if i < len(starts) else text.vmaddr + text.vmsize
+            body = disasm(ctx, target, max_insns=max(0, (end - target) // 4), stop_at_ret=True)
+            if body and body[-1].mnemonic in RETURNS and all(
+                    _runs_in_caller(ins) for ins in body[:-1]):
+                res = tuple(body[:-1])
+    except (NameError, ImportError):
+        raise
+    except Exception:                               # unreadable bytes: an ordinary call
+        res = None
+    memo[target] = res
+    return res
+
+
+def _runs_in_caller(ins) -> bool:
+    """*ins* may run as part of the calling function: not a control transfer, and it leaves sp
+    and the link register (x30) as the caller has them."""
+    mn = ins.mnemonic
+    if mn in BLOCK_ENDS or is_cond_branch(mn) or mn in ("brk", "udf", "hlt", "svc"):
+        return False
+    ops = split_ops(ins.op_str)
+    if "x30" in writes(ins) or writeback_base(ops) == "sp":
+        return False
+    return not (ops and ops[0] in ("sp", "wsp") and mn not in NO_DEST)
 
 def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     """The registers a call to *target* may read: a runtime function's ABI contract
