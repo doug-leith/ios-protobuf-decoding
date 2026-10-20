@@ -76,6 +76,11 @@ def _runlength_types(text):
         i = j + 1
     return out
 _STRUCT_KIND, _ENUM_KIND = 17, 18
+# [cap:INPUT-SANITY] runaway guards on metadata a corrupt or misread descriptor could make
+# unbounded: the field records read off one FieldDescriptor (its own count is the real bound),
+# and the parent contexts walked for a qualified name (the walk ends at the module).
+_MAX_FIELD_RECORDS = 512
+_MAX_CONTEXT_DEPTH = 12
 
 
 def _i32(ctx, va):
@@ -280,7 +285,7 @@ def _resolve_symbolic(ctx, va):
         raise
     except Exception:
         return None
-    # local rebase: try the decoded pointer, then a manual low-32 + image_base.
+    # local rebase: the pointer through the image's fixups.
     name = None
     try:
         name = _local_type_ref(ctx, ctx.read_ptr(ptr_site))
@@ -288,8 +293,6 @@ def _resolve_symbolic(ctx, va):
         raise
     except Exception:
         pass
-    if not name:
-        name = _local_type_ref(ctx, ctx.image_base + (raw & 0xFFFFFFFF))
     if name:
         return _SWIFT_SCALAR.get(name, name)
     # external bind: demangle the import symbol name.
@@ -398,10 +401,6 @@ def decode_mangled(ctx, va):
             val, _ = decode_mangled(ctx, body + 2)
         lbl = "map" if (key and val) else "map?"
         return f"map<{key or 'string'}, {val or 'bytes'}>", lbl
-    # Optional -> <inner>Sg
-    if txt.endswith("Sg") and len(txt) > 2:
-        inner, lbl = decode_mangled(ctx, va)  # inner handled below via _DIRECT/prefix
-        # fall through to direct handling on the stripped form
     # direct scalar codes
     for code, proto in _DIRECT.items():
         if txt == code or txt == code + "Sg":
@@ -446,7 +445,7 @@ def _read_field_types(ctx, desc):
     fields: Dict[str, str] = {}
     incomplete: set = set()
     rec = fd + 0x10
-    for _ in range(min(nfields, 512)):
+    for _ in range(min(nfields, _MAX_FIELD_RECORDS)):
         fname = _cstr(ctx, _relptr(ctx, rec + 0x08))
         mva = _relptr(ctx, rec + 0x04)
         rec += recsize
@@ -475,7 +474,7 @@ def _qualified_name(ctx, desc) -> Optional[str]:
     skipped; the module terminates the walk)."""
     names = []
     cur = desc
-    for _ in range(12):
+    for _ in range(_MAX_CONTEXT_DEPTH):
         if not cur:
             break
         try:

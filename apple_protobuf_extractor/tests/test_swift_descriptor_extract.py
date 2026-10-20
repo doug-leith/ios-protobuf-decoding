@@ -179,14 +179,9 @@ class TestStaticBlobScan(unittest.TestCase):
         buf = struct.pack("<QQQQ", 0, 0, 0, 0)
         self.assertIsNone(S._parse_static_blob(_FakeCtx(buf), 0))
 
-    def test_huge_count_with_reachable_entry_returns_none(self):
-        # Isolates the `0 < count < 4096` plausibility bound from BOTH
-        # downstream masking guards (`off + 24 <= len(buf)` and
-        # `len(out) < count`): the buffer is long enough to reach a real,
-        # well-formed (number, name-ptr, len) entry right after the header,
-        # and count (4097, one over the cap) is non-zero so `len(out) < count`
-        # does not itself block the loop -- only the count bound stands
-        # between this corrupt-looking count and a wrongly-parsed field.
+    def test_count_beyond_the_elements_returns_none(self):
+        # a well-formed first element, but the header counts 4097: every element must parse,
+        # so an array that ends after one is not read as a one-field table
         name = "alpha"
         count = 4097
         header = struct.pack("<QQQQ", 0, 0, count, count)
@@ -277,119 +272,86 @@ class TestInlineClosureWalk(unittest.TestCase):
             entry={"x2": 0x20, "x3": 4})
         self.assertEqual([(f.number, f.name) for f in got], [(5, "data")])
 
-    _SINGLE_FIELD_INSNS = _listing([
-        ("adrp", "x2, #0x0"), ("add", "x2, x2, #0x10"),  # -> "key"
-        ("mov", "w3, #3"), ("b", "#0x100"),
-    ])
-
-    def test_single_field_tail_call_adrp_add(self):
-        # cache/device single-field shape: name via adrp+add, len via mov, tail b.
-        # (Regression for the CP_EncryptionID 'uuid' miss — see
-        # SWIFT_PROTO_HAND_VERIFICATION.md.)
-        got = S._single_field_tail_call(self._ctx(), self._SINGLE_FIELD_INSNS,
-                                        decode_va=None)
-        self.assertEqual([(f.number, f.name) for f in got], [(1, "key")])
-
-    def test_single_field_number_unconfirmed_without_decode(self):
-        # the number is NOT in the closure; with no decodeMessage the default 1
-        # is a GUESS and must surface as unconfirmed (to-do #63a).
-        got = S._single_field_tail_call(self._ctx(), self._SINGLE_FIELD_INSNS,
-                                        decode_va=None)
-        self.assertEqual(got[0].number, 1)
-        self.assertFalse(got[0].number_confirmed)
-
-    def test_single_field_number_confirmed_from_single_decode_compare(self):
-        # exactly one decodeMessage field-number compare => independent source =>
-        # the number is real and confirmed.
-        orig = S._decode_message_numbers
-        S._decode_message_numbers = lambda ctx, va: [5]
-        try:
-            got = S._single_field_tail_call(self._ctx(), self._SINGLE_FIELD_INSNS,
-                                            decode_va=0x1000)
-        finally:
-            S._decode_message_numbers = orig
-        self.assertEqual(got[0].number, 5)
-        self.assertTrue(got[0].number_confirmed)
-
-    def test_single_field_number_unconfirmed_when_decode_ambiguous(self):
-        # >1 (or 0) compares => no single independent number => default 1, flagged.
-        orig = S._decode_message_numbers
-        S._decode_message_numbers = lambda ctx, va: [1, 2]
-        try:
-            got = S._single_field_tail_call(self._ctx(), self._SINGLE_FIELD_INSNS,
-                                            decode_va=0x1000)
-        finally:
-            S._decode_message_numbers = orig
-        self.assertEqual(got[0].number, 1)
-        self.assertFalse(got[0].number_confirmed)
-
-    def _with_sources(self, decode_nums, traverse_nums, decode_va=None,
-                      traverse_va=None):
-        od, ot = S._decode_message_numbers, S._traverse_field_numbers
-        S._decode_message_numbers = lambda ctx, va: decode_nums
-        S._traverse_field_numbers = lambda ctx, va: traverse_nums
-        try:
-            return S._single_field_tail_call(self._ctx(), self._SINGLE_FIELD_INSNS,
-                                             decode_va=decode_va,
-                                             traverse_va=traverse_va)
-        finally:
-            S._decode_message_numbers, S._traverse_field_numbers = od, ot
-
-    def test_single_field_confirmed_from_traverse_only(self):
-        # Tier-2a: traverse's single visit number confirms even with no decode.
-        got = self._with_sources([], [9], traverse_va=0x2000)
-        self.assertEqual(got[0].number, 9)
-        self.assertTrue(got[0].number_confirmed)
-
-    def test_single_field_unconfirmed_on_source_disagreement(self):
-        # decode says 1, traverse says 2 => distrust => default 1, flagged.
-        got = self._with_sources([1], [2], decode_va=0x1000, traverse_va=0x2000)
-        self.assertEqual(got[0].number, 1)
-        self.assertFalse(got[0].number_confirmed)
-
-    def test_single_field_unconfirmed_when_traverse_multifield(self):
-        # traverse exposes many numbers => message is really multi-field, shape-B
-        # under-extracted it => don't confirm a single number (to-do #72).
-        got = self._with_sources([], [1, 2, 3], traverse_va=0x2000)
-        self.assertEqual(got[0].number, 1)
-        self.assertFalse(got[0].number_confirmed)
 
 
-class TestTraverseFieldNumbers(unittest.TestCase):
-    """`_traverse_field_numbers` reads the field number (highest w-reg immediate)
-    before each visit call, for direct `bl` and protocol-witness `blr` forms."""
-    def _run(self, insns):
-        orig = S.disasm
-        S.disasm = lambda ctx, va, **kw: insns
-        try:
-            return S._traverse_field_numbers(None, 0x1000)
-        finally:
-            S.disasm = orig
+class _NamedListingCtx:
+    """A cache-style ctx over a hand-built listing whose call targets have export names, so
+    :func:`S._listing`, Flow's call model and :func:`S._symbol_at` run offline.  Every call
+    target in a test needs a name (an unnamed own-image target would be scanned)."""
+    is_cache_backed = True
+    image_base = 0
 
-    def test_value_and_number_picks_highest_reg(self):
-        # visitSingularBoolField(value:fieldNumber:): w0=value, w1=#N => 7
-        self.assertEqual(self._run([
-            _FI("mov", "w0, #1"), _FI("mov", "w1, #7"), _FI("bl", "#0x200")]), [7])
+    class _Reader:
+        def __init__(self, names):
+            self._names = names
 
-    def test_float_value_in_fp_reg_number_in_w0(self):
-        # float value uses d0 (no w imm), fieldNumber lands in w0
-        self.assertEqual(self._run([
-            _FI("mov", "w0, #3"), _FI("bl", "#0x200")]), [3])
+        def export_name_at(self, va):
+            return self._names.get(va)
 
-    def test_witness_blr_form(self):
-        self.assertEqual(self._run([
-            _FI("mov", "w2, #5"), _FI("mov", "x3, x22"), _FI("blr", "x8")]), [5])
+        def image_symbol_addrs(self, base, *subs):
+            return {}
 
-    def test_multi_field_in_visit_order(self):
-        self.assertEqual(self._run([
-            _FI("mov", "w1, #1"), _FI("bl", "#0x1"),
-            _FI("mov", "w1, #2"), _FI("bl", "#0x2"),
-            _FI("mov", "w1, #3"), _FI("bl", "#0x3")]), [1, 2, 3])
+    def __init__(self, lines, names, base=0x1000):
+        from tests._listing import layout
+        self.order, self.fake = layout((base, lines))
+        self._cache_reader = self._Reader(names)
+        self._end = base + 4 * len(lines)
 
-    def test_call_without_field_number_immediate_ignored(self):
-        # a metadata/release call (no field-number imm) contributes nothing
-        self.assertEqual(self._run([
-            _FI("bl", "#0x100"), _FI("mov", "w1, #4"), _FI("bl", "#0x200")]), [4])
+    def function_starts(self):
+        return [self.order[0].addr, self._end]
+
+
+_OTHER = "_swift_retain"
+_VISIT = "_$s21InternalSwiftProtobuf7VisitorP{n}visit{l}{k}Field5value11fieldNumberyxKFTj"
+
+
+def _visit(label, kind):
+    return _VISIT.format(n=len(f"visit{label}{kind}Field"), l=label, k=kind)
+
+
+def _traverse(lines, names):
+    ctx = _NamedListingCtx(lines, names)
+    orig = S.disasm
+    S.disasm = ctx.fake
+    try:
+        return ctx, S._traverse_visits(ctx, 0x1000)
+    finally:
+        S.disasm = orig
+
+
+class TestTraverseVisits(unittest.TestCase):
+    """`_traverse_visits`: a named Visitor method gives the field number from the register its
+    signature puts it in, and the field's type; any other call keeps the highest w-register
+    immediate set since the previous call."""
+    def test_named_visit_number_follows_the_value_registers(self):
+        # String value in x0/x1 -> fieldNumber in x2, whatever else holds a small constant
+        _ctx, got = _traverse([("mov", "w2, #4"), ("mov", "w3, #9"), ("bl", "#0x3000")],
+                              {0x3000: _visit("Singular", "String")})
+        self.assertEqual(got, [(4, "string")])
+
+    def test_named_visit_gives_the_integer_encoding(self):
+        _ctx, got = _traverse([("mov", "w0, #3"), ("mov", "w1, #7"), ("bl", "#0x3000"),
+                               ("mov", "w1, #8"), ("bl", "#0x3100"),
+                               ("mov", "w0, #2"), ("bl", "#0x3200")],
+                              {0x3000: _visit("Singular", "SInt32"),
+                               0x3100: _visit("Repeated", "Fixed64"),
+                               0x3200: _visit("Singular", "Double")})
+        self.assertEqual(got, [(7, "sint32"), (8, "repeated fixed64"), (2, "double")])
+
+    def test_message_visit_has_no_scalar_type(self):
+        _ctx, got = _traverse([("mov", "w1, #5"), ("bl", "#0x3000")],
+                              {0x3000: _visit("Singular", "Message")})
+        self.assertEqual(got, [(5, None)])
+
+    def test_unnamed_witness_call_keeps_the_highest_w_immediate(self):
+        _ctx, got = _traverse([("mov", "w2, #5"), ("mov", "x3, x22"), ("blr", "x8")], {})
+        self.assertEqual(got, [(5, None)])
+
+    def test_other_calls_contribute_nothing_and_order_is_kept(self):
+        _ctx, got = _traverse([("bl", "#0x2000"), ("mov", "w1, #1"), ("bl", "#0x3000"),
+                               ("mov", "w1, #2"), ("bl", "#0x3000")],
+                              {0x2000: _OTHER, 0x3000: _visit("Singular", "Bool")})
+        self.assertEqual([n for n, _t in got], [1, 2])
 
 
 class TestNameMapBuilderValidation(unittest.TestCase):
@@ -407,40 +369,27 @@ class TestNameMapBuilderValidation(unittest.TestCase):
         got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURL")]
         self.assertTrue(S._namemap_builder_validated(None, got, None, None))
 
-    def test_oracle_subset_of_recovered_accepted(self):
-        # traverse exposes {1,2}; the reading recovered a strict SUPERSET {1,2,3}
-        # -> accept: the oracle is fully explained by recovery plus extra info,
-        # not a contradiction.  Under the WRONG reversed check ("recovered subset
-        # of oracle") this would be incorrectly rejected, since 3 isn't in the
-        # oracle -- this is what distinguishes the correct direction.
+    def _validated(self, numbers, got):
+        lines = []
+        for n in numbers:
+            lines += [("mov", f"w1, #{n}"), ("bl", "#0x3000")]
+        ctx = _NamedListingCtx(lines, {0x3000: _visit("Singular", "UInt32")})
         orig = S.disasm
-        S.disasm = lambda ctx, va, **kw: [
-            _FI("mov", "w1, #1"), _FI("bl", "#0x1"),
-            _FI("mov", "w1, #2"), _FI("bl", "#0x2")]
+        S.disasm = ctx.fake
         try:
-            got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURLX"),
-                   S.SwiftField(3, "extra")]
-            self.assertTrue(S._namemap_builder_validated(None, got, None, 0x1000))
+            return S._namemap_builder_validated(ctx, got, None, 0x1000)
         finally:
             S.disasm = orig
 
+    def test_oracle_subset_of_recovered_accepted(self):
+        # traverse visits {1,2}; the reading recovered a strict SUPERSET {1,2,3} -> accept
+        got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURLX"), S.SwiftField(3, "extra")]
+        self.assertTrue(self._validated([1, 2], got))
+
     def test_oracle_contradiction_rejected(self):
-        # traverse exposes {1,2,5} but the reading only recovered {1,2} -> reject:
-        # the oracle independently knows field 5 that the recovery MISSED, a
-        # genuine contradiction.  Under the WRONG reversed check ("recovered
-        # subset of oracle") this would be incorrectly ACCEPTED, since {1,2} IS
-        # a subset of {1,2,5} -- this is what distinguishes the correct direction.
-        orig = S.disasm
-        S.disasm = lambda ctx, va, **kw: [
-            _FI("mov", "w1, #1"), _FI("bl", "#0x1"),
-            _FI("mov", "w1, #2"), _FI("bl", "#0x2"),
-            _FI("mov", "w1, #5"), _FI("bl", "#0x3")]
-        try:
-            # names chosen so num != len(name): isolates the oracle-subset check
-            got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURLX")]
-            self.assertFalse(S._namemap_builder_validated(None, got, None, 0x1000))
-        finally:
-            S.disasm = orig
+        # traverse visits {1,2,5} but the reading only recovered {1,2} -> reject
+        got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURLX")]
+        self.assertFalse(self._validated([1, 2, 5], got))
 
 
 class TestSharedOnceInitTargets(unittest.TestCase):
@@ -839,7 +788,7 @@ class TestLiveDPSubmission(unittest.TestCase):
         # ProtectedDonation's builder is itself an arg-setup stub tail-calling
         # a second shared template (the two-stub form of shape D, #74) that
         # ISN'T laid out contiguously with it, unlike CollectionID's -- this
-        # is the case that needs _walk_namemap_builder_hop's explicit follow
+        # is the case that needs _builder_entries' explicit follow
         # rather than falling out of a single linear disasm.
         self.assertEqual(_fieldset(self.msgs["ProtectedDonation"]),
                           {(1, "baa_signed_donation_envelope")})
@@ -932,9 +881,9 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
         traversers = {}
         for name, va in syms.items():
             if "V8traverse" in name and name.endswith("F"):
-                p = S._type_from_namemap_symbol_like(name, "V8traverse")
-                if p:
-                    traversers.setdefault(p, va)
+                t = S._type_of_symbol(name, "8traverse")
+                if t and t[2] == "V":
+                    traversers.setdefault(t[:2], va)
         checked = 0
         for m in self.msgs.values():
             va = traversers.get((m.module, m.name))
@@ -1283,31 +1232,11 @@ class TestLivePegasusSingleEntryStub(unittest.TestCase):
         self.assertEqual(m.shape, "shared-once")
         self.assertEqual(m.fields[0].proto_type, "string")
 
-
-@unittest.skipUnless(_pegasus_path(), "PegasusAPI image not available")
-class TestLivePegasusOutlinedFragments(unittest.TestCase):
-    """Shape-D builders whose entries go through machine-outlined fragments (TODO #97): the
-    name slot is computed in one (``ldrsw x9, [x23, #0x30] ; add x0, x8, x9 ; ret``), the last
-    entry is stored inside another, and a third moves the stub's arguments into callee-saved
-    registers.  Expected tables are the binary's own stores."""
-    @classmethod
-    def setUpClass(cls):
-        ctx = _load_ctx(_pegasus_path())
-        cls.msgs = {m.name: m for m in S.swift_messages(ctx)}
-        cls.enums = {m.name: m for m in S.swift_enums(ctx)}
-
-    def test_every_entry_of_watch_now_card_section(self):
-        self.assertEqual(
-            [(f.number, f.name) for f in self.msgs["Searchfoundation_WatchNowCardSection"].fields],
-            [(1, "punchoutOptions"), (2, "punchoutPickerTitle"), (3, "punchoutPickerDismissText"),
-             (4, "canBeHidden"), (5, "hasTopPadding"), (6, "hasBottomPadding"), (7, "type"),
-             (8, "separatorStyle"), (9, "backgroundColor"), (51, "sectionTitle"),
-             (52, "watchListItem")])
-
-    def test_the_one_case_of_null_value(self):
-        self.assertEqual(
-            [(f.number, f.name) for f in self.enums["Apple_Parsec_Feedback_V2_NullValue"].fields],
-            [(0, "NULL_VALUE")])
+    def test_enum_single_case(self):
+        # the enum's lone case, read through the shared template's outlined fragments (#97)
+        enums = {e.name: e for e in S.swift_enums(_load_ctx(_pegasus_path()))}
+        self.assertEqual(_fieldset(enums["Apple_Parsec_Feedback_V2_NullValue"]),
+                         {(0, "NULL_VALUE")})
 
 
 class TestFieldlessMarker(unittest.TestCase):
@@ -1348,9 +1277,9 @@ class TestLiveDecoderCrossCheck(unittest.TestCase):
             decoders = {}
             for name, va in syms.items():
                 if "13decodeMessage" in name and name.endswith("F"):
-                    p = S._type_from_namemap_symbol_like(name, "V13decodeMessage")
-                    if p:
-                        decoders.setdefault(p, va)
+                    t = S._type_of_symbol(name, "13decodeMessage")
+                    if t and t[2] == "V":
+                        decoders.setdefault(t[:2], va)
             for m in S.swift_messages(ctx):
                 if not m.fields:
                     continue
@@ -1385,6 +1314,13 @@ class TestLiveStaticOracle(unittest.TestCase):
         self.assertEqual(
             {(f.number, f.name) for f in msgs["Ora_Multi"].fields},
             {(1, "a"), (2, "b"), (3, "c"), (5, "big"), (9, "raw")})
+
+    def test_static_table_is_the_one_handed_to_swift_init_static_object(self):
+        # descriptor.proto's FeatureSet.VisibilityFeature has no fields (it only nests an
+        # enum); reading every address the getter builds took a neighbouring table's
+        # (1, "ALLOW") for it.  The table is the object passed to swift_initStaticObject.
+        msgs = _msgs_by_name(_swift_oracle_path())
+        self.assertEqual(msgs["Google_Protobuf_FeatureSet.VisibilityFeature"].fields, [])
 
 
 def _cache_path():
@@ -1426,6 +1362,15 @@ class TestLiveCacheNative(unittest.TestCase):
         self.assertFalse(getattr(self.ctx, "_data", b""))
         syms = S.symbol_addrs(self.ctx)
         self.assertTrue(any(S._NAMEMAP_MARKER in n for n in syms))
+
+    def test_traverse_symbols_reach_the_cross_check(self):
+        # the .symbols sub-cache carries each message's traverse(visitor:); symbol_addrs
+        # used to filter it out, so the cache-mode readings ran without that cross-check
+        syms = S.symbol_addrs(self.ctx)
+        bodies = [n for n in syms if "V8traverse" in n and n.endswith(S._FUNCTION_BODY_SUFFIXES)]
+        self.assertTrue(bodies)
+        # CopresenceCore's are all identical-body merges (``…FTm``); closures (``…XEfU_``) are not
+        self.assertTrue(all(n.endswith("FTm") for n in bodies))
 
     def test_cp_keyvalue(self):
         self.assertEqual(
@@ -1556,7 +1501,10 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
     (``_INLINE_MAX_INSNS``) with its path still open: `_runtime_namemap_fields` must flag the
     numbers it read off it as estimated.  A genuine (if synthetic) arm64 instruction stream --
     disassembled through capstone, not faked -- long enough to reach the guard without a ret,
-    embedding one real (number, name) store."""
+    embedding one real (number, name) store, behind a once-init getter (``cmn x0, #1; b.ne
+    <builder>``) whose listing reaches it."""
+
+    _GETTER_VA = 0x100
 
     _BUILDER_VA = 0x10000
     _PAGE_DELTA = 5
@@ -1585,17 +1533,18 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
             buf[pad_start:pad_start + n_pad * 4] = NOP_BYTES * n_pad
         name_bytes = self._FIELD_NAME.encode() + b"\x00"
         buf[self._STR_VA:self._STR_VA + len(name_bytes)] = name_bytes
+        g = self._GETTER_VA
+        buf[g:g + 4] = struct.pack('<I', 0xB100041F)                       # cmn x0, #1
+        imm19 = (self._BUILDER_VA - (g + 4)) // 4
+        buf[g + 4:g + 8] = struct.pack('<I', 0x54000000 | (imm19 << 5) | 1)  # b.ne <builder>
         return _FakeCtx(bytes(buf))
 
-    def _getter_insns(self):
-        # Only the once-init guard + cold-path branch target matter to
-        # _runtime_namemap_fields's outer gate; these can be bare stand-ins --
-        # it's the disasm() call AT the branch target that must be real.
-        return _listing([("cmn", "x0, #1"), ("b.ne", f"#{self._BUILDER_VA:#x}")], base=0x100)
+    def _fields(self, ctx):
+        return S._runtime_namemap_fields(ctx, S._listing(ctx, self._GETTER_VA))
 
     def test_builder_hitting_cap_flags_number_unconfirmed(self):
         ctx = self._build(self._CAP + 16, terminate_with_ret=False)   # runs on past the guard
-        fields = S._runtime_namemap_fields(ctx, self._getter_insns())
+        fields = self._fields(ctx)
         self.assertEqual(len(fields), 1)
         self.assertEqual(fields[0].number, self._FIELD_NUM)
         self.assertEqual(fields[0].name, self._FIELD_NAME)
@@ -1608,7 +1557,7 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
         # case: confirms the flag is genuinely conditional on hitting the cap,
         # not just always False for this builder shape.
         ctx = self._build(5, terminate_with_ret=True)
-        fields = S._runtime_namemap_fields(ctx, self._getter_insns())
+        fields = self._fields(ctx)
         self.assertEqual(len(fields), 1)
         self.assertTrue(fields[0].number_confirmed)
 

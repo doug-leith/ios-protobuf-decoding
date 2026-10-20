@@ -148,11 +148,12 @@ _MAX_LITERAL_LEN = 4096
 _W = 0xFFFFFFFF
 
 
-def call_site_registers(ctx, insns, tail_only: bool = False) -> List[Tuple[int, Dict[str, int]]]:
+def call_site_registers(ctx, insns,
+                        flow: Optional[Flow] = None) -> List[Tuple[int, Dict[str, int]]]:
     """``(k, registers known before insns[k])`` at each call in the listing *insns* -- a
     ``bl`` / ``blr``, and a tail call: a ``b`` to an address outside the listing or a ``br``
     -- in address order, by :meth:`proto.arm64_eval.Flow.propagate` from its entry (calls
-    clobber the caller-saved registers).  *tail_only*: the tail calls only."""
+    clobber the caller-saved registers).  *flow*: the listing's Flow, when already built."""
     inside = {i.addr for i in insns}
     ks = []
     for k, ins in enumerate(insns):
@@ -160,13 +161,14 @@ def call_site_registers(ctx, insns, tail_only: bool = False) -> List[Tuple[int, 
         ops = split_ops(ins.op_str)
         tail = ((mn == "b" and ops and _parse_imm(ops[-1]) not in inside)
                 or mn in INDIRECT_BRANCHES)
-        if tail or (not tail_only and mn in CALLS):
+        if tail or mn in CALLS:
             ks.append(k)
-    regs = Flow(ctx, list(insns)).propagate({}, at=ks)
+    regs = (flow or Flow(ctx, list(insns))).propagate({}, at=ks)
     return [(k, regs[k]) for k in ks if k in regs]
 
 
-def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[bytes]:
+def bytecode_literal_from_getter(ctx, insns, enum: bool = False,
+                                 flow: Optional[Flow] = None) -> Optional[bytes]:
     """Locate the bytecode string literal passed to ``_NameMap.init(bytecode:)``
     from a getter's listing (the instructions its entry reaches).  Two lowerings:
 
@@ -180,7 +182,7 @@ def bytecode_literal_from_getter(ctx, insns, enum: bool = False) -> Optional[byt
     up to the first tail call.  The tail-call candidate is only a CANDIDATE: callers must
     validate it with :func:`decode_namemap_bytecode`, which declines anything that is not a
     well-formed bytecode."""
-    for k, regs in call_site_registers(ctx, insns):
+    for k, regs in call_site_registers(ctx, insns, flow):
         if insns[k].mnemonic not in CALLS:                   # tail-call form
             if regs.get("x2") is not None and regs.get("x3", 0) & _W:
                 return _read(ctx, regs["x2"], regs["x3"] & _W)

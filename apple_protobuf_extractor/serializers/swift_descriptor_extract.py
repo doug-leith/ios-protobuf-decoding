@@ -13,8 +13,8 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   init closure builds each entry inline with ``mov w,#<num>; str x,[base]`` plus
   ``adr x,<name-cstring>; mov w,#<len>; stp x,x,[entry]``.
 * **B — compact single-field tail-call**: the closure passes ``x2=<name>``,
-  ``w3=<len>`` to a shared ``_NameMap`` builder; the (single) field number comes
-  from the message's ``decodeMessage`` ``cmp x0, #<num>``.
+  ``w3=<len>`` (and the number) to a shared single-entry template, which stores them; it is
+  read as the template with the closure's registers (:func:`_tail_callee`), like A and D.
 * **C — static object** (newer toolchains): the dictionary literal is
   const-folded into a static ``Array<(Int, _NameDescription)>`` handed to
   ``_swift_initStaticObject``; entries are scanned from the blob as
@@ -30,7 +30,7 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   literal shape as A, just reached by chasing the ``adr`` instead of walking
   the getter inline (:func:`_shared_once_init_targets`).  Some builders are
   themselves only a further arg-setup stub for a *second*, arity-specific
-  shared template (:func:`_walk_namemap_builder_hop` reads that template with the
+  shared template (:func:`_builder_entries` reads that template with the
   registers the stub hands it).
 
 * **E — packed bytecode** (newer swift-protobuf / iOS 27 InternalSwiftProtobuf):
@@ -38,8 +38,8 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   NUL-delimited string literal, reached from a getter of the form ``adrp/add
   x1,<slot>; adrp/add x2,<literal>; mov w3,#<len>; b <template>``.  Decoded by
   :mod:`serializers.swift_namemap_bytecode` (structure-validated: header, opcodes,
-  terminators and full consumption, else it declines).  Single-field messages use
-  a bare-name literal (no header) and stay with shape B.
+  terminators and full consumption, else it declines).  A single-field message's
+  bare-name literal (no header) is declined and read as shape B.
 
 TYPES are intentionally NOT recovered here: swift-protobuf encodes them via
 generic ``Visitor``/``Decoder`` witness-table calls (``blraa`` / local thunks),
@@ -69,21 +69,22 @@ from dataclasses import dataclass, field
 from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from macho.memory import BinaryContext
+from macho.memory import BinaryContext, _ctx_cache
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
-from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, is_cond_branch,
-                                  parse_mem, split_ops, writes)
+from proto.callees import callee_name
+from proto.arm64_operands import (CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS,
+                                  is_cond_branch, parse_mem, split_ops, writes)
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
 
 log = logging.getLogger(__name__)
 
-# Max proto field number (29-bit) and a sane name-length ceiling — used to
-# validate candidate (number, name, len) triples when scanning static blobs.
-_MAX_FIELD_NUMBER = 0x1FFFFFFF
-_MAX_NAME_LEN = 80
+_MAX_FIELD_NUMBER = 0x1FFFFFFF        # proto field numbers are 29-bit
+# [cap:INPUT-SANITY] the largest (Int, _NameDescription) element stride tried while deriving a
+# static name-map array's stride (the description is a few words in every swift-protobuf version).
+_MAX_ELEMENT_STRIDE = 0x78
 _NAMEMAP_MARKER = "17_protobuf_nameMap"
 # [cap:INPUT-SANITY] runaway guard on a listing read without a function index (:func:`_listing`;
 # with one, the function's extent bounds it) and on the linear decodeMessage / traverse reads.
@@ -106,10 +107,8 @@ class SwiftField:
     # recovered (oneof members, stripped metadata).  The int varint/zigzag/fixed
     # encoding nuance is NOT distinguished (base Swift type only).
     proto_type: Optional[str] = None
-    # True when the NUMBER came from a real structural signal (the nameMap closure
-    # immediate, the static blob, or a single decodeMessage field-number compare).
-    # False only for the shape-B single-field DEFAULT of 1, which is a guess that
-    # must surface as "number estimated" rather than being laundered as confirmed.
+    # False when the builder listing the number was read off stopped at the runaway guard
+    # (it may be incomplete): rendered "number estimated" rather than laundered as confirmed.
     number_confirmed: bool = True
     # Set when the recovered proto_type contains a GUESS filler (an Array element /
     # map key-or-value that didn't decode, shown as `bytes`); surfaced as a note so
@@ -145,15 +144,15 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
 
     Cache-native images keep no per-image symbol table in their (shared-LINKEDIT)
     Mach-O; instead the original local symbols — including each type's
-    ``…_protobuf_nameMap`` static-init and ``…decodeMessage`` symbols — live in
-    the cache's ``.symbols`` sub-cache, keyed by vmaddr.  We read those directly
+    ``…_protobuf_nameMap`` static-init, ``…decodeMessage`` and ``…traverse`` symbols —
+    live in the cache's ``.symbols`` sub-cache, keyed by vmaddr.  We read those directly
     so swift-protobuf recovery works cache-native, not just from a standalone
     binary.  Returns ``{}`` when no symbol source is addressable."""
     reader = getattr(ctx, "_cache_reader", None)
     if reader is not None and getattr(ctx, "is_cache_backed", False):
         try:
             return reader.image_symbol_addrs(
-                ctx.image_base, _NAMEMAP_MARKER, "13decodeMessage")
+                ctx.image_base, _NAMEMAP_MARKER, "13decodeMessage", "V8traverse")
         except (NameError, ImportError):
             raise
         except Exception:
@@ -177,16 +176,23 @@ def _split_idents(head: str) -> List[str]:
     return demangle_idents(head)
 
 
-def _parse_namemap_symbol(sym: str) -> Optional[Tuple[str, str, bool]]:
-    """``…_protobuf_nameMap`` symbol -> ``(module, type_name, is_enum)``, or None.
-    ``V`` before the marker is a struct (message), ``O`` an enum."""
-    m = re.search(r"_\$[sS](.*?)([VO])" + _NAMEMAP_MARKER, sym)
+def _type_of_symbol(sym: str, member: str) -> Optional[Tuple[str, str, str]]:
+    """``(module, type_name, kind)`` of the Swift type a member's symbol belongs to:
+    ``…<identifiers>V<member>…`` (kind ``V``: a struct, i.e. a message) or ``…O<member>…``
+    (an enum); type_name is dotted for a nested type.  None for any other symbol."""
+    m = re.search(r"_\$[sS](.*?)([VO])" + re.escape(member), sym)
     if not m:
         return None
     idents = _split_idents(m.group(1))
     if len(idents) < 2:
         return None
-    return idents[0], ".".join(idents[1:]), m.group(2) == "O"
+    return idents[0], ".".join(idents[1:]), m.group(2)
+
+
+def _parse_namemap_symbol(sym: str) -> Optional[Tuple[str, str, bool]]:
+    """``…_protobuf_nameMap`` symbol -> ``(module, type_name, is_enum)``, or None."""
+    t = _type_of_symbol(sym, _NAMEMAP_MARKER)
+    return None if t is None else (t[0], t[1], t[2] == "O")
 
 
 # ── listings and register values ──────────────────────────────────────────────
@@ -197,8 +203,20 @@ _PATH_ENDS = RETURNS | INDIRECT_BRANCHES | frozenset(("brk", "udf", "hlt"))
 
 class _Listing(list):
     """A function's instructions in address order (:func:`_listing`); *truncated* when the
-    read stopped at :data:`_INLINE_MAX_INSNS` with paths still open."""
+    read stopped at :data:`_INLINE_MAX_INSNS` with paths still open; *flow* its
+    :class:`~proto.arm64_eval.Flow` once built (:func:`_flow_of`)."""
     truncated = False
+    flow: Optional[Flow] = None
+
+
+def _flow_of(ctx: BinaryContext, insns) -> Flow:
+    """The Flow of a listing, built once per :class:`_Listing`."""
+    flow = getattr(insns, "flow", None)
+    if flow is None:
+        flow = Flow(ctx, list(insns))
+        if isinstance(insns, _Listing):
+            insns.flow = flow
+    return flow
 
 
 def _function_end(ctx: BinaryContext, va: int) -> Optional[int]:
@@ -280,7 +298,7 @@ def _cstr(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
     if va is None:
         return None
     try:
-        s = ctx.read_cstring(va, _MAX_NAME_LEN + 16)
+        s = ctx.read_cstring(va)
     except (NameError, ImportError):
         raise
     except Exception:
@@ -288,21 +306,23 @@ def _cstr(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
     return s if s and all(32 <= ord(c) < 127 for c in s) else None
 
 
-def _constant_addresses(insns) -> List[int]:
-    """Every value an ``add Xd, Xn, #imm`` computes from a constant ``Xn`` (an ``adrp`` page,
-    by reaching definitions): the data addresses the function materialises."""
-    flow = Flow(None, list(insns))
+def _symbol_at(ctx: BinaryContext, va: Optional[int]) -> str:
+    """The name of the function at *va*: its export / import (:func:`proto.callees.callee_name`)
+    or the image's own symbol for it; "" when it has none."""
+    if va is None:
+        return ""
+    own = _ctx_cache(ctx, "_swift_symbol_at", lambda: {a: n for n, a in symbol_addrs(ctx).items()})
+    return callee_name(ctx, va) or own.get(va) or ""
+
+
+def _static_objects(ctx: BinaryContext, insns) -> List[int]:
+    """The objects the listing hands ``swift_initStaticObject(metadata, object)``: a static
+    ``_NameMap`` array the compiler laid out in the image (shape C)."""
     out: List[int] = []
-    for k, ins in enumerate(insns):
-        if ins.mnemonic != "add":
-            continue
-        ops = split_ops(ins.op_str)
-        if len(ops) != 3 or not ops[2].startswith("#"):
-            continue
-        base = flow.const_before(k, _norm_reg(ops[1]) or "")
-        off = _parse_imm(ops[2])
-        if base is not None and off is not None:
-            out.append(base + off)
+    for k, regs in call_site_registers(ctx, insns, _flow_of(ctx, insns)):
+        t = _branch_target(insns[k]) if insns[k].mnemonic in ("bl", "b") else None
+        if _symbol_at(ctx, t).lstrip("_") == "swift_initStaticObject" and "x1" in regs:
+            out.append(regs["x1"])
     return out
 
 
@@ -348,34 +368,51 @@ def _name_ptr(ctx: BinaryContext, slot_va: int) -> Optional[int]:
         return None
 
 
-def _parse_enum_blob(ctx: BinaryContext, blob_va: int, buf: bytes,
-                     count: int) -> Optional[List[SwiftField]]:
-    """Strict reader for a static ``Array<(Int, _NameDescription)>`` of enum cases.
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
-    Elements start right after the 0x20-byte header, each ``(value: Int, name ptr,
-    name len, …)`` with a fixed (version-specific) stride.  Unlike the message scan
-    this does NOT hunt through neighbouring memory: the first case must sit at +0x20,
-    the stride is read off the first two cases, and all ``count`` cases must parse
-    -- otherwise None.  (Scanning loosely read an unrelated alias-name array, then
-    the next type's cases, as this type's.)"""
+
+def _parse_static_blob(ctx: BinaryContext, blob_va: int,
+                       enum: bool = False) -> Optional[List[SwiftField]]:
+    """A static ``Array<(Int, _NameDescription)>`` storage object: a 0x20-byte header
+    (metadata, refcount, count, capacity), then ``count`` elements of one stride, each
+    ``(key: Int, name pointer, name length, …)``.  ``_NameDescription``'s size is
+    version-specific, so the stride is the distance from the first element to the second that
+    parses.  Every element must parse -- the name pointer read through the image's fixups
+    (:func:`_name_ptr`) and its cstring as long as the stored length -- else None.
+
+    *enum*: the keys are case values (any int32; an alias repeats one) and the names must be
+    identifiers; a message's keys are field numbers (>= 1), each once."""
+    try:
+        count = struct.unpack_from("<Q", ctx.read_bytes(blob_va + 0x10, 8))[0]
+    except (NameError, ImportError):
+        raise
+    except Exception:
+        return None
+
     def entry(off: int):
-        if off + 24 > len(buf):
+        try:
+            num, _ptr, ln = struct.unpack_from("<qQQ", ctx.read_bytes(blob_va + off, 24))
+        except (NameError, ImportError):
+            raise
+        except Exception:
             return None
-        num = struct.unpack_from("<q", buf, off)[0]
-        ln = struct.unpack_from("<Q", buf, off + 16)[0]
-        if not (-(1 << 31) <= num < (1 << 31)) or not 1 <= ln <= _MAX_NAME_LEN:
+        if enum:
+            if not -(1 << 31) <= num < (1 << 31):
+                return None
+        elif not 1 <= num <= _MAX_FIELD_NUMBER:
             return None
         nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
-        if not nm or ln != len(nm) or not _IDENT_RE.match(nm):
+        if not nm or ln != len(nm) or (enum and not _IDENT_RE.match(nm)):
             return None
         return num, nm
 
-    first = entry(0x20)
+    first = entry(0x20) if count else None
     if first is None:
         return None
     out = [SwiftField(*first)]
     if count > 1:
-        stride = next((st for st in range(0x18, 0x80, 8) if entry(0x20 + st) is not None), None)
+        stride = next((st for st in range(0x18, _MAX_ELEMENT_STRIDE + 8, 8)
+                       if entry(0x20 + st) is not None), None)
         if stride is None:
             return None
         for i in range(1, count):
@@ -383,79 +420,8 @@ def _parse_enum_blob(ctx: BinaryContext, blob_va: int, buf: bytes,
             if e is None:
                 return None
             out.append(SwiftField(*e))
-    if len({(f.number, f.name) for f in out}) != len(out):
-        return None
-    return out
-
-
-_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
-
-
-def _parse_static_blob(ctx: BinaryContext, blob_va: int,
-                       enum: bool = False) -> Optional[List[SwiftField]]:
-    """Parse a static ``Array<(Int, _NameDescription)>`` storage blob.
-
-    Header is 0x20 bytes (metadata, refcount, count, capacity); the element
-    stride depends on ``_NameDescription``'s size (version-specific), so we
-    SCAN 8-byte slots for valid ``(number, name-ptr, len)`` triples rather than
-    assume the stride.
-
-    *enum*: the entries are enum cases, whose value may be 0 or negative (a signed
-    Int in the slot) and may repeat (aliases); a message field number is >= 1 and
-    unique.  Enum names must also look like identifiers, and the scan is bounded by
-    the header's entry count -- without that bound a blob whose values the field-number
-    filter rejects keeps scanning into the NEXT type's data and returns its cases."""
-    try:
-        count = struct.unpack_from("<Q", ctx.read_bytes(blob_va, 0x20), 0x10)[0]
-    except (NameError, ImportError):
-        raise
-    except Exception:
-        return None
-    if not (0 < count < 4096):
-        return None
-    span = 0x20 + count * 0x80
-    buf = b""
-    for step in range(span, 0x18, -8):
-        try:
-            buf = ctx.read_bytes(blob_va, step)
-            break
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            continue
-    if not buf:
-        return None
-    if enum:
-        return _parse_enum_blob(ctx, blob_va, buf, count)
-    out: List[SwiftField] = []
-    seen = set()
-    # Real elements start right after the 0x20-byte header.  Message blobs have always
-    # been scanned from 0x10 (harmless: nothing there parses as a triple), but for
-    # enums the header's `capacity` word at 0x18 can pair with the first slots of an
-    # unrelated static array -- e.g. the one-element alias-name array of an enum with
-    # aliases looked like case ``(2, "AL_Y2")``.
-    off = 0x20 if enum else 0x10
-    while off + 24 <= len(buf) and len(out) < count:
-        if enum:
-            num = struct.unpack_from("<q", buf, off)[0]
-            valid = -(1 << 31) <= num < (1 << 31)
-        else:
-            num = struct.unpack_from("<Q", buf, off)[0]
-            valid = 1 <= num <= _MAX_FIELD_NUMBER
-        if not valid:
-            off += 8
-            continue
-        ln = struct.unpack_from("<Q", buf, off + 16)[0]
-        if 1 <= ln <= _MAX_NAME_LEN:
-            nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
-            key = (num, nm) if enum else num
-            if (nm and ln == len(nm) and key not in seen
-                    and (not enum or _IDENT_RE.match(nm))):
-                seen.add(key)
-                out.append(SwiftField(num, nm))
-                off += 16          # skip the matched (name ptr, len) slots
-        off += 8
-    return out or None
+    keys = [(f.number, f.name) if enum else f.number for f in out]
+    return out if len(set(keys)) == len(keys) else None
 
 
 # ── shapes A/B/C: the (number, name) stores of a name-map builder ────────────
@@ -590,7 +556,7 @@ def _table_entries(ctx: BinaryContext, insns, enum: bool, entry: Optional[Dict[s
     *with_len*: the name must be followed by its length (``stp <name>, <len>``, the inline
     closure).  *enum*: a number is any int32 (the stored register sign-extended), else a field
     number (1 .. 2^29-1).  *entry*: register values on entry (a stub's arguments)."""
-    slots = _store_slots(Flow(ctx, list(insns)), entry)
+    slots = _store_slots(_flow_of(ctx, insns), entry)
     at: Dict[tuple, Optional[_Slot]] = {}
     for s in slots:
         at[s.addr] = None if s.addr in at else s          # stored twice: not one entry
@@ -674,29 +640,31 @@ def _tail_callee(ctx: BinaryContext, insns) -> Optional[Tuple[int, Dict[str, int
         return None
     k = tails[0]
     t = _branch_target(insns[k])
-    regs = Flow(ctx, list(insns)).propagate({}, at=[k]).get(k)
+    regs = _flow_of(ctx, insns).propagate({}, at=[k]).get(k)
     if t is None or t == insns[0].addr or regs is None or not _in_executable_text(ctx, t):
         return None
     return t, regs
 
 
-def _walk_namemap_builder_hop(ctx: BinaryContext, va: int,
-                              enum: bool = False) -> List[SwiftField]:
-    """Read one builder's (number, name) table.  When the builder is itself only an
-    arg-setup stub (``adr x1,<storage>; adr x2,<name>; mov w3,<len>; b <template>``) for a
-    second, arity-specific shared template that does the stores, read the template with the
-    registers the stub hands it (:func:`_tail_callee`) as its entry values."""
+def _builder_entries(ctx: BinaryContext, va: int,
+                     enum: bool = False) -> Tuple[List[SwiftField], bool]:
+    """One builder's (number, name) table, and whether the listing it was read off was cut
+    by the runaway guard.  When the builder is itself only an arg-setup stub (``adr
+    x1,<storage>; adr x2,<name>; mov w3,<len>; b <template>``) for a shared template that does
+    the stores, the template is read with the registers the stub hands it (:func:`_tail_callee`)
+    as its entry values."""
     try:
         body = _listing(ctx, va)
         got = _walk_namemap_builder(ctx, body, enum)
         callee = None if got else _tail_callee(ctx, body)
         if callee is not None:
-            got = _walk_namemap_builder(ctx, _listing(ctx, callee[0]), enum, entry=callee[1])
+            body = _listing(ctx, callee[0])
+            got = _walk_namemap_builder(ctx, body, enum, entry=callee[1])
     except (NameError, ImportError):
         raise
     except Exception:
-        return []
-    return got
+        return [], False
+    return got, body.truncated
 
 
 def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
@@ -705,7 +673,7 @@ def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
     ``adrp``+``add`` when it is far, as in device / cache images).  Values outside this
     image's executable text -- the once-token, a storage slot -- are not closures."""
     out: List[int] = []
-    for _k, regs in call_site_registers(ctx, insns):
+    for _k, regs in call_site_registers(ctx, insns, _flow_of(ctx, insns)):
         for r in (f"x{n}" for n in range(8)):
             v = regs.get(r)
             if v is not None and v not in out and _in_executable_text(ctx, v):
@@ -719,56 +687,25 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     cached ``_NameMap`` from ``__bss`` and a ``cmn x?,#1; b.ne <builder>`` guards
     a cold builder that constructs it once.  Follow the cold path to the builder
     closure and read its literal ``(number, name)`` table (:func:`_walk_namemap_
-    builder`).  Returns ``[]`` (so the caller falls through to the shape-B single-
-    field path) unless the once-init signature is present AND a builder is found.
+    builder`).  Returns ``[]`` unless the once-init signature is present AND a builder is
+    found.
 
     This recovers app types whose nameMap is emitted as a runtime ``_NameMap``
-    (e.g. remindd ``StartMigrationRequest.Credential`` — 5 fields that shape-B
-    under-reads to just the first), not only the SwiftProtobuf well-known types."""
+    (e.g. remindd ``StartMigrationRequest.Credential``, 5 fields), not only the SwiftProtobuf
+    well-known types."""
     # Gate: the lazy-_NameMap guard compares the cached pointer to the -1 sentinel.
     if not any(ins.mnemonic == "cmn" and ins.op_str.strip().endswith("#1")
                for ins in getter_insns):
         return []
-    # Candidate builder/closure entry points: branch targets + the closures passed to calls.
-    targets: List[int] = []
-    for ins in getter_insns:
-        if is_cond_branch(ins.mnemonic) or ins.mnemonic in COMPARE_BRANCHES or ins.mnemonic == "b":
-            t = _branch_target(ins)
-            if t is not None:
-                targets.append(t)
-    targets += _closure_arg_targets(ctx, getter_insns)
+    # The builder: the getter's own cold path, or the closure it hands swift_once.
+    readings = [(_walk_namemap_builder(ctx, getter_insns, enum),
+                 getattr(getter_insns, "truncated", False))]
+    readings += [_builder_entries(ctx, c, enum) for c in _closure_arg_targets(ctx, getter_insns)]
     best: List[SwiftField] = []
     best_truncated = False
-    for t in targets:
-        try:
-            body = _listing(ctx, t)
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            continue
-        got = _walk_namemap_builder(ctx, body, enum)
-        trunc = body.truncated
-        if not got:
-            # the builder is often reached one hop on, as the closure the cold path passes.
-            for ct in _closure_arg_targets(ctx, body):
-                try:
-                    inner = _listing(ctx, ct)
-                except (NameError, ImportError):
-                    raise
-                except Exception:
-                    got = []
-                    continue
-                got = _walk_namemap_builder(ctx, inner, enum)
-                trunc = inner.truncated
-                if not got:
-                    # the closure may itself be only an arg-setup stub that tail-calls
-                    # the real builder (the Google well-known wrappers do)
-                    got = _walk_namemap_builder_hop(ctx, ct, enum)
-                if got:
-                    break
+    for got, trunc in readings:
         if len(got) > len(best):
-            best = got
-            best_truncated = trunc
+            best, best_truncated = got, trunc
     # CAUTIOUS: if the builder's listing ran into the runaway guard, its (number, name) store
     # table may be incomplete.  Rather than launder a partial read as ground truth, flag the
     # recovered numbers as estimated (renders "// number estimated").
@@ -778,38 +715,17 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     return best
 
 
-def _single_entry_stub(ctx: BinaryContext, va: int) -> List[SwiftField]:
-    """Shape F: a builder that is only an arg-setup stub for the shared SINGLE-entry
-    ``_NameMap`` template -- ``adrp/add x1,<slot>; adrp/add x3,<name>; mov w2,#<number>;
-    mov w4,#<len>; b <template>``.  The template stores ``x2`` (the field number), ``x3``
-    and ``x4`` (name pointer and length) as the one entry, so the number is a literal,
-    unlike the shape-B tail call where it must come from ``decodeMessage``.  Accepted only
-    when the length matches the name's cstring."""
-    try:
-        args = _tail_call_args(_listing(ctx, va))
-    except (NameError, ImportError):
-        raise
-    except Exception:
-        return []
-    if not args or "x2" not in args or "x4" not in args:
-        return []
-    name, num = _cstr(ctx, args.get("x3")), args["x2"] & 0xFFFFFFFF
-    if not name or len(name) != args["x4"] & 0xFFFFFFFF or not 1 <= num <= _MAX_FIELD_NUMBER:
-        return []
-    return [SwiftField(num, name)]
-
-
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
                                decode_va: Optional[int],
                                traverse_va: Optional[int],
                                enum: bool = False) -> bool:
     """Guard the runtime-namemap reading against fabrication.
 
-    The cold-builder entry is a ``stp <smallInt>, <namePtr>, [base,#slot]`` pair
-    whose small int is AMBIGUOUS: in the older codegen it is the field NUMBER
-    (remindd), but in the newer InternalSwiftProtobuf packed-bytecode ``_NameMap``
-    it is the name LENGTH (nptocompaniond ErrorResponse: 6=len'domain', 4='code'),
-    so :func:`_walk_namemap_builder` would mis-read lengths as numbers.
+    A ``stp <smallInt>, <namePtr>, [base,#slot]`` pair is AMBIGUOUS by its stores alone: the
+    small int is the field NUMBER in the older codegen (remindd) but the name LENGTH in a
+    ``(length, pointer)`` description (nptocompaniond ErrorResponse: 6 = len 'domain',
+    4 = 'code'), and both sit 8 bytes before the name, so :func:`_table_entries` pairs either
+    as a number.
 
     Accept only when neither check rejects:
       * the independent ``decodeMessage``/``traverse`` numbers (a different codegen
@@ -837,8 +753,7 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
 
 def _decode_message_numbers(ctx: BinaryContext, decode_va: int) -> List[int]:
     """Field numbers from a ``decodeMessage`` body, read off its ``cmp x0,#N``
-    field-number switch (used to supply the number for the single-field
-    tail-call shape, where it is not in the nameMap closure).
+    field-number switch (an independent check of a builder reading).
 
     Read linearly from the entry to its first return: past it a dense switch's jump-table
     bound (``sub x8, x0, #1; cmp x8, #14``) would be taken for a field number.  A reading of
@@ -859,30 +774,131 @@ def _decode_message_numbers(ctx: BinaryContext, decode_va: int) -> List[int]:
     return nums
 
 
-def _traverse_field_numbers(ctx: BinaryContext, traverse_va: int) -> List[int]:
-    """Field numbers from a ``traverse(visitor:)`` body, in visit order.
+# swift-protobuf's Visitor methods take ``(value, fieldNumber: Int, …)``: in the Swift calling
+# convention the field number is the integer argument after the value's registers -- none for a
+# Float / Double (it travels in an FP register), two for a String / Data (two words), one for
+# everything else (an integer, a Bool, an Array, a Dictionary, an enum or message by reference).
+# Checked over every named visit call of the census: each method's constant sits in that register.
+_VISIT_RE = re.compile(r"VisitorP\d+visit(Singular|Repeated|Packed)?(\w*?)Field")
+_VISIT_SCALARS = {
+    "Int32": "int32", "Int64": "int64", "UInt32": "uint32", "UInt64": "uint64",
+    "SInt32": "sint32", "SInt64": "sint64", "Fixed32": "fixed32", "Fixed64": "fixed64",
+    "SFixed32": "sfixed32", "SFixed64": "sfixed64", "Bool": "bool", "Float": "float",
+    "Double": "double", "String": "string", "Bytes": "bytes",
+}
+# the integer encodings a Swift Int32 / Int64 / UInt32 / UInt64 field may be written with (LIM 10b)
+_VISIT_ENCODINGS = frozenset({"sint32", "sint64", "fixed32", "fixed64", "sfixed32", "sfixed64"})
 
-    swift-protobuf's ``traverse`` calls ``visitor.visitSingular<T>Field(value:,
-    fieldNumber:)`` (direct ``bl`` or protocol-witness ``blr``) for every set
-    field, with the field number a literal ``mov w?,#N`` argument.  ``fieldNumber``
-    is the last labelled (Int) argument, so among the scalar immediates loaded
-    before each call it lands in the HIGHEST-numbered ``w`` register (the value
-    arg, if scalar, takes a lower register; float/double values use FP registers
-    and consume none).  A call with no such immediate (retain/release, metadata
-    accessor ``…Ma``, the generic-table driver) contributes nothing.
 
-    This is the canonical, complete per-field number source (the swift analog of
-    PBCodable ``writeTo:``); the nameMap only supplies names.
-    """
+_SWIFT_PROTOBUF_MODULES = ("InternalSwiftProtobuf", "SwiftProtobuf")
+
+
+def _visitor_symbols(ctx: BinaryContext) -> Dict[str, int]:
+    """The symbols that can name a swift-protobuf ``Visitor`` requirement: the image's own (a
+    binary that links swift-protobuf statically, or the framework itself), and in a dyld cache
+    the exports of the swift-protobuf framework the image links."""
+    reader = getattr(ctx, "_cache_reader", None)
+    if reader is None or not getattr(ctx, "is_cache_backed", False):
+        return {n: a for n, a in ctx.iter_symbols() if a}
+    images = [ctx.image_base] + [
+        reader.find_image_header(p) for p in reader.image_dependencies(ctx.image_base)
+        if p.rsplit("/", 1)[-1] in _SWIFT_PROTOBUF_MODULES]
+    out: Dict[str, int] = {}
+    for mh in images:
+        if mh is not None:
+            out.update(reader.image_exports(mh))
+    return out
+
+
+def _build_visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
+    out: Dict[int, str] = {}
+    syms = _visitor_symbols(ctx)
+    for name, desc in syms.items():
+        if not name.endswith("7VisitorMp"):
+            continue
+        # protocol descriptor: flags, parent, name, NumRequirementsInSignature,
+        # NumRequirements, associated type names; then the signature's requirements (12
+        # bytes each) and the protocol's own (8 bytes each), in witness-table order after the
+        # table's first word (the conformance descriptor)
+        _f, _p, _n, nsig, nreq, _a = struct.unpack("<IiiIIi", ctx.read_bytes(desc, 24))
+        start = desc + 24 + 12 * nsig
+        for meth, addr in syms.items():
+            if meth.endswith("Tq") and start <= addr < start + 8 * nreq and not (addr - start) % 8:
+                out.setdefault(8 + addr - start, meth)
+    return out
+
+
+def _visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
+    """``{witness-table offset: method descriptor symbol}`` of the swift-protobuf ``Visitor``
+    protocol, read off its descriptor (``…7VisitorMp``) and its methods' descriptors
+    (``…VisitorP…Tq``); empty when the image cannot see them.  Memoised on *ctx*."""
+    def build():
+        try:
+            return _build_visitor_slots(ctx)
+        except (NameError, ImportError):
+            raise
+        except Exception:
+            return {}
+    return _ctx_cache(ctx, "_swift_visitor_slots", build)
+
+
+def _visit_method(ctx: BinaryContext, flow: Flow, k: int) -> Optional[Tuple[str, str]]:
+    """``(label, kind)`` of the swift-protobuf ``Visitor.visit<label><kind>Field`` method the
+    call ``insns[k]`` of a ``traverse<V: Visitor>`` goes to; label is Singular / Repeated /
+    Packed or "" (``visitMapField``).  A ``bl`` is named by its dispatch thunk
+    (``…VisitorP24visitSingularInt64Field…Tj``); a ``blr`` by the witness-table slot its target
+    is loaded from -- the table is ``traverse``'s ``x2`` on entry -- and the Visitor requirement
+    at that slot (:func:`_visitor_slots`).  None for any other call."""
+    ins = flow.insns[k]
+    name = ""
+    if ins.mnemonic == "bl":
+        name = _symbol_at(ctx, _branch_target(ins))
+    elif ins.mnemonic in CALLS:
+        reg = _norm_reg(split_ops(ins.op_str)[0])
+        d = next(iter(flow.defs_before(k, reg)), -1) if len(flow.defs_before(k, reg)) == 1 else -1
+        ld = flow.insns[d] if d >= 0 else None
+        ops = split_ops(ld.op_str) if ld is not None and ld.mnemonic == "ldr" else []
+        pm = parse_mem(ops[1]) if len(ops) == 2 and not ops[1].endswith("!") else None
+        if pm is not None and pm.index is None and \
+                _sym(flow, d, pm.base, {}) == ((("entry", -1, "x2"),), 0):
+            name = _visitor_slots(ctx).get(pm.disp, "")
+    m = _VISIT_RE.search(name)
+    return (m.group(1) or "", m.group(2)) if m else None
+
+
+def _visit_number_register(label: str, kind: str) -> Optional[str]:
+    if kind == "Extension":
+        return None                               # an extension's number is the extension's
+    if label == "Singular" and kind in ("Float", "Double"):
+        return "x0"
+    if label == "Singular" and kind in ("String", "Bytes"):
+        return "x2"
+    return "x1"
+
+
+def _traverse_visits(ctx: BinaryContext, traverse_va: int) -> List[Tuple[int, Optional[str]]]:
+    """``(field number, proto type or None)`` per field a ``traverse(visitor:)`` body visits,
+    in visit order.
+
+    A call to a Visitor method :func:`_visit_method` can name gives the number exactly -- the
+    register the method's signature puts it in (:func:`_visit_number_register`), its value by
+    :meth:`Flow.propagate` -- and the type (``visitSingularSInt32Field`` -> ``sint32``,
+    ``visitRepeatedUInt64Field`` -> ``repeated uint64``; None for a message, enum, group or
+    map).  A call it cannot name -- a witness ``blr`` in an image that cannot see the Visitor
+    protocol, e.g. an extracted framework whose swift-protobuf is another file -- still takes the
+    highest-numbered ``w`` register set by an immediate since the previous call: the remaining
+    heuristic."""
     try:
-        insns = disasm(ctx, traverse_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
+        insns = _listing(ctx, traverse_va)
     except (NameError, ImportError):
         raise
     except Exception:
         return []
-    nums: List[int] = []
+    flow = _flow_of(ctx, insns)
+    at_call = dict(call_site_registers(ctx, insns, flow))
+    out: List[Tuple[int, Optional[str]]] = []
     pend: Dict[str, int] = {}        # w-register -> immediate, since the last call
-    for ins in insns:
+    for k, ins in enumerate(insns):
         m = ins.mnemonic
         if m in ("mov", "movz") and "," in ins.op_str:
             dst, _, src = ins.op_str.partition(",")
@@ -890,53 +906,28 @@ def _traverse_field_numbers(ctx: BinaryContext, traverse_va: int) -> List[int]:
             v = _parse_imm(src)
             if v is not None and dst.startswith("w") and 1 <= v <= _MAX_FIELD_NUMBER:
                 pend[dst] = v
-        elif m in ("bl", "blr"):
-            if pend:
+        elif m in CALLS:
+            visit = _visit_method(ctx, flow, k)
+            if visit is not None:
+                reg = _visit_number_register(*visit)
+                v = at_call.get(k, {}).get(reg) if reg else None
+                if v is not None and 1 <= v <= _MAX_FIELD_NUMBER:
+                    scalar = _VISIT_SCALARS.get(visit[1])
+                    typ = None if scalar is None else \
+                        scalar if visit[0] == "Singular" else f"repeated {scalar}"
+                    out.append((v, typ))
+            elif pend:
                 hi = max(pend, key=lambda r: int(re.sub(r"\D", "", r) or "-1"))
-                nums.append(pend[hi])
+                out.append((pend[hi], None))
             pend = {}
-    return nums
+    return out
 
 
-def _single_field_tail_call(ctx: BinaryContext, insns, decode_va: Optional[int],
-                            traverse_va: Optional[int] = None) -> List[SwiftField]:
-    """Shape B: a compact closure that hands ``x2=<name>``, ``w3=<len>`` to a shared builder
-    in a tail call.  The single name is an argument cstring whose length is another argument
-    of the same tail call (``b`` out of the listing, or ``br``); the number comes from
-    ``decodeMessage`` / ``traverse``."""
-    name = None
-    for _k, regs in call_site_registers(ctx, insns, tail_only=True):
-        args = [regs[r] for r in (f"x{n}" for n in range(8)) if r in regs]
-        name = next((s for v in args if (s := _cstr(ctx, v))
-                     and any(w & 0xFFFFFFFF == len(s) for w in args)), None)
-        if name:
-            break
-    if not name:
-        return []
-    # The number is NOT in the closure (it carries only name + len + the field's
-    # type metadata).  Two INDEPENDENT structural sources can supply it:
-    #   * decodeMessage's field-number switch (cmp x0,#N), and
-    #   * traverse's per-field visit number (mov w?,#N before visitSingular*).
-    # Each is trusted only when it yields exactly ONE field number (a genuine
-    # single-field message).  CONFIRM the number iff the trusted sources agree on
-    # exactly one value; otherwise fall back to 1 but mark it UNCONFIRMED — a
-    # single field is conventionally #1, but that is a guess.  (When a source
-    # yields MANY numbers the message is really multi-field and shape-B has
-    # under-extracted it — left to the traverse-driven enumerator, to-do #72.)
-    cands: set = set()
-    if decode_va is not None:
-        dn = _decode_message_numbers(ctx, decode_va)
-        if len(dn) == 1:
-            cands.add(dn[0])
-    if traverse_va is not None:
-        tn = _traverse_field_numbers(ctx, traverse_va)
-        if len(tn) == 1:
-            cands.add(tn[0])
-    if len(cands) == 1:
-        num, confirmed = cands.pop(), True
-    else:
-        num, confirmed = 1, False
-    return [SwiftField(num, name, number_confirmed=confirmed)]
+def _traverse_field_numbers(ctx: BinaryContext, traverse_va: int) -> List[int]:
+    """Field numbers from a ``traverse(visitor:)`` body, in visit order (:func:`_traverse_visits`).
+    This is the canonical, complete per-field number source (the swift analog of PBCodable
+    ``writeTo:``); the nameMap only supplies names."""
+    return [n for n, _t in _traverse_visits(ctx, traverse_va)]
 
 
 # ── per-type extraction ───────────────────────────────────────────────────────
@@ -945,9 +936,8 @@ def _enum_cases_plausible(got: List[SwiftField]) -> bool:
     """Self-consistency of a recovered enum case table.
 
     protoc-gen-swift writes an enum's name map sorted by case value (aliases share a
-    value), with distinct identifier names.  The loose pairing of separate number /
-    name stores can scramble a large table, and an enum has no ``decodeMessage`` to
-    cross-check against -- so a table that violates the invariant is rejected rather
+    value), with distinct identifier names.  An enum has no ``decodeMessage`` / ``traverse``
+    to cross-check its table against, so one that breaks this invariant is rejected rather
     than emitted with wrong values."""
     nums = [f.number for f in got]
     names = [f.name for f in got]
@@ -987,14 +977,11 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     except Exception:
         return [], "none"
 
-    # C — static object: try each address the getter materialises as a static _NameMap blob.
-    best: Optional[List[SwiftField]] = None
-    for blob in _constant_addresses(insns):
+    # C — static object: the array the getter hands swift_initStaticObject.
+    for blob in _static_objects(ctx, insns):
         got = _parse_static_blob(ctx, blob, enum)
-        if got and (best is None or len(got) > len(best)):
-            best = got
-    if best:
-        return best, "static"
+        if got:
+            return got, "static"
 
     # A — inline, directly in this function, or in the function it tail-calls with its
     # registers (CreateML getters: `adrp; add; b <the closure placed next>`).
@@ -1011,23 +998,19 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         return got, "inline"
 
     # Runtime-built _NameMap (once-init `cmn x?,#1; b.ne <builder>`): follow the
-    # cold builder closure and read its literal (number, name) table.  Placed
-    # before the shape-B fallback, which would under-read such a message to its
-    # first field only (e.g. remindd Credential 5 -> 1).  #72.
+    # cold builder closure and read its literal (number, name) table.  #72.
     got = _runtime_namemap_fields(ctx, insns, enum)
     if len(got) > (0 if enum else 1) and _namemap_builder_validated(
             ctx, got, decode_va, traverse_va, enum):
         return got, "runtime-namemap"
-    # a runtime builder with exactly ONE entry is held back: the shape-B single-field
-    # path below can confirm the number from decodeMessage/traverse.  If B finds nothing
-    # (the well-known wrappers such as BoolValue), the builder's own literal entry is
-    # still exact, so it is used -- under the same oracle validation.
+    # a runtime builder with exactly ONE entry is used last, under the same oracle validation and
+    # Swift reflection's check of the name (``runtime-single``): its literal is the only support.
     runtime_single = got if (len(got) == 1 and not enum) else None
 
     # D — shared once-init template (`adr x0,<token>; adr x1,<storage>;
     # adr x2,<builder>; b <shared-template>`): chase every CODE address the stub
     # passes (skipping the once-token / storage data addresses) and read
-    # its literal (number, name) table (:func:`_walk_namemap_builder_hop`,
+    # its literal (number, name) table (:func:`_builder_entries`,
     # which follows one further tail-call when the builder is itself just an
     # arg-setup stub for a second shared template) -- oracle-validated for
     # the same reason as runtime-namemap.  #74.
@@ -1036,17 +1019,14 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     for t in _shared_once_init_targets(insns):
         if t == init_va or not _in_executable_text(ctx, t):
             continue
-        got = _walk_namemap_builder_hop(ctx, t, enum)
-        single = False
-        if not got and not enum:
-            got = _single_entry_stub(ctx, t)
-            single = bool(got)
+        got = _builder_entries(ctx, t, enum)[0]
         packed = False
         if not got:
             # iOS 27: the builder is a stub passing the packed bytecode literal (x2) and its
             # length (w3) to the shared template (shape E's data, one hop deeper)
             try:
-                lit = bytecode_literal_from_getter(ctx, _listing(ctx, t), enum=enum)
+                stub = _listing(ctx, t)
+                lit = bytecode_literal_from_getter(ctx, stub, enum=enum, flow=_flow_of(ctx, stub))
             except (NameError, ImportError):
                 raise
             except Exception:
@@ -1057,7 +1037,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
                 packed = True
         if len(got) > len(best_shared):
             best_shared = got
-            shared_shape = ("bytecode" if packed else "single-stub" if single else "shared-once")
+            shared_shape = "bytecode" if packed else "shared-once"
     if best_shared and (shared_shape == "bytecode"
                         or _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum)):
         return best_shared, shared_shape
@@ -1065,8 +1045,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the
     # getter hands a string literal + length to a shared template.  Placed after
     # D (whose targets are code addresses; the literal is data, so the two never
-    # collide) and before the shape-B fallback, which would read at most one field.
-    lit = bytecode_literal_from_getter(ctx, insns, enum=enum)
+    # collide).
+    lit = bytecode_literal_from_getter(ctx, insns, enum=enum, flow=_flow_of(ctx, insns))
     if lit is not None:
         decoded = decode_namemap_bytecode(lit, enum=enum)
         if decoded:
@@ -1085,20 +1065,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         got = _walk_inline_closure(ctx, cl, enum)
         if got:
             return got, "inline-closure"
-        if enum:
-            continue
-        # B — single-field tail-call inside the followed closure.
-        got = _single_field_tail_call(ctx, cl, decode_va, traverse_va)
-        if got:
-            return got, "single"
 
-    # B — single-field tail-call directly in this function.  Not for an enum: its
-    # single-field number comes from a message's decodeMessage, which an enum lacks.
-    if enum:
-        return [], "none"
-    got = _single_field_tail_call(ctx, insns, decode_va, traverse_va)
-    if got:
-        return got, "single"
     if runtime_single and _namemap_builder_validated(ctx, runtime_single, decode_va, traverse_va):
         return runtime_single, "runtime-single"
     return [], "none"
@@ -1126,6 +1093,11 @@ def swift_enums(ctx: BinaryContext) -> List[SwiftMessage]:
     return _recover_types(ctx, want_enum=True)
 
 
+# A function symbol's own body: ``…F``, or ``…FTm`` when identical bodies of several types were
+# merged into one (still this type's function).  ``…XEfU_`` and the like are closures inside it.
+_FUNCTION_BODY_SUFFIXES = ("F", "FTm")
+
+
 def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
     syms = symbol_addrs(ctx)
     if not syms:
@@ -1148,14 +1120,14 @@ def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
                 inits[parsed] = (va, "vgZ")
         elif want_enum:
             continue
-        elif "13decodeMessage" in name and name.endswith("F"):
-            parsed = _type_from_namemap_symbol_like(name, "V13decodeMessage")
-            if parsed:
-                decoders.setdefault(parsed, va)
-        elif "V8traverse" in name and name.endswith("F"):
-            parsed = _type_from_namemap_symbol_like(name, "V8traverse")
-            if parsed:
-                traversers.setdefault(parsed, va)
+        elif "13decodeMessage" in name and name.endswith(_FUNCTION_BODY_SUFFIXES):
+            t = _type_of_symbol(name, "13decodeMessage")
+            if t and t[2] == "V":
+                decoders.setdefault(t[:2], va)
+        elif "V8traverse" in name and name.endswith(_FUNCTION_BODY_SUFFIXES):
+            t = _type_of_symbol(name, "8traverse")
+            if t and t[2] == "V":
+                traversers.setdefault(t[:2], va)
 
     out: List[SwiftMessage] = []
     for (module, tname), (va, _kind) in inits.items():
@@ -1166,6 +1138,10 @@ def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
                                 is_enum=want_enum, shape=shape))
     if not want_enum:
         _attach_field_types(ctx, out)
+        for m in out:
+            tva = traversers.get((m.module, m.name))
+            if m.fields and tva is not None:
+                _attach_visit_types(m, _traverse_visits(ctx, tva))
     out.sort(key=lambda m: m.qualified)
     return out
 
@@ -1176,9 +1152,9 @@ def _norm(name: str) -> str:
     return name.replace("_", "").lower()
 
 
-# Readings with no cross-check of their own (one builder entry / one stub entry): kept only
-# when Swift reflection agrees the message has that field.
-_REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single", "single-stub"})
+# Readings with no cross-check of their own (one builder entry): kept only when Swift reflection
+# agrees the message has that field.
+_REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single"})
 
 
 def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
@@ -1238,16 +1214,21 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
                                    "not recovered (shown as bytes)")
 
 
-def _type_from_namemap_symbol_like(sym: str, marker: str) -> Optional[Tuple[str, str]]:
-    """``(module, type_name)`` like :func:`_parse_namemap_symbol`, for an arbitrary
-    ``V<marker>`` boundary (e.g. ``V13decodeMessage``)."""
-    m = re.search(r"_\$[sS](.*?)" + re.escape(marker), sym)
-    if not m:
-        return None
-    idents = _split_idents(m.group(1))
-    if len(idents) < 2:
-        return None
-    return idents[0], ".".join(idents[1:])
+def _attach_visit_types(m: SwiftMessage, visits: List[Tuple[int, Optional[str]]]) -> None:
+    """Types from the Visitor method each field is written with (:func:`_traverse_visits`):
+    the integer encoding Swift reflection cannot tell (an ``Int32`` written zigzag is ``sint32``,
+    a ``UInt64`` written fixed is ``fixed64``), and the scalar type of a field reflection did not
+    type at all."""
+    typed = {}
+    for num, typ in visits:
+        if typ is not None:
+            typed.setdefault(num, typ)
+    for f in m.fields:
+        typ = typed.get(f.number)
+        if typ is None:
+            continue
+        if f.proto_type is None or typ.split()[-1] in _VISIT_ENCODINGS:
+            f.proto_type = typ
 
 
 # ── emit ──────────────────────────────────────────────────────────────────────
