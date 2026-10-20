@@ -36,6 +36,12 @@ LC_DYLD_CHAINED_FIXUPS = 0x80000034
 LC_DYLD_EXPORTS_TRIE   = 0x80000033
 LC_FUNCTION_STARTS     = 0x00000026
 
+#: What reading an image can raise: an address no segment or mapping holds (ValueError, its
+#: UnicodeDecodeError for a non-UTF-8 string), a missing table entry (KeyError), a read past
+#: a buffer (IndexError, struct.error).  A guard on a read catches these, not Exception,
+#: so a logic error still surfaces.
+READ_ERRORS = (ValueError, KeyError, IndexError, struct.error)
+
 
 def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
     """The function entries an ``LC_FUNCTION_STARTS`` table lists: ULEB128 deltas, the first

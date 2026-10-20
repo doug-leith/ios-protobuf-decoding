@@ -20,6 +20,7 @@ import unittest
 from serializers import swift_descriptor_extract as S
 from tests.conftest import encode_adrp, encode_add_imm64, encode_movz, NOP_BYTES, RET_BYTES
 from tests._listing import insns as _listing
+from tests._fakes import NoImage
 
 
 # ── a minimal in-memory ctx where vmaddr == file offset (image_base 0) ────────
@@ -274,7 +275,7 @@ class TestInlineClosureWalk(unittest.TestCase):
 
 
 
-class _NamedListingCtx:
+class _NamedListingCtx(NoImage):
     """A cache-style ctx over a hand-built listing whose call targets have export names, so
     :func:`S._listing`, Flow's call model and :func:`S._symbol_at` run offline.  Every call
     target in a test needs a name (an unnamed own-image target would be scanned)."""

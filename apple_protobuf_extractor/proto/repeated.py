@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Optional, Tuple
 
-from macho.memory    import BinaryContext
+from macho.memory    import READ_ERRORS, BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
 from macho.disasm    import disasm, _parse_imm
 from proto.arm64_operands import RETURNS, mem_regs, split_ops
@@ -106,9 +106,7 @@ def _adder_array_ivar(
         return None
     try:
         insns = disasm(ctx, imp_va, max_insns=_ADDER_MAX_INSNS, stop_at_ret=True)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     nxt = function_entries(ctx).next_after(imp_va)
     if nxt is not None:
@@ -122,9 +120,7 @@ def _adder_array_ivar(
             continue
         try:
             val = int.from_bytes(ctx.read_bytes(slot_va, 4), 'little')
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             continue
         if val in array_offsets:
             return val          # first array-offset load = the accessor's own ivar

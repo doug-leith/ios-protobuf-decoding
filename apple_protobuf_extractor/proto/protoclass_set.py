@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Dict, FrozenSet, Optional, Set
 
-from macho.memory import BinaryContext, _ctx_cache, _ctx_store
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcClass, class_name_at
 from proto.protoclass_heuristic import _is_proto_class, va_cluster_closure
 
@@ -88,9 +88,7 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                     return True
                 try:
                     cur = ctx.read_ptr(cur + 8)            # next superclass
-                except (NameError, ImportError):
-                    raise
-                except Exception:
+                except READ_ERRORS:
                     return False
             return False
 

@@ -26,10 +26,10 @@ import bisect
 from typing import Dict, NamedTuple, Optional, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, writes, writeback_base, operand_regs, STORE_BYTES,
                                   PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
-                                  INDIRECT_BRANCHES, is_cond_branch)
+                                  INDIRECT_BRANCHES, CALL_ARG_GPRS, ARG_FPRS, is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
 
@@ -155,9 +155,7 @@ def stub_target(ctx, va: Optional[int]) -> Optional[Stub]:
             else:
                 break
             k += 4
-    except (NameError, ImportError):
-        raise
-    except Exception:                               # unreadable bytes at va: not a stub
+    except READ_ERRORS:                               # unreadable bytes at va: not a stub
         res = None
     memo[va] = res
     return res
@@ -231,9 +229,7 @@ def stub_selector(ctx, va: Optional[int]) -> Optional[str]:
                     and pm.index is None):
                 slot = ctx.read_ptr(pa[1] + pm.disp)
                 sel = ctx.read_cstring(slot) if slot else None
-    except (NameError, ImportError):
-        raise
-    except Exception:                               # unreadable bytes: not a stub
+    except READ_ERRORS:                               # unreadable bytes: not a stub
         sel = None
     memo[va] = sel
     return sel
@@ -279,7 +275,7 @@ def call_clobbers(ctx, target: Optional[int]) -> Optional[Tuple[str, ...]]:
 
 #: AAPCS64 argument registers (x8: an indirect result's address): what a function with a
 #: calling convention reads.
-ABI_ARGS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
+ABI_ARGS = CALL_ARG_GPRS + ARG_FPRS
 #: Every register a callee could read.
 _ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
@@ -311,9 +307,7 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
             if body and body[-1].mnemonic in RETURNS and all(
                     _runs_in_caller(ins) for ins in body[:-1]):
                 res = tuple(body[:-1])
-    except (NameError, ImportError):
-        raise
-    except Exception:                               # unreadable bytes: an ordinary call
+    except READ_ERRORS:                               # unreadable bytes: an ordinary call
         res = None
     memo[target] = res
     return res
@@ -369,9 +363,7 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
                 src = set(operand_regs(ops[1:] if dst else ops))
             read |= src - written
             written |= dst
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         res = _ALL_REGS
     memo[target] = res
     return res

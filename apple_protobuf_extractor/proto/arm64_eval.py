@@ -28,7 +28,8 @@ from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_
 from macho.strings import read_cfstring_text
 from proto.callees import call_reads, call_clobbers as callee_clobbers, outlined_fragment
 from proto.arm64_operands import (
-    CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES,
+    ARG_GPRS, CALL_ARG_GPRS, CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES,
+    SIGNED_LOADS, STORE_BYTES,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
     parse_mem, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
     operand2,
@@ -57,7 +58,7 @@ _STACK_TOP = 1 << 62
 _STACK_SPAN = 1 << 32
 _FRAME_REGS = ('sp', 'x29')
 # Registers that may carry a flag argument into a function: x0 holds the object / struct.
-_FLAG_ARG_REGS = tuple(f"x{n}" for n in range(1, 8))
+_FLAG_ARG_REGS = ARG_GPRS[1:]
 
 
 # arm64e pointer authentication in place (``pacia x16, x8``, ``autibsp``, ``xpaci x0``): the
@@ -70,10 +71,6 @@ _POINTER_AUTH = frozenset((
     "autia", "autib", "autda", "autdb", "autiza", "autizb", "autdza", "autdzb",
     "autiaz", "autibz", "autiasp", "autibsp", "autia1716", "autib1716",
     "xpaci", "xpacd", "xpaclri"))
-
-
-# The registers a callee is handed its arguments in (x8: an indirect result's address).
-_CALL_ARGS = tuple(f"x{i}" for i in range(9))
 
 
 def _is_stack(v: Optional[int]) -> bool:
@@ -271,7 +268,7 @@ class _Machine:
             self.top.update(clobbers)
             self.flags = None
             return
-        for r in (_CALL_ARGS if args is None else args):
+        for r in (CALL_ARG_GPRS if args is None else args):
             v = self.regs.get(r)
             if v is None and r not in self.top and self.fallback is not None:
                 v = self.fallback(r)
@@ -489,6 +486,10 @@ class Flow:
             if reg in self._wr[j]:
                 state = frozenset((j,))
         return state
+
+    def from_entry(self, k: int, reg: str) -> bool:
+        """Whether *reg* before ``insns[k]`` still holds its value on entry, on every path."""
+        return self.defs_before(k, reg) == frozenset((_ENTRY,))
 
     def only_def(self, k: int, reg: str) -> Optional[int]:
         """Index of the one definition of *reg* reaching ``insns[k]``; None for a live-in,
@@ -1277,7 +1278,7 @@ class Flow:
                 if record:
                     target = (_parse_imm(ins.op_str) if mn in ('bl', 'b')
                               else m_get_target(st, ins))
-                    args = {f"x{n}": v for n in range(8) if (v := st.copy_of(f"x{n}")) is not None}
+                    args = {r: v for r in ARG_GPRS if (v := st.copy_of(r)) is not None}
                     region.calls.append(CallSite(k, ins.addr, target, args, tail))
                 if mn != 'b':
                     x0 = st.copy_of('x0')
@@ -1360,13 +1361,10 @@ class Flow:
         """The register whose ENTRY value *reg* holds before ``insns[k]``, through copies."""
         if reg is None:
             return None
-        defs = self.defs_before(k, reg)
-        if defs == frozenset((_ENTRY,)):
+        if self.from_entry(k, reg):
             return reg
-        if len(defs) != 1:
-            return None
-        (d,) = defs
-        if d < 0 or d in seen:
+        d = self.only_def(k, reg)
+        if d is None or d in seen:
             return None
         seen.add(d)
         ins = self.insns[d]
@@ -1386,8 +1384,7 @@ class Flow:
 
     def _string_args(self, get, direct: bool = False) -> Dict[str, str]:
         out: Dict[str, str] = {}
-        for n in range(8):
-            reg = f"x{n}"
+        for reg in ARG_GPRS:
             va = get(reg)
             if va is None:
                 continue

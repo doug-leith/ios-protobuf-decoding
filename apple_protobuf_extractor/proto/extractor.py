@@ -544,7 +544,7 @@ def _writeto_self_load_offset(ctx: BinaryContext, insns) -> Optional[int]:
     (:func:`_self_offset`) -- ``ldr x0,[x0,#imm]``, ``ldr x0,[x0,xB]`` with ``xB`` loaded from
     an ivar-offset variable, or the iOS 27 / macOS 27 ``add x8,x0,x8 ; ldr x0,[x8]``."""
     flow = Flow(ctx, insns)
-    d = _one_def(flow, len(insns) - 1, 'x0')
+    d = flow.only_def(len(insns) - 1, 'x0')
     if d is None:
         return None
     ops = split_ops(insns[d].op_str)
@@ -561,23 +561,17 @@ def _writeto_self_load_offset(ctx: BinaryContext, insns) -> Optional[int]:
     return None if off is None else base + off
 
 
-def _one_def(flow, k: int, reg: str) -> Optional[int]:
-    """The one instruction whose definition of *reg* reaches ``insns[k]`` (-1: the entry)."""
-    defs = flow.defs_before(k, reg)
-    return next(iter(defs)) if len(defs) == 1 else None
-
-
 def _self_offset(flow, k: int, reg: Optional[str], seen: Set[int]) -> Optional[int]:
     """*reg* before ``insns[k]`` as self + a constant offset: 0 for self itself (``x0`` on
     entry), through ``mov`` copies and ``add`` of an immediate or of an ivar-offset variable's
     value (:meth:`Flow.ivar_of_reg`); None for anything else."""
     if reg is None:
         return None
-    d = _one_def(flow, k, reg)
+    if flow.from_entry(k, reg):
+        return 0 if reg == 'x0' else None
+    d = flow.only_def(k, reg)
     if d is None or d in seen:
         return None
-    if d < 0:
-        return 0 if reg == 'x0' else None
     seen.add(d)
     ins = flow.insns[d]
     ops = split_ops(ins.op_str)

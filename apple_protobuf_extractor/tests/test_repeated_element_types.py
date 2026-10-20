@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import artifacts
 from macho.disasm import Insn
 from macho.classlist import ObjcClass, ObjcIvar, ObjcMethod
+from tests._fakes import NoImage
 
 
 # ── tiny fakes ────────────────────────────────────────────────────────────────
@@ -165,12 +166,11 @@ class TestReturnedClassRef(unittest.TestCase):
     OPT_CLASS, CLAIM = 0x9000, 0x9100
 
     def _ref(self, blocks, entries=(0x1000, 0x2000)):
-        from types import SimpleNamespace
         import proto.repeated as R
         from tests._listing import layout
         _o, fd = layout(*blocks)
         names = {self.OPT_CLASS: '_objc_opt_class', self.CLAIM: '_objc_claimAutoreleasedReturnValue'}
-        ctx = SimpleNamespace(_function_entries=set(entries))
+        ctx = NoImage(_function_entries=set(entries))
         with patch.object(R, 'disasm', fd), \
                 patch.object(R, 'callee_name', lambda c, va: names.get(va)):
             return R._returned_class_ref(ctx, 0x1000)

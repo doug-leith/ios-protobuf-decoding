@@ -8,9 +8,10 @@ import unittest
 
 from serializers import swift_namemap_bytecode as B
 from tests._listing import insns as _listing
+from tests._fakes import NoImage
 
 
-class _Ctx:
+class _Ctx(NoImage):
     def __init__(self, data, base):
         self._d, self._b = data, base
 

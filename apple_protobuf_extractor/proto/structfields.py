@@ -46,7 +46,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from macho.disasm import disasm, _parse_imm, _norm_reg
-from macho.memory import _ctx_cache
+from macho.memory import READ_ERRORS, _ctx_cache
 
 from proto.arm64cfg import split_ops, mem_operand, _next_imp
 from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
@@ -210,9 +210,7 @@ def _writer_insns(ctx, entry: int) -> List:
         seen_blocks.add(a)
         try:
             block = disasm(ctx, a, max_insns=_WRITER_BLOCK_INSNS, stop_at_ret=True)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             continue
         for k, ins in enumerate(block):
             if ins.addr in out:
@@ -260,9 +258,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
     try:
         flow = arm64_eval.Flow(ctx, list(insns))
         region = flow.run_from(0, {'x0': _STRUCT_ARG, 'x1': _WRITER_ARG}, objects=OPAQUE)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return []
 
     def member_at(d: int) -> Optional[Tuple[int, int]]:
@@ -402,36 +398,28 @@ def _load_width(ins, mem) -> int:
     return 4 if mem[0][0] in 'wsf' else 8
 
 
-def _struct_load_step(flow, ins, k: int, state: Dict[str, tuple], pages: Dict[str, int],
+def _struct_load_step(flow, ins, k: int, state: Dict[str, tuple],
                       is_ivar_offset, is_array: bool) -> Optional[Tuple[int, int]]:
     """One instruction (``flow.insns[k]``) of the struct-addressing state (see
     :func:`track_struct_loads`); returns ``(member offset, width)`` when *ins* loads a member."""
     mn, ops = ins.mnemonic, split_ops(ins.op_str)
     if mn in CALLS:
-        for r in flow.call_clobbers(k) or CALLER_SAVED_GPRS:
+        for r in flow.call_writes(k) or CALLER_SAVED_GPRS:
             state.pop(r, None)
-            pages.pop(r, None)
         return None
     if not ops or mn in NO_DEST:
         return None
     dst = _norm_reg(ops[0])
     new, member = None, None
-    if mn == 'adrp' and len(ops) == 2:
-        pages[dst] = _parse_imm(ops[1])
-        state.pop(dst, None)
-        return None
     if mn in LOAD_BYTES:
         mem = mem_operand(ins.op_str)
-        if mem is None:                                             # PC-relative literal
-            if mn == 'ldrsw' and len(ops) == 2 and is_ivar_offset(_parse_imm(ops[1])):
-                new = ('ivoff',)
-        else:
+        slot = flow.slot_load_address(k)
+        if slot is not None and is_ivar_offset(slot):
+            new = ('ivoff',)                                        # the offset variable itself
+        elif mem is not None:
             base_st = state.get(mem[1])
             idx_st = state.get(mem[2]) if mem[2] else None
-            if mn == 'ldrsw' and mem[2] is None and mem[1] in pages \
-                    and is_ivar_offset(pages[mem[1]] + mem[3]):
-                new = ('ivoff',)                                    # the offset variable itself
-            elif idx_st == ('ivoff',):
+            if idx_st == ('ivoff',):
                 if is_array:
                     new = ('base', 0)                               # the element array
                 else:
@@ -457,7 +445,6 @@ def _struct_load_step(flow, ins, k: int, state: Dict[str, tuple], pages: Dict[st
             state[dst] = new
         else:
             state.pop(dst, None)
-        pages.pop(dst, None)
     return member
 
 
@@ -471,8 +458,9 @@ def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array
     (restricted to the indices in *window*, when given), that reads a member of the struct held
     in one particular ivar — found by following how the code addresses it:
 
-    * the ivar's **offset variable** is loaded (``ldrsw xOff,[xPage, #k]``; *is_ivar_offset*
-      says whether that address holds this ivar's offset);
+    * the ivar's **offset variable** is loaded (``ldrsw xOff,[xPage, #k]``, its address by
+      :meth:`Flow.slot_load_address`; *is_ivar_offset* says whether that address holds this
+      ivar's offset);
     * **by value**: ``add xB, xSelf, xOff`` is the struct, members ``[xB, #k]`` (member 0 may
       be the load ``ldr xV,[xSelf, xOff]`` itself);
     * **array** (*is_array*): ``ldr xA,[xSelf, xOff]`` -- or ``add xS, xSelf, xOff`` (the
@@ -491,26 +479,25 @@ def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array
     if cfg.entry is None:
         return {}
     at = {ins.addr: k for k, ins in enumerate(flow.insns)}
-    states: Dict[int, Tuple[Dict, Dict]] = {cfg.entry: ({}, {})}
+    states: Dict[int, Dict] = {cfg.entry: {}}
     work = [cfg.entry]
     while work:
         b = work.pop()
-        state, pages = dict(states[b][0]), dict(states[b][1])
+        state = dict(states[b])
         for ins in cfg.blocks[b]:
-            _struct_load_step(flow, ins, at[ins.addr], state, pages, is_ivar_offset, is_array)
+            _struct_load_step(flow, ins, at[ins.addr], state, is_ivar_offset, is_array)
         for s in cfg.succ.get(b, []):
             cur = states.get(s)
-            nxt = (dict(state), dict(pages)) if cur is None else \
-                (_join_maps(cur[0], state), _join_maps(cur[1], pages))
+            nxt = dict(state) if cur is None else _join_maps(cur, state)
             if cur is None or nxt != cur:
                 states[s] = nxt
                 work.append(s)
     out: Dict[int, Tuple[int, int]] = {}
-    for b, (st0, pg0) in states.items():
-        state, pages = dict(st0), dict(pg0)
+    for b, st0 in states.items():
+        state = dict(st0)
         for ins in cfg.blocks[b]:
             k = at[ins.addr]
-            member = _struct_load_step(flow, ins, k, state, pages, is_ivar_offset, is_array)
+            member = _struct_load_step(flow, ins, k, state, is_ivar_offset, is_array)
             if member is not None and k <= last and (window is None or k in window):
                 out[k] = member
     return out
@@ -574,9 +561,7 @@ def _flow_for(ctx, insns: Sequence):
     if hit is None or hit[0] is not insns:
         try:
             arms = _jump_table_arm_addrs(ctx, list(insns))
-        except (NameError, ImportError):
-            raise
-        except Exception:                      # CFG completion only; the evaluation itself
+        except READ_ERRORS:                      # CFG completion only; the evaluation itself
             arms = ()                          # follows `br` targets and does not need it
         hit = (insns, dictrep_flow.Flow(ctx, list(insns), jump_table_arms=arms))
         cache[key] = hit
@@ -861,9 +846,7 @@ def _linear_method(ctx, cls, selector: str, imps_sorted: List[int], memo: dict):
             try:
                 insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4),
                                stop_at_ret=False)
-            except (NameError, ImportError):
-                raise
-            except Exception:
+            except READ_ERRORS:
                 insns = None
         memo[key] = insns
     return memo[key]
@@ -876,9 +859,7 @@ def _ivar_offset_test(ctx, site: StructSite):
     def test(addr) -> bool:
         try:
             return addr is not None and ctx.read_s32(addr) == site.ivar_offset
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             return False
     return test
 

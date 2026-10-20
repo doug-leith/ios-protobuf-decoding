@@ -13,6 +13,7 @@ import unittest
 import artifacts
 from macho.export_trie import decode_export_trie
 from proto.writer_flow import WriterFlow, writer_reachable_ivars
+from tests._fakes import NoImage
 
 
 def _uleb(n):
@@ -63,10 +64,9 @@ class TestFastEnumerationContract(unittest.TestCase):
     receiver only, not from the arrays earlier loops enumerated."""
 
     def test_state_holds_only_the_receiver_after_the_call(self):
-        from types import SimpleNamespace
         from unittest import mock
         import proto.writer_flow as WF
-        wf = WF.WriterFlow(SimpleNamespace(segments=[]), [])
+        wf = WF.WriterFlow(NoImage(segments=[]), [])
         wf._cx = {0x1000: {'sp': WF._STACK_TOP, 'x2': WF._STACK_TOP + 0x40}}   # x2 = &state
         st = WF._St({'x0': frozenset({('I', '_b')})})
         st.frame_write(0x40, 64, frozenset({('I', '_a')}))      # an earlier loop's state
@@ -85,7 +85,6 @@ class TestFrameAddressesComeFromTheEvaluation(unittest.TestCase):
     own constant tracking used to read only the unshifted form)."""
 
     def test_a_slot_stored_through_x29_reloads_through_a_shifted_sp(self):
-        from types import SimpleNamespace
         from unittest import mock
         import proto.writer_flow as WF
         from tests._listing import layout
@@ -96,7 +95,7 @@ class TestFrameAddressesComeFromTheEvaluation(unittest.TestCase):
             ('stur', 'x8, [x29, #-8]'),
             ('ldr', 'x1, [sp, #0xff8]'),                     # sp + 0xff8 == x29 - 8
             ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
-        wf = WF.WriterFlow(SimpleNamespace(segments=[]), [])
+        wf = WF.WriterFlow(NoImage(segments=[]), [])
         wf.off_to_ivar = {8: '_a'}
         with mock.patch('proto.dispatch_eval.disasm', fd), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \

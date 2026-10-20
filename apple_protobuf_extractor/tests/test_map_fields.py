@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import unittest
 from tests._listing import layout
+from tests._fakes import NoImage
 from pathlib import Path
 
 import proto.mapfields as M
@@ -28,7 +29,7 @@ from proto.models import FieldLabel, ProtoField, ProtoMessage
 # ── fake instruction memory + context ─────────────────────────────────────────
 
 
-class FakeCtx:
+class FakeCtx(NoImage):
     """Just enough BinaryContext for the helpers under test."""
 
     def __init__(self, u32=None, ptrs=None, cstrs=None):

@@ -41,7 +41,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
-from macho.memory import BinaryContext, _ctx_store
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_store
 from proto.arm64cfg import split_ops
 from proto.arm64_eval import Objects, _STACK_TOP, _is_stack
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, decoded_flow
@@ -50,7 +50,7 @@ from proto.callees import (callee_name, stub_selector, call_reads, call_clobbers
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
 from proto.arm64_operands import (writes, reg_name, operand_regs, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
-                                  CALLS, INDIRECT_BRANCHES)
+                                  CALLS, INDIRECT_BRANCHES, ARG_GPRS)
 
 log = logging.getLogger(__name__)
 
@@ -185,9 +185,6 @@ class _St:
 
     def kill(self, reg: str, prov: FrozenSet = E) -> None:
         self.r[reg] = prov
-
-
-_ARG_REGS = tuple(f"x{i}" for i in range(8))
 
 
 @dataclass(frozen=True)
@@ -451,9 +448,7 @@ class WriterFlow:
     def _cstring(self, va: int) -> Optional[str]:
         try:
             return self.ctx.read_cstring(va)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             return None
 
     def _is_function(self, va: int) -> bool:
@@ -473,13 +468,13 @@ class WriterFlow:
                 res.indirect_calls += 1
             elif sel is not None:
                 res.sends.add(sel)
-        wreg = next((r for r in _ARG_REGS if _W in st.p(r)), None) if depth == 0 else None
+        wreg = next((r for r in ARG_GPRS if _W in st.p(r)), None) if depth == 0 else None
         if wreg is not None and addr is not None:
             # the last visit of a call is the fixpoint's
             slot = self._frame(addr, 'x1')
             res.sites[addr] = WriteSite(
                 addr, tgt, name, wreg, self._int32(addr, 'x1'), self._int32(addr, 'x2'),
-                tuple((r, st.p(r)) for r in _ARG_REGS if st.p(r)), st.p('v0'), slot, st.om,
+                tuple((r, st.p(r)) for r in ARG_GPRS if st.p(r)), st.p('v0'), slot, st.om,
                 st.fv)
         if wreg == 'x0' and addr is not None:
             slot = self._frame(addr, 'x1')

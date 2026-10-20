@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 from proto import callees
 from proto.arm64_eval import Flow, _STACK_TOP
 from tests._listing import insns, layout
+from tests._fakes import NoImage
 
 FRAG = 0x2000
 
@@ -25,7 +26,7 @@ def _flow(frag_lines, *caller):
     frag = tuple(insns(frag_lines, FRAG))
     with mock.patch('proto.arm64_eval.outlined_fragment',
                     lambda ctx, t: frag if t == FRAG else None):
-        flow = Flow(object(), insns(caller))
+        flow = Flow(NoImage(), insns(caller))
         flow.fragment(next(k for k, i in enumerate(flow.insns) if i.mnemonic == 'bl'))
     return flow
 

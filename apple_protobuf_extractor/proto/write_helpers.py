@@ -312,12 +312,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
                         field_regs.add(dst)
                 elif ops[1].startswith("#"):
                     # mov Rd, #imm  — remember; may be a fixed tag wire-type constant.
-                    try:
-                        movs[ops[0]] = _parse_imm(ops[1])
-                    except (NameError, ImportError):
-                        raise
-                    except Exception:
-                        pass
+                    movs[ops[0]] = _parse_imm(ops[1])
             # bfi <Rd>, <field-reg>, #3, #0x1d  — tag = (field << 3) | wt, wt in Rd.
             if mn == "bfi" and len(ops) == 4 and _parse_imm(ops[2]) == 3:
                 wt = movs.get(ops[0])

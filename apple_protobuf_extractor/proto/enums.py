@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from macho.memory     import BinaryContext, _ctx_cache, _ctx_store
+from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from macho.disasm     import disasm, Insn, _STOP_MNEMONICS
@@ -184,9 +184,7 @@ def _function_body_extent(
     outlined block would drag the sweep through foreign code."""
     try:
         insns = disasm(ctx, imp, max_insns=hard_cap, stop_at_ret=False)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return []
     hi = imp
     span = hard_cap * 4
@@ -260,9 +258,7 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
         return None
     try:
         insns = disasm(ctx, m.imp, max_insns=_DICTREP_WRAPPER_INSNS, stop_at_ret=False)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     end = next((k for k, i in enumerate(insns)
                 if i.mnemonic in ('b', 'udf') or i.mnemonic in CALLS
@@ -272,9 +268,7 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     try:
         flow = Flow(ctx, insns[:end + 1])
         region = flow.run_from(0, {'x0': SELF}, objects=OPAQUE)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     if not region.calls:
         return None

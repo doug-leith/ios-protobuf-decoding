@@ -13,6 +13,7 @@ import sys
 import unittest
 
 from tests._listing import text_listing
+from tests._fakes import NoImage
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
@@ -32,7 +33,7 @@ def at_mark(insns, mark='bl', nth=-1):
     return [k for k, i in enumerate(insns) if i.mnemonic == mark][nth]
 
 
-class _StringsCtx:
+class _StringsCtx(NoImage):
     """A binary with no ``__cfstring`` section: string constants are plain C strings."""
 
     def __init__(self, strings):
@@ -99,7 +100,7 @@ class TestStackSlots(unittest.TestCase):
         from proto.callees import ABI_ARGS, RUNTIME_CONTRACTS
         for reads, want in ((RUNTIME_CONTRACTS["_objc_retain_x19"][0], PLAIN), (ABI_ARGS, None)):
             with mock.patch.object(AE, 'call_reads', lambda ctx, va, r=reads: r):
-                self.assertEqual(Flow(object(), insns).propagate({}, [k])[k].get('x3'), want)
+                self.assertEqual(Flow(NoImage(), insns).propagate({}, [k])[k].get('x3'), want)
 
     def test_a_stack_address_handed_once_exposes_the_frame_to_every_later_call(self):
         self.assertIsNone(self.known_x3(

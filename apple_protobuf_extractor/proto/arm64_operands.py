@@ -68,6 +68,12 @@ def reg_name(tok: str) -> Optional[str]:
 CALLER_SAVED_GPRS = tuple(f"x{n}" for n in range(0, 19)) + ("x30",)
 
 
+# The AAPCS64 argument registers; a call also reads x8, an indirect result's address.
+ARG_GPRS = tuple(f"x{n}" for n in range(8))
+ARG_FPRS = tuple(f"v{n}" for n in range(8))
+CALL_ARG_GPRS = ARG_GPRS + ("x8",)
+
+
 # The SIMD/FP registers, named vN whatever the width (b/h/s/d/q/vN.T): tracked by the reaching
 # definitions only (a float/double argument rides in v0), never by value.  AAPCS64 preserves
 # v8-v15 (their low 64 bits, all a scalar uses) across a call.

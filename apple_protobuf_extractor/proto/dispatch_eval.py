@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
-from macho.memory import _ctx_cache, _ctx_store
+from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store
 from macho.classlist import class_name_at
 from proto.arm64cfg import build_blocks_with_br_arms, dominators, dominates, split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
@@ -189,9 +189,7 @@ def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = 
     try:
         insns = [i for i in disasm(ctx, va, max_insns=max(1, (hard_end - va) // 4),
                                    stop_at_ret=False) if va <= i.addr < hard_end]
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return []
     if not insns:
         return []

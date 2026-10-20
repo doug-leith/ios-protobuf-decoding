@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Dict, List, Optional
 
-from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
+from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ObjcClass
 from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
@@ -57,9 +57,7 @@ def _find_readfrom_c_func(
 
     try:
         insns = disasm(ctx, method.imp, max_insns=_READFROM_MAX_INSNS, stop_at_ret=False)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     end = next((k for k, i in enumerate(insns)
                 if i.mnemonic in ('b', 'udf') or i.mnemonic in INDIRECT_BRANCHES

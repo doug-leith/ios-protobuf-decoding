@@ -49,7 +49,7 @@ import logging
 
 from typing import Dict, Iterator, List, Optional, Set
 
-from .memory import BinaryContext
+from .memory import READ_ERRORS, BinaryContext
 from .objc_model import ObjcClass, ObjcIvar, ObjcMethod   # re-exported; see below
 from .strings import StringTable
 from .objc_abi import (CLASS_T_SUPERCLASS, CLASS_T_DATA, CLASS_RO_FLAGS,
@@ -196,9 +196,7 @@ def class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:
         ro = ctx.read_ptr(va + CLASS_T_DATA) & FAST_DATA_MASK
         name_va = ctx.read_ptr(ro + CLASS_RO_NAME) if ro else 0
         return (ctx.read_cstring(name_va) or None) if name_va else None
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
 

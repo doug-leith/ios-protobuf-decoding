@@ -15,6 +15,7 @@ extractor on the dyld cache.
 import os
 import unittest
 from tests._listing import layout
+from tests._fakes import NoImage
 
 import artifacts
 import proto.extractor as E
@@ -253,11 +254,8 @@ _WIFI_TIMERANGE_DICTREP_3 = (0x18cb8ce4c, [
 ])
 
 
-class _NoStringsMixin:
+class _NoStringsMixin(NoImage):
     """What the data-flow analysis may ask of ANY ctx: no named sections, no raw C strings."""
-
-    def has_section(self, segname, sectname):
-        return False
 
     def read_cstring(self, va, max_len=4096):
         raise ValueError(f"no string at {va:#x}")

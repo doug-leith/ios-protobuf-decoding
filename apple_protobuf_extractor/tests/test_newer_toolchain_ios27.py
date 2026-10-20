@@ -24,6 +24,7 @@ Those runs are NOT golden-guarded; these assertions are the guard.
 import os
 import unittest
 from tests._listing import insns, layout
+from tests._fakes import NoImage
 
 import artifacts
 from proto.writer_flow import _image_text_range as WF_image_text_range
@@ -36,7 +37,7 @@ def _asm(*blocks):
     return layout(*blocks)[1]
 
 
-class _ImageCtx:
+class _ImageCtx(NoImage):
     """Stand-in context exposing only ``segments`` (what ``_image_text_range`` reads)."""
     def __init__(self, lo, size):
         self.segments = [Segment(name="__TEXT", vmaddr=lo, vmsize=size, fileoff=0, filesize=size)]

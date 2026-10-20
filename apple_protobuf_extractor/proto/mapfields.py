@@ -46,7 +46,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import disasm, _parse_imm, _norm_reg
 from proto.callees import real_target, stub_selector
@@ -75,9 +75,7 @@ def _addr_to_name(ctx, addr, offset_to_name):
         return None
     try:
         return offset_to_name.get(ctx.read_u32(addr))
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
 #: ObjC ivar classes a protobuf ``map<>`` field compiles to.
@@ -325,9 +323,7 @@ def scan_block_enumerated_maps(
     end = _next_imp(imps_sorted, imp)
     try:
         insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4), stop_at_ret=False)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return out
     calls = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
              and stub_selector(ctx, _parse_imm(ins.op_str)) == _ENUMERATE_SELECTOR]
@@ -347,9 +343,7 @@ def scan_block_enumerated_maps(
             continue
         try:
             body = disasm(ctx, invoke, max_insns=_BLOCK_INVOKE_MAX_INSNS, stop_at_ret=True)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             continue
         if not body or body[-1].mnemonic not in RETURNS:
             continue                                    # never analyse a truncated body
@@ -377,9 +371,7 @@ def entry_from_bound_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
     end = _next_imp(imps_sorted, imp)
     try:
         insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4), stop_at_ret=False)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     k = next((i for i, x in enumerate(insns) if x.addr == w.addr), None)
     if k is None:
