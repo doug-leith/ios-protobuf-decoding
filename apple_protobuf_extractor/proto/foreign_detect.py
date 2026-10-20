@@ -16,6 +16,7 @@ from macho.memory import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass
 from proto.models import record_failed_pass
 from proto.protoclass_set import _resolve_class_name_at
+from serializers import cpp_descriptor_extract as _cpp
 from serializers.protobufc_detect import ProtobufCDescriptors, find_protobufc_descriptors
 
 log = logging.getLogger(__name__)
@@ -262,21 +263,31 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
 
     cpp_ns = cpp_protobuf_namespaces(ctx)
     if cpp_ns:
-        total = sum(cpp_ns.values())
-        decoded.append(
-            "C++ google::protobuf: %d symbol(s) [namespace(s): %s]%s (full descriptors "
-            "from the embedded FileDescriptorProto)" % (
-                total, ", ".join(sorted(cpp_ns)),
-                " (a vendored static copy, e.g. Apple Wireless Diagnostics telemetry)"
-                if any(n != "google::protobuf" for n in cpp_ns) else "",
-            )
-        )
+        symbols = "%d symbol(s) [namespace(s): %s]%s" % (
+            sum(cpp_ns.values()), ", ".join(sorted(cpp_ns)),
+            " (a vendored static copy, e.g. Apple Wireless Diagnostics telemetry)"
+            if any(n != "google::protobuf" for n in cpp_ns) else "")
+        try:
+            has_descriptors = bool(_cpp.extract_cpp_protos_from_ctx(ctx))
+        except (NameError, ImportError):
+            raise
+        except Exception as exc:
+            record_failed_pass(ctx, "C++ libprotobuf descriptor scan", exc,
+                               "C++ messages are not reported as decoded or detected")
+            has_descriptors = None
+        if has_descriptors:
+            decoded.append("C++ google::protobuf: %s (full descriptors from the embedded "
+                           "FileDescriptorProto)" % symbols)
+        elif has_descriptors is False:
+            # libprotobuf-lite strips the FileDescriptorProto: LIMITATIONS.md (9).
+            detected.append("C++ libprotobuf-lite: %s; no embedded FileDescriptorProto, "
+                            "so message/field names and numbers are not recoverable" % symbols)
 
     gpb_subs, gpb_bases = google_protobuf_classes(ctx, cl)
     if gpb_subs:
         detected.append(
             "Google protobuf-objc (%s): %d ObjC class(es), e.g. %s — driven by a shared "
-            "GPBDescriptor runtime; not yet decodable by this tool" % (
+            "GPBDescriptor runtime; not decoded by this tool" % (
                 "/".join(sorted(gpb_bases)) or _GPB_RUNTIME_SUFFIX,
                 len(gpb_subs), ", ".join(sorted(gpb_subs)[:5]),
             )

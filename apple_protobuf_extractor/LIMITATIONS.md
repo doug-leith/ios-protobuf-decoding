@@ -385,7 +385,7 @@ field-for-field against Google's `descriptor_pb2`: 0 mismatches over 2626 fields
 70 protos; see `notes/SWIFT_PROTO_HAND_VERIFICATION.md` Part 2). It makes **no
 estimates**.
 
-## 8. GPBMessage (Google protobuf-objc) is detected but not decoded  — to-do #64 (deferred)
+## 8. GPBMessage (Google protobuf-objc) is detected but not decoded  — accepted limitation
 
 **Symptom.** An image using Google's ObjC `GPBMessage` runtime is reported by
 `--list-serializers` as `[DETECTED — not decodable by this tool]`; no `.proto`
@@ -395,8 +395,8 @@ schema is emitted for its messages.
 `GPBMessageFieldDescription[]` table built by each class's `+descriptor` method.
 Decoding it is tractable (numbers, types incl. integer subtype, labels, enums, and
 names are all in the table) but the struct layout is protobuf-objc-version-specific
-and some builds compact the field-name strings — a substantial, separate effort.
-**Accepted as a deferred limitation.**
+and some builds compact the field-name strings — a substantial, separate effort. In the
+captured iPhone traffic its one producer is Key Transparency. **Accepted as a limitation.**
 
 **Known affected (libexec).** `anomalydetectiond`, `transparencyStaticKey`,
 `transparencyd` (Key Transparency); ~180 GPBMessage images cache-wide. The tool

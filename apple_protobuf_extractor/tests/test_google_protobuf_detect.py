@@ -101,12 +101,14 @@ class TestGoogleProtobufNoFalsePositive(unittest.TestCase):
 # ── Swift-protobuf + C++ libprotobuf detection ───────────────────────────────
 
 class _SymCtx:
-    """Minimal ctx exposing only iter_symbol_names() for the symbol-based
-    Swift/C++ detectors."""
+    """Minimal ctx for the symbol-based Swift/C++ detectors: symbol names and no
+    sections (so no embedded C++ descriptors)."""
     def __init__(self, names):
         self._names = list(names)
     def iter_symbol_names(self):
         return iter(self._names)
+    def has_section(self, seg, sect):
+        return False
 
 
 # Real conformance-descriptor symbols (from bookdatastored / synthesised siblings).
@@ -218,12 +220,29 @@ class TestForeignProtobufWarnings(unittest.TestCase):
         self.assertIn("DETECTED", out)
         self.assertIn("Google protobuf-objc", out)
         self.assertIn("swift-protobuf", out)
-        self.assertIn("C++ google::protobuf", out)
         self.assertIn("FooRequest", out)              # GPB class named
         self.assertIn("PBPropertyValue", out)         # Swift type named
-        # GPB appears under DETECTED, the decodables under DECODED
-        self.assertLess(out.index("DECODED"), out.index("Google protobuf-objc"))
+        # swift is DECODED; GPB and the descriptor-less C++ (lite) are DETECTED
+        self.assertLess(out.index("DECODED"), out.index("swift-protobuf"))
+        self.assertLess(out.index("swift-protobuf"), out.index("DETECTED"))
         self.assertLess(out.index("DETECTED"), out.index("Google protobuf-objc"))
+        self.assertLess(out.index("DETECTED"), out.index("C++ libprotobuf-lite"))
+        self.assertNotIn("C++ google::protobuf", out)
+
+    def test_cpp_with_descriptors_is_decoded(self):
+        # The same symbols plus an embedded FileDescriptorProto: full C++, DECODED.
+        ctx = _SymClassCtx(["__ZN6google8protobuf11MessageLiteD2Ev"])
+        saved = FD._cpp.extract_cpp_protos_from_ctx
+        FD._cpp.extract_cpp_protos_from_ctx = lambda c: [object()]
+        try:
+            with self.assertLogs("proto.foreign_detect", level="WARNING") as cm:
+                FD._warn_if_foreign_protobuf(ctx, ClassList([]))
+        finally:
+            FD._cpp.extract_cpp_protos_from_ctx = saved
+        out = cm.output[0]
+        self.assertIn("DECODED", out)
+        self.assertIn("C++ google::protobuf", out)
+        self.assertNotIn("DETECTED", out)
 
     def test_no_runtimes_no_warning(self):
         with self.assertRaises(AssertionError):       # assertLogs fails if nothing logged

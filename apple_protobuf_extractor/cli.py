@@ -341,7 +341,7 @@ def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native)
         print("  (none detected)")
     for s in summaries:
         tag = "" if s.decodable else "  [DETECTED — not decodable by this tool]"
-        note = getattr(s, "note", None)
+        note = s.note
         if not s.names and note:
             # name-less detect-only entry (e.g. libprotobuf-lite)
             print(f"\n  {s.label}{tag}:")
@@ -358,7 +358,7 @@ def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native)
             "swift-protobuf (names+numbers; types from reflection, int "
             "subtype/oneof limited)."
             "\n    Detect-only: C++ libprotobuf-lite (descriptors stripped — "
-            "names/numbers unrecoverable), GPBMessage (not yet decoded), "
+            "names/numbers unrecoverable), GPBMessage (not decoded), "
             "protobuf-c (descriptor names listed; fields not decoded)."
             "\n    Cache-native (--framework) decodes PBCodable + C++-full + "
             "swift and detects lite/GPB/protobuf-c, all via the .symbols nlist / "
