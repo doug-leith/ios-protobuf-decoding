@@ -4,7 +4,7 @@ An iPhone sends binary protobuf messages to Apple's servers for location service
 
 - **[`apple_protobuf_extractor`](apple_protobuf_extractor/README.md)**, which recovers `.proto` definitions (message and field names, field numbers, types and enums) from Apple's compiled binaries, in a Mach-O file or a dyld shared cache. It handles three protobuf runtimes: Apple's Objective-C `PBCodable` classes (by analysing their generated `writeTo:` and `readFrom:` code), Google's C++ `libprotobuf` (an exact decode of the descriptors the binary embeds) and `swift-protobuf` (names and numbers from each message's name map, types from Swift reflection metadata). No Apple headers or `.proto` sources are needed. It also extracts protobufs from macOS binaries (Apple silicon), e.g. the frameworks in a macOS dyld shared cache; it has been tested on iOS 16, iOS 27 and macOS 27.
 - **[`ios_decoder`](ios_decoder/README.md)**, which decodes captured iOS traffic (mitmproxy `.mitm` files) offline into readable protobuf using those schemas, and also handles Siri, DNS-over-HTTPS, certificates and the map and location tiles.
-- **[120 recovered `.proto` files](#recovered-schemas)** (2,410 messages, 1,060 enums) in `ios_decoder/protos/`, which you can use directly.
+- **[189 recovered `.proto` files](#recovered-schemas)** (2,773 messages, 1,177 enums) in `ios_decoder/protos/`, which you can use directly.
 
 The schemas are partly decoded. Names, numbers and types come from the binaries. The C++ schemas are exact. For `PBCodable` and `swift-protobuf` some numbers or types are estimates, most of them flagged in the output (see the [extractor README](apple_protobuf_extractor/README.md#what-it-recovers--and-the-honest-caveats)). What each endpoint is *for* comes from observed traffic, and is described [below](#protobufs-by-endpoint).
 
@@ -98,15 +98,20 @@ The dyld cache and binaries are Apple's software and are not in this repository.
 
 | Framework | `.proto` files | Messages | What is in it |
 |---|---|---|---|
-| `GeoServices` | 6 | 1,720 | Maps, places and geocoding, Wi-Fi quality and `geod` telemetry. `geo.proto` holds most of the `GEO*` messages. |
+| `GeoServices` | 6 | 1,721 | Maps, places and geocoding, Wi-Fi quality and `geod` telemetry. `geo.proto` holds most of the `GEO*` messages. |
 | `locationd` | 25 | 399 | Wi-Fi and cell location lookup (`als.proto`) and other `locationd` messages. |
 | `CoreLocationProtobuf` | 1 | 84 | Cell and Wi-Fi observation, location, trace and pressure uploads (`clp.proto`). |
 | `AppPredictionInternal` | 8 | 99 | App-prediction messages (`atx.proto`, used by the `DuetExpert` feedback channel). |
 | `CoreParsec` | 77 | 77 | Feedback and usage messages, for example `_cpusageenvelope.proto` and `_cpclientsession.proto`. |
 | `ProactiveEventTracker` | 2 | 8 | `pet.proto`, used by the `ProactiveEventTracker` feedback channels. |
 | `AdCore` | 1 | 23 | The iAd advertising SDK: opt-out, segment update, settings, configuration, analytics and user-transparency requests and responses (`ad.proto`). |
+| `CloudKitDaemon` | 4 | 244 | CloudKit: the database API operations `cloudd` exchanges with `*.icloud.com/ckdatabase/` (`ckdp.proto`), and the code-service and sharing messages. |
+| `iTunesCloud` | 49 | 80 | Music and store messages: the in-app message sync (`iciam.proto`) and the shared-queue session messages, for participants, queue edits and playback sync (`_icll*.proto`). |
+| `C2` | 13 | 13 | `cloudd`'s network-metrics upload to `metrics.icloud.com/c2` (`c2mpmetric.proto` and its parts). |
+| `NetworkServiceProxy` | 1 | 14 | iCloud Private Relay: the privacy-token request and response and the signed proxy configuration (`nsp.proto`). |
+| `itunescloudd` | 2 | 11 | The daemon's own messages: Apple Music API tokens and taste preferences (`ic.proto`), and the artist new-releases response (`amp.proto`). |
 
-103 of the files (2,026 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. 
+172 of the files (2,389 messages) were recovered from `PBCodable` classes. The other 17 (384 messages) are exact decodes of C++ `libprotobuf` descriptors: five in `GeoServices` (`addressobject`, `compressed_path`, `descriptor`, `geo3_slim` and `path`) and twelve in `locationd`, mostly GNSS and log-entry types such as `gnssemergencytypes.proto` and `clpprivatedatacapture.proto`. 
 
 ## Protobufs by endpoint
 
@@ -428,19 +433,22 @@ logMessages {
 ./venv/bin/python3 -m pytest
 ```
 
-Without Apple artifacts or captures, a large part of the suite skips by design (227 tests in
-a clean checkout, all in the extractor suite; `ios_decoder` needs no Apple data). The summary says so, and a green run in that state does **not**
+Without Apple artifacts or captures, a large part of the suite skips by design (344 tests in
+a clean checkout: 343 in the extractor suite, and one `ios_decoder` test that reads iPhone 8 captures). The summary says so, and a green run in that state does **not**
 mean the extractor was exercised against real binaries.
 
 - **Live extractor tests** need the Apple artifacts: a dyld shared cache and the `locationd`
   binary. Put them in `./iphone8_data/`, or point `MACHO_DATA_DIR` at a directory
   that holds them. Set `MACHO_REQUIRE_LIVE=1` to make a missing artifact a failure instead of a skip.
-  The 12 iOS 27 tests (`test_newer_toolchain_ios27.py`) look for `./ios27_data/dylib/dyld_shared_cache_arm64e`,
-  or for the directory named by `MACHO_TEST_IOS27_CACHE`.
+  The iOS 27 tests look for `./ios27_data/dylib/dyld_shared_cache_arm64e`, or for the directory
+  named by `MACHO_TEST_IOS27_CACHE`; the macOS 27 tests for `./macos27_data/dylib/dyld_shared_cache_arm64e`,
+  or for `MACHO_TEST_MACOS27_CACHE`.
 - **Real tile, Siri, ARPC and `/fb` tests** use extracts of real captured traffic that are committed
   under `ios_decoder/tests/fixtures/` (about 2.8 MB). They can be
   regenerated from your own `.mitm` captures with `extract_tile_samples.py`, `extract_tcp_samples.py`
   and `extract_request_samples.py` (all in `ios_decoder/tests/`); no capture is needed to run the tests.
+  One test also decodes the iCloud and store endpoints' bodies in full captures, `iphone8_data/captures/*.mitm`,
+  and skips without them.
 
 ## Getting the Apple artifacts (optional)
 
@@ -504,14 +512,18 @@ find iphone8_data/extracted -type f \( -name locationd -o -name geod -o -name DP
 `ipsw` recreates the firmware's folder layout under `iphone8_data/extracted/`, so the two `find` commands
 do the moving.
 
-**5. Extract the GeoServices image from the cache.** This prints an "experimental" warning; that is expected.
+**5. Extract the images the tests read as files from the cache.** Each prints an "experimental" warning; that is expected.
 
 ```sh
 ipsw dyld extract iphone8_data/dylib/dyld_shared_cache_arm64 GeoServices --output iphone8_data
+for fw in MMCS SeymourCore PegasusAPI; do
+  ipsw dyld extract iphone8_data/dylib/dyld_shared_cache_arm64 "$fw" \
+    --output "iphone8_data/dylib/System/Library/PrivateFrameworks/$fw.framework"
+done
 ```
 
-**6. iOS 27 cache (optional; about 12 GB).** Only the 12 tests in `test_newer_toolchain_ios27.py`
-use it. This extracts just the cache from Apple's server, without keeping the whole firmware.
+**6. iOS 27 cache (optional; about 12 GB).** Only the iOS 27 tests use it. This extracts just the
+cache from Apple's server, without keeping the whole firmware.
 
 ```sh
 mkdir -p ios27_data/dylib
@@ -519,18 +531,24 @@ ipsw download ipsw --device iPhone17,3 --build 24A437 --dyld --dyld-arch arm64e 
 find ios27_data/dylib -mindepth 2 -name 'dyld_shared_cache_arm64e*' -exec mv {} ios27_data/dylib/ \;
 ```
 
-**7. Run the suite with the live tests enforced.**
+**7. macOS 27 cache (optional).** The macOS 27 tests read the dyld shared cache of a Mac running macOS 27
+(`/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e*`), copied into
+`macos27_data/dylib/` or named by `MACHO_TEST_MACOS27_CACHE`.
+
+**8. Run the suite with the live tests enforced.**
 
 ```sh
 MACHO_REQUIRE_LIVE=1 ./venv/bin/python3 -m pytest
 ```
 
-With everything in place, nothing should skip (without step 6, the 12 iOS 27 tests skip). The firmware downloaded in step 2
+Without steps 6 and 7 the iOS 27 and macOS 27 tests skip. A few tests also read files these steps do not
+produce, and skip without them: `TrustedPeersHelper` from the iPhone 8 firmware, under
+`iphone8_data/disk_image/System/Library/Frameworks/Security.framework/XPCServices/TrustedPeersHelper.xpc/`;
+and from the iOS 27 firmware, the cache's `dyld_shared_cache_arm64e.symbols` (beside the cache) and
+`TrustedPeersHelper`, under `ios27_data/ipsw_extract/24A446__iPhone17,3/` in the firmware's folder layout. The firmware downloaded in step 2
 can be deleted afterwards (`rm -r iphone8_data/ipsw`); the tests do not use it.
 
 ## Provenance
 
-This repository was created as a snapshot of two directories from a larger private research
-repository, taken at its commit `9115ef2`. It starts with no history. Some things you will meet in
-the code reflect that origin including comments and notes refer to predecessor tools that are not included and to commit hashes from the original repository.
+This repository started as a snapshot of a larger private research repository, so some code comments refer to commits and tools that are not in it.
 
