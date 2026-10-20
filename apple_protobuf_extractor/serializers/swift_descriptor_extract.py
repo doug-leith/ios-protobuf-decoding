@@ -1101,7 +1101,7 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
     ``OneOf_*`` enums (#60), so oneof/storage-backed fields are now covered too."""
     try:
         from serializers import swift_type_recovery
-        by_type, incomplete, fieldless = swift_type_recovery.collect_field_types(ctx)
+        by_type, incomplete, fieldless, stored = swift_type_recovery.collect_field_types(ctx)
     except (NameError, ImportError):
         raise
     except Exception as exc:
@@ -1115,8 +1115,9 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
         if m.shape in _REFLECTION_CONFIRMED_SHAPES and m.fields:
             # single-entry readings whose only support is the literal itself: the struct's
             # reflection must list that field, or the reading is another type's
-            # (e.g. an empty message whose getter reaches a sibling's closure).
-            refl = {_norm(k) for k in by_type.get(m.name, {})}
+            # (e.g. an empty message whose getter reaches a sibling's closure).  Any
+            # stored field record counts, whether or not its type decodes.
+            refl = {_norm(k) for k in stored.get(m.name, ())}
             if _norm(m.fields[0].name) not in refl:
                 m.fields, m.shape = [], "none"
         if not m.fields and m.name in fieldless:

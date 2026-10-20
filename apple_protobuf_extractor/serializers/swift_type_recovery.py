@@ -32,7 +32,7 @@ NAME against the nameMap (number↔name).  Binary mode only.
 from __future__ import annotations
 
 import struct
-from typing import Dict, Optional
+from typing import Dict, NamedTuple, Optional, Set
 
 from macho.memory import READ_ERRORS
 
@@ -409,21 +409,24 @@ def _read_field_types(ctx, desc):
     """Decode the ``__swift5_fieldmd`` records hanging off a nominal type
     descriptor's FieldDescriptor (at ``desc + 0x10``).
 
-    Returns ``(fields, incomplete)`` where ``fields`` is ``{name: proto_type}`` and
+    Returns ``(fields, incomplete, names)`` where ``fields`` is ``{name: proto_type}``,
     ``incomplete`` is the subset of names whose ``proto_type`` contains a GUESS
     filler (an Array element / map key-or-value that didn't decode, shown as
-    ``bytes``) — flagged so the emitter can note it (#67).  Bookkeeping fields and
-    any whose mangled type doesn't decode at all are skipped."""
+    ``bytes``) — flagged so the emitter can note it (#67) — and ``names`` is every
+    stored proto field the records list.  A field whose mangled type doesn't decode
+    (e.g. a reference to a type outside the image that an extracted image no longer
+    names) is in ``names`` but not ``fields``; bookkeeping fields are in neither."""
     fd = _relptr(ctx, desc + 0x10)
     if not fd:
-        return {}, set()
+        return {}, set(), set()
     try:
         nfields = _u32(ctx, fd + 0x0C)
         recsize = _u16(ctx, fd + 0x0A) or 12
     except READ_ERRORS:
-        return {}, set()
+        return {}, set(), set()
     fields: Dict[str, str] = {}
     incomplete: set = set()
+    names: set = set()
     rec = fd + 0x10
     for _ in range(min(nfields, _MAX_FIELD_RECORDS)):
         fname = _cstr(ctx, _relptr(ctx, rec + 0x08))
@@ -431,14 +434,15 @@ def _read_field_types(ctx, desc):
         rec += recsize
         if not fname or fname in _SKIP_FIELDS or mva == 0:
             continue
+        clean = fname.lstrip("_")
+        names.add(clean)
         ptype, label = decode_mangled(ctx, mva)
         if not ptype:
             continue
-        clean = fname.lstrip("_")
         fields[clean] = f"repeated {ptype}" if label.startswith("repeated") else ptype
         if label.endswith("?"):          # 'repeated?' / 'map?' -> inner is a guess
             incomplete.add(clean)
-    return fields, incomplete
+    return fields, incomplete, names
 
 
 def _parent_desc(ctx, desc):
@@ -479,15 +483,26 @@ def _owner_type_name(ctx, desc) -> Optional[str]:
     return _qualified_name(ctx, _parent_desc(ctx, desc))
 
 
-def collect_field_types(ctx):
-    """Walk ``__swift5_types`` once and return ``(types, incomplete, fieldless)``:
+class FieldMetadata(NamedTuple):
+    """What ``__swift5_fieldmd`` says about each message (:func:`collect_field_types`)."""
+    types: Dict[str, Dict[str, str]]
+    incomplete: Dict[str, Set[str]]
+    fieldless: Set[str]
+    stored: Dict[str, Set[str]]
+
+
+def collect_field_types(ctx) -> FieldMetadata:
+    """Walk ``__swift5_types`` once and return ``(types, incomplete, fieldless, stored)``:
       * ``types``      — ``{qualified_type_name: {field_name: proto_type}}``
       * ``incomplete`` — ``{qualified_type_name: set(field_names)}`` for fields whose
         ``proto_type`` carries a ``bytes`` guess filler (#67).
       * ``fieldless``  — qualified names of struct types whose reflection metadata
         lists NO stored proto field (own struct, COW storage class and oneof members
         all empty): the independent proof that a message with no recovered name-map
-        entries is genuinely EMPTY rather than unread.
+        entries is genuinely EMPTY rather than unread.  Counted from the field
+        records, not from the types that decoded.
+      * ``stored``     — ``{qualified_type_name: set(field_names)}``: every stored proto
+        field the records list, typed or not.
 
     Covers the message struct's directly-stored proto fields, the fields moved into
     a copy-on-write ``_StorageClass`` for larger messages, AND the members of a
@@ -496,8 +511,9 @@ def collect_field_types(ctx):
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
     except READ_ERRORS:
-        return {}, {}, set()
+        return FieldMetadata({}, {}, set(), {})
     out: Dict[str, Dict[str, str]] = {}
+    stored: Dict[str, Set[str]] = {}
     incomplete: Dict[str, set] = {}
     structs: set = set()
     for i in range(sec.vmsize // 4):
@@ -524,12 +540,14 @@ def collect_field_types(ctx):
                 continue
             if kind == _STRUCT_KIND:
                 structs.add(key)
-            fields, inc = _read_field_types(ctx, desc)
+            fields, inc, names = _read_field_types(ctx, desc)
             if fields:
                 out.setdefault(key, {}).update(fields)
             if inc:
                 incomplete.setdefault(key, set()).update(inc)
+            if names:
+                stored.setdefault(key, set()).update(names)
         except READ_ERRORS:
             continue
-    return out, incomplete, structs - set(out)
+    return FieldMetadata(out, incomplete, structs - set(stored), stored)
 

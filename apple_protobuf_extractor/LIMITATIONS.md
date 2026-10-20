@@ -500,7 +500,9 @@ lowerings, 5 built inline in `StrokeAnimation`, and a handful elsewhere).
 Two readings have no cross-check of their own, a runtime-built name map with exactly one
 entry and a one-entry arg-setup stub, so they are accepted only if the struct's
 reflection lists a field with that name (a sibling type's closure otherwise gets
-read as the message's own).
+read as the message's own). Both checks count the field records, typed or not. In a
+framework extracted from the dyld cache, a field whose type lives outside the image
+(`Swift.Int32`, `Foundation.Data`) has a record but no type the file still names (#106).
 
 **Unrecovered types.** A fully-unrecovered type is emitted as `bytes` with the inline
 `// swift-protobuf: type not recovered` note rather than a guess.

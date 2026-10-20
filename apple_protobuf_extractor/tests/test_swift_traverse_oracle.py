@@ -53,11 +53,10 @@ class TestTraverseOracleStandalone(unittest.TestCase):
             total += agree
         self.assertGreaterEqual(total, 10)       # 17 when both are present
 
-    @unittest.expectedFailure
     def test_internal_swift_protobuf_wrappers(self):
-        # Int32Value / Int64Value (and the UInt / Bytes wrappers) are reported fieldless: their
-        # `value` record's type binds outside the image, decode_mangled returns None and the
-        # record is dropped before the fieldless test (TODO #100).
+        # Int32Value / Int64Value / UInt32Value / UInt64Value / BytesValue: the `value` record's
+        # type is a reference outside the image that the extracted file no longer names.  The
+        # record still counts for the fieldless test and the one-entry reading (TODO #106).
         p = _data_path(*_INTERNAL_SWIFT_PROTOBUF)
         if not p:
             self.skipTest("extracted InternalSwiftProtobuf not available")
@@ -88,7 +87,7 @@ class TestTraverseOracleIos27(unittest.TestCase):
         finally:
             reader.close()
         self.assertEqual(seen, set(_IOS27_IMAGES))
-        self.assertGreaterEqual(total, 150)      # 184 at #100
+        self.assertGreaterEqual(total, 150)      # 184 at #105
 
 
 if __name__ == "__main__":

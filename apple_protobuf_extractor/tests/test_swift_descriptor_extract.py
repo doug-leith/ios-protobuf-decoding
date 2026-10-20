@@ -980,7 +980,7 @@ class TestLiveIos27PackedBytecode(unittest.TestCase):
         from serializers import swift_type_recovery as TR
         from macho.memory import BinaryContext
         ctx = BinaryContext.from_cache(self.reader, self.reader.resolve_image("CipherML"))
-        by_type, _, _ = TR.collect_field_types(ctx)
+        by_type = TR.collect_field_types(ctx).types
         checked = 0
         for name, m in self.msgs["CipherML"].items():
             fm = {k.replace("_", "").lower() for k, t in by_type.get(name, {}).items()
