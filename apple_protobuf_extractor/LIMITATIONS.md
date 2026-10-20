@@ -444,27 +444,20 @@ are exact — **except** the cases below. Well-known types built at runtime
 (`Google_Protobuf_*`), copy-on-write `_StorageClass` fields and proto `oneof` members
 are recovered exactly.
 
-**(a) A single-field message's number can be estimated (flagged).** For the compact
-single-field "tail-call" lowering the number is not in the nameMap closure. It is read
-from two independent structural sources — `decodeMessage`'s field-number compare and
-`traverse`'s per-field visit immediate — and treated as confirmed only when they agree
-on exactly one value. When neither yields a single number it falls back to **1** with
-`number_confirmed=False`, rendered as `// number estimated`.
+**(a) Closed (#98).** The compact single-field lowering is read through the getter's
+template like any other name map; the separate reader that guessed `= 1` is gone. A number
+is rendered `// number estimated` only when a runtime builder's listing hit the runaway
+guard, so its table may be incomplete.
 
-**(b) Integer subtype is collapsed to the base type (NOT flagged).** `int32`,
+**(b) Integer subtype can be collapsed to the base type (NOT flagged).** `int32`,
 `sint32`, `sfixed32` and `fixed32` are all `Int32` in Swift (likewise the `uint*`/`*64`
-analogues), so `swift_type_recovery` emits the base (`int32`/`uint32`/`int64`/
-`uint64`). For a genuinely `sint*` (zigzag) or `fixed*`/`sfixed*` (wire type 1/5)
-field this is **wire-incorrect**. `Float`/`Double`/`Bool`/`String`/`Data`/`Array`/
-`Dictionary` are correct. **Why it is not recovered:** the signal exists (`traverse`
-selects the exact `visitSingular<Type>Field` by witness-table slot offset) but is not
-extractable on the available inputs: cache-mode `.symbols` carries no `traverse` symbol,
-so the slot map cannot be built, and in binary mode the sint/fixed `visitSingular*`
-calls appear only in SwiftProtobuf library plumbing types, never in an app or framework
-schema message — every application integer field surveyed is a plain
-`Int32/UInt32/Int64/UInt64`. No affected field is known; a corpus with a genuine
-`sint*`/`fixed*` Swift field and a resolvable `traverse` would need the subtype read
-from the witness-slot map.
+analogues), so the reflection type alone gives only the base. Since #98 the encoding is
+read off the Visitor method `traverse` calls for the field (`visitSingularSInt32Field`,
+`visitSingularFixed64Field`, …), named by its dispatch thunk or by its slot in the visitor
+witness table (AONSense `rssi_db` is `sint32`, nptocompaniond `SyncAsset.date` is
+`sfixed64`). Where the call cannot be named, in an extracted framework whose swift-protobuf
+is another file, the base type (`int32`/`uint32`/`int64`/`uint64`) stays, which is
+**wire-incorrect** for a genuine `sint*` (zigzag) or `fixed*`/`sfixed*` (wire type 1/5) field.
 
 **(c) Undecoded container element (flagged).** When an Array element or a map
 key/value doesn't decode, the field shows a `bytes` filler with an inline
@@ -477,7 +470,7 @@ messages, and each enum is written as a proto `enum` that its fields reference. 
 may be 0, negative or large. Two cases sharing a value (an alias) are written as one
 value with the alias in a comment, because the flat emitter has no `allow_alias`; names
 that `protoc` would reject (equal ignoring case and underscores, or reused by another
-enum of the package) are renamed with a comment. No `decodeMessage` exists to
+enum of the package) are renamed with a comment. No `traverse` exists to
 cross-check an enum, so a table is accepted only if it is sorted by value with distinct
 identifier names, which is how protoc-gen-swift writes it. Known gaps:
 

@@ -5,8 +5,8 @@ Wired into :func:`swift_descriptor_extract._extract_namemap` as shape E (a fallb
 reached only when no other shape recovered fields).  Strictly self-validating:
 :func:`decode_namemap_bytecode` returns ``None`` unless the literal has the header,
 only known opcodes, NUL-terminated names and is consumed exactly, so a non-bytecode
-literal (e.g. the bare-name literal of a single-field message, which stays with
-shape B) can never be misread as fields.
+literal (e.g. the bare-name literal of a single-field message) can never be misread
+as fields.
 
 Format (swift-protobuf ``NameMap.swift``, ``ProtoNameInstruction``).  The
 generator emits ``_NameMap(bytecode: "<string literal>")`` instead of a runtime

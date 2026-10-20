@@ -17,9 +17,9 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   read as the template with the closure's registers (:func:`_tail_callee`), like A and D.
 * **C — static object** (newer toolchains): the dictionary literal is
   const-folded into a static ``Array<(Int, _NameDescription)>`` handed to
-  ``_swift_initStaticObject``; entries are scanned from the blob as
-  ``(number, name-ptr, len, …)`` triples (element stride is version-dependent,
-  so we scan rather than assume it).
+  ``_swift_initStaticObject(metadata, object)``; the object the getter passes is read as
+  ``(number, name-ptr, len, …)`` elements, the stride (version-dependent) taken from the
+  first two and every element required to parse (:func:`_parse_static_blob`).
 * **D — shared once-init template** (another newer-toolchain lowering, e.g.
   DPSubmissionService): the getter is just ``adr x0,<once-token>; adr
   x1,<storage-slot>; adr x2,<builder>; b <shared-lazy-init-template>`` — the
@@ -39,12 +39,12 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   x1,<slot>; adrp/add x2,<literal>; mov w3,#<len>; b <template>``.  Decoded by
   :mod:`serializers.swift_namemap_bytecode` (structure-validated: header, opcodes,
   terminators and full consumption, else it declines).  A single-field message's
-  bare-name literal (no header) is declined and read as shape B.
+  bare-name literal (no header) is declined and read through its template, as B.
 
-TYPES are intentionally NOT recovered here: swift-protobuf encodes them via
-generic ``Visitor``/``Decoder`` witness-table calls (``blraa`` / local thunks),
-so there is no named ``visit*Field`` symbol to read the wire type from.  Output
-lists field names + numbers only.
+TYPES come from Swift reflection (:mod:`serializers.swift_type_recovery`), joined by name.
+``traverse`` adds the integer encoding (``sint32``, ``fixed64`` …) and types the scalars
+reflection leaves untyped: each of its Visitor calls is named by its dispatch thunk or its
+visitor witness-table slot (:func:`_traverse_visits`).
 
 Works in BOTH modes: from a standalone binary the per-type ``_protobuf_nameMap``
 static-init symbols come from ``LC_SYMTAB`` / the dyld export trie; cache-native
@@ -87,9 +87,8 @@ _MAX_FIELD_NUMBER = 0x1FFFFFFF        # proto field numbers are 29-bit
 _MAX_ELEMENT_STRIDE = 0x78
 _NAMEMAP_MARKER = "17_protobuf_nameMap"
 # [cap:INPUT-SANITY] runaway guard on a listing read without a function index (:func:`_listing`;
-# with one, the function's extent bounds it) and on the linear decodeMessage / traverse reads.
-# A listing that reaches it is marked truncated and the builder numbers read from it are
-# reported as estimated.
+# with one, the function's extent bounds it).  A listing that reaches it is marked truncated and
+# the builder numbers read from it are reported as estimated.
 _INLINE_MAX_INSNS = 4000
 # [cap:COSMETIC] instructions disassembled per read while following a path; a path is read
 # on until it ends, whatever this is.
@@ -144,7 +143,7 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
 
     Cache-native images keep no per-image symbol table in their (shared-LINKEDIT)
     Mach-O; instead the original local symbols — including each type's
-    ``…_protobuf_nameMap`` static-init, ``…decodeMessage`` and ``…traverse`` symbols —
+    ``…_protobuf_nameMap`` static-init and ``…traverse`` symbols —
     live in the cache's ``.symbols`` sub-cache, keyed by vmaddr.  We read those directly
     so swift-protobuf recovery works cache-native, not just from a standalone
     binary.  Returns ``{}`` when no symbol source is addressable."""
@@ -152,7 +151,7 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
     if reader is not None and getattr(ctx, "is_cache_backed", False):
         try:
             return reader.image_symbol_addrs(
-                ctx.image_base, _NAMEMAP_MARKER, "13decodeMessage", "V8traverse")
+                ctx.image_base, _NAMEMAP_MARKER, "V8traverse")
         except (NameError, ImportError):
             raise
         except Exception:
@@ -716,7 +715,6 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
 
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
-                               decode_va: Optional[int],
                                traverse_va: Optional[int],
                                enum: bool = False) -> bool:
     """Guard the runtime-namemap reading against fabrication.
@@ -728,50 +726,22 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
     as a number.
 
     Accept only when neither check rejects:
-      * the independent ``decodeMessage``/``traverse`` numbers (a different codegen
+      * the field numbers ``traverse`` visits (:func:`_traverse_visits`, a different codegen
         path) are a SUBSET of the recovered set — a contradiction means we read the
         wrong thing; and
       * not EVERY entry has ``number == len(name)`` — the signature of the
         ``(length, ptr)`` packed form."""
     if enum:
-        # no decodeMessage / traverse for an enum; the (length, ptr) packed-form
+        # no traverse for an enum; the (length, ptr) packed-form
         # confusion is a message-field-number artefact.  Case names must all look
         # like identifiers, and at least one entry must exist.
         return bool(got) and all(_IDENT_RE.match(f.name) for f in got)
-    recovered = {f.number for f in got}
-    oracle: set = set()
-    if decode_va is not None:
-        oracle |= set(_decode_message_numbers(ctx, decode_va))
-    if traverse_va is not None:
-        oracle |= set(_traverse_field_numbers(ctx, traverse_va))
-    if oracle and not oracle <= recovered:
+    oracle = set(_traverse_field_numbers(ctx, traverse_va)) if traverse_va is not None else set()
+    if oracle and not oracle <= {f.number for f in got}:
         return False
     if got and all(f.number == len(f.name) for f in got):
         return False
     return True
-
-
-def _decode_message_numbers(ctx: BinaryContext, decode_va: int) -> List[int]:
-    """Field numbers from a ``decodeMessage`` body, read off its ``cmp x0,#N``
-    field-number switch (an independent check of a builder reading).
-
-    Read linearly from the entry to its first return: past it a dense switch's jump-table
-    bound (``sub x8, x0, #1; cmp x8, #14``) would be taken for a field number.  A reading of
-    the numbers the switch on ``nextFieldNumber()``'s result distinguishes, jump-table arms
-    decoded, would replace this (TODO #95)."""
-    nums: List[int] = []
-    try:
-        insns = disasm(ctx, decode_va, max_insns=_INLINE_MAX_INSNS, stop_at_ret=True)
-    except (NameError, ImportError):
-        raise
-    except Exception:
-        return nums
-    for ins in insns:
-        if ins.mnemonic == "cmp":
-            v = _parse_imm(ins.op_str)
-            if v is not None and 1 <= v <= _MAX_FIELD_NUMBER and v not in nums:
-                nums.append(v)
-    return nums
 
 
 # swift-protobuf's Visitor methods take ``(value, fieldNumber: Int, …)``: in the Swift calling
@@ -936,7 +906,7 @@ def _enum_cases_plausible(got: List[SwiftField]) -> bool:
     """Self-consistency of a recovered enum case table.
 
     protoc-gen-swift writes an enum's name map sorted by case value (aliases share a
-    value), with distinct identifier names.  An enum has no ``decodeMessage`` / ``traverse``
+    value), with distinct identifier names.  An enum has no ``traverse``
     to cross-check its table against, so one that breaks this invariant is rejected rather
     than emitted with wrong values."""
     nums = [f.number for f in got]
@@ -946,19 +916,17 @@ def _enum_cases_plausible(got: List[SwiftField]) -> bool:
 
 
 def _extract_namemap(ctx: BinaryContext, init_va: int,
-                     decode_va: Optional[int],
                      traverse_va: Optional[int] = None,
                      enum: bool = False) -> Tuple[List[SwiftField], str]:
     """See :func:`_extract_namemap_raw`; for an enum the result must also pass
     :func:`_enum_cases_plausible`."""
-    got, shape = _extract_namemap_raw(ctx, init_va, decode_va, traverse_va, enum)
+    got, shape = _extract_namemap_raw(ctx, init_va, traverse_va, enum)
     if enum and got and not _enum_cases_plausible(got):
         return [], "none"
     return got, shape
 
 
 def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
-                     decode_va: Optional[int],
                      traverse_va: Optional[int] = None,
                      enum: bool = False) -> Tuple[List[SwiftField], str]:
     """Recover one type's (number, name) entries, auto-detecting the lowering.
@@ -969,7 +937,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
 
     *enum*: the type is a swift ``enum`` (case value <-> case name) rather than a
     message.  The same lowerings are used, but values may be 0 / negative / repeated
-    and there is no ``decodeMessage`` to cross-check or single-field default."""
+    and there is no ``traverse`` to cross-check against."""
     try:
         insns = _listing(ctx, init_va)
     except (NameError, ImportError):
@@ -1001,7 +969,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     # cold builder closure and read its literal (number, name) table.  #72.
     got = _runtime_namemap_fields(ctx, insns, enum)
     if len(got) > (0 if enum else 1) and _namemap_builder_validated(
-            ctx, got, decode_va, traverse_va, enum):
+            ctx, got, traverse_va, enum):
         return got, "runtime-namemap"
     # a runtime builder with exactly ONE entry is used last, under the same oracle validation and
     # Swift reflection's check of the name (``runtime-single``): its literal is the only support.
@@ -1039,7 +1007,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             best_shared = got
             shared_shape = "bytecode" if packed else "shared-once"
     if best_shared and (shared_shape == "bytecode"
-                        or _namemap_builder_validated(ctx, best_shared, decode_va, traverse_va, enum)):
+                        or _namemap_builder_validated(ctx, best_shared, traverse_va, enum)):
         return best_shared, shared_shape
 
     # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the
@@ -1066,7 +1034,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         if got:
             return got, "inline-closure"
 
-    if runtime_single and _namemap_builder_validated(ctx, runtime_single, decode_va, traverse_va):
+    if runtime_single and _namemap_builder_validated(ctx, runtime_single, traverse_va):
         return runtime_single, "runtime-single"
     return [], "none"
 
@@ -1106,7 +1074,6 @@ def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
     # init point per type: prefer the `_WZ` static-init function, else the
     # `vgZ` static getter (the device/framework form).
     inits: Dict[Tuple[str, str], Tuple[int, str]] = {}
-    decoders: Dict[Tuple[str, str], int] = {}
     traversers: Dict[Tuple[str, str], int] = {}
     for name, va in syms.items():
         if _NAMEMAP_MARKER in name:
@@ -1120,10 +1087,6 @@ def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
                 inits[parsed] = (va, "vgZ")
         elif want_enum:
             continue
-        elif "13decodeMessage" in name and name.endswith(_FUNCTION_BODY_SUFFIXES):
-            t = _type_of_symbol(name, "13decodeMessage")
-            if t and t[2] == "V":
-                decoders.setdefault(t[:2], va)
         elif "V8traverse" in name and name.endswith(_FUNCTION_BODY_SUFFIXES):
             t = _type_of_symbol(name, "8traverse")
             if t and t[2] == "V":
@@ -1131,8 +1094,7 @@ def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
 
     out: List[SwiftMessage] = []
     for (module, tname), (va, _kind) in inits.items():
-        fields, shape = _extract_namemap(ctx, va, decoders.get((module, tname)),
-                                         traversers.get((module, tname)),
+        fields, shape = _extract_namemap(ctx, va, traversers.get((module, tname)),
                                          enum=want_enum)
         out.append(SwiftMessage(module=module, name=tname, fields=fields,
                                 is_enum=want_enum, shape=shape))

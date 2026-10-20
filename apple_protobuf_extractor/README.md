@@ -221,12 +221,11 @@ storage fields are recovered. For example, `remindd` gives its own messages in
 ./venv/bin/python3 apple_protobuf_extractor/cli.py --binary iphone8_data/libexec/remindd -o ./protos/
 ```
 
-The accepted gaps ([LIMITATIONS.md](LIMITATIONS.md), section 10): the number of a
-single-field message can be an estimate (flagged `// number estimated`); integer
-subtypes are collapsed to `int32` / `uint32` / `int64` / `uint64` (not flagged, and
-wire-incorrect for a genuine `sint*` or `fixed*` field, though none is known in the
-binaries surveyed); and a container element that does not decode is shown as `bytes`
-with a note. Enums are extracted and referenced by name (an enum whose cases cannot be
+The accepted gaps ([LIMITATIONS.md](LIMITATIONS.md), section 10): integer encodings
+(`sint*`, `fixed*`, `sfixed*`) are read off the Visitor methods that `traverse` calls,
+and where that call cannot be named the field stays `int32` / `uint32` / `int64` /
+`uint64` (not flagged, and wire-incorrect for a genuine `sint*` or `fixed*` field); and
+a container element that does not decode is shown as `bytes` with a note. Enums are extracted and referenced by name (an enum whose cases cannot be
 recovered falls back to `int32` with a note). Types defined outside the image (another module, the well-known
 types) are emitted as `bytes` with an `unresolved:` note, so the output compiles under
 `protoc`.

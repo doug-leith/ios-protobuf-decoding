@@ -363,12 +363,12 @@ class TestNameMapBuilderValidation(unittest.TestCase):
     def test_length_form_rejected(self):
         # every entry's number == len(name) -> the (length, ptr) packed form
         got = [S.SwiftField(6, "domain"), S.SwiftField(4, "code")]
-        self.assertFalse(S._namemap_builder_validated(None, got, None, None))
+        self.assertFalse(S._namemap_builder_validated(None, got, None))
 
     def test_genuine_numbers_accepted(self):
         # numbers differ from name lengths, no oracle to contradict -> accept
         got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURL")]
-        self.assertTrue(S._namemap_builder_validated(None, got, None, None))
+        self.assertTrue(S._namemap_builder_validated(None, got, None))
 
     def _validated(self, numbers, got):
         lines = []
@@ -378,7 +378,7 @@ class TestNameMapBuilderValidation(unittest.TestCase):
         orig = S.disasm
         S.disasm = ctx.fake
         try:
-            return S._namemap_builder_validated(ctx, got, None, 0x1000)
+            return S._namemap_builder_validated(ctx, got, 0x1000)
         finally:
             S.disasm = orig
 
