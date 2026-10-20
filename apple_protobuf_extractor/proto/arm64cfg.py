@@ -6,7 +6,6 @@ dominators, and operand helpers.  They carry no writeTo: or readFrom: meaning an
 on decoded ``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
 """
 import bisect
-from collections import deque
 
 from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS as TERMINALS
 from proto.arm64_operands import split_ops, parse_mem, writes  # noqa: F401  (re-export)

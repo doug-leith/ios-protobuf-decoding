@@ -68,10 +68,6 @@ def _is_field_number(n) -> bool:
     return n is not None and 1 <= n <= _MAX_PROTO_FIELD_NUMBER
 
 
-def _is_field_number(n) -> bool:
-    return n is not None and 1 <= n <= _MAX_PROTO_FIELD_NUMBER
-
-
 @dataclass(frozen=True)
 class BoundWrite:
     """The write call that binds an ivar: the field number it is handed, its address, whether
