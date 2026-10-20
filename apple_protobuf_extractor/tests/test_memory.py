@@ -624,11 +624,12 @@ def _export_trie_bytes():
     return blob
 
 
-def _bare_ctx(data, symtab=None, export_trie=None):
+def _bare_ctx(data, symtab=None, export_trie=None, image_base=0):
     c = BinaryContext.__new__(BinaryContext)
     c._data = data
     c._symtab = symtab
     c._export_trie = export_trie
+    c._image_base = image_base
     return c
 
 
@@ -706,6 +707,54 @@ class TestIterSymbolNames:
         # and yielding a bogus empty-string symbol.
         c = _bare_ctx(b"abcd", symtab=None, export_trie=(0, 10))
         assert list(c.iter_symbol_names()) == []
+
+
+class TestIterSymbols:
+    """``(name, address)``: an nlist symbol's value when it is defined in a section, the export
+    trie's image offset from the image base; a debug stab (no section, its value an mtime) or
+    an undefined symbol has none."""
+    PAD = b"\x00\x00\x00\x00"
+
+    def test_addresses(self):
+        strtab = b"\x00_def\x00/path/obj.o\x00_undef\x00"
+        entries = ((1, 1, 0x1000), (6, 0, 0x6a608d3b), (18, 0, 0))   # (n_strx, n_sect, n_value)
+        nlist = b"".join(struct.pack("<IBBHQ", x, 0, s, 0, v) for x, s, v in entries)
+        trie = _export_trie_bytes()
+        data = self.PAD + strtab + nlist + trie
+        stroff, symoff = len(self.PAD), len(self.PAD) + len(strtab)
+        ctx = _bare_ctx(data, symtab=(symoff, 3, stroff, len(strtab)),
+                        export_trie=(symoff + len(nlist), len(trie)), image_base=0x100000000)
+        assert list(ctx.iter_symbols()) == [
+            ("_def", 0x1000), ("/path/obj.o", None), ("_undef", None),
+            ("_A", 0x100000020), ("_AB", 0x100000010)]
+
+
+class TestReadUleb:
+
+    def test_multi_byte(self):
+        from macho.leb import read_uleb
+        assert read_uleb(b"\x80\x01\x05", 0) == (128, 2)
+        assert read_uleb(b"\x80\x01\x05", 2) == (5, 3)
+
+    def test_an_encoding_open_at_the_end_stops_there(self):
+        from macho.leb import read_uleb
+        assert read_uleb(b"\xff\xff", 0) == (0x3FFF, 2)
+        assert read_uleb(b"\x81\x01\x05", 0, end=1) == (1, 1)
+
+
+class TestFunctionStarts:
+
+    def test_deltas_from_text_until_a_zero(self):
+        from macho.memory import decode_function_starts
+        assert decode_function_starts(_uleb(0x10) + _uleb(0x208) + b"\x00" + _uleb(4), 0x1000) \
+            == [0x1010, 0x1218]
+
+    def test_without_the_command_there_are_none(self):
+        c = _bare_ctx(b"\x00" * 64)
+        c._segments, c._cache_reader = [], None
+        c._function_starts_lc = c._function_starts = None
+        assert c.function_starts() == []
+
 
 
 class TestDecodeChainPtrUnknownFormat:

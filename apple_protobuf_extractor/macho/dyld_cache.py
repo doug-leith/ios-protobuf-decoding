@@ -38,7 +38,8 @@ import sys
 import warnings
 from typing import Dict, List, Optional, Set, Tuple
 
-from .memory import LC_DYLD_EXPORTS_TRIE, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_SEGMENT_64
+from .memory import (LC_DYLD_EXPORTS_TRIE, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_FUNCTION_STARTS,
+                     LC_SEGMENT_64, decode_function_starts)
 from .local_symbols import (
     load_image_local_symbols,
     load_image_symbol_addrs,
@@ -1100,24 +1101,46 @@ class DyldCacheReader:
         if mach_header_va in memo:
             return memo[mach_header_va]
         from .export_trie import decode_export_trie
-        linkedit = trie = None
-        for cmd, body in self._image_load_commands(mach_header_va):
-            if cmd == LC_SEGMENT_64 and len(body) >= 56 \
-                    and body[8:24].rstrip(b'\x00') == b'__LINKEDIT':
-                vmaddr, _vmsize, fileoff = struct.unpack_from('<QQQ', body, 24)
-                linkedit = (vmaddr, fileoff)
-            elif cmd == LC_DYLD_EXPORTS_TRIE and len(body) >= 16:
-                trie = struct.unpack_from('<II', body, 8)
-            elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and len(body) >= 48 and trie is None:
-                trie = struct.unpack_from('<II', body, 40)
-        out: Dict[str, int] = {}
-        if linkedit is not None and trie is not None and trie[1]:
-            data = self.read_raw(linkedit[0] + (trie[0] - linkedit[1]), trie[1])
-            if data:
-                out = {name: mach_header_va + off
-                       for name, (_flags, off) in decode_export_trie(data).items()}
+        segs, cmds = self._image_linkedit_commands(mach_header_va)
+        trie = cmds.get(LC_DYLD_EXPORTS_TRIE) or cmds.get(LC_DYLD_INFO) or cmds.get(LC_DYLD_INFO_ONLY)
+        data = self._linkedit_read(segs, trie)
+        out = ({name: mach_header_va + off for name, (_flags, off) in decode_export_trie(data).items()}
+               if data else {})
         memo[mach_header_va] = out
         return out
+
+    def image_function_starts(self, mach_header_va: int) -> List[int]:
+        """The function entries of the image at *mach_header_va* (``LC_FUNCTION_STARTS``,
+        in the shared ``__LINKEDIT`` like the export trie: :meth:`image_exports`), sorted;
+        ``[]`` when the image has none."""
+        segs, cmds = self._image_linkedit_commands(mach_header_va)
+        data = self._linkedit_read(segs, cmds.get(LC_FUNCTION_STARTS))
+        return decode_function_starts(data, segs['__TEXT'][0]) if data and '__TEXT' in segs else []
+
+    def _image_linkedit_commands(self, mach_header_va: int):
+        """``({segment name: (vmaddr, fileoff)}, {cmd: (dataoff, datasize)})`` of the image's
+        load commands that locate linkedit data (the export trie, function starts)."""
+        segs: Dict[str, Tuple[int, int]] = {}
+        cmds: Dict[int, Tuple[int, int]] = {}
+        for cmd, body in self._image_load_commands(mach_header_va):
+            if cmd == LC_SEGMENT_64 and len(body) >= 56:
+                vmaddr, _vmsize, fileoff = struct.unpack_from('<QQQ', body, 24)
+                segs[body[8:24].rstrip(b'\x00').decode('ascii', 'replace')] = (vmaddr, fileoff)
+            elif cmd in (LC_DYLD_EXPORTS_TRIE, LC_FUNCTION_STARTS) and len(body) >= 16:
+                cmds[cmd] = struct.unpack_from('<II', body, 8)
+            elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and len(body) >= 48:
+                cmds[cmd] = struct.unpack_from('<II', body, 40)     # the export range
+        return segs, cmds
+
+    def _linkedit_read(self, segs: Dict[str, Tuple[int, int]],
+                       table: Optional[Tuple[int, int]]) -> Optional[bytes]:
+        """The bytes of a linkedit table ``(file offset, size)``: in the cache the offset maps to
+        a vmaddr through the image's own ``__LINKEDIT`` segment (``vmaddr + (offset -
+        fileoff)``).  None when the image has no such table or segment."""
+        linkedit = segs.get('__LINKEDIT')
+        if linkedit is None or table is None or not table[1]:
+            return None
+        return self.read_raw(linkedit[0] + (table[0] - linkedit[1]), table[1]) or None
 
     def export_name_at(self, vmaddr: int) -> Optional[str]:
         """Name of the symbol some cache image exports at *vmaddr*, or None.

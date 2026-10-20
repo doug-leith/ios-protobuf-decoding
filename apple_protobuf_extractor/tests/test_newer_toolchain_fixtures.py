@@ -13,7 +13,6 @@ the core, which handler each field number reaches -- so a failure points at the
 mechanism rather than just at "the field came back as bytes".
 """
 import os
-import struct
 import unittest
 
 from macho.memory import BinaryContext
@@ -28,19 +27,8 @@ _FIXTURE_DIR = os.path.join(
 
 
 def _symbol_addrs(ctx):
-    """``{symbol_name: vmaddr}`` from the binary's own LC_SYMTAB (the fixture
-    is unstripped).  Test-only: the extractor itself never needs to look a
-    function up by name."""
-    symoff, nsyms, stroff, strsize = ctx._symtab
-    out = {}
-    for i in range(nsyms):
-        n_strx, _t, n_sect, _d, n_value = struct.unpack_from(
-            "<IBBHQ", ctx._data, symoff + i * 16)
-        if n_sect == 0 or n_value == 0:
-            continue
-        end = ctx._data.index(b"\0", stroff + n_strx)
-        out[ctx._data[stroff + n_strx:end].decode()] = n_value
-    return out
+    """``{symbol_name: vmaddr}`` of the symbols the (unstripped) fixture defines."""
+    return {name: addr for name, addr in ctx.iter_symbols() if addr}
 
 
 def _load(binary):

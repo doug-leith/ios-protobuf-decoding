@@ -12,6 +12,8 @@ import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
+from .leb import read_uleb
+
 if TYPE_CHECKING:            # dyld_cache sits ABOVE this module; a runtime
     from .dyld_cache import DyldCacheReader   # import here would be a cycle
 
@@ -32,6 +34,20 @@ LC_DYLD_INFO           = 0x00000022
 LC_DYLD_INFO_ONLY      = 0x80000022
 LC_DYLD_CHAINED_FIXUPS = 0x80000034
 LC_DYLD_EXPORTS_TRIE   = 0x80000033
+LC_FUNCTION_STARTS     = 0x00000026
+
+
+def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
+    """The function entries an ``LC_FUNCTION_STARTS`` table lists: ULEB128 deltas, the first
+    from the ``__TEXT`` segment's start, ending at a zero delta (sorted by construction)."""
+    starts, addr, p = [], text_vmaddr, 0
+    while p < len(blob):
+        delta, p = read_uleb(blob, p)
+        if delta == 0:
+            break
+        addr += delta
+        starts.append(addr)
+    return starts
 
 # Chained fixup pointer formats
 _DYLD_PTR_ARM64E    = 1
@@ -242,6 +258,9 @@ class BinaryContext:
         # Swift protocol-conformance descriptors), which are NOT in the nlist
         # symtab.  Binary mode only; None in cache mode.
         self._export_trie: Optional[Tuple[int, int]] = None
+        # LC_FUNCTION_STARTS (file_off, size); binary mode only (function_starts()).
+        self._function_starts_lc: Optional[Tuple[int, int]] = None
+        self._function_starts: Optional[List[int]] = None
 
         # Per-extraction memoisation caches owned by proto.*, declared here so the
         # attributes are discoverable.  proto.extractor.extract_all() clears every
@@ -346,6 +365,8 @@ class BinaryContext:
         self._imports:   List[str]                  = []   # unused in cache mode
         self._symtab:    Optional[Tuple[int, int, int, int]] = None  # see binary __init__
         self._export_trie: Optional[Tuple[int, int]] = None
+        self._function_starts_lc: Optional[Tuple[int, int]] = None
+        self._function_starts: Optional[List[int]] = None
         self._image_base: Optional[int]             = mach_header_va
         self._cache_reader                          = reader
 
@@ -699,21 +720,26 @@ class BinaryContext:
         return None
 
     def iter_symbol_names(self) -> Iterator[str]:
-        """Yield every symbol name the binary declares — ``LC_SYMTAB`` nlist names
-        plus the dyld **export trie** (which holds exported symbols such as Swift
-        protocol-conformance descriptors that never appear in the nlist table).
-
-        Binary mode only — reads straight from ``_data`` at the linkedit file
-        offsets; a no-op for a cache image (whose exports
-        :meth:`macho.dyld_cache.DyldCacheReader.image_exports` reads from the
-        cache's shared LINKEDIT).
+        """Yield every symbol name the binary declares (:meth:`iter_symbols`).
         Names are returned raw (mangled), e.g. the Swift conformance descriptor
         ``_$s14bookdatastored15PBPropertyValueV21InternalSwiftProtobuf7MessageAAMc``
         or the C++ ``__ZN6google8protobuf11MessageLite…``; callers pattern-match.
         """
+        for name, _addr in self.iter_symbols():
+            yield name
+
+    def iter_symbols(self) -> Iterator[Tuple[str, Optional[int]]]:
+        """``(name, address or None)`` for every symbol the binary declares: the ``LC_SYMTAB``
+        nlist entries (the address of one defined in a section, else None) and the dyld
+        **export trie**, which holds exported symbols such as Swift protocol-conformance
+        descriptors that never appear in the nlist table (the image base + its offset; None
+        for a re-export).
+
+        Binary mode only — reads straight from ``_data`` at the linkedit file offsets; a no-op
+        for a cache image (whose exports :meth:`macho.dyld_cache.DyldCacheReader.image_exports`
+        reads from the cache's shared LINKEDIT)."""
         if not self._data:
             return
-        # nlist string table
         if self._symtab:
             symoff, nsyms, stroff, strsize = self._symtab
             data = self._data
@@ -722,7 +748,8 @@ class BinaryContext:
             if symoff > 0 and stroff > 0 and symoff < n:
                 nsyms = min(nsyms, (n - symoff) // 16)
                 for i in range(nsyms):
-                    n_strx = struct.unpack_from('<I', data, symoff + i * 16)[0]
+                    n_strx, _type, n_sect, _desc, n_value = struct.unpack_from(
+                        '<IBBHQ', data, symoff + i * 16)
                     if n_strx == 0:
                         continue
                     sp = stroff + n_strx
@@ -731,20 +758,30 @@ class BinaryContext:
                     end = data.find(b'\x00', sp, str_end)
                     if end < 0:
                         end = str_end
-                    yield data[sp:end].decode('utf-8', errors='replace')
-        # export trie
-        yield from self._iter_export_trie_names()
+                    yield (data[sp:end].decode('utf-8', errors='replace'),
+                           n_value if n_sect and n_value else None)
+        if self._export_trie:
+            from .export_trie import iter_export_trie
+            base, size = self._export_trie
+            if 0 < base < len(self._data):
+                for name, _flags, off in iter_export_trie(
+                        self._data[base:min(base + size, len(self._data))]):
+                    yield name, (None if off is None else self.image_base + off)
 
-    def _iter_export_trie_names(self) -> Iterator[str]:
-        """Every name in the binary's dyld export trie (re-exports included), depth-first."""
-        from .export_trie import iter_export_trie
-        if not self._export_trie or not self._data:
-            return
-        base, size = self._export_trie
-        if base <= 0 or base >= len(self._data):
-            return
-        for name, _flags, _off in iter_export_trie(self._data[base:min(base + size, len(self._data))]):
-            yield name
+    def function_starts(self) -> List[int]:
+        """The image's function entries (``LC_FUNCTION_STARTS``), sorted; ``[]`` without the
+        command.  A cache image's table is in the shared ``__LINKEDIT``
+        (:meth:`macho.dyld_cache.DyldCacheReader.image_function_starts`).  Read once."""
+        if self._function_starts is None:
+            if self._cache_reader is not None:
+                self._function_starts = self._cache_reader.image_function_starts(self.image_base)
+            else:
+                text = next((s for s in self._segments if s.name == '__TEXT'), None)
+                off, size = self._function_starts_lc or (0, 0)
+                self._function_starts = (decode_function_starts(self._data[off:off + size],
+                                                                text.vmaddr)
+                                         if text is not None and size else [])
+        return self._function_starts
 
     def find_cstring_in_section(
         self, segname: str, sectname: str, target: str
@@ -789,6 +826,8 @@ class BinaryContext:
                     '<IIII', self._data, off + 8
                 )
                 self._symtab = (symoff, nsyms, stroff, strsize)
+            elif cmd == LC_FUNCTION_STARTS and cmdsize >= 16:
+                self._function_starts_lc = struct.unpack_from('<II', self._data, off + 8)
             elif cmd == LC_DYLD_EXPORTS_TRIE and cmdsize >= 16:
                 # linkedit_data_command: cmd, cmdsize, dataoff, datasize
                 t_off, t_size = struct.unpack_from('<II', self._data, off + 8)

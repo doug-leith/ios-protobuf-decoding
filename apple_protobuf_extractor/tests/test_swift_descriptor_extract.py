@@ -33,6 +33,12 @@ class _FakeCtx:
         self._export_trie = None
         self._fixups = fixups or {}     # slot -> the pointer its fixup decodes to
 
+    def function_starts(self):          # no LC_FUNCTION_STARTS
+        return []
+
+    def iter_symbols(self):             # no symbol table
+        return iter(())
+
     def read_bytes(self, va: int, n: int) -> bytes:
         if va < 0 or va + n > len(self._data):
             raise ValueError("oob")
@@ -1204,12 +1210,15 @@ class TestTailCallArgs(unittest.TestCase):
 
 
 class _ListingCtx:
-    """A disasm-able ctx over a hand-built listing, with a function index (``_function_starts``
-    memo) so :func:`S._listing` can be driven offline."""
+    """A disasm-able ctx over a hand-built listing, with a function index
+    (``BinaryContext.function_starts``) so :func:`S._listing` can be driven offline."""
     def __init__(self, lines, base, starts):
         from tests._listing import layout
         self.order, self.fake = layout((base, lines))
-        self._swift_function_starts = starts
+        self._starts = starts
+
+    def function_starts(self):
+        return self._starts
 
 
 class TestListing(unittest.TestCase):

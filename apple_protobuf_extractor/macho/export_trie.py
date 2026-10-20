@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from typing import Dict, Iterator, Optional, Tuple
 
+from .leb import read_uleb
+
 EXPORT_SYMBOL_FLAGS_REEXPORT = 0x08
 EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER = 0x10
 
@@ -29,17 +31,7 @@ def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
     end = len(data)
 
     def uleb(p: int) -> Tuple[int, int]:
-        res = shift = 0
-        while p < end:
-            b = data[p]
-            p += 1
-            res |= (b & 0x7F) << shift
-            if not b & 0x80:
-                return res, p
-            shift += 7
-            if shift > 63:
-                break
-        return res, end
+        return read_uleb(data, p, end)
 
     stack = [(0, "")]
     seen = set()

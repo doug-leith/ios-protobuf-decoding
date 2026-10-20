@@ -69,7 +69,7 @@ from dataclasses import dataclass, field
 from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import BinaryContext
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, is_cond_branch,
@@ -160,83 +160,9 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
             return {}
 
     out: Dict[str, int] = {}
-    data = getattr(ctx, "_data", b"") or b""
-    if not data:
-        return out
-    base = ctx.image_base
-
-    symtab = getattr(ctx, "_symtab", None)
-    if symtab:
-        symoff, nsyms, stroff, strsize = symtab
-        n = len(data)
-        str_end = min(stroff + strsize, n)
-        if symoff > 0 and stroff > 0 and symoff < n:
-            for i in range(min(nsyms, (n - symoff) // 16)):
-                b = symoff + i * 16
-                n_strx = struct.unpack_from("<I", data, b)[0]
-                n_value = struct.unpack_from("<Q", data, b + 8)[0]
-                if n_strx == 0 or n_value == 0:
-                    continue
-                sp = stroff + n_strx
-                if sp >= str_end:
-                    continue
-                end = data.find(b"\x00", sp, str_end)
-                if end < 0:
-                    end = str_end
-                out.setdefault(data[sp:end].decode("utf-8", "replace"), n_value)
-
-    export = getattr(ctx, "_export_trie", None)
-    if export:
-        tb, sz = export
-        end = min(tb + sz, len(data))
-        if 0 < tb < len(data):
-            out.update(_export_trie_addrs(data, tb, end, base))
-    return out
-
-
-def _uleb(data: bytes, p: int, end: int) -> Tuple[int, int]:
-    result = shift = 0
-    while p < end:
-        b = data[p]
-        p += 1
-        result |= (b & 0x7F) << shift
-        if not (b & 0x80):
-            break
-        shift += 7
-        if shift > 63:
-            break
-    return result, p
-
-
-def _export_trie_addrs(data: bytes, base: int, end: int, image_base: int) -> Dict[str, int]:
-    """DFS the export trie, yielding name → image_base + terminal address."""
-    out: Dict[str, int] = {}
-    stack = [(base, "")]
-    seen = set()
-    steps = 0
-    while stack and steps < 1_000_000:
-        steps += 1
-        node, prefix = stack.pop()
-        if node < base or node >= end or node in seen:
-            continue
-        seen.add(node)
-        term, p = _uleb(data, node, end)
-        if term:
-            _flags, q = _uleb(data, p, end)
-            addr, _q = _uleb(data, q, end)
-            out.setdefault(prefix, image_base + addr)
-        children_at = p + term
-        if children_at >= end:
-            continue
-        nchild = data[children_at]
-        p = children_at + 1
-        for _ in range(nchild):
-            z = data.find(b"\x00", p, end)
-            if z < 0:
-                break
-            edge = data[p:z].decode("utf-8", "replace")
-            child_off, p = _uleb(data, z + 1, end)
-            stack.append((base + child_off, prefix + edge))
+    for name, addr in ctx.iter_symbols():
+        if addr:
+            out.setdefault(name, addr)
     return out
 
 
@@ -275,73 +201,9 @@ class _Listing(list):
     truncated = False
 
 
-_LC_SEGMENT_64, _LC_FUNCTION_STARTS = 0x19, 0x26
-
-
-def _load_commands(ctx: BinaryContext) -> List[Tuple[int, bytes]]:
-    """``(cmd, bytes)`` for each load command of the image."""
-    reader = getattr(ctx, "_cache_reader", None)
-    if reader is not None and getattr(ctx, "is_cache_backed", False):
-        return reader._image_load_commands(ctx.image_base)
-    data = getattr(ctx, "_data", b"") or b""
-    if len(data) < 32:
-        return []
-    ncmds, sizeofcmds = struct.unpack_from("<II", data, 16)
-    out, pos, end = [], 32, min(32 + sizeofcmds, len(data))
-    for _ in range(ncmds):
-        if pos + 8 > end:
-            break
-        cmd, size = struct.unpack_from("<II", data, pos)
-        if size < 8:
-            break
-        out.append((cmd, data[pos:pos + size]))
-        pos += size
-    return out
-
-
-def _build_function_starts(ctx: BinaryContext) -> List[int]:
-    segs: Dict[str, Tuple[int, int]] = {}
-    dataoff = datasize = None
-    for cmd, body in _load_commands(ctx):
-        if cmd == _LC_SEGMENT_64 and len(body) >= 56:
-            name = body[8:24].split(b"\x00", 1)[0].decode("ascii", "replace")
-            vmaddr, _vmsize, fileoff = struct.unpack_from("<QQQ", body, 24)
-            segs[name] = (vmaddr, fileoff)
-        elif cmd == _LC_FUNCTION_STARTS and len(body) >= 16:
-            dataoff, datasize = struct.unpack_from("<II", body, 8)
-    if dataoff is None or "__TEXT" not in segs or not datasize:
-        return []
-    if getattr(ctx, "is_cache_backed", False):
-        le_vm, le_off = segs["__LINKEDIT"]                 # the shared linkedit, by its segment
-        blob = ctx.read_bytes(le_vm + dataoff - le_off, datasize)
-    else:
-        blob = ctx._data[dataoff:dataoff + datasize]
-    starts, addr, p = [], segs["__TEXT"][0], 0
-    while p < len(blob):
-        delta, p = _uleb(blob, p, len(blob))
-        if delta == 0:
-            break
-        addr += delta
-        starts.append(addr)
-    return starts
-
-
-def _function_starts(ctx: BinaryContext) -> List[int]:
-    """The image's function entries (``LC_FUNCTION_STARTS``), sorted; empty without the
-    command.  Memoised on *ctx*."""
-    def build():
-        try:
-            return _build_function_starts(ctx)
-        except (NameError, ImportError):
-            raise
-        except Exception:
-            return []
-    return _ctx_cache(ctx, "_swift_function_starts", build)
-
-
 def _function_end(ctx: BinaryContext, va: int) -> Optional[int]:
     """Where the function at *va* ends: the next function entry after it (None: unknown)."""
-    starts = _function_starts(ctx)
+    starts = ctx.function_starts()
     i = bisect.bisect_right(starts, va)
     return starts[i] if i < len(starts) else None
 
@@ -355,7 +217,7 @@ def _branch_target(ins) -> Optional[int]:
 def _listing(ctx: BinaryContext, va: int) -> _Listing:
     """The instructions of the function at *va* that its entry reaches, in address order:
     both sides of each conditional branch and the target of each ``b`` inside the function
-    (its extent: *va* up to the next function entry, :func:`_function_starts`), each path
+    (its extent: *va* up to the next function entry, :meth:`BinaryContext.function_starts`), each path
     on to a return, an indirect jump, or a branch out of the function (a tail call, which
     is not followed).  Calls return.  Without a function index a ``b`` ends its path
     unless it goes to the next instruction.  Raises when *va* itself cannot be read."""
