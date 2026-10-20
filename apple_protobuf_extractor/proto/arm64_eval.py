@@ -20,7 +20,7 @@ import logging
 from collections import deque
 from itertools import product
 from dataclasses import dataclass, field
-from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
@@ -339,17 +339,32 @@ class Region:
     unresolved_br: List[int] = field(default_factory=list)
 
 
+class RegMap(dict):
+    """A :meth:`Flow.forward` state that is a plain map (register -> value, or any key): an
+    entry holds at a join iff it holds, with the same value, on both sides."""
+
+    def copy(self) -> "RegMap":
+        return RegMap(self)
+
+    def join(self, other: Dict) -> "RegMap":
+        return RegMap((r, v) for r, v in self.items() if other.get(r) == v)
+
+    def same(self, other: Dict) -> bool:
+        return self == other
+
+
 class _Worklist:
-    """The forward fixpoint's work list: the state at a block is the join of every state pushed
-    to it; a block is (re)queued when that changes; *order* lists blocks by first visit."""
+    """The forward fixpoint's work list (:meth:`Flow.forward`): the state at a block is the join
+    of every state pushed to it; a block is (re)queued when that changes; *order* lists blocks
+    by first visit."""
 
     def __init__(self, order: Optional[List[int]] = None):
-        self.states: Dict[int, "_Machine"] = {}
+        self.states: Dict[int, Any] = {}
         self.order: List[int] = order if order is not None else []
         self._work: deque = deque()
         self._queued: Set[int] = set()
 
-    def push(self, blk: int, st: "_Machine") -> None:
+    def push(self, blk: int, st: Any) -> None:
         cur = self.states.get(blk)
         if cur is None:
             self.order.append(blk)
@@ -644,39 +659,20 @@ class Flow:
         root_blk = self._block_of.get(root) if root >= 0 else self.cfg.entry
         if root_blk is None:
             return scan
-        entry: Dict[int, Dict[str, int]] = {}
-        work: deque = deque()
-
-        def push(blk: int, st: Dict[str, int]) -> None:
-            cur = entry.get(blk)
-            if cur is None:
-                entry[blk] = dict(st)
-            else:
-                merged = {r: b for r, b in cur.items() if st.get(r) == b}
-                if merged == cur:
-                    return
-                entry[blk] = merged
-            work.append(blk)
-
-        def run(blk: int, st: Dict[str, int], lo: int) -> bool:
-            hi = self._first_in_block[blk] + len(self.cfg.blocks[blk])
-            for k in range(lo, hi):
+        def run(blk: int, st: RegMap, lo: int):
+            for k in range(lo, self.block_range(blk).stop):
                 if self.insns[k].mnemonic in CALLS:
                     clobbers = self.call_writes(k)
                     if clobbers is None:
-                        return False
+                        return []                      # the path ends at its first call
                     for r in clobbers:
                         st.pop(r, None)
                     continue
                 self._candidate_step(scan, st, k)
-            for succ in self.cfg.succ.get(blk, []):
-                push(succ, st)
-            return True
+            return [(succ, st) for succ in self.cfg.succ.get(blk, [])]
 
-        run(root_blk, {dest: 0}, root + 1)
-        while work:
-            blk = work.popleft()
-            run(blk, dict(entry[blk]), self._first_in_block[blk])
+        self.forward(run(root_blk, RegMap({dest: 0}), root + 1),
+                     lambda blk, st: run(blk, st, self._first_in_block[blk]))
         lo, hi = domain if isinstance(domain, tuple) else (0, domain)
         scan.values = {v for v in cands if lo <= v < hi}
         return scan
@@ -1070,6 +1066,33 @@ class Flow:
 
     # ── constant propagation over the whole function ────────────────────────
 
+    def block_range(self, blk: int) -> range:
+        """Indices of the instructions of the block led by *blk*."""
+        first = self._first_in_block[blk]
+        return range(first, first + len(self.cfg.blocks[blk]))
+
+    def forward(self, seeds: Iterable[Tuple[int, Any]], run_block: Callable[[int, Any], Iterable],
+                order: Optional[List[int]] = None, max_visits: Optional[int] = None
+                ) -> Optional[Dict[int, Any]]:
+        """The forward fixpoint over the CFG, in any state domain (a state has ``copy``,
+        ``join`` and ``same``): the state at a block is the join of every state pushed to it,
+        from *seeds* ``(block, state)`` and from ``run_block(block, state)``, which runs the
+        block on its own copy of the state and returns the ``(successor, state)`` edges it
+        leaves by.  ``{block: state}`` of every block reached, or None when it has not settled
+        after *max_visits* block runs; *order* receives the blocks by first visit."""
+        wl = _Worklist(order)
+        for blk, st in seeds:
+            wl.push(blk, st)
+        visits = 0
+        while wl:
+            visits += 1
+            if max_visits is not None and visits > max_visits:
+                return None
+            blk = wl.pop()
+            for succ, st in run_block(blk, wl.states[blk].copy()):
+                wl.push(succ, st)
+        return wl.states
+
     def propagate(self, entry: Dict[str, int], at: Iterable[int], objects: Objects = NO_OBJECTS,
                   slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None,
                   fragments_out: Optional[Dict[int, List[Dict[str, int]]]] = None
@@ -1093,21 +1116,16 @@ class Flow:
             return {}
         start = objects.machine(entry)
         start.put('sp', _STACK_TOP)
-        wl = _Worklist()
-        wl.push(cfg.entry, start)
-        while wl:
-            blk = wl.pop()
-            st = wl.states[blk].copy()
-            first = self._first_in_block[blk]
-            for k in range(first, first + len(cfg.blocks[blk])):
+
+        def run_block(blk: int, st: _Machine):
+            for k in self.block_range(blk):
                 self._propagate_step(st, k, objects.call_result)
-            for succ in self._live_successors(blk, st):
-                wl.push(succ, st)
+            return [(succ, st) for succ in self._live_successors(blk, st)]
+
         out: Dict[int, Dict[str, int]] = {}
-        for blk, st0 in wl.states.items():
+        for blk, st0 in self.forward([(cfg.entry, start)], run_block).items():
             st = st0.copy()
-            first = self._first_in_block[blk]
-            for k in range(first, first + len(cfg.blocks[blk])):
+            for k in self.block_range(blk):
                 if k in want:
                     out[k] = dict(st.regs)
                     if slots_out is not None:
@@ -1261,12 +1279,6 @@ class Flow:
         region = Region()
         if start_blk is None:
             return region
-        wl = _Worklist(region.order)
-
-        def push(blk: int, st: _Machine, frm: Optional[int] = None) -> None:
-            if blk in stop or (frm is not None and blk in rejoin and frm not in rejoin):
-                return
-            wl.push(blk, st)
 
         def step(st: _Machine, k: int, record: bool) -> None:
             ins = self.insns[k]
@@ -1306,8 +1318,7 @@ class Flow:
             return self._live_successors(blk, st)
 
         def run_block(blk: int, st: _Machine, lo: int, record: bool) -> None:
-            first = self._first_in_block[blk]
-            for k in range(lo, first + len(cfg.blocks[blk])):
+            for k in range(lo, self.block_range(blk).stop):
                 step(st, k, record)
             last = cfg.blocks[blk][-1]
             if record and last.mnemonic == 'br':
@@ -1323,20 +1334,22 @@ class Flow:
             st0.put('sp', _STACK_TOP)
         if slots:
             st0.slots = dict(slots)
+
+        def edges(blk: int, st: _Machine):
+            return [(succ, st) for succ in successors(blk, st)
+                    if succ not in stop and not (succ in rejoin and blk not in rejoin)]
+
+        def run_whole(blk: int, st: _Machine):
+            run_block(blk, st, self._first_in_block[blk], False)
+            return edges(blk, st)
+
         first_st = st0.copy()
         run_block(start_blk, st0, k0, False)
-        for succ in successors(start_blk, st0):
-            push(succ, st0, start_blk)
-        while wl:
-            blk = wl.pop()
-            st = wl.states[blk].copy()
-            run_block(blk, st, self._first_in_block[blk], False)
-            for succ in successors(blk, st):
-                push(succ, st, blk)
+        states = self.forward(edges(start_blk, st0), run_whole, order=region.order)
         # Record the calls from the final (fixpoint) state of each block.
         run_block(start_blk, first_st, k0, True)
         for blk in region.order:
-            run_block(blk, wl.states[blk].copy(), self._first_in_block[blk], True)
+            run_block(blk, states[blk].copy(), self._first_in_block[blk], True)
         region.blocks = set(region.order) | {start_blk}
         return region
 

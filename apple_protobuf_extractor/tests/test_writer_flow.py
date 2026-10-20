@@ -67,12 +67,12 @@ class TestFastEnumerationContract(unittest.TestCase):
         from unittest import mock
         import proto.writer_flow as WF
         wf = WF.WriterFlow(NoImage(segments=[]), [])
-        wf._cx = {0x1000: {'sp': WF._STACK_TOP, 'x2': WF._STACK_TOP + 0x40}}   # x2 = &state
+        vals = {'sp': WF._STACK_TOP, 'x2': WF._STACK_TOP + 0x40}      # x2 = &state
         st = WF._St({'x0': frozenset({('I', '_b')})})
         st.frame_write(0x40, 64, frozenset({('I', '_a')}))      # an earlier loop's state
         with mock.patch.object(WF, 'stub_selector', lambda ctx, va: WF._FAST_ENUMERATION), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None):
-            wf._call(st, 0x9000, WF._Result(), 0, 0, 0x1000)
+            wf._call(st, 0x9000, WF._Result(), 0, 0, 0x1000, vals)
         self.assertEqual(st.frame_read(0x48, 8), frozenset({('I', '_b')}))   # itemsPtr
         self.assertEqual(st.p('x0'), frozenset({('I', '_b')}))               # the count
 
@@ -103,6 +103,39 @@ class TestFrameAddressesComeFromTheEvaluation(unittest.TestCase):
             res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
         site = res.sites[0x1024]
         self.assertEqual((site.number, set(site.value_origins)), (1, {('I', '_a')}))
+
+
+class TestOutlinedFragments(unittest.TestCase):
+    """A ``bl`` to a machine-outlined fragment runs the fragment as part of ``writeTo:``
+    (:meth:`proto.arm64_eval.Flow.fragment`): the value it loads into x1 is still there at
+    the write, where an AAPCS64 call would have taken x1."""
+
+    def _site(self, frag_lines):
+        from unittest import mock
+        import proto.writer_flow as WF
+        from tests._listing import insns, layout
+        frag = tuple(insns(frag_lines, 0x2000))
+        _order, fd = layout((0x1000, [
+            ('mov', 'x19, x2'), ('bl', '#0x2000'),          # the fragment loads x1
+            ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
+        wf = WF.WriterFlow(NoImage(segments=[]), [])
+        wf.off_to_ivar = {8: '_a'}
+        with mock.patch('proto.dispatch_eval.disasm', fd), \
+                mock.patch('proto.arm64_eval.outlined_fragment',
+                           lambda ctx, t: frag if t == 0x2000 else None), \
+                mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
+                mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
+            res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
+        return res.sites[0x1010]
+
+    def test_the_value_it_loads_reaches_the_write(self):
+        site = self._site([('ldr', 'x1, [x0, #8]')])                     # self->_a
+        self.assertEqual((site.number, set(site.value_origins)), (1, {('I', '_a')}))
+
+    def test_its_frame_stores_are_the_functions(self):
+        site = self._site([('ldr', 'x8, [x0, #8]'), ('str', 'x8, [sp, #-0x10]'),
+                           ('ldur', 'x1, [sp, #-0x10]')])
+        self.assertEqual(set(site.value_origins), {('I', '_a')})
 
 try:
     import live_artifacts as _V

@@ -448,10 +448,6 @@ def _struct_load_step(flow, ins, k: int, state: Dict[str, tuple],
     return member
 
 
-def _join_maps(a: Dict, b: Dict) -> Dict:
-    return {r: v for r, v in a.items() if b.get(r) == v}
-
-
 def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array: bool,
                        window=None) -> Dict[int, Tuple[int, int]]:
     """``{instruction index: (member offset, width)}`` for every load, among ``insns[:last+1]``
@@ -478,26 +474,17 @@ def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_offset, is_array
     cfg = flow.cfg
     if cfg.entry is None:
         return {}
-    at = {ins.addr: k for k, ins in enumerate(flow.insns)}
-    states: Dict[int, Dict] = {cfg.entry: {}}
-    work = [cfg.entry]
-    while work:
-        b = work.pop()
-        state = dict(states[b])
-        for ins in cfg.blocks[b]:
-            _struct_load_step(flow, ins, at[ins.addr], state, is_ivar_offset, is_array)
-        for s in cfg.succ.get(b, []):
-            cur = states.get(s)
-            nxt = dict(state) if cur is None else _join_maps(cur, state)
-            if cur is None or nxt != cur:
-                states[s] = nxt
-                work.append(s)
+
+    def run_block(b: int, state: arm64_eval.RegMap):
+        for k in flow.block_range(b):
+            _struct_load_step(flow, flow.insns[k], k, state, is_ivar_offset, is_array)
+        return [(s, state) for s in cfg.succ.get(b, [])]
+
     out: Dict[int, Tuple[int, int]] = {}
-    for b, st0 in states.items():
-        state = dict(st0)
-        for ins in cfg.blocks[b]:
-            k = at[ins.addr]
-            member = _struct_load_step(flow, ins, k, state, is_ivar_offset, is_array)
+    for b, st0 in flow.forward([(cfg.entry, arm64_eval.RegMap())], run_block).items():
+        state = st0.copy()
+        for k in flow.block_range(b):
+            member = _struct_load_step(flow, flow.insns[k], k, state, is_ivar_offset, is_array)
             if member is not None and k <= last and (window is None or k in window):
                 out[k] = member
     return out
