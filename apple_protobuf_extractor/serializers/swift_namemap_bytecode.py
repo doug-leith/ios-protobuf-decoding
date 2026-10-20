@@ -45,6 +45,7 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 
 from macho.disasm import _parse_imm
+from macho.memory import READ_ERRORS
 from proto.arm64_eval import Flow
 from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, split_ops
 
@@ -200,8 +201,6 @@ def _read(ctx, va, length) -> Optional[bytes]:
         return None
     try:
         return ctx.read_bytes(va, length)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 

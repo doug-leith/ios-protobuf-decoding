@@ -69,7 +69,7 @@ from dataclasses import dataclass, field
 from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import callee_name
@@ -152,9 +152,7 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
         try:
             return reader.image_symbol_addrs(
                 ctx.image_base, _NAMEMAP_MARKER, "V8traverse")
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             return {}
 
     out: Dict[str, int] = {}
@@ -250,9 +248,7 @@ def _listing(ctx: BinaryContext, va: int) -> _Listing:
         while a is not None and a not in out and (end is None or a < end):
             try:
                 chunk = disasm(ctx, a, max_insns=_READ_CHUNK, stop_at_ret=False)
-            except (NameError, ImportError):
-                raise
-            except Exception:
+            except READ_ERRORS:
                 if a == va:
                     raise
                 break
@@ -298,9 +294,7 @@ def _cstr(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
         return None
     try:
         s = ctx.read_cstring(va)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     return s if s and all(32 <= ord(c) < 127 for c in s) else None
 
@@ -361,9 +355,7 @@ def _name_ptr(ctx: BinaryContext, slot_va: int) -> Optional[int]:
     (``ctx.read_ptr``: a chained-fixup rebase in a standalone binary, the cache's slide)."""
     try:
         return ctx.read_ptr(slot_va)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
 
@@ -383,17 +375,13 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
     identifiers; a message's keys are field numbers (>= 1), each once."""
     try:
         count = struct.unpack_from("<Q", ctx.read_bytes(blob_va + 0x10, 8))[0]
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
     def entry(off: int):
         try:
             num, _ptr, ln = struct.unpack_from("<qQQ", ctx.read_bytes(blob_va + off, 24))
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             return None
         if enum:
             if not -(1 << 31) <= num < (1 << 31):
@@ -659,9 +647,7 @@ def _builder_entries(ctx: BinaryContext, va: int,
         if callee is not None:
             body = _listing(ctx, callee[0])
             got = _walk_namemap_builder(ctx, body, enum, entry=callee[1])
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return [], False
     return got, body.truncated
 
@@ -805,9 +791,7 @@ def _visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
     def build():
         try:
             return _build_visitor_slots(ctx)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             return {}
     return _ctx_cache(ctx, "_swift_visitor_slots", build)
 
@@ -860,9 +844,7 @@ def _traverse_visits(ctx: BinaryContext, traverse_va: int) -> List[Tuple[int, Op
     heuristic."""
     try:
         insns = _listing(ctx, traverse_va)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return []
     flow = _flow_of(ctx, insns)
     at_call = dict(call_site_registers(ctx, insns, flow))
@@ -940,9 +922,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     and there is no ``traverse`` to cross-check against."""
     try:
         insns = _listing(ctx, init_va)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return [], "none"
 
     # C — static object: the array the getter hands swift_initStaticObject.
@@ -958,9 +938,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     if callee is not None:
         try:
             got = _walk_inline_closure(ctx, _listing(ctx, callee[0]), enum, entry=callee[1])
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             got = []
     if got:
         return got, "inline"
@@ -995,9 +973,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             try:
                 stub = _listing(ctx, t)
                 lit = bytecode_literal_from_getter(ctx, stub, enum=enum, flow=_flow_of(ctx, stub))
-            except (NameError, ImportError):
-                raise
-            except Exception:
+            except READ_ERRORS:
                 lit = None
             dec = decode_namemap_bytecode(lit, enum=enum) if lit else None
             if dec:
@@ -1026,9 +1002,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             continue
         try:
             cl = _listing(ctx, t)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             continue
         got = _walk_inline_closure(ctx, cl, enum)
         if got:

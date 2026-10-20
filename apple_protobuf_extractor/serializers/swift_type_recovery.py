@@ -34,6 +34,8 @@ from __future__ import annotations
 import struct
 from typing import Dict, Optional
 
+from macho.memory import READ_ERRORS
+
 # Swift stdlib / Foundation type name -> proto scalar type.
 _SWIFT_SCALAR = {
     "Int32": "int32", "Int64": "int64", "UInt32": "uint32", "UInt64": "uint64",
@@ -110,27 +112,21 @@ def _relptr(ctx, va):
 def _cstr(ctx, va):
     try:
         return ctx.read_cstring(va, 256)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
 
 def _desc_name(ctx, desc):
     try:
         return _cstr(ctx, _relptr(ctx, desc + 0x08))
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
 
 def _desc_kind(ctx, desc):
     try:
         return _u32(ctx, desc) & 0x1F
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return -1
 
 
@@ -281,26 +277,20 @@ def _resolve_symbolic(ctx, va):
     # descriptor — a REBASE to a local type, or a BIND to an external one.
     try:
         raw = struct.unpack("<Q", ctx.read_bytes(ptr_site, 8))[0]
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
     # local rebase: the pointer through the image's fixups.
     name = None
     try:
         name = _local_type_ref(ctx, ctx.read_ptr(ptr_site))
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         pass
     if name:
         return _SWIFT_SCALAR.get(name, name)
     # external bind: demangle the import symbol name.
     try:
         return _type_from_bind(ctx.import_name_for_bind(raw))
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None
 
 
@@ -323,9 +313,7 @@ def local_enum_names(ctx):
     out = set()
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return out
     for i in range(sec.vmsize // 4):
         try:
@@ -337,9 +325,7 @@ def local_enum_names(ctx):
                 q = _qualified_name(ctx, desc)
                 if q:
                     out.add(q)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             continue
     return out
 
@@ -359,9 +345,7 @@ def decode_mangled(ctx, va):
     where label is '', 'repeated', or 'map'.  Returns (None, '') if undecodable."""
     try:
         head = ctx.read_bytes(va, 1)[0]
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return None, ""
     if head in (1, 2):
         return _resolve_symbolic(ctx, va), ""
@@ -372,9 +356,7 @@ def decode_mangled(ctx, va):
     # prefix would otherwise be missed (e.g. `Say<symref>G` -> repeated <message>).
     try:
         raw = ctx.read_bytes(va, 3)
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         raw = b""
 
     # Array  ->  Say<elem>...G   (element starts right after 'Say').  When the
@@ -438,9 +420,7 @@ def _read_field_types(ctx, desc):
     try:
         nfields = _u32(ctx, fd + 0x0C)
         recsize = _u16(ctx, fd + 0x0A) or 12
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return {}, set()
     fields: Dict[str, str] = {}
     incomplete: set = set()
@@ -486,9 +466,7 @@ def _qualified_name(ctx, desc) -> Optional[str]:
                 if nm:
                     names.append(nm)
             cur = _parent_desc(ctx, cur)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             break                        # bad parent pointer: degrade to what we have
     return ".".join(reversed(names)) if names else None
 
@@ -517,9 +495,7 @@ def collect_field_types(ctx):
     message via the descriptor parent chain (#60)."""
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
-    except (NameError, ImportError):
-        raise
-    except Exception:
+    except READ_ERRORS:
         return {}, {}, set()
     out: Dict[str, Dict[str, str]] = {}
     incomplete: Dict[str, set] = {}
@@ -553,9 +529,7 @@ def collect_field_types(ctx):
                 out.setdefault(key, {}).update(fields)
             if inc:
                 incomplete.setdefault(key, set()).update(inc)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS:
             continue
     return out, incomplete, structs - set(out)
 
