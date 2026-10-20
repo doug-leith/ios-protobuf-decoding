@@ -388,10 +388,20 @@ class TestIPhone8(_Live):
                          {1: 'GEOLPRRegion', 3: 'GEOLPRPowerType', 4: 'GEOLPRVehicleType'})
 
     def test_next_function_past_a_noreturn_call_is_not_ours(self):
+        # The core ends in a call that never returns (the stack-guard failure).  The function
+        # laid out after it is no method IMP or core, but LC_FUNCTION_STARTS starts one there,
+        # so the core's body ends before it and its lsr is never read (it used to be read, and
+        # refused for not holding self).
+        from proto.function_body import function_end
         got = self.ev('GEOPDPlaceCollection')
         self.assertNotIn(29, got.elements())
         self.assertEqual(got.elements()[1], 'GEOLocalizedString')
-        self.assertTrue(any('self not held' in n for n in got.notes))
+        self.assertFalse(any('self not held' in n for n in got.notes))
+        core = got.cores[0]
+        entries = E._known_entries(self.ctx, self.by_name['GEOPDPlaceCollection'], self.core_index)
+        end = function_end(self.ctx, core)
+        self.assertLess(end, entries.next_after(core))
+        self.assertLess(E._function_insns(self.ctx, core, entries)[-1].addr, end)
 
     def test_an_inline_reader_has_no_c_core(self):
         # -[GEOPDTileList readFrom:] holds the dispatch itself; its first call retains the

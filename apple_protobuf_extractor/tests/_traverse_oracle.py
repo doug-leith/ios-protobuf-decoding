@@ -111,7 +111,7 @@ def _location(v):
 
 def traverse_locations(ctx, va) -> Dict[tuple, int]:
     """{location: field number} over the visits :func:`S._visit_method` names."""
-    insns = S._listing(ctx, va)
+    insns = S.function_body(ctx, va)
     flow = S._flow_of(ctx, insns)
     out: Dict[tuple, int] = {}
     shared = set()
@@ -133,7 +133,7 @@ def traverse_locations(ctx, va) -> Dict[tuple, int]:
 
 def getter_location(ctx, va) -> Optional[tuple]:
     """The one location a getter returns the value at, or None."""
-    insns = S._listing(ctx, va)
+    insns = S.function_body(ctx, va)
     flow = S._flow_of(ctx, insns)
     found = set()
     for k, ins in enumerate(insns):

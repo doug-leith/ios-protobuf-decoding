@@ -271,6 +271,12 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
                 break
             by_br = {**by_br, **new}
         hit = memo[key] = [by_br, final, ins]
+        if bounds is not None and all(ins[0].addr <= a < ins[-1].addr + 4
+                                      for arms in by_br.values() for a in arms):
+            # Every arm lies in the listing's span: decoding within the span accepts the same
+            # arms in each round, so this is also the listing's decode without *bounds* (a
+            # function body read with its extent's bounds, then decoded by its callers).
+            memo.setdefault((key[0], None), hit)
     return hit
 
 

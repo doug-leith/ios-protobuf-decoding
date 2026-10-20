@@ -97,7 +97,7 @@ class TestFrameAddressesComeFromTheEvaluation(unittest.TestCase):
             ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
         wf = WF.WriterFlow(NoImage(segments=[]), [])
         wf.off_to_ivar = {8: '_a'}
-        with mock.patch('proto.dispatch_eval.disasm', fd), \
+        with mock.patch('proto.function_body.disasm', fd), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
                 mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
             res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
@@ -120,7 +120,7 @@ class TestOutlinedFragments(unittest.TestCase):
             ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
         wf = WF.WriterFlow(NoImage(segments=[]), [])
         wf.off_to_ivar = {8: '_a'}
-        with mock.patch('proto.dispatch_eval.disasm', fd), \
+        with mock.patch('proto.function_body.disasm', fd), \
                 mock.patch('proto.arm64_eval.outlined_fragment',
                            lambda ctx, t: frag if t == 0x2000 else None), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \

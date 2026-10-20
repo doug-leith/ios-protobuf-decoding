@@ -18,6 +18,7 @@ import struct
 import unittest
 
 from serializers import swift_descriptor_extract as S
+from proto import function_body as FB
 from tests.conftest import encode_adrp, encode_add_imm64, encode_movz, NOP_BYTES, RET_BYTES
 from tests._listing import insns as _listing
 from tests._fakes import NoImage
@@ -277,7 +278,7 @@ class TestInlineClosureWalk(unittest.TestCase):
 
 class _NamedListingCtx(NoImage):
     """A cache-style ctx over a hand-built listing whose call targets have export names, so
-    :func:`S._listing`, Flow's call model and :func:`S._symbol_at` run offline.  Every call
+    :func:`FB.function_body`, Flow's call model and :func:`S._symbol_at` run offline.  Every call
     target in a test needs a name (an unnamed own-image target would be scanned)."""
     is_cache_backed = True
     image_base = 0
@@ -312,12 +313,12 @@ def _visit(label, kind):
 
 def _traverse(lines, names):
     ctx = _NamedListingCtx(lines, names)
-    orig = S.disasm
-    S.disasm = ctx.fake
+    orig = FB.disasm
+    FB.disasm = ctx.fake
     try:
         return ctx, S._traverse_visits(ctx, 0x1000)
     finally:
-        S.disasm = orig
+        FB.disasm = orig
 
 
 class TestTraverseVisits(unittest.TestCase):
@@ -375,12 +376,12 @@ class TestNameMapBuilderValidation(unittest.TestCase):
         for n in numbers:
             lines += [("mov", f"w1, #{n}"), ("bl", "#0x3000")]
         ctx = _NamedListingCtx(lines, {0x3000: _visit("Singular", "UInt32")})
-        orig = S.disasm
-        S.disasm = ctx.fake
+        orig = FB.disasm
+        FB.disasm = ctx.fake
         try:
             return S._namemap_builder_validated(ctx, got, 0x1000)
         finally:
-            S.disasm = orig
+            FB.disasm = orig
 
     def test_oracle_subset_of_recovered_accepted(self):
         # traverse visits {1,2}; the reading recovered a strict SUPERSET {1,2,3} -> accept
@@ -1136,7 +1137,7 @@ class TestTailCallArgs(unittest.TestCase):
 
 class _ListingCtx:
     """A disasm-able ctx over a hand-built listing, with a function index
-    (``BinaryContext.function_starts``) so :func:`S._listing` can be driven offline."""
+    (``BinaryContext.function_starts``) so :func:`FB.function_body` can be driven offline."""
     def __init__(self, lines, base, starts):
         from tests._listing import layout
         self.order, self.fake = layout((base, lines))
@@ -1147,16 +1148,16 @@ class _ListingCtx:
 
 
 class TestListing(unittest.TestCase):
-    """:func:`_listing` reads what the entry reaches inside the function's extent (up to the
-    next function entry): a jump inside it is followed, a branch out of it is a tail call."""
+    """:func:`FB.function_body` reads what the entry reaches inside the function's extent (up to
+    the next function entry): a jump inside it is followed, a branch out of it is a tail call."""
     def _read(self, lines, starts):
         ctx = _ListingCtx(lines, 0x1000, starts)
-        orig = S.disasm
-        S.disasm = ctx.fake
+        orig = FB.disasm
+        FB.disasm = ctx.fake
         try:
-            return [i.addr for i in S._listing(ctx, 0x1000)]
+            return [i.addr for i in FB.function_body(ctx, 0x1000)]
         finally:
-            S.disasm = orig
+            FB.disasm = orig
 
     def test_forward_jump_inside_the_function_is_followed(self):
         # decodeMessage enters its loop with `b` over the loop's continue block
@@ -1447,7 +1448,7 @@ class TestLiveCacheMessageProtection(unittest.TestCase):
 
 class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
     """A builder listing read without a function index stops at the runaway guard
-    (``_INLINE_MAX_INSNS``) with its path still open: `_runtime_namemap_fields` must flag the
+    (``_UNBOUNDED_MAX_INSNS``) with its path still open: `_runtime_namemap_fields` must flag the
     numbers it read off it as estimated.  A genuine (if synthetic) arm64 instruction stream --
     disassembled through capstone, not faked -- long enough to reach the guard without a ret,
     embedding one real (number, name) store, behind a once-init getter (``cmn x0, #1; b.ne
@@ -1461,7 +1462,7 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
     _STR_VA = (_BUILDER_VA & ~0xFFF) + _PAGE_DELTA * 0x1000 + _STR_OFF
     _FIELD_NAME = "hitCapField"
     _FIELD_NUM = 7
-    _CAP = S._INLINE_MAX_INSNS
+    _CAP = FB._UNBOUNDED_MAX_INSNS
 
     def _build(self, n_total_insns, terminate_with_ret):
         # mov w8,#num ; adrp x1,#page ; add x1,x1,#off ; stp x8,x1,[x20] ; then
@@ -1489,7 +1490,7 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
         return _FakeCtx(bytes(buf))
 
     def _fields(self, ctx):
-        return S._runtime_namemap_fields(ctx, S._listing(ctx, self._GETTER_VA))
+        return S._runtime_namemap_fields(ctx, FB.function_body(ctx, self._GETTER_VA))
 
     def test_builder_hitting_cap_flags_number_unconfirmed(self):
         ctx = self._build(self._CAP + 16, terminate_with_ret=False)   # runs on past the guard

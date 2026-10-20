@@ -47,13 +47,14 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from macho.disasm import disasm, _norm_reg, _parse_imm
+from macho.disasm import _norm_reg
 from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store
 from macho.classlist import class_name_at
-from proto.arm64cfg import build_blocks_with_br_arms, dominators, dominates, split_ops
+from proto.arm64cfg import dominators, dominates, split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.callees import callee_name, stub_selector
+from proto.function_body import function_body
 from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, ret_value,
                                object_model)
 from proto import dispatch as D
@@ -169,44 +170,16 @@ def _as_entries(entries) -> "D.FunctionEntries":
     return entries if isinstance(entries, D.FunctionEntries) else D.FunctionEntries(entries or ())
 
 
-# [cap:INPUT-SANITY] how far past its entry a function is looked for when no later function
-# entry is known (the largest GeoServices reader is ~5 KB; a runaway guard, not a window).
-_MAX_FUNC_BYTES = 0x10000
-
-
-def _function_insns(ctx, va: int, upto: int = 0, entries: Optional[List[int]] = None):
-    """The instructions of the function at *va*: those reachable from its entry over a CFG
-    whose ``br`` instructions reach their own decoded jump-table arms (a control ``br`` ahead of
-    the dispatch would otherwise end the function), where a ``b`` to a known function entry is
-    a tail call, and never past the next known function entry (*entries*).  *upto* extends it
-    to cover arms found by evaluation."""
-    entries = _as_entries(entries)
-    hard_end = va + _MAX_FUNC_BYTES
-    nxt = entries.next_after(va)
-    if nxt is not None:
-        hard_end = min(hard_end, nxt)
-    tails = entries.members
+def _function_insns(ctx, va: int, entries: Optional[List[int]] = None,
+                    arms: Optional[Dict[int, Set[int]]] = None):
+    """The instructions of the function at *va* (:func:`proto.function_body.function_body`):
+    what its entry reaches inside its extent, which also ends at the next known function entry
+    (*entries*: method IMPs, ReadAllFrom cores), following each ``br``'s decoded table and the
+    *arms* found by evaluation.  [] when *va* cannot be read."""
     try:
-        insns = [i for i in disasm(ctx, va, max_insns=max(1, (hard_end - va) // 4),
-                                   stop_at_ret=False) if va <= i.addr < hard_end]
+        return function_body(ctx, va, _as_entries(entries), arms)
     except READ_ERRORS:
         return []
-    if not insns:
-        return []
-    cfg = build_blocks_with_br_arms(insns, _seed_br_arms(ctx, insns))
-    reached, work = set(), [cfg.entry]
-    while work:
-        b = work.pop()
-        if b is None or b in reached:
-            continue
-        reached.add(b)
-        last = cfg.blocks[b][-1]
-        if last.mnemonic == 'b' and _parse_imm(last.op_str) in tails:
-            continue                                       # a tail call into another function
-        work.extend(cfg.succ.get(b, []))
-    end = max(cfg.blocks[b][-1].addr for b in reached) + 4
-    end = min(max(end, upto), hard_end)
-    return [i for i in insns if i.addr < end]
 
 
 def _lsr3_sites(flow: Flow) -> List[Tuple[int, str]]:
@@ -277,8 +250,7 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
         per_br = _seed_br_arms(ctx, insns)
         flow = D.decoded_flow(ctx, insns)
         region = flow.run_from(0, regs, objects=objs, tail_targets=tails)
-        # A core extracts a field number on a path from ITS OWN entry (the window can hold
-        # the function laid out after it).
+        # A core extracts a field number on a path from ITS OWN entry.
         if any(flow._block_of.get(k) in region.blocks for k, _d in _lsr3_sites(flow)):
             found.append((va, regs))
             if flows is not None:
@@ -313,7 +285,6 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
     objs = object_model(ctx)
 
     arms: Dict[int, Set[int]] = {}             # br address -> targets found by evaluation
-    upto = 0
     for _round in range(_ARM_ROUNDS):
         # CFG completion, per br: its decoded table (as every Flow user), so a control ``br``
         # ahead of the lsr (has-bits bookkeeping, whose index the fixpoint cannot know) does
@@ -321,7 +292,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
         if _round == 0 and first is not None:
             insns, br_arms, flow = first
         else:
-            insns = _function_insns(ctx, core_va, upto, entries)
+            insns = _function_insns(ctx, core_va, entries, arms)
             br_arms: Dict[int, Set[int]] = _seed_br_arms(ctx, insns)
             for b, a in arms.items():
                 br_arms.setdefault(b, set()).update(a)
@@ -370,10 +341,8 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             results.append((k, dest, regions, default_n))
         if not new_arms:
             break
-        end = insns[-1].addr + 4 if insns else 0
         for b, ts in new_arms.items():
             arms.setdefault(b, set()).update(ts)
-            upto = max([upto] + [t + 4 for t in ts if t >= end])
     else:
         detail = f"core {core_va:#x}: arms still being discovered after {_ARM_ROUNDS} rounds"
         out.notes.append(detail)

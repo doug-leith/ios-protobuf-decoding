@@ -52,7 +52,7 @@ they come from the cache's ``.symbols`` sub-cache (same nlist, keyed by vmaddr).
 The disassembly-driven decoders are mode-agnostic (all reads route through
 ``ctx``).
 
-Every shape reads a function's :func:`_listing` (what its entry reaches within its extent,
+Every shape reads a function's :func:`~proto.function_body.function_body` (what its entry reaches within its extent,
 ``LC_FUNCTION_STARTS``) and register values from :class:`proto.arm64_eval.Flow`; a builder's
 (number, name) entries are paired by the address they are stored at (:func:`_table_entries`).
 
@@ -61,7 +61,6 @@ in LIMITATIONS.md (10) / to-do #63a/#63b/#66/#67/#68/#70.
 """
 from __future__ import annotations
 
-import bisect
 import logging
 import re
 import struct
@@ -70,12 +69,12 @@ from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
-from macho.disasm import disasm, _norm_reg, _parse_imm
+from macho.disasm import _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import callee_name
-from proto.dispatch import _jump_table_arm_addrs, listing_flow
-from proto.arm64_operands import (CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS,
-                                  is_cond_branch, parse_mem, split_ops, writes)
+from proto.dispatch import listing_flow
+from proto.function_body import FunctionBody, _branch_target, function_body
+from proto.arm64_operands import CALLS, parse_mem, split_ops, writes
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
@@ -87,13 +86,6 @@ _MAX_FIELD_NUMBER = 0x1FFFFFFF        # proto field numbers are 29-bit
 # static name-map array's stride (the description is a few words in every swift-protobuf version).
 _MAX_ELEMENT_STRIDE = 0x78
 _NAMEMAP_MARKER = "17_protobuf_nameMap"
-# [cap:INPUT-SANITY] runaway guard on a listing read without a function index (:func:`_listing`;
-# with one, the function's extent bounds it).  A listing that reaches it is marked truncated and
-# the builder numbers read from it are reported as estimated.
-_INLINE_MAX_INSNS = 4000
-# [cap:COSMETIC] instructions disassembled per read while following a path; a path is read
-# on until it ends, whatever this is.
-_READ_CHUNK = 64
 
 
 # ── data model ──────────────────────────────────────────────────────────────
@@ -195,103 +187,14 @@ def _parse_namemap_symbol(sym: str) -> Optional[Tuple[str, str, bool]]:
 
 # ── listings and register values ──────────────────────────────────────────────
 
-# What ends a path through a function: a return, an indirect jump, a trap.
-_PATH_ENDS = RETURNS | INDIRECT_BRANCHES | frozenset(("brk", "udf", "hlt"))
-
-
-class _Listing(list):
-    """A function's instructions in address order (:func:`_listing`); *truncated* when the
-    read stopped at :data:`_INLINE_MAX_INSNS` with paths still open; *flow* its
-    :class:`~proto.arm64_eval.Flow` once built (:func:`_flow_of`)."""
-    truncated = False
-    flow: Optional[Flow] = None
-
-
 def _flow_of(ctx: BinaryContext, insns) -> Flow:
-    """The Flow of a listing, built once per :class:`_Listing`."""
+    """The Flow of a listing, built once per :class:`~proto.function_body.FunctionBody`."""
     flow = getattr(insns, "flow", None)
     if flow is None:
         flow = listing_flow(ctx, list(insns))     # each ``br`` reaching its decoded table
-        if isinstance(insns, _Listing):
+        if isinstance(insns, FunctionBody):
             insns.flow = flow
     return flow
-
-
-def _function_end(ctx: BinaryContext, va: int) -> Optional[int]:
-    """Where the function at *va* ends: the next function entry after it (None: unknown)."""
-    starts = ctx.function_starts()
-    i = bisect.bisect_right(starts, va)
-    return starts[i] if i < len(starts) else None
-
-
-def _branch_target(ins) -> Optional[int]:
-    """Target of a direct branch (``b``, ``b.cond``, ``cbz``/``tbz``...): its last operand."""
-    ops = split_ops(ins.op_str)
-    return _parse_imm(ops[-1]) if ops else None
-
-
-def _listing(ctx: BinaryContext, va: int) -> _Listing:
-    """The instructions of the function at *va* that its entry reaches, in address order:
-    both sides of each conditional branch and the target of each ``b`` inside the function
-    (its extent: *va* up to the next function entry, :meth:`BinaryContext.function_starts`), each path
-    on to a return, an indirect jump, or a branch out of the function (a tail call, which
-    is not followed).  A ``br`` jump table goes on to its arms in the extent, decoded by
-    evaluation (:func:`proto.dispatch._jump_table_arm_addrs`); a table reached only through
-    another's arms is decoded once those are read.  Calls return.  Without a function index a
-    ``b`` ends its path unless it goes to the next instruction (and no table is decoded).
-    Raises when *va* itself cannot be read."""
-    end = _function_end(ctx, va)
-
-    def inside(t: Optional[int]) -> bool:
-        return t is not None and va <= t and (end is None or t < end)
-
-    out: Dict[int, object] = {}
-    work = [va]
-    while True:
-        while work:
-            a = work.pop()
-            while a is not None and a not in out and (end is None or a < end):
-                try:
-                    chunk = disasm(ctx, a, max_insns=_READ_CHUNK, stop_at_ret=False)
-                except READ_ERRORS:
-                    if a == va:
-                        raise
-                    break
-                if not chunk:
-                    break
-                nxt: Optional[int] = chunk[-1].addr + 4
-                for ins in chunk:
-                    if ins.addr in out or (end is not None and ins.addr >= end):
-                        nxt = None
-                        break
-                    if end is None and len(out) >= _INLINE_MAX_INSNS:
-                        listing = _Listing(sorted(out.values(), key=lambda i: i.addr))
-                        listing.truncated = True
-                        return listing
-                    out[ins.addr] = ins
-                    mn = ins.mnemonic
-                    if mn in _PATH_ENDS:
-                        nxt = None
-                        break
-                    if mn == "b":
-                        t = _branch_target(ins)
-                        if inside(t) if end is not None else t == ins.addr + 4:
-                            work.append(t)
-                        nxt = None
-                        break
-                    if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
-                        t = _branch_target(ins)
-                        if inside(t):
-                            work.append(t)
-                a = nxt
-        if end is None:
-            break
-        arms = _jump_table_arm_addrs(ctx, sorted(out.values(), key=lambda i: i.addr),
-                                     per_br=True, bounds=(va, end))
-        work = sorted({t for ts in arms.values() for t in ts if t not in out})
-        if not work:
-            break
-    return _Listing(sorted(out.values(), key=lambda i: i.addr))
 
 
 def _tail_calls(insns) -> List[int]:
@@ -653,11 +556,11 @@ def _builder_entries(ctx: BinaryContext, va: int,
     the stores, the template is read with the registers the stub hands it (:func:`_tail_callee`)
     as its entry values."""
     try:
-        body = _listing(ctx, va)
+        body = function_body(ctx, va)
         got = _walk_namemap_builder(ctx, body, enum)
         callee = None if got else _tail_callee(ctx, body)
         if callee is not None:
-            body = _listing(ctx, callee[0])
+            body = function_body(ctx, callee[0])
             got = _walk_namemap_builder(ctx, body, enum, entry=callee[1])
     except READ_ERRORS:
         return [], False
@@ -855,7 +758,7 @@ def _traverse_visits(ctx: BinaryContext, traverse_va: int) -> List[Tuple[int, Op
     highest-numbered ``w`` register set by an immediate since the previous call: the remaining
     heuristic."""
     try:
-        insns = _listing(ctx, traverse_va)
+        insns = function_body(ctx, traverse_va)
     except READ_ERRORS:
         return []
     flow = _flow_of(ctx, insns)
@@ -925,7 +828,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
                      enum: bool = False) -> Tuple[List[SwiftField], str]:
     """Recover one type's (number, name) entries, auto-detecting the lowering.
 
-    Every shape reads the getter's :func:`_listing` -- what its entry reaches, up to its
+    Every shape reads the getter's :func:`~proto.function_body.function_body` -- what its entry reaches, up to its
     returns and tail calls -- so a stub getter (a tail call) is never read on into the
     next function in memory.
 
@@ -933,7 +836,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     message.  The same lowerings are used, but values may be 0 / negative / repeated
     and there is no ``traverse`` to cross-check against."""
     try:
-        insns = _listing(ctx, init_va)
+        insns = function_body(ctx, init_va)
     except READ_ERRORS:
         return [], "none"
 
@@ -949,7 +852,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     callee = None if got else _tail_callee(ctx, insns)
     if callee is not None:
         try:
-            got = _walk_inline_closure(ctx, _listing(ctx, callee[0]), enum, entry=callee[1])
+            got = _walk_inline_closure(ctx, function_body(ctx, callee[0]), enum, entry=callee[1])
         except READ_ERRORS:
             got = []
     if got:
@@ -983,7 +886,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             # iOS 27: the builder is a stub passing the packed bytecode literal (x2) and its
             # length (w3) to the shared template (shape E's data, one hop deeper)
             try:
-                stub = _listing(ctx, t)
+                stub = function_body(ctx, t)
                 lit = bytecode_literal_from_getter(ctx, stub, enum=enum, flow=_flow_of(ctx, stub))
             except READ_ERRORS:
                 lit = None
@@ -1013,7 +916,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
         if t == init_va:
             continue
         try:
-            cl = _listing(ctx, t)
+            cl = function_body(ctx, t)
         except READ_ERRORS:
             continue
         got = _walk_inline_closure(ctx, cl, enum)
