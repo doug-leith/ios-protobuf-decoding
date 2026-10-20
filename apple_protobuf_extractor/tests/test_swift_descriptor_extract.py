@@ -569,31 +569,6 @@ class TestFatSlice(unittest.TestCase):
         self.assertEqual(S.load_macho_slice(thin), thin)
 
 
-class TestFormatProto(unittest.TestCase):
-    def test_message_enum_empty(self):
-        msgs = [
-            S.SwiftMessage("m", "Msg", [S.SwiftField(2, "b"), S.SwiftField(1, "a")]),
-            S.SwiftMessage("m", "Col", [S.SwiftField(0, "U"), S.SwiftField(1, "R")],
-                           is_enum=True),
-            S.SwiftMessage("m", "Empty", []),
-        ]
-        text = S.format_proto(msgs)
-        self.assertIn("message Msg {", text)
-        # fields sorted by number, type shown as ??? (not recovered)
-        self.assertIn("optional ??? a = 1;", text)
-        self.assertIn("optional ??? b = 2;", text)
-        # The two assertIn checks above are TAUTOLOGICAL for "sorted by number"
-        # specifically: assertIn ignores position, so they'd pass even if `b`
-        # (constructed first, field 2) were emitted before `a` (field 1).
-        # Msg's fields are deliberately constructed out of number order above
-        # ([b, a]) so this actually exercises the sort; assert genuine
-        # ordering by string position.
-        self.assertLess(text.index("a = 1;"), text.index("b = 2;"))
-        self.assertIn("enum Col {", text)
-        self.assertIn("R = 1;", text)
-        self.assertIn("message Empty {}", text)
-
-
 # ── live: remindd device binary ───────────────────────────────────────────────
 
 def _data_path(*rel):
@@ -1468,33 +1443,6 @@ class TestLiveCacheMessageProtection(unittest.TestCase):
         self.assertEqual([(f.number, f.name, f.proto_type)
                           for f in sorted(m.fields, key=lambda x: x.number)],
                          [(1, "key", "bytes"), (2, "index", "uint64")])
-
-
-class TestCli(unittest.TestCase):
-    def test_not_a_macho_returns_2(self):
-        import tempfile
-        with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as fh:
-            fh.write(b"not a mach-o file at all, no valid header here")
-            p = fh.name
-        try:
-            self.assertEqual(S._main([p]), 2)     # BinaryContext rejects → error 2
-        finally:
-            os.unlink(p)
-
-
-@unittest.skipUnless(_remindd_path(), "remindd binary not available")
-class TestCliLive(unittest.TestCase):
-    def test_cli_emits_messages(self):
-        import io
-        import contextlib
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            rc = S._main([_remindd_path(), "--all-shapes"])
-        out = buf.getvalue()
-        self.assertEqual(rc, 0)
-        self.assertIn("message StartMigrationRequest {", out)
-        self.assertIn("credential = 2;", out)
-        self.assertIn("message StartMigrationRequest.Credential {", out)
 
 
 class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):

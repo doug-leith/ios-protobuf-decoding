@@ -1180,38 +1180,7 @@ def _attach_visit_types(m: SwiftMessage, visits: List[Tuple[int, Optional[str]]]
             f.proto_type = typ
 
 
-# ── emit ──────────────────────────────────────────────────────────────────────
-
-def format_proto(messages: List[SwiftMessage]) -> str:
-    """Render recovered messages as a partial ``.proto`` (field names + numbers;
-    TYPES are not recovered for swift-protobuf — see module docstring)."""
-    lines = [
-        "// swift-protobuf schema recovered from the binary.",
-        "// Field NAMES and NUMBERS only — wire types are not recoverable from",
-        "// swift-protobuf (generic Visitor/Decoder witness calls carry no named",
-        "// type symbol).  Types shown as `???`.",
-        'syntax = "proto2";',
-        "",
-    ]
-    for m in messages:
-        kw = "enum" if m.is_enum else "message"
-        if not m.fields:
-            lines.append(f"{kw} {m.name} {{}}")
-            lines.append("")
-            continue
-        lines.append(f"{kw} {m.name} {{")
-        for f in sorted(m.fields, key=lambda x: x.number):
-            est = "" if f.number_confirmed else "  // number estimated"
-            if m.is_enum:
-                lines.append(f"  {f.name} = {f.number};{est}")
-            else:
-                lines.append(f"  optional ??? {f.name} = {f.number};{est}")
-        lines.append("}")
-        lines.append("")
-    return "\n".join(lines)
-
-
-# ── fat-binary slice helper + CLI ─────────────────────────────────────────────
+# ── fat-binary slice helper ───────────────────────────────────────────────────
 
 _FAT_MAGIC_BE = 0xCAFEBABE
 _FAT_MAGIC_64_BE = 0xCAFEBABF
@@ -1251,38 +1220,3 @@ def load_macho_slice(data: bytes, prefer=("arm64e", "arm64")) -> bytes:
     if best and best[1] + best[2] <= len(data):
         return data[best[1]:best[1] + best[2]]
     return data
-
-
-def _main(argv: List[str]) -> int:
-    import argparse
-    ap = argparse.ArgumentParser(
-        description="Recover swift-protobuf message field names+numbers from a "
-                    "Mach-O binary (types not recovered).")
-    ap.add_argument("binary", help="path to a Mach-O (fat or thin)")
-    ap.add_argument("--all-shapes", action="store_true",
-                    help="annotate each message with the codegen lowering detected")
-    args = ap.parse_args(argv)
-
-    with open(args.binary, "rb") as fh:
-        data = load_macho_slice(fh.read())
-    try:
-        ctx = BinaryContext(data)
-    except ValueError as e:
-        print(f"error: {e}")
-        return 2
-    msgs = swift_messages(ctx)
-    if not msgs:
-        print("no swift-protobuf nameMaps found "
-              "(not a swift-protobuf binary, or symbols stripped)")
-        return 1
-    print(format_proto(msgs))
-    if args.all_shapes:
-        print("// --- shapes ---")
-        for m in msgs:
-            print(f"//   {m.qualified}: {len(m.fields)} field(s) [{m.shape}]")
-    return 0
-
-
-if __name__ == "__main__":
-    import sys
-    sys.exit(_main(sys.argv[1:]))
