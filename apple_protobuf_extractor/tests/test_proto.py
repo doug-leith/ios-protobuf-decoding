@@ -784,7 +784,7 @@ class _NullClassList:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 9-A. Disasm ADRP+ADD roundtrip (pure-Python fallback)
+# 9-A. Disasm ADRP+ADD roundtrip
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestDisasmAdrpAdd(unittest.TestCase):

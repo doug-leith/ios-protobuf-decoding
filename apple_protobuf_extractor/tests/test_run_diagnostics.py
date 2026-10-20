@@ -266,16 +266,20 @@ class TestForeignRuntimeFailuresAreNotSilent(unittest.TestCase):
             self.assertIn('differing field counts', out[0].message_note)
 
 
-class TestNativeDecoderNotice(unittest.TestCase):
+class TestCapstoneRequired(unittest.TestCase):
 
-    def test_warns_once_per_process(self):
-        from macho import disasm
-        disasm._native_decoder_warned = False
-        with self.assertLogs('macho.disasm', 'WARNING') as logs:
-            disasm._warn_native_decoder_once()
-            disasm._warn_native_decoder_once()
-        self.assertEqual(len(logs.output), 1)
-        self.assertIn('capstone is not installed', logs.output[0])
+    def test_without_capstone_disassembly_fails_loudly(self):
+        # a partial built-in decoder used to stand in, silently changing what the analysis saw
+        import sys
+        from unittest import mock
+        from macho.disasm import disasm
+        from macho.memory import BinaryContext
+        from tests.conftest import build_text_binary, RET_BYTES
+        ctx = BinaryContext(build_text_binary(RET_BYTES, vmaddr=0x4000))
+        with mock.patch.dict(sys.modules, {'capstone': None}), \
+                mock.patch('macho.disasm._CS', None):
+            with self.assertRaisesRegex(ImportError, 'capstone is required'):
+                disasm(ctx, 0x4000)
 
 
 if __name__ == '__main__':
