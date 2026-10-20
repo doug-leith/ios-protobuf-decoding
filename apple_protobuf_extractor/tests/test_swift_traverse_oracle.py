@@ -51,7 +51,7 @@ class TestTraverseOracleStandalone(unittest.TestCase):
             agree, problems = _compare(ctx, _binary_names(ctx))
             self.assertEqual(problems, [], os.path.basename(p))
             total += agree
-        self.assertGreaterEqual(total, 10)       # 17 when both are present
+        self.assertGreaterEqual(total, 40)       # 44 when both are present (17 at #105)
 
     def test_internal_swift_protobuf_wrappers(self):
         # Int32Value / Int64Value / UInt32Value / UInt64Value / BytesValue: the `value` record's
@@ -62,7 +62,7 @@ class TestTraverseOracleStandalone(unittest.TestCase):
             self.skipTest("extracted InternalSwiftProtobuf not available")
         ctx = _load_ctx(p)
         agree, problems = _compare(ctx, _binary_names(ctx))
-        self.assertGreaterEqual(agree, 10)
+        self.assertGreaterEqual(agree, 20)       # 22 (17 at #107)
         self.assertEqual(problems, [])
 
 
@@ -80,14 +80,14 @@ class TestTraverseOracleIos27(unittest.TestCase):
                     continue
                 seen.add(image)
                 ctx = BinaryContext.from_cache(reader, va)
-                names = reader.image_symbol_addrs(va, "V8traverse", "vg", "CMn", "VMn")
+                names = reader.image_symbol_addrs(va, "V8traverse", "vg", "CMn", "VMn", "Wvd")
                 agree, problems = _compare(ctx, names)
                 self.assertEqual(problems, [], path)
                 total += agree
         finally:
             reader.close()
         self.assertEqual(seen, set(_IOS27_IMAGES))
-        self.assertGreaterEqual(total, 150)      # 184 at #105
+        self.assertGreaterEqual(total, 900)      # 930 (184 at #105)
 
 
 if __name__ == "__main__":
