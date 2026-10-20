@@ -110,10 +110,11 @@ class TestRepeatedElementPrecedence(unittest.TestCase):
         with patch.object(X, '_resolve_repeated_field_type', return_value=rr):
             return X._resolve_repeated_element_type(
                 None, None, ivar, 'items', FieldLabel.REPEATED, 'NSMutableArray',
-                'NSMutableArray', 1, True,
-                dispatch_elements={}, dispatch_unambiguous=False,
-                dispatch_ivars=dispatch_ivars or {},
-                metaclass=None, string_helper=STR_HELPER, wt_helpers={})
+                'NSMutableArray',
+                dispatch_element=X._DispatchContext({}, dispatch_ivars or {}, False)
+                .element('_items', 1),
+                metaclass=None,
+                writes=X._FieldNumberResult({}, {}, STR_HELPER))
 
     def test_dispatch_ivar_supplies_the_element(self):
         out = self._call(dispatch_ivars={'_items': ('GEOFromDispatch', 3)})

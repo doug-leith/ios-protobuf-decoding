@@ -674,15 +674,16 @@ def _collect_enum_definitions(
     In order:
 
     **Phase 1 — shared-cache methname scan** (only when *instance_method_names*
-    is empty):  Scan ``__objc_methname`` for ``xAsString:``/``StringAsX:``
-    patterns for each ``int32``/``uint32`` field that has no ``ENUM:`` tag yet.
-    Matching fields are tagged with ``ENUM:<qualified>``.
+    is empty, :func:`_tag_methname_enums`):  Scan ``__objc_methname`` for
+    ``xAsString:``/``StringAsX:`` patterns for each ``int32``/``uint32`` field that has no
+    ``ENUM:`` tag yet.  Matching fields are tagged with ``ENUM:<qualified>``.
 
-    **Phase 1.5 — _dictionaryRepresentation: enums** for int fields with no xAsString:.
+    **Phase 1.5 — _dictionaryRepresentation: enums** for int fields with no xAsString:
+    (:func:`_tag_dictrep_enums`).
 
     **Phase 2 — enum extraction loop**:  For each ``ENUM:``-tagged field, find
-    and extract the ``xAsString:`` method implementation.  On success a
-    :class:`ProtoEnum` is appended to the returned list.  On failure (no
+    and extract the ``xAsString:`` method implementation (:func:`_recover_enum_values`).
+    On success a :class:`ProtoEnum` is appended to the returned list.  On failure (no
     resolvable ``xAsString:`` method for the field) the ``ENUM:`` tag is reverted
     and the field is left as its raw scalar type (``int32``/``uint32``).
 
@@ -696,81 +697,14 @@ def _collect_enum_definitions(
         # its own module scope, so importing it at proto.enums' module load
         # time would cycle. Safe here because by the time this FUNCTION runs,
         # proto.enums has already finished initializing.
-        from proto.enums_debug import _emit_mode_b_debug, _emit_mode_c_debug
+        from proto.enums_debug import _emit_mode_c_debug
 
-    # ── Phase 1: shared-cache methname-based enum detection ──────────────────
     if not instance_method_names:
-        cls_prefix = _class_to_proto_name(cls.name, _pfx)
-        for fld in fields:
-            if fld.type_name in ("int32", "uint32") and fld.type_class is None:
-                base = _enum_name_from_methname(fld.name, st)
-                if base:
-                    qualified      = _qualify_enum_name(cls_prefix, base)
-                    fld.type_name  = qualified
-                    fld.type_class = f"ENUM:{qualified}"
-                elif _dbg_w is not None:
-                    _emit_mode_b_debug(ctx, cls, fld, st, _dbg_w)
+        _tag_methname_enums(ctx, cls, fields, st, _pfx, _dbg_w)
+    dictrep_pairs, dictrep_incomplete = _tag_dictrep_enums(ctx, cls, fields, st, _pfx)
 
     enums: List[ProtoEnum] = []
     seen_enum_names: Set[str] = set()
-
-    # ── Phase 1.5: _dictionaryRepresentation: switch-table enums ──────────────
-    # Recover enums for scalar-int fields that have NO xAsString:/StringAsX:
-    # companion selector.  Apple stores their int→name map in the class's
-    # -[Class _dictionaryRepresentation:] switch table instead (e.g.
-    # GEOComponentType / ComponentStatus on GEOPDComponent).  Only run when at
-    # least one int field is still untyped, so the (potentially large) dictRep
-    # disassembly is skipped for classes with nothing to gain.
-    #
-    # The field is tagged with the class-qualified enum name (as the
-    # ``__objc_methname`` path does) and its recovered pairs are stashed in
-    # *dictrep_pairs*; the Phase 2 loop below picks them up and applies the same
-    # name-refinement / value-normalisation as the xAsString: path, keeping
-    # naming uniform (e.g. the COMPONENT_TYPE_* prefix collapses to ``ComponentType``).
-    dictrep_pairs: Dict[str, List[Tuple[int, str]]] = {}
-    dictrep_incomplete: Dict[str, str] = {}  # recovered, but some value could not be evaluated
-    if any(f.type_name in ("int32", "uint32") and f.type_class is None
-           for f in fields):
-        ivar_off_by_pname = {
-            _proto_name(iv.name): iv.offset
-            for iv in cls.ivars if iv.name
-        }
-        untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
-                           if f.type_name in ("int32", "uint32") and f.type_class is None
-                           and f.name in ivar_off_by_pname}
-        dr_enums, dr_incomplete, dr_unevaluated = _harvest_dictrep(
-            ctx, cls, st, wanted=untyped_offsets)
-        if dr_enums:
-            cls_prefix = _class_to_proto_name(cls.name, _pfx)
-            for fld in fields:
-                if fld.type_name not in ("int32", "uint32") or fld.type_class is not None:
-                    continue
-                off = ivar_off_by_pname.get(fld.name)
-                if off is None or off not in dr_enums:
-                    continue
-                pairs = dr_enums[off]
-                if not pairs:
-                    continue
-                qualified = _qualify_enum_name(
-                    cls_prefix, fld.name[0].upper() + fld.name[1:])
-                fld.type_name  = qualified
-                fld.type_class = f"ENUM:{qualified}"
-                dictrep_pairs[fld.name] = pairs
-                if off in dr_incomplete:
-                    dictrep_incomplete[fld.name] = dr_incomplete[off]
-        # An enum-like switch that could not be evaluated leaves its field an untyped int:
-        # say so on the field and in the run summary instead of staying quiet.
-        for fld in fields:
-            off = ivar_off_by_pname.get(fld.name)
-            if (off in dr_unevaluated and fld.type_name in ("int32", "uint32")
-                    and fld.type_class is None and fld.name in ivar_off_by_pname):
-                reason = dr_unevaluated[off]
-                if not fld.type_inference_note:
-                    fld.type_inference_note = (
-                        "may be an enum: a switch over this field's value in "
-                        "_dictionaryRepresentation: could not be evaluated (" + reason + ")")
-                get_diagnostics(ctx).unevaluated_switches.append((cls.name, fld.name, reason))
-
     for fld in fields:
         if not (fld.type_class and fld.type_class.startswith("ENUM:")):
             continue
@@ -779,34 +713,11 @@ def _collect_enum_definitions(
             continue
         seen_enum_names.add(enum_name)
 
-        # Look for the AsString method on both instance class and metaclass.
-        as_string_sel = f"{fld.name}AsString:"
-        as_method = cls.get_method(as_string_sel)
-        if as_method is None and metaclass is not None:
-            as_method = metaclass.get_method(as_string_sel)
-
-        pairs: List[Tuple[int, str]] = []
-        confirmed   = False
-        truncated   = False   # True when the value-string scan hit its disasm cap
-        incomplete_reason: Optional[str] = None
-        method_exists: bool = as_method is not None
-
-        if as_method is not None and as_method.imp != 0:
-            xr = _extract_xasstring(ctx, as_method.imp)
-            pairs, confirmed, truncated = xr.pairs, xr.confirmed, xr.truncated
-            incomplete_reason = xr.reason if xr.truncated else None
-        elif fld.name in dictrep_pairs:
-            # Enum recovered from -[Class _dictionaryRepresentation:] switch table
-            # (no xAsString: companion selector exists for this field).
-            pairs = dictrep_pairs[fld.name]
-            confirmed = False
-            method_exists = True
-            truncated = fld.name in dictrep_incomplete   # some value could not be evaluated
-            incomplete_reason = dictrep_incomplete.get(fld.name)
-
-        if not method_exists:
+        as_method, recovered = _recover_enum_values(
+            ctx, cls, metaclass, fld, dictrep_pairs, dictrep_incomplete)
+        if recovered is None:
             # No xAsString: enum method resolved for this field → revert it to
-            # the raw scalar type below.  (When selectors are wholly unresolved
+            # the raw scalar type.  (When selectors are wholly unresolved
             # the run errors/warns up front in extract_all; see
             # :func:`_check_selectors_resolved` — so reaching here with a
             # resolved binary just means this particular field has no enum
@@ -814,17 +725,10 @@ def _collect_enum_definitions(
             if _dbg_w is not None:
                 _emit_mode_c_debug(ctx, cls, fld, st, enum_name, as_method,
                                    instance_method_names, _dbg_w)
-            for f2 in fields:
-                if f2.type_class == f"ENUM:{enum_name}":
-                    f2.type_class = None
-                    f2.type_name  = "int32"
-                    # Transparency: this field was flagged as an enum (a value-
-                    # string selector exists) but its values could not be
-                    # recovered, so the int32 is a degraded fallback, not a true
-                    # scalar.  Surface it instead of degrading silently.
-                    f2.disambiguation_comment = _ENUM_UNRESOLVED_COMMENT
+            _revert_enum(fields, enum_name)
             seen_enum_names.discard(enum_name)
             continue
+        pairs, confirmed, truncated, incomplete_reason = recovered
 
         # ── Derive canonical enum name from value string prefix ───────────────
         # NB: the enum TYPE name is not stored in the binary; this is a best-
@@ -834,10 +738,7 @@ def _collect_enum_definitions(
         if pairs:
             derived_name = _enum_name_from_pairs(pairs, enum_name)
             if derived_name != enum_name:
-                for f2 in fields:
-                    if f2.type_class == f"ENUM:{enum_name}":
-                        f2.type_class = f"ENUM:{derived_name}"
-                        f2.type_name  = derived_name
+                _retag_enum(fields, enum_name, derived_name)
                 seen_enum_names.discard(enum_name)
                 seen_enum_names.add(derived_name)
                 enum_name = derived_name
@@ -853,3 +754,127 @@ def _collect_enum_definitions(
         ))
 
     return enums
+
+
+def _is_untyped_int(fld: ProtoField) -> bool:
+    """A scalar int field no enum is attached to (yet)."""
+    return fld.type_name in ("int32", "uint32") and fld.type_class is None
+
+
+def _tag_enum(fld: ProtoField, qualified: str) -> None:
+    fld.type_name  = qualified
+    fld.type_class = f"ENUM:{qualified}"
+
+
+def _retag_enum(fields: List[ProtoField], enum_name: str, new_name: str) -> None:
+    """Every field of enum *enum_name* becomes one of *new_name*."""
+    for f in fields:
+        if f.type_class == f"ENUM:{enum_name}":
+            _tag_enum(f, new_name)
+
+
+def _revert_enum(fields: List[ProtoField], enum_name: str) -> None:
+    """Every field of enum *enum_name* is a plain ``int32`` again, flagged: a value-string
+    selector exists but its values could not be recovered, so the int32 is a degraded
+    fallback, not a true scalar (transparency: surface it instead of degrading silently)."""
+    for f in fields:
+        if f.type_class == f"ENUM:{enum_name}":
+            f.type_class = None
+            f.type_name  = "int32"
+            f.disambiguation_comment = _ENUM_UNRESOLVED_COMMENT
+
+
+def _tag_methname_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoField],
+                        st: StringTable, prefixes: Tuple[str, ...], dbg_w) -> None:
+    """Phase 1, shared-cache methname-based enum detection: an untyped int field whose
+    ``xAsString:`` / ``StringAsX:`` selector ``__objc_methname`` lists is tagged ``ENUM:``."""
+    if dbg_w is not None:
+        from proto.enums_debug import _emit_mode_b_debug   # (see _collect_enum_definitions)
+    cls_prefix = _class_to_proto_name(cls.name, prefixes)
+    for fld in fields:
+        if _is_untyped_int(fld):
+            base = _enum_name_from_methname(fld.name, st)
+            if base:
+                _tag_enum(fld, _qualify_enum_name(cls_prefix, base))
+            elif dbg_w is not None:
+                _emit_mode_b_debug(ctx, cls, fld, st, dbg_w)
+
+
+def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoField],
+                       st: StringTable, prefixes: Tuple[str, ...]
+                       ) -> Tuple[Dict[str, List[Tuple[int, str]]], Dict[str, str]]:
+    """Phase 1.5, ``_dictionaryRepresentation:`` switch-table enums: ``(pairs, incomplete)``
+    by field name.
+
+    Recover enums for scalar-int fields that have NO xAsString:/StringAsX: companion
+    selector.  Apple stores their int→name map in the class's
+    -[Class _dictionaryRepresentation:] switch table instead (e.g. GEOComponentType /
+    ComponentStatus on GEOPDComponent).  Only run when at least one int field is still
+    untyped, so the (potentially large) dictRep disassembly is skipped for classes with
+    nothing to gain.
+
+    The field is tagged with the class-qualified enum name (as the ``__objc_methname`` path
+    does) and its recovered pairs returned; the Phase 2 loop picks them up and applies the
+    same name-refinement / value-normalisation as the xAsString: path, keeping naming
+    uniform (e.g. the COMPONENT_TYPE_* prefix collapses to ``ComponentType``).  *incomplete*:
+    recovered, but some value could not be evaluated."""
+    dictrep_pairs: Dict[str, List[Tuple[int, str]]] = {}
+    dictrep_incomplete: Dict[str, str] = {}
+    if not any(_is_untyped_int(f) for f in fields):
+        return dictrep_pairs, dictrep_incomplete
+    ivar_off_by_pname = {_proto_name(iv.name): iv.offset for iv in cls.ivars if iv.name}
+    untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
+                       if _is_untyped_int(f) and f.name in ivar_off_by_pname}
+    dr_enums, dr_incomplete, dr_unevaluated = _harvest_dictrep(
+        ctx, cls, st, wanted=untyped_offsets)
+    if dr_enums:
+        cls_prefix = _class_to_proto_name(cls.name, prefixes)
+        for fld in fields:
+            if not _is_untyped_int(fld):
+                continue
+            off = ivar_off_by_pname.get(fld.name)
+            if off is None or off not in dr_enums:
+                continue
+            pairs = dr_enums[off]
+            if not pairs:
+                continue
+            _tag_enum(fld, _qualify_enum_name(cls_prefix, fld.name[0].upper() + fld.name[1:]))
+            dictrep_pairs[fld.name] = pairs
+            if off in dr_incomplete:
+                dictrep_incomplete[fld.name] = dr_incomplete[off]
+    # An enum-like switch that could not be evaluated leaves its field an untyped int:
+    # say so on the field and in the run summary instead of staying quiet.
+    for fld in fields:
+        off = ivar_off_by_pname.get(fld.name)
+        if off in dr_unevaluated and _is_untyped_int(fld) and fld.name in ivar_off_by_pname:
+            reason = dr_unevaluated[off]
+            if not fld.type_inference_note:
+                fld.type_inference_note = (
+                    "may be an enum: a switch over this field's value in "
+                    "_dictionaryRepresentation: could not be evaluated (" + reason + ")")
+            get_diagnostics(ctx).unevaluated_switches.append((cls.name, fld.name, reason))
+    return dictrep_pairs, dictrep_incomplete
+
+
+def _recover_enum_values(ctx: BinaryContext, cls: ObjcClass, metaclass: Optional[ObjcClass],
+                         fld: ProtoField, dictrep_pairs: Dict[str, List[Tuple[int, str]]],
+                         dictrep_incomplete: Dict[str, str]):
+    """``(xAsString: method, (pairs, confirmed, truncated, incomplete reason))`` of the enum
+    field *fld*: from its ``xAsString:`` (on the class or the metaclass), else the pairs
+    ``_dictionaryRepresentation:`` gave (:func:`_tag_dictrep_enums`); the second item is None
+    when neither source exists."""
+    as_string_sel = f"{fld.name}AsString:"
+    as_method = cls.get_method(as_string_sel)
+    if as_method is None and metaclass is not None:
+        as_method = metaclass.get_method(as_string_sel)
+    if as_method is not None and as_method.imp != 0:
+        xr = _extract_xasstring(ctx, as_method.imp)
+        return as_method, (xr.pairs, xr.confirmed, xr.truncated,
+                           xr.reason if xr.truncated else None)
+    if fld.name in dictrep_pairs:
+        # (no xAsString: companion selector exists for this field)
+        return as_method, (dictrep_pairs[fld.name], False, fld.name in dictrep_incomplete,
+                           dictrep_incomplete.get(fld.name))
+    if as_method is not None:                          # declared, no implementation
+        return as_method, ([], False, False, None)
+    return as_method, None

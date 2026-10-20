@@ -303,11 +303,29 @@ def _ensure_readfrom_core_index(ctx: BinaryContext, cl: ClassList) -> Dict[int, 
     return index
 
 
+@dataclass(frozen=True)
+class _DispatchContext:
+    """Return value of :func:`_resolve_dispatch_context`."""
+    elements:    Dict[int, str]              # field_number → element class
+    ivars:       Dict[str, Tuple[str, int]]  # ivar_name → (element class, field_number)
+    unambiguous: bool
+
+    def element(self, ivar_name: str, confirmed_number: Optional[int]) -> Optional[str]:
+        """The element class readFrom: builds for this field: by its number when that is
+        confirmed, else the only one when unambiguous, else by the ivar it appends to."""
+        found = self.elements.get(confirmed_number) if confirmed_number is not None else None
+        if found is None and self.unambiguous:
+            found = next(iter(self.elements.values()))
+        if found is None and ivar_name in self.ivars:
+            found = self.ivars[ivar_name][0]
+        return found
+
+
 def _resolve_dispatch_context(
     ctx: BinaryContext, cls: ObjcClass,
     readfrom_core_index: "Optional[Dict[int, str]]",
     field_ivars: List[ObjcIvar],
-) -> "Tuple[Dict[int, str], Dict[str, Tuple[str, int]], bool]":
+) -> _DispatchContext:
     """Resolve the readFrom: dispatch context for repeated-<message> element typing:
 
       * ``dispatch_elements`` — ``{field_number: element_class}``: the class each field's
@@ -338,7 +356,7 @@ def _resolve_dispatch_context(
                                     f"{type(exc).__name__}: {exc}")
     _n_real_fields = sum(1 for _iv in field_ivars if _proto_name(_iv.name))
     unambiguous = (_n_real_fields == 1 and len(dispatch_elements) == 1)
-    return dispatch_elements, dispatch_ivars, unambiguous
+    return _DispatchContext(dispatch_elements, dispatch_ivars, unambiguous)
 
 
 def _is_backing_store_phantom(
@@ -671,9 +689,8 @@ def _qualify_field_enum(type_name, type_class, cls, pfx):
 
 
 def _resolve_repeated_element_type(
-    ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
-    *, dispatch_elements, dispatch_unambiguous, dispatch_ivars,
-    metaclass, string_helper, wt_helpers,
+    ctx, cl, ivar, pname, label, type_name, type_class,
+    *, dispatch_element, metaclass, writes,
 ):
     """Resolve a repeated field's element type (dispatch-first, then heuristic).
 
@@ -687,12 +704,9 @@ def _resolve_repeated_element_type(
     (e.g. ``geoIds`` → GEOSubPremise).  Their element type is decoded directly from
     ``^<elem>`` in ``_type_from_enc``; the label is already REPEATED.
 
-    Principled-first: the readFrom: dispatch read this field's element class from
-    the binary's own field→handler routing.  The dispatch map is keyed by field
-    NUMBER, so the ivar↔number match is only trustworthy when the number is
-    confirmed, or in the single-field-message case (unambiguous).  The adder→ivar
-    lever binds the element type to THIS ivar directly, so it is safe regardless of
-    number confirmation.  Always run the heuristic too: it answers when dispatch is
+    Principled-first: *dispatch_element* is the element class readFrom: builds for
+    this field (:meth:`_DispatchContext.element`), and *writes* the class's writeTo:
+    write helpers (:class:`_FieldNumberResult`).  Always run the heuristic too: it answers when dispatch is
     absent and — crucially — an ABI-confirmed element type (a distinct ``string``
     write helper / +xyzType→NSString) must never be overridden by a dispatch hit
     (which can only be an unconfirmed ordinal collision in that case).  Precedence
@@ -702,17 +716,11 @@ def _resolve_repeated_element_type(
             and not _is_packed_list_enc(ivar.type_enc)):
         return type_name, type_class, None
 
-    _disp = dispatch_elements.get(number) if confirmed else None
-    if _disp is None and dispatch_unambiguous:
-        _disp = next(iter(dispatch_elements.values()))
-    if _disp is None and ivar.name in dispatch_ivars:
-        _disp = dispatch_ivars[ivar.name][0]
-
     _rr = _resolve_repeated_field_type(
-        ivar, pname, metaclass, cl, ctx, string_helper, wt_helpers,
+        ivar, pname, metaclass, cl, ctx, writes.string_helper, writes.wt_helpers,
     )
-    if _disp is not None and not _rr.abi_confirmed:
-        return _disp, _disp, None
+    if dispatch_element is not None and not _rr.abi_confirmed:
+        return dispatch_element, dispatch_element, None
     note = None
     if _rr.element_unresolved:
         # Repeated field whose element type could not be determined → emitted as
@@ -870,7 +878,6 @@ def extract_proto_message(
     )
     confirmed_numbers = _fnr.confirmed_numbers
     _wt_helpers       = _fnr.wt_helpers
-    _string_helper    = _fnr.string_helper
     _wrote_zero       = _fnr.wrote_zero_fields
     _map_writers      = _fnr.map_writers
     _bound_writes      = _fnr.bound_writes
@@ -880,8 +887,7 @@ def extract_proto_message(
     record_helper_votes(ctx, field_ivars, _wt_helpers, _proto_class_names)
 
     # ── Principled repeated-<message> element types (readFrom: dispatch) ───────
-    dispatch_elements, dispatch_ivars, _dispatch_unambiguous = _resolve_dispatch_context(
-        ctx, cls, readfrom_core_index, field_ivars)
+    _dispatch = _resolve_dispatch_context(ctx, cls, readfrom_core_index, field_ivars)
 
     # ── Build ProtoField list ─────────────────────────────────────────────────
     # Build a set of field numbers already taken by confirmed fields so that
@@ -938,12 +944,9 @@ def extract_proto_message(
         # helper / +xyzType) and flag an unresolved element.  Alerts the user via
         # an inline `//` comment when the element type could not be determined.
         type_name, type_class, _type_note = _resolve_repeated_element_type(
-            ctx, cl, ivar, pname, label, type_name, type_class, number, confirmed,
-            dispatch_elements=dispatch_elements,
-            dispatch_unambiguous=_dispatch_unambiguous,
-            dispatch_ivars=dispatch_ivars,
-            metaclass=metaclass,
-            string_helper=_string_helper, wt_helpers=_wt_helpers,
+            ctx, cl, ivar, pname, label, type_name, type_class,
+            dispatch_element=_dispatch.element(ivar.name, number if confirmed else None),
+            metaclass=metaclass, writes=_fnr,
         )
 
         # protobuf map<> field: remember its entry writer for the post-extraction
