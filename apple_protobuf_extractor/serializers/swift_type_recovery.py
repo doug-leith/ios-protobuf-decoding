@@ -78,10 +78,9 @@ def _runlength_types(text):
         i = j + 1
     return out
 _STRUCT_KIND, _ENUM_KIND = 17, 18
-# [cap:INPUT-SANITY] runaway guards on metadata a corrupt or misread descriptor could make
-# unbounded: the field records read off one FieldDescriptor (its own count is the real bound),
-# and the parent contexts walked for a qualified name (the walk ends at the module).
-_MAX_FIELD_RECORDS = 512
+# [cap:INPUT-SANITY] runaway guard on the parent contexts walked for a qualified name (the
+# walk ends at the module).  (A FieldDescriptor's records are bounded by its own count and the
+# end of __swift5_fieldmd, :func:`_read_field_types`.)
 _MAX_CONTEXT_DEPTH = 12
 
 
@@ -405,9 +404,12 @@ _STORAGE_CLASS_NAMES = {"_StorageClass", "AnyMessageStorage"}
 _ONEOF_PREFIX = "OneOf_"
 
 
-def _read_field_types(ctx, desc):
+def _read_field_types(ctx, desc, fieldmd):
     """Decode the ``__swift5_fieldmd`` records hanging off a nominal type
-    descriptor's FieldDescriptor (at ``desc + 0x10``).
+    descriptor's FieldDescriptor (at ``desc + 0x10``).  *fieldmd* is that section's
+    ``(start, end)``: a descriptor whose header and ``count`` records do not lie inside it is
+    malformed, or not a FieldDescriptor, and none of its records is read (not a truncated
+    prefix).
 
     Returns ``(fields, incomplete, names)`` where ``fields`` is ``{name: proto_type}``,
     ``incomplete`` is the subset of names whose ``proto_type`` contains a GUESS
@@ -424,11 +426,13 @@ def _read_field_types(ctx, desc):
         recsize = _u16(ctx, fd + 0x0A) or 12
     except READ_ERRORS:
         return {}, set(), set()
+    if not (fieldmd[0] <= fd and fd + 0x10 + nfields * recsize <= fieldmd[1]):
+        return {}, set(), set()
     fields: Dict[str, str] = {}
     incomplete: set = set()
     names: set = set()
     rec = fd + 0x10
-    for _ in range(min(nfields, _MAX_FIELD_RECORDS)):
+    for _ in range(nfields):
         fname = _cstr(ctx, _relptr(ctx, rec + 0x08))
         mva = _relptr(ctx, rec + 0x04)
         rec += recsize
@@ -510,8 +514,10 @@ def collect_field_types(ctx) -> FieldMetadata:
     message via the descriptor parent chain (#60)."""
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
+        fmd = ctx.section("__TEXT", "__swift5_fieldmd")
     except READ_ERRORS:
         return FieldMetadata({}, {}, set(), {})
+    fieldmd = (fmd.vmaddr, fmd.vmaddr + fmd.vmsize)
     out: Dict[str, Dict[str, str]] = {}
     stored: Dict[str, Set[str]] = {}
     incomplete: Dict[str, set] = {}
@@ -540,7 +546,7 @@ def collect_field_types(ctx) -> FieldMetadata:
                 continue
             if kind == _STRUCT_KIND:
                 structs.add(key)
-            fields, inc, names = _read_field_types(ctx, desc)
+            fields, inc, names = _read_field_types(ctx, desc, fieldmd)
             if fields:
                 out.setdefault(key, {}).update(fields)
             if inc:

@@ -83,7 +83,8 @@ log = logging.getLogger(__name__)
 
 _MAX_FIELD_NUMBER = 0x1FFFFFFF        # proto field numbers are 29-bit
 # [cap:INPUT-SANITY] the largest (Int, _NameDescription) element stride tried while deriving a
-# static name-map array's stride (the description is a few words in every swift-protobuf version).
+# static name-map array's stride (the description is a few words in every swift-protobuf version;
+# 0x38 in the oracle fixtures' SwiftProtobuf: _NameDescription is 41 bytes, 8-aligned).
 _MAX_ELEMENT_STRIDE = 0x78
 _NAMEMAP_MARKER = "17_protobuf_nameMap"
 
@@ -277,14 +278,56 @@ def _name_ptr(ctx: BinaryContext, slot_va: int) -> Optional[int]:
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
+def _static_entry(ctx: BinaryContext, blob_va: int, off: int,
+                  enum: bool) -> Optional[Tuple[int, str]]:
+    """The ``(key, name)`` of the static name-map element at *blob_va* + *off*, or None: a key
+    in range (a field number >= 1, or any int32 case value) and a name pointer, read through
+    the image's fixups (:func:`_name_ptr`), whose cstring is exactly the stored length (and an
+    identifier, for an enum case)."""
+    try:
+        num, _ptr, ln = struct.unpack_from("<qQQ", ctx.read_bytes(blob_va + off, 24))
+    except READ_ERRORS:
+        return None
+    if enum:
+        if not -(1 << 31) <= num < (1 << 31):
+            return None
+    elif not 1 <= num <= _MAX_FIELD_NUMBER:
+        return None
+    nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
+    if not nm or ln != len(nm) or (enum and not _IDENT_RE.match(nm)):
+        return None
+    return num, nm
+
+
+def _static_blob_stride(ctx: BinaryContext, blob_va: int, enum: bool = False) -> Optional[int]:
+    """The element stride of a static name-map array: the smallest 8-aligned distance from the
+    first element at which a second element parses (:func:`_static_entry`).
+
+    A search, not a read: the stride is ``(Int, _NameDescription)``'s, and _NameDescription's
+    size is version-specific.  Its value witness table (``_NameMap.NameDescription`` metadata
+    - 8: size at +0x40, alignment in the flags at +0x50) gives it exactly, but that table is in
+    the swift-protobuf image, which a standalone image linking it dynamically cannot read.  A
+    wrong stride would have to land every element on an in-range key and a name pointer to a
+    cstring of exactly the stored length, with no key repeated (:func:`_parse_static_blob`).
+    ``tests/test_swift_descriptor_extract.TestStaticStrideWitness`` checks the search against the
+    value witness stride on every static name map of the oracle fixtures (the only images with
+    this lowering in the census)."""
+    try:
+        count = struct.unpack_from("<Q", ctx.read_bytes(blob_va + 0x10, 8))[0]
+    except READ_ERRORS:
+        return None
+    if count < 2 or _static_entry(ctx, blob_va, 0x20, enum) is None:
+        return None
+    return next((st for st in range(0x18, _MAX_ELEMENT_STRIDE + 8, 8)
+                 if _static_entry(ctx, blob_va, 0x20 + st, enum) is not None), None)
+
+
 def _parse_static_blob(ctx: BinaryContext, blob_va: int,
                        enum: bool = False) -> Optional[List[SwiftField]]:
     """A static ``Array<(Int, _NameDescription)>`` storage object: a 0x20-byte header
-    (metadata, refcount, count, capacity), then ``count`` elements of one stride, each
-    ``(key: Int, name pointer, name length, …)``.  ``_NameDescription``'s size is
-    version-specific, so the stride is the distance from the first element to the second that
-    parses.  Every element must parse -- the name pointer read through the image's fixups
-    (:func:`_name_ptr`) and its cstring as long as the stored length -- else None.
+    (metadata, refcount, count, capacity), then ``count`` elements of one stride
+    (:func:`_static_blob_stride`), each ``(key: Int, name pointer, name length, …)``.  Every
+    element must parse (:func:`_static_entry`) and no key may repeat, else None.
 
     *enum*: the keys are case values (any int32; an alias repeats one) and the names must be
     identifiers; a message's keys are field numbers (>= 1), each once."""
@@ -292,33 +335,16 @@ def _parse_static_blob(ctx: BinaryContext, blob_va: int,
         count = struct.unpack_from("<Q", ctx.read_bytes(blob_va + 0x10, 8))[0]
     except READ_ERRORS:
         return None
-
-    def entry(off: int):
-        try:
-            num, _ptr, ln = struct.unpack_from("<qQQ", ctx.read_bytes(blob_va + off, 24))
-        except READ_ERRORS:
-            return None
-        if enum:
-            if not -(1 << 31) <= num < (1 << 31):
-                return None
-        elif not 1 <= num <= _MAX_FIELD_NUMBER:
-            return None
-        nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
-        if not nm or ln != len(nm) or (enum and not _IDENT_RE.match(nm)):
-            return None
-        return num, nm
-
-    first = entry(0x20) if count else None
+    first = _static_entry(ctx, blob_va, 0x20, enum) if count else None
     if first is None:
         return None
     out = [SwiftField(*first)]
     if count > 1:
-        stride = next((st for st in range(0x18, _MAX_ELEMENT_STRIDE + 8, 8)
-                       if entry(0x20 + st) is not None), None)
+        stride = _static_blob_stride(ctx, blob_va, enum)
         if stride is None:
             return None
         for i in range(1, count):
-            e = entry(0x20 + i * stride)
+            e = _static_entry(ctx, blob_va, 0x20 + i * stride, enum)
             if e is None:
                 return None
             out.append(SwiftField(*e))

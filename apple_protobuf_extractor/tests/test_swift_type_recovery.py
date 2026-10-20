@@ -90,6 +90,52 @@ class TestDemangleOffline(unittest.TestCase):
             "Google_Protobuf_Any")
 
 
+class TestFieldRecordsBoundedBySection(unittest.TestCase):
+    """A FieldDescriptor's records are read only when its header and all ``count`` records lie
+    inside ``__swift5_fieldmd``; an overrunning descriptor is not read at all (no truncated
+    prefix, and no fixed record cap)."""
+
+    class _Mem:
+        def __init__(self, base, data):
+            self.base, self.data = base, bytes(data)
+
+        def read_bytes(self, va, n):
+            if not self.base <= va <= va + n <= self.base + len(self.data):
+                raise ValueError(va)
+            return self.data[va - self.base:va - self.base + n]
+
+        def read_cstring(self, va, max_len=4096):
+            raw = self.read_bytes(va, min(max_len, self.base + len(self.data) - va))
+            return raw.split(b"\0", 1)[0].decode()
+
+    def _image(self, nfields):
+        import struct
+        base, desc, fd, strs = 0x1000, 0x1000, 0x1100, 0x1400
+        buf = bytearray(0x600)
+        struct.pack_into("<i", buf, desc + 0x10 - base, fd - (desc + 0x10))
+        struct.pack_into("<HHI", buf, fd + 0x08 - base, 0, 12, nfields)
+        names = []
+        for i in range(nfields):
+            rec = fd + 0x10 + 12 * i
+            name_va, type_va = strs + 0x20 * i, strs + 0x20 * i + 0x10
+            buf[name_va - base:name_va - base + 3] = f"f{i}".encode() + b"\0"
+            buf[type_va - base:type_va - base + 3] = b"Si\0"
+            struct.pack_into("<Iii", buf, rec - base, 0, type_va - (rec + 4), name_va - (rec + 8))
+            names.append(f"f{i}")
+        return self._Mem(base, buf), desc, fd, names
+
+    def test_records_inside_the_section_are_read(self):
+        mem, desc, fd, names = self._image(3)
+        fields, _inc, got = TR._read_field_types(mem, desc, (fd, fd + 0x10 + 3 * 12))
+        self.assertEqual(got, set(names))
+        self.assertEqual(fields, {n: "int64" for n in names})
+
+    def test_a_descriptor_overrunning_the_section_is_not_read(self):
+        mem, desc, fd, _names = self._image(3)
+        self.assertEqual(TR._read_field_types(mem, desc, (fd, fd + 0x10 + 2 * 12)),
+                         ({}, set(), set()))
+
+
 @unittest.skipUnless(_swift_oracle(),
                      "swift-protobuf oracle fixture not available (see "
                      "tests/swift_oracle_fixture/README.md); "

@@ -1281,6 +1281,46 @@ class TestLiveDecoderCrossCheck(unittest.TestCase):
                                 "no decoder confirmation across any swift binary")
 
 
+class TestStaticStrideWitness(unittest.TestCase):
+    """The static name-map stride is found by search (:func:`S._static_blob_stride`).  Where the
+    image carries swift-protobuf itself, the exact stride is ``(Int, _NameDescription)``'s, from
+    _NameDescription's value witness table: every searched stride must equal it.  The oracle
+    fixtures are the only census images with static name maps."""
+
+    @staticmethod
+    def _witness_stride(ctx):
+        names = {n: a for n, a in ctx.iter_symbols() if a}
+        md = [a for n, a in names.items()
+              if "_NameMapV" in n and n.endswith("11DescriptionON")]
+        if len(md) != 1:
+            return None
+        vwt = ctx.read_ptr(md[0] - 8)
+        size, _stride, flags = struct.unpack("<QQI", ctx.read_bytes(vwt + 0x40, 20))
+        align = (flags & 0xFF) + 1
+        off = -(-8 // align) * align                  # _NameDescription after the Int key
+        return -(-(off + size) // max(8, align)) * max(8, align)
+
+    def test_searched_stride_is_the_value_witness_stride(self):
+        paths = [p for p in (_swift_oracle_path(), _enum_oracle("eo_classic")) if p]
+        if not paths:
+            self.skipTest("no oracle fixture available")
+        checked = 0
+        for path in paths:
+            ctx = _load_ctx(path)
+            witness = self._witness_stride(ctx)
+            self.assertIsNotNone(witness, path)
+            for name, va in S.symbol_addrs(ctx).items():
+                p = S._parse_namemap_symbol(name)
+                if not p or not name.endswith(("_WZ", "vgZ")):
+                    continue
+                for blob in S._static_objects(ctx, S.function_body(ctx, va)):
+                    stride = S._static_blob_stride(ctx, blob, p[2])
+                    if stride is not None:
+                        self.assertEqual(stride, witness, f"{os.path.basename(path)} {name}")
+                        checked += 1
+        self.assertGreaterEqual(checked, 100)        # 137 static name maps of two or more
+
+
 @unittest.skipUnless(_swift_oracle_path(),
                      "swift-protobuf oracle fixture not available (see "
                      "tests/swift_oracle_fixture/README.md); "

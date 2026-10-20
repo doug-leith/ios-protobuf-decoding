@@ -455,9 +455,11 @@ analogues), so the reflection type alone gives only the base. Since #98 the enco
 read off the Visitor method `traverse` calls for the field (`visitSingularSInt32Field`,
 `visitSingularFixed64Field`, …), named by its dispatch thunk or by its slot in the visitor
 witness table (AONSense `rssi_db` is `sint32`, nptocompaniond `SyncAsset.date` is
-`sfixed64`). Where the call cannot be named, in an extracted framework whose swift-protobuf
-is another file, the base type (`int32`/`uint32`/`int64`/`uint64`) stays, which is
-**wire-incorrect** for a genuine `sint*` (zigzag) or `fixed*`/`sfixed*` (wire type 1/5) field.
+`sfixed64`). Where the call cannot be named, the base type (`int32`/`uint32`/`int64`/`uint64`)
+stays, which is **wire-incorrect** for a genuine `sint*` (zigzag) or `fixed*`/`sfixed*` (wire
+type 1/5) field. That happens in a framework extracted from the dyld cache, whose calls branch
+into cache islands that no extracted file holds (read it from the cache instead), and in a
+binary whose swift-protobuf method descriptors are stripped (remindd).
 
 **(c) Undecoded container element (flagged).** When an Array element or a map
 key/value doesn't decode, the field shows a `bytes` filler with an inline
