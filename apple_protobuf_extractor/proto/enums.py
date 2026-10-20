@@ -20,17 +20,16 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
+from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
-from macho.disasm     import disasm, Insn, _STOP_MNEMONICS
 from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
 from proto.protocore  import _proto_name
-from proto.dispatch   import _jump_table_arm_addrs
+from proto.dispatch   import _jump_table_arm_addrs, function_entries
 from proto.dictrep_flow import Flow
 from proto.dispatch_eval import _in_image_text
 from proto.eval_tokens import SELF, OPAQUE, opaque
-from proto.arm64cfg   import _next_imp
+from proto.function_body import FunctionBody, function_listing
 from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, RETURNS
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
@@ -105,102 +104,9 @@ def _normalize_enum_value_name(enum_name: str, raw: str, camel: Optional[bool] =
     return f"{prefix}_{s}"
 
 
-def _disasm_truncated(insns: List[Insn], cap: int) -> bool:
-    """Return True if a ``disasm(..., max_insns=cap)`` result was budget-truncated.
-
-    ``disasm`` stops at the first terminal (``ret``/``eret``) or after *cap*
-    instructions, whichever comes first.  So a result of length ``cap`` whose
-    last instruction is NOT a terminal ran out of budget before the method
-    ended — any enum values encoded past that point are missing.  This
-    distinguishes a genuine tool-budget truncation (worth flagging) from a
-    method that simply ended within the cap, and from a sparse-enum gap (an
-    undefined value, which is not a truncation at all)."""
-    return (len(insns) >= cap
-            and bool(insns)
-            and insns[-1].mnemonic not in _STOP_MNEMONICS)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Function bodies of the enum methods (xAsString:, _dictionaryRepresentation:)
 # ══════════════════════════════════════════════════════════════════════════════
-
-
-# [cap:COSMETIC — verified 2026-06-11, TODO #40] Fast-path probe length only; its value
-# does NOT determine the harvest result.  _harvest_dictrep first decodes this many
-# instructions (stop_at_ret); if the body closed (ret reached) that IS the whole
-# serializer.  If not, it recomputes the body by its true FUNCTION EXTENT
-# (_function_body_extent) — so 8000 only chooses fast-path-vs-extent, and both yield
-# identical enums (proven: harvest(8000) == harvest(full extent) on all 9 overrunning
-# GeoServices classes; raising the cap recovers 0 enums — dictrep_probe3.py).
-_DICTREP_PROBE_INSNS = 8000
-# [cap:COSMETIC] Pure safety ceiling for the extent sweep.  -[cls _dictionaryRepresentation:]
-# is a CONTIGUOUS serializer (verified >=99.6% reachable-fill — UNLIKE the OUTLINED writeTo:
-# family, whose field-write blocks sit past other function boundaries), so it closes on its
-# own `ret` well below this (max observed extent ~24.6k insns).  If a future body fails to
-# close under this ceiling the harvest still fails loud (_disasm_truncated ->
-# enum_recovery_truncated), preserving the honest signal for a genuine overrun.
-_DICTREP_HARD_CAP = 40000
-
-# [cap:INPUT-SANITY — TODO #58] Safety ceiling for the xAsString: jump-table
-# function-extent fallback (below).  Only reached when the cheap 1000-insn probe
-# didn't close on `ret`; the LogMsg-family methods that trigger it are ~12k insns
-# and close well under this (the 2026-06-13 sweep saw every method close ≤30k).
-# Like _DICTREP_HARD_CAP it is a fail-loud bound: a body that doesn't close under
-# it still trips _disasm_truncated, preserving the honest INCOMPLETE signal.
-_SPARSE_HARD_CAP = 40000
-
-
-def _direct_branch_target(ins: "Insn") -> Optional[int]:
-    """PC-relative target of a DIRECT branch (b / b.<cond> / cbz / cbnz / tbz / tbnz),
-    or None.  Excludes bl/blr (calls) and br (indirect jump-table dispatch) so a tail call
-    or switch does not extend the function extent."""
-    m = ins.mnemonic
-    if m == 'b' or m.startswith('b.') or m in ('cbz', 'cbnz', 'tbz', 'tbnz'):
-        for tok in reversed(ins.op_str.replace(',', ' ').split()):
-            tok = tok.strip('#')
-            try:
-                return int(tok, 16) if tok.lower().startswith('0x') else int(tok)
-            except ValueError:
-                continue
-    return None
-
-
-def _function_body_extent(
-    ctx: BinaryContext, imp: int, hard_cap: int
-) -> "List[Insn]":
-    """Instructions of the CONTIGUOUS function at *imp*, bounded by its own last `ret`
-    (the first terminal that no earlier forward branch jumps past), via a single linear
-    sweep + forward-branch high-water-mark.
-
-    Value-independent: the cut-off is the function's structure, not a magic count.
-    *hard_cap* is only a safety ceiling — when the function fails to close under it the
-    full hard_cap-length sweep is returned (last insn NOT a terminal) so the caller's
-    _disasm_truncated check still fires (fail-loud on a genuine overrun).
-
-    SOUND ONLY for contiguous bodies (verified for _dictionaryRepresentation:,
-    >=99.6% reachable-fill — matches a full reachability walk on all 9 overrunning
-    classes, dictrep_probe5.py).  Do NOT reuse for the OUTLINED writeTo: family, whose
-    field-write blocks sit past other function boundaries — a forward branch into an
-    outlined block would drag the sweep through foreign code."""
-    try:
-        insns = disasm(ctx, imp, max_insns=hard_cap, stop_at_ret=False)
-    except READ_ERRORS:
-        return []
-    hi = imp
-    span = hard_cap * 4
-    for k, ins in enumerate(insns):
-        t = _direct_branch_target(ins)
-        if t is not None and imp <= t < imp + span and t > hi:
-            hi = t
-        if ins.mnemonic in _STOP_MNEMONICS and ins.addr >= hi:
-            return insns[:k + 1]
-    return insns
-
-
-# [cap:INPUT-SANITY] a runaway backstop for reading a representation wrapper's opening (it
-# is cut at its first call or unconditional terminator; the wrappers seen are 1-2
-# instructions, a self-contained implementation's first call comes within ~10).
-_DICTREP_WRAPPER_INSNS = 16
 
 
 def _find_dictrep_c_func(ctx: BinaryContext, cls: ObjcClass) -> Optional[int]:
@@ -229,7 +135,7 @@ def _find_dictrep_c_func(ctx: BinaryContext, cls: ObjcClass) -> Optional[int]:
     with a frame and a call that is not a tail call: it builds the dictionary itself, so
     its own IMP is the body (iOS 16 CoreDuet's ``_DKPRValueType``, whose only dictRep is
     the no-arg one; iOS locationd's ``ALSNr5GCellTower``).  Its internal branches are
-    never followed; :func:`_dictrep_body` bounds it like any other body."""
+    never followed; :func:`_dictrep_body` reads it like any other body."""
     m = cls.get_method('_dictionaryRepresentation:')
     if m is not None and m.imp != 0:
         return m.imp
@@ -257,7 +163,7 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     if m is None or m.imp == 0:
         return None
     try:
-        insns = disasm(ctx, m.imp, max_insns=_DICTREP_WRAPPER_INSNS, stop_at_ret=False)
+        insns = function_listing(ctx, m.imp, function_entries(ctx))
     except READ_ERRORS:
         return None
     end = next((k for k, i in enumerate(insns)
@@ -294,30 +200,18 @@ def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
     return c.target, (_ARG_UNTOUCHED if flow.entry_arg(c.k, 'x1') == 'x1' else None)
 
 
-def _dictrep_body(ctx: BinaryContext, imp: int) -> Optional[List[Insn]]:
-    """The dictRep function at *imp* as the linear range ``[imp, next method IMP)`` -- or
-    None when the method-IMP set is not on *ctx* (it is built once by ``extract_all``;
-    see proto.write_helpers._ensure_writeto_prepass).
+def _dictrep_body(ctx: BinaryContext, imp: int) -> FunctionBody:
+    """The dictRep function at *imp* as the linear listing of its extent
+    (:func:`proto.function_body.function_listing`: *imp* up to the next function entry).
 
-    Bound by structure, not by a count or by a `ret`: the next method IMP is a hard upper
-    bound on the function (as for the writeTo: pre-scan).  A dictRep leaves by a tail
-    call (``b objc_autoreleaseReturnValue``) or ends in a noreturn call, never a `ret` of
-    its own, so the stop-at-ret probe / _function_body_extent ran on into the following
+    A dictRep leaves by a tail call (``b objc_autoreleaseReturnValue``) or ends in a noreturn
+    call, never a `ret` of its own, so a read to the first `ret` runs on into the following
     functions: on the iPhone 8 iOS 16 cache every one of the 1,641 harvested bodies did
-    (550,916 foreign instructions in all), and no body reaches code past the next method
-    IMP.  Reachability within the range is left to :class:`proto.dictrep_flow.Flow`, which
-    walks from the entry and resolves `br` targets by evaluation: pruning the range to a
-    static CFG first drops jump-table arms only that evaluation finds (iOS 27
-    GEOPDSUserActionMetadataElement lost 8 values that way)."""
-    imps = getattr(ctx, "_method_imps", None)
-    if not imps:
-        return None
-    memo = getattr(ctx, "_dictrep_imps_sorted", None)
-    if memo is None or memo[0] is not imps:
-        memo = (imps, sorted(imps))
-        _ctx_store(ctx, "_dictrep_imps_sorted", memo)
-    end = _next_imp(memo[1], imp)
-    return disasm(ctx, imp, max_insns=max(1, (end - imp) // 4), stop_at_ret=False)
+    (550,916 foreign instructions in all).  Reachability within the extent is left to
+    :class:`proto.dictrep_flow.Flow`, which walks from the entry and resolves `br` targets by
+    evaluation: pruning the extent to a static CFG first drops jump-table arms only that
+    evaluation finds (iOS 27 GEOPDSUserActionMetadataElement lost 8 values that way)."""
+    return function_listing(ctx, imp, function_entries(ctx))
 
 
 def _harvest_dictrep(
@@ -337,8 +231,7 @@ def _harvest_dictrep(
     if imp is None:
         return result, {}, {}
     try:
-        body = _dictrep_body(ctx, imp)
-        insns = body if body is not None else disasm(ctx, imp, max_insns=_DICTREP_PROBE_INSNS)
+        insns = _dictrep_body(ctx, imp)
     except (NameError, ImportError):
         raise
     except Exception as exc:
@@ -348,27 +241,16 @@ def _harvest_dictrep(
     if not insns:
         return result, {}, {}
 
-    # Without the method-IMP set (a bare call outside extract_all): if the cheap probe
-    # didn't reach a `ret`, widen it to _function_body_extent.  Both run past the
-    # function's own end -- it leaves by a tail call, never a `ret` of its own -- into the
-    # functions that follow (see _dictrep_body), so this is only the fallback.
-    if body is None and _disasm_truncated(insns, _DICTREP_PROBE_INSNS):
-        body = _function_body_extent(ctx, imp, _DICTREP_HARD_CAP)
-        if body:
-            insns = body
-
-    # Fail loud ONLY on a genuine overrun: the function failed to close even under the
-    # safety ceiling.  None do today; if one ever does, flag the whole class (caller ->
-    # ProtoMessage.enum_recovery_truncated -> emitted comment) and log a warning rather
-    # than silently drop tail enums.  Only called when >=1 int field is still untyped
-    # (caller guard), so this is always relevant when it fires.
-    if _disasm_truncated(insns, _DICTREP_HARD_CAP):
+    # Fail loud on a body read only in part: with no known extent (no function entry above
+    # it and no __text) the read stops at a runaway guard.  Flag the whole class (caller ->
+    # ProtoMessage.enum_recovery_truncated -> emitted comment) rather than silently drop
+    # tail enums.  Only called when >=1 int field is still untyped (caller guard).
+    if insns.truncated:
         log.warning(
-            "enum recovery for %s may be INCOMPLETE: "
-            "-[%s _dictionaryRepresentation:] did not close within the %d-instruction "
-            "safety ceiling; switch-table enums past that point are not recovered, so "
-            "some int32 fields may actually be enums (see TODO #40).",
-            cls.name, cls.name, _DICTREP_HARD_CAP)
+            "enum recovery for %s may be INCOMPLETE: the extent of "
+            "-[%s _dictionaryRepresentation:] is not known and its read stopped early; "
+            "switch-table enums past that point are not recovered, so some int32 fields "
+            "may actually be enums.", cls.name, cls.name)
         _ctx_cache(ctx, "_dictrep_truncated_classes", set).add(cls.name)
 
     # The field's int is driven through the function's own code, value by value, to the
@@ -489,37 +371,14 @@ class XasResult:
     reason: Optional[str] = None
 
 
-# [cap:COSMETIC] cheap first probe of an xAsString: body; a longer body is re-read by its
-# function extent (see _function_body_extent), so this chooses only fast-path-vs-extent.
-_XAS_PROBE_INSNS = 1000
-
-
-def _branches_past_end(insns: List[Insn]) -> bool:
-    """True if a CONDITIONAL branch in *insns* targets an address beyond the last decoded
-    instruction: the body continues past the ``ret`` the decode stopped at (an out-of-line
-    default / case block).  Unconditional ``b`` is excluded: a tail call into
-    ``objc_retainAutoreleaseReturnValue`` is a ``b`` to another function."""
-    end = insns[-1].addr
-    return any(i.mnemonic != 'b' and (t := _direct_branch_target(i)) is not None and t > end
-               for i in insns)
-
-
 def _xasstring_flow(ctx: BinaryContext, imp: int) -> Tuple[Optional[Flow], bool]:
-    """``(flow, truncated)`` of the ``xAsString:`` body at *imp* (``(None, False)`` when it
-    is empty); raises when it cannot be disassembled."""
-    insns = disasm(ctx, imp, max_insns=_XAS_PROBE_INSNS)
+    """``(flow, truncated)`` of the ``xAsString:`` body at *imp*, the linear listing of its
+    extent (:func:`proto.function_body.function_listing`; ``(None, False)`` when it is
+    empty); raises when it cannot be disassembled."""
+    insns = function_listing(ctx, imp, function_entries(ctx))
     if not insns:
         return None, False
-    truncated = _disasm_truncated(insns, _XAS_PROBE_INSNS)
-    if truncated or _branches_past_end(insns):
-        # the probe stopped at the budget, or at a `ret` that a branch jumps over (out-of-line
-        # default / case blocks): re-read the method by its true extent (SOUND for xAsString:
-        # bodies, which are contiguous)
-        body = _function_body_extent(ctx, imp, _SPARSE_HARD_CAP)
-        if body:
-            insns = body
-            truncated = _disasm_truncated(insns, _SPARSE_HARD_CAP)
-    return Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns)), truncated
+    return Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns)), insns.truncated
 
 
 def _xasstring_gate_span(ctx: BinaryContext, imp: int) -> int:

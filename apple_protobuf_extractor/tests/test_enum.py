@@ -363,40 +363,6 @@ class TestProtoEnumModel(unittest.TestCase):
         self.assertIn("…", repr(e))
 
 
-class TestDisasmTruncationDetection(unittest.TestCase):
-    """The _disasm_truncated helper distinguishes a budget cut-off from a method
-    that genuinely ended within the cap."""
-
-    def _insns(self, mnemonics):
-        from macho.disasm import Insn
-        return [Insn(addr=0x1000 + 4 * i, mnemonic=m, op_str="", size=4, raw=b"\x00\x00\x00\x00")
-                for i, m in enumerate(mnemonics)]
-
-    def test_full_cap_without_terminal_is_truncated(self):
-        from proto.enums import _disasm_truncated
-        insns = self._insns(["mov"] * 10)        # cap reached, last insn not a ret
-        self.assertTrue(_disasm_truncated(insns, cap=10))
-
-    def test_full_cap_ending_in_ret_is_not_truncated(self):
-        from proto.enums import _disasm_truncated
-        insns = self._insns(["mov"] * 9 + ["ret"])  # ended on a terminal
-        self.assertFalse(_disasm_truncated(insns, cap=10))
-
-    def test_below_cap_is_not_truncated(self):
-        from proto.enums import _disasm_truncated
-        insns = self._insns(["mov", "add", "ldr"])   # well under the cap
-        self.assertFalse(_disasm_truncated(insns, cap=10))
-
-    def test_empty_is_not_truncated(self):
-        from proto.enums import _disasm_truncated
-        self.assertFalse(_disasm_truncated([], cap=10))
-        # At cap=10, `len([]) >= 10` (0>=10=False) already short-circuits before
-        # `bool(insns)` is even reached, so that guard is not exercised above.  Use
-        # cap=0 so the length check passes trivially (0>=0=True) and only the
-        # `bool(insns)` guard can still stop `insns[-1]` from raising IndexError.
-        self.assertFalse(_disasm_truncated([], cap=0))
-
-
 # ── TestTypeFromEncEnum ───────────────────────────────────────────────────────
 
 class TestTypeFromEncEnum(unittest.TestCase):

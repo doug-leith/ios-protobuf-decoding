@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ObjcClass
-from macho.disasm   import disasm, Insn, _norm_reg, _parse_imm
+from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
 from proto.arm64_operands import (NO_DEST, PAIR_LOADS, INDIRECT_BRANCHES, RETURNS, imm_operand,
@@ -27,8 +27,6 @@ from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
 
-# [cap:COSMETIC — verified] the readFrom: wrapper's call is in its first two instructions (x8 changed nothing).
-_READFROM_MAX_INSNS = 12
 
 
 def _find_readfrom_c_func(
@@ -51,12 +49,13 @@ def _find_readfrom_c_func(
     (a field-less filter's skip-everything helper) has none either.
     """
     from proto.arm64_eval import Flow
+    from proto.function_body import function_listing     # (function_body imports this module)
     method = cls.get_method("readFrom:")
     if method is None or method.imp == 0:
         return None
 
     try:
-        insns = disasm(ctx, method.imp, max_insns=_READFROM_MAX_INSNS, stop_at_ret=False)
+        insns = function_listing(ctx, method.imp, function_entries(ctx))
     except READ_ERRORS:
         return None
     end = next((k for k, i in enumerate(insns)

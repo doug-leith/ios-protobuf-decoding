@@ -272,13 +272,10 @@ class BinaryContext:
         # attributes are discoverable.  proto.extractor.extract_all() clears every
         # registered cache at the start of a run (reset_ctx_caches), so reusing one
         # BinaryContext across extractions cannot leak stale results.  None == empty.
-        # Names of classes whose -[cls _dictionaryRepresentation:] disassembly hit
-        # the _DICTREP_MAX_INSNS budget, so dictRep enum recovery may be incomplete;
-        # surfaced as ProtoMessage.enum_recovery_truncated.  None == empty.
+        # Names of classes whose -[cls _dictionaryRepresentation:] was read only in part
+        # (proto.function_body: no known extent), so dictRep enum recovery may be
+        # incomplete; surfaced as ProtoMessage.enum_recovery_truncated.  None == empty.
         self._dictrep_truncated_classes: Optional[set] = None
-        # writeTo: pre-pass results, threaded by proto.extractor.extract_all (the set of
-        # all method IMPs; the image's WriterFlow is _writer_flow).
-        self._method_imps:           Optional[set]  = None
         # Binary-wide field-typing pre-passes, lazily built + cached for standalone
         # extract_proto_message callers (extract_all builds + passes them directly).
         # None == not yet built; an empty set/dict is a valid built result.

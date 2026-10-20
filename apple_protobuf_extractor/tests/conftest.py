@@ -209,6 +209,21 @@ class WordCtx:
 
     def __init__(self, base, words):
         self._m = {base + i * 4: w for i, w in enumerate(words)}
+        self._text = (base, 4 * len(words))
+
+    # The image the words stand for: they are its ``__TEXT,__text``, with no function index,
+    # so a function there runs to the end of the code (proto.function_body.function_end).
+    def function_starts(self):
+        return []
+
+    def has_section(self, segname, sectname):
+        """Only ``__TEXT,__text``: no ``__cfstring``, which routes read_cfstring_text's
+        cfstring/direct-C-string dispatch to the direct-pointer branch unconditionally."""
+        return (segname, sectname) == ('__TEXT', '__text')
+
+    def section(self, segname, sectname):
+        from types import SimpleNamespace
+        return SimpleNamespace(vmaddr=self._text[0], vmsize=self._text[1])
 
     def read_bytes(self, va, length):
         if length <= 0 or length % 4 != 0:
@@ -226,12 +241,6 @@ class WordCtx:
         (the table entry IS the ivar's byte offset, stored as data, not an
         instruction immediate)."""
         return struct.unpack('<i', self.read_bytes(va, 4))[0]
-
-    def has_section(self, segname, sectname):
-        """Always False: this stand-in models a binary with no named sections,
-        which routes read_cfstring_text's cfstring/direct-C-string dispatch to
-        the direct-pointer branch unconditionally."""
-        return False
 
     def read_cstring(self, va, max_len=4096):
         """Look up a plain Python string previously registered at *va* via

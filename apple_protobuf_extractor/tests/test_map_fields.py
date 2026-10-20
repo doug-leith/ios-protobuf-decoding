@@ -20,8 +20,9 @@ from pathlib import Path
 
 import proto.mapfields as M
 import proto.callees as C
+import proto.function_body as FB
 import proto.extractor as E
-from proto.dispatch import listing_flow
+from proto.dispatch import FunctionEntries, listing_flow
 from proto.emitter import build_proto_files, write_from_messages
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 
@@ -68,7 +69,7 @@ class _Patched(unittest.TestCase):
     """Route ``disasm`` in the modules that read memory to a fake."""
 
     def patch(self, fake):
-        for mod in (M, C):
+        for mod in (FB, C):
             orig = mod.disasm
             mod.disasm = fake
             self.addCleanup(setattr, mod, 'disasm', orig)
@@ -247,7 +248,7 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8                      # ivar-offset variable -> offset 8
         name = {8: '_publisherAttributionSources'} if offset_to_name is None else offset_to_name
-        return M.scan_block_enumerated_maps(ctx, writeto[0], [0x18ce417e8], name)
+        return M.scan_block_enumerated_maps(ctx, writeto[0], FunctionEntries([0x18ce417e8]), name)
 
     def test_block_map_is_found_and_bound_to_its_ivar(self):
         got = self._scan()
@@ -276,7 +277,7 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000='enumerateObjectsUsingBlock:')
         ctx.u32[0x1dcfb30e4] = 8
         self.assertEqual(M.scan_block_enumerated_maps(
-            ctx, _MANIFEST_WRITETO[0], [0x18ce417e8], {8: '_x'}), {})
+            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]), {8: '_x'}), {})
 
     def test_invoke_without_ret_is_never_analysed(self):
         lines = [x for x in _MANIFEST_INVOKE[1] if x[0] != 'ret']
@@ -286,7 +287,7 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8
         self.assertEqual(M.scan_block_enumerated_maps(
-            ctx, _MANIFEST_WRITETO[0], [0x18ce417e8], {8: '_x'}), {})
+            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]), {8: '_x'}), {})
 
 
 # Newer (arm64e, macOS 27) toolchain: the invoke pointer is PAC-signed in place, the
@@ -359,7 +360,7 @@ class TestNewerToolchainBlockShape(_Patched):
     def test_pac_signed_invoke_and_add_ldr_ivar_load_are_recovered(self):
         insns, fd = asm(_ARM64E_WRITETO, _ARM64E_INVOKE, self._stub())
         self.patch(fd)
-        got = M.scan_block_enumerated_maps(self._ctx(), _ARM64E_WRITETO[0], [0x199a3000],
+        got = M.scan_block_enumerated_maps(self._ctx(), _ARM64E_WRITETO[0], FunctionEntries([0x199a3000]),
                                            {8: '_vehicles'})
         e = got['_vehicles']
         self.assertEqual((e.number, e.key_helper, e.value_helper),
@@ -395,7 +396,7 @@ class TestFindMapWriters(_Patched):
         self.patch(fd)
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8
-        ctx._method_imps = {0x18ce417e8}
+        ctx._function_entries = {0x18ce417e8}
 
         class _Method:
             imp = _MANIFEST_WRITETO[0]

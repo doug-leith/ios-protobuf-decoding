@@ -4,10 +4,13 @@ extent.  The one reader of a function body for the ObjC readers (:mod:`proto.dis
 (:mod:`serializers.swift_descriptor_extract`).
 
 * :func:`function_end` -- where the function at an address ends: the next function entry the
-  image's ``LC_FUNCTION_STARTS`` or a caller's own index (method IMPs, ReadAllFrom cores) knows.
+  image's ``LC_FUNCTION_STARTS`` or a caller's own index (method IMPs, ReadAllFrom cores) knows,
+  else the end of ``__text``.
 * :func:`function_body` -- the instructions its entry reaches before that, following ``b`` and
   conditional branches inside the extent and each ``br``'s decoded jump table.  A branch out
   of the extent is a tail call.
+* :func:`function_listing` -- every instruction of that extent in address order, for a reader
+  that evaluates from the entry itself (its evaluation decides what runs).
 """
 from __future__ import annotations
 import bisect
@@ -32,7 +35,8 @@ _READ_CHUNK = 64
 
 class FunctionBody(list):
     """A function's instructions in address order (:func:`function_body`); *truncated* when the
-    read stopped at :data:`_UNBOUNDED_MAX_INSNS` with paths still open; *flow* a reader's
+    read is incomplete -- it stopped at :data:`_UNBOUNDED_MAX_INSNS` with paths still open, or a
+    path (a listing) ran into a word that cannot be read or decoded; *flow* a reader's
     :class:`~proto.arm64_eval.Flow` of it once built."""
     truncated = False
     flow = None
@@ -41,13 +45,18 @@ class FunctionBody(list):
 def function_end(ctx: BinaryContext, va: int, entries=None) -> Optional[int]:
     """Where the function at *va* ends: the first function entry above it that
     :meth:`BinaryContext.function_starts` or *entries* (a
-    :class:`proto.dispatch.FunctionEntries`) holds.  None: no entry above it is known."""
+    :class:`proto.dispatch.FunctionEntries`) holds, else -- the image's last function -- the
+    end of the ``__TEXT,__text`` section holding *va*.  None: neither is known."""
     starts = ctx.function_starts()
     i = bisect.bisect_right(starts, va)
     end = starts[i] if i < len(starts) else None
     nxt = entries.next_after(va) if entries else None
     if nxt is not None and (end is None or nxt < end):
         end = nxt
+    if end is None and ctx.has_section("__TEXT", "__text"):
+        text = ctx.section("__TEXT", "__text")
+        if text.vmaddr <= va < text.vmaddr + text.vmsize:
+            end = text.vmaddr + text.vmsize
     return end
 
 
@@ -69,7 +78,7 @@ def function_body(ctx: BinaryContext, va: int, entries=None,
     *arms* gives it (``{br address: targets}``, found by a caller's own evaluation).  A table
     reached only through another's arms is decoded once those are read.
 
-    With no function entry above *va* the extent is unknown: a ``b`` ends its path unless it
+    With no known end (:func:`function_end` is None) the extent is unknown: a ``b`` ends its path unless it
     goes to the next instruction, no table is decoded, and the read stops at
     :data:`_UNBOUNDED_MAX_INSNS` (*truncated*).  Raises when *va* itself cannot be read."""
     end = function_end(ctx, va, entries)
@@ -91,6 +100,7 @@ def function_body(ctx: BinaryContext, va: int, entries=None,
         return decoded.get(a)
 
     out: Dict[int, object] = {}
+    open_path = False                  # a path stopped at a word that cannot be read or decoded
     work = [va]
     while True:
         while work:
@@ -101,8 +111,10 @@ def function_body(ctx: BinaryContext, va: int, entries=None,
                 except READ_ERRORS:
                     if a == va:
                         raise
+                    open_path = True
                     break
                 if ins is None:
+                    open_path = True
                     break
                 if end is None and len(out) >= _UNBOUNDED_MAX_INSNS:
                     body = FunctionBody(sorted(out.values(), key=lambda i: i.addr))
@@ -130,4 +142,22 @@ def function_body(ctx: BinaryContext, va: int, entries=None,
         work = sorted(t for t in targets if t not in out and inside(t))
         if not work:
             break
-    return FunctionBody(sorted(out.values(), key=lambda i: i.addr))
+    body = FunctionBody(sorted(out.values(), key=lambda i: i.addr))
+    body.truncated = open_path
+    return body
+
+
+def function_listing(ctx: BinaryContext, va: int, entries=None) -> FunctionBody:
+    """The function at *va* as one linear listing: every instruction of its extent (*va* up to
+    :func:`function_end`) in address order, out-of-line blocks included, for a reader that
+    evaluates from the entry and so decides itself what runs (a jump table only evaluation
+    resolves reaches its arms).  A word capstone cannot decode ends it (*truncated*).
+    With no known end, the instructions the entry reaches (:func:`function_body`).  Raises
+    when *va* cannot be read."""
+    end = function_end(ctx, va, entries)
+    if end is None:
+        return function_body(ctx, va, entries)
+    body = FunctionBody(i for i in disasm(ctx, va, max_insns=max(1, (end - va) // 4),
+                                          stop_at_ret=False) if i.addr < end)
+    body.truncated = not body or body[-1].addr + 4 < end
+    return body

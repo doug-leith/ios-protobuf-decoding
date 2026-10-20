@@ -38,6 +38,9 @@ class _FakeCtx:
     def function_starts(self):          # no LC_FUNCTION_STARTS
         return []
 
+    def has_section(self, segname, sectname):   # no sections
+        return False
+
     def iter_symbols(self):             # no symbol table
         return iter(())
 

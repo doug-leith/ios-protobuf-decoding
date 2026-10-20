@@ -45,17 +45,18 @@ import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from macho.disasm import disasm, _parse_imm, _norm_reg
+from macho.disasm import _parse_imm, _norm_reg
 from macho.memory import READ_ERRORS, _ctx_cache
 
-from proto.arm64cfg import split_ops, mem_operand, _next_imp
+from proto.arm64cfg import split_ops, mem_operand
 from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
                                   reg_name)
 from proto import arm64_eval, dictrep_flow
-from proto.callees import callee_name, stub_selector
+from proto.callees import stub_selector
 from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
-from proto.dispatch import _jump_table_arm_addrs, listing_flow
+from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, function_entries, listing_flow
+from proto.function_body import function_body, function_listing
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
@@ -166,11 +167,6 @@ def parse_struct_encoding(enc: Optional[str]) -> Optional[StructLayout]:
 
 # ── the struct's own C serialiser ─────────────────────────────────────────────
 
-# [cap:INPUT-SANITY] runaway backstops for the writer walk, not tuned bounds: a struct writer
-# is a handful of straight-line blocks of ~10 instructions, one per member.
-_WRITER_MAX_BLOCKS = 64
-_WRITER_BLOCK_INSNS = 128
-
 _LOAD_WIDTH_MNEMONICS = {mn: n for mn, n in LOAD_BYTES.items() if n}    # fixed-width loads
 
 
@@ -188,47 +184,14 @@ def _branch_target(ins) -> Optional[int]:
     return _parse_imm(ops[-1]) if ops and ops[-1].startswith('#') else None
 
 
-def _is_function_entry(ctx, va: int) -> bool:
-    """*va* starts a function of its own: a method IMP, a named export / import (a C
-    serialiser such as ``_GEOPDTimeRangeWriteTo``) or a selector stub."""
-    return (va in (getattr(ctx, "_method_imps", None) or ()) or callee_name(ctx, va) is not None
-            or stub_selector(ctx, va) is not None)
-
-
 def _writer_insns(ctx, entry: int) -> List:
-    """The instructions reachable from *entry* in address order: conditional branches and
-    in-function jumps are followed, ``ret`` and a tail call end a path.  A ``b`` is an
-    in-function jump when its target lies in the function's extent (*entry* .. the next
-    method IMP) and is not itself a function entry (:func:`_is_function_entry`); otherwise
-    it is a tail call -- to a write helper, another serialiser, the runtime."""
-    end = _next_imp(sorted(getattr(ctx, "_method_imps", None) or ()), entry)
-    seen_blocks, work, out = set(), [entry], {}
-    while work and len(seen_blocks) < _WRITER_MAX_BLOCKS:
-        a = work.pop()
-        if a in seen_blocks or a in out:
-            continue
-        seen_blocks.add(a)
-        try:
-            block = disasm(ctx, a, max_insns=_WRITER_BLOCK_INSNS, stop_at_ret=True)
-        except READ_ERRORS:
-            continue
-        for k, ins in enumerate(block):
-            if ins.addr in out:
-                break
-            out[ins.addr] = ins
-            mn = ins.mnemonic
-            if mn in ('cbz', 'cbnz', 'tbz', 'tbnz') or mn.startswith('b.'):
-                t = _branch_target(ins)
-                if t is not None:
-                    work.append(t)
-            elif mn == 'b':
-                if field_number_at(arm64_eval.Flow(ctx, block[:k + 1]), k) is not None:
-                    break                                   # tail-called write helper
-                t = _branch_target(ins)
-                if t is not None and entry <= t < end and not _is_function_entry(ctx, t):
-                    work.append(t)                          # a block of this function
-                break
-    return [out[a] for a in sorted(out)]
+    """The struct serialiser at *entry*: the instructions its entry reaches
+    (:func:`proto.function_body.function_body`), [] when *entry* cannot be read.  A ``b`` out
+    of its extent -- to a write helper, another serialiser, the runtime -- is a tail call."""
+    try:
+        return function_body(ctx, entry, function_entries(ctx))
+    except READ_ERRORS:
+        return []
 
 
 # The serialiser's two arguments as opaque tokens for the evaluation (any two values the
@@ -820,19 +783,17 @@ def _method_body(ctx, cls, selector: str) -> Optional[int]:
     return m.imp if m is not None and m.imp else None
 
 
-def _linear_method(ctx, cls, selector: str, imps_sorted: List[int], memo: dict):
-    """The class's *selector* method as one linear instruction list (its body .. the next
-    method IMP — its structural extent, including out-of-line tail blocks), memoised per
+def _linear_method(ctx, cls, selector: str, entries: FunctionEntries, memo: dict):
+    """The class's *selector* method as one linear instruction list (its extent, out-of-line
+    tail blocks included: :func:`proto.function_body.function_listing`), memoised per
     class."""
     key = (cls.name, selector)
     if key not in memo:
         imp = _method_body(ctx, cls, selector)
         insns = None
         if imp:
-            end = _next_imp(imps_sorted, imp)
             try:
-                insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4),
-                               stop_at_ret=False)
+                insns = function_listing(ctx, imp, entries)
             except READ_ERRORS:
                 insns = None
         memo[key] = insns
@@ -851,10 +812,10 @@ def _ivar_offset_test(ctx, site: StructSite):
     return test
 
 
-def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, imps_sorted, memo):
+def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, entries, memo):
     """``({offset: field#}, {offset: helper})`` for one site, or ``None`` if its begin-mark
     body does not hold a struct serialiser matching *layout*."""
-    insns = _linear_method(ctx, cls, "writeTo:", imps_sorted, memo)
+    insns = _linear_method(ctx, cls, "writeTo:", entries, memo)
     if not insns:
         return None
     idx = next((i for i, x in enumerate(insns) if x.addr == site.write_addr), None)
@@ -881,7 +842,7 @@ def _unique_keys(members: Dict[int, MemberDict]) -> bool:
     return len(set(keys)) == len(keys)
 
 
-def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, imps_sorted,
+def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, entries,
                      memo) -> Optional[Dict[int, MemberDict]]:
     """What this owner's ``_dictionaryRepresentation:`` says about *layout*'s members (key and
     enum-ness).
@@ -891,7 +852,7 @@ def _dictrep_members(ctx, cls, site: StructSite, layout: StructLayout, imps_sort
     different ones mean the owner cannot say which is which), or the compiler inlined it, in
     which case the members are paired through the ivar's offset variable.  ``None`` if neither
     names every member."""
-    insns = _linear_method(ctx, cls, _DICTREP_SELECTOR, imps_sorted, memo)
+    insns = _linear_method(ctx, cls, _DICTREP_SELECTOR, entries, memo)
     if not insns:
         return None
     want = {m.offset for m in layout.members}
@@ -1004,7 +965,7 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
     sites = getattr(ctx, "_struct_sites", None) or {}
     if not sites:
         return
-    imps_sorted = sorted(getattr(ctx, "_method_imps", None) or ())
+    entries = function_entries(ctx)
     by_class = {c.name: c for c in cl if not c.is_meta}
     taken_names = {m.name for m in messages}
     taken_classes = {m.class_name for m in messages} | set(by_class)
@@ -1018,9 +979,9 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
             if site is None or cls is None or fld.type_name != "bytes":
                 continue
             layout = parse_struct_encoding(site.enc)
-            got = _decode_site(ctx, cls, site, layout, imps_sorted, memo) if layout else None
+            got = _decode_site(ctx, cls, site, layout, entries, memo) if layout else None
             if got is not None:
-                dmembers = _dictrep_members(ctx, cls, site, layout, imps_sorted, memo)
+                dmembers = _dictrep_members(ctx, cls, site, layout, entries, memo)
                 groups.setdefault(layout.tag, []).append((fld, layout, got[0], got[1], dmembers))
 
     for tag, items in sorted(groups.items()):

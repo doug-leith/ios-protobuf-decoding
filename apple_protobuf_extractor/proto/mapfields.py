@@ -48,13 +48,12 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
-from macho.disasm import disasm, _parse_imm, _norm_reg
+from macho.disasm import _parse_imm, _norm_reg
 from proto.callees import real_target, stub_selector
 
-from proto.arm64cfg import (
-    split_ops, mem_operand, _next_imp,
-)
-from proto.arm64_operands import RETURNS
+from proto.arm64cfg import split_ops, mem_operand
+from proto.dispatch import FunctionEntries, function_entries
+from proto.function_body import function_body, function_listing
 from proto.writeto import BoundWrite, field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
@@ -99,12 +98,6 @@ _ENUMERATE_SELECTOR = "enumerateKeysAndObjectsUsingBlock:"
 
 # Stack-block layout (clang Block ABI): isa @+0, flags/reserved @+8, invoke @+0x10.
 _BLOCK_INVOKE_OFFSET = 0x10
-
-# [cap:INPUT-SANITY] a runaway backstop for the block-invoke disassembly, NOT a tuned
-# bound: the invoke function ends at its own ``ret`` (the scan stops there), and the
-# entry writer is ~40 instructions.  A body with no ``ret`` inside the window is
-# rejected (never truncated-and-guessed).
-_BLOCK_INVOKE_MAX_INSNS = 1024
 
 # NSNumber unboxing selector → proto types that storage is consistent with.  Used only
 # as an INDEPENDENT CROSS-CHECK of the helper-derived type (the helper decides the type).
@@ -305,24 +298,24 @@ def _scratch_slot_of(flow, k: int) -> Optional[int]:
 
 
 def scan_block_enumerated_maps(
-    ctx: BinaryContext, imp: int, imps_sorted: List[int],
+    ctx: BinaryContext, imp: int, entries: FunctionEntries,
     offset_to_name: Dict[int, str],
 ) -> Dict[str, MapEntryWriter]:
     """``{ivar_name: MapEntryWriter}`` for every ``[self->_dict
     enumerateKeysAndObjectsUsingBlock:&block]`` in the ``writeTo:`` at *imp*.
 
-    The parent is its structural extent (``imp`` .. next method IMP — a hard upper bound
-    that includes its out-of-line tail blocks), evaluated over its CFG
+    The parent is its extent (:func:`proto.function_body.function_listing`: ``imp`` .. the
+    next function entry, *entries* among them; its out-of-line tail blocks included),
+    evaluated over its CFG
     (:meth:`proto.arm64_eval.Flow.propagate`, which models the stack frame).  For each
     enumerate call: the receiver (``x0``) traces to the dictionary ivar; ``x2`` is the stack
     block, whose invoke pointer is the 8-byte slot at ``x2 + 0x10`` as every path into the
-    call leaves it; the invoke function's own body (to its ``ret``) is then analysed by
-    :func:`analyze_entry`.  Unrecognised shapes are simply absent (the field keeps its
+    call leaves it; the invoke function's own body (:func:`proto.function_body.function_body`)
+    is then analysed by :func:`analyze_entry`.  Unrecognised shapes are simply absent (the field keeps its
     flagged fallback)."""
     out: Dict[str, MapEntryWriter] = {}
-    end = _next_imp(imps_sorted, imp)
     try:
-        insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4), stop_at_ret=False)
+        insns = function_listing(ctx, imp, entries)
     except READ_ERRORS:
         return out
     calls = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
@@ -342,10 +335,10 @@ def scan_block_enumerated_maps(
         if ivar is None or invoke is None or ivar in out:
             continue
         try:
-            body = disasm(ctx, invoke, max_insns=_BLOCK_INVOKE_MAX_INSNS, stop_at_ret=True)
+            body = function_body(ctx, invoke, entries)
         except READ_ERRORS:
             continue
-        if not body or body[-1].mnemonic not in RETURNS:
+        if not body or body.truncated:
             continue                                    # never analyse a truncated body
         body_flow = listing_flow(ctx, body)
         for k, b in enumerate(body):
@@ -360,17 +353,16 @@ def scan_block_enumerated_maps(
 # ── Shape B: inline enumeration loop (bound begin-mark) ──────────────────────
 
 
-def entry_from_bound_write(ctx: BinaryContext, imp: int, imps_sorted: List[int],
+def entry_from_bound_write(ctx: BinaryContext, imp: int, entries: FunctionEntries,
                           w: BoundWrite) -> Optional[MapEntryWriter]:
     """The :class:`MapEntryWriter` for a bound ``writeTo:`` write *w* (at *imp*) that is a
     begin-submessage mark (already bound to the dictionary ivar, with its field number).
-    The entry body is the code after it in the method's linear listing (``imp`` .. the next
-    method IMP)."""
+    The entry body is the code after it in the method's linear listing
+    (:func:`proto.function_body.function_listing`)."""
     if not w.bracket:
         return None
-    end = _next_imp(imps_sorted, imp)
     try:
-        insns = disasm(ctx, imp, max_insns=max(64, (end - imp) // 4), stop_at_ret=False)
+        insns = function_listing(ctx, imp, entries)
     except READ_ERRORS:
         return None
     k = next((i for i, x in enumerate(insns) if x.addr == w.addr), None)
@@ -395,17 +387,17 @@ def find_map_writers(
     if m is None or not m.imp or not map_ivars:
         return {}
     writers: Dict[str, MapEntryWriter] = {}
-    imps_sorted = sorted(getattr(ctx, "_method_imps", None) or ())
+    entries = function_entries(ctx)
     for iv in map_ivars:
         w = bound_writes.get(iv.name)
         if w is not None:
-            e = entry_from_bound_write(ctx, m.imp, imps_sorted, w)
+            e = entry_from_bound_write(ctx, m.imp, entries, w)
             if e is not None:
                 writers[iv.name] = e
     pending = [iv for iv in map_ivars if iv.name not in writers]
     if pending:
         for name, e in scan_block_enumerated_maps(
-                ctx, m.imp, imps_sorted, offset_to_name).items():
+                ctx, m.imp, entries, offset_to_name).items():
             if any(iv.name == name for iv in pending):
                 writers[name] = e
     taken: Dict[int, str] = {}

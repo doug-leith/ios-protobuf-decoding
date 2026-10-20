@@ -20,6 +20,7 @@ from tests._fakes import NoImage
 import artifacts
 import proto.extractor as E
 import proto.structfields as SF
+import proto.function_body as FB
 from proto.dispatch import listing_flow
 import live_artifacts as V
 from proto.models import FieldLabel
@@ -54,40 +55,35 @@ _PD_TIMERANGE_WRITER_TAIL = (0x18c241b90, [
 
 class _Patched(unittest.TestCase):
     def patch(self, fake):
-        orig = SF.disasm
-        SF.disasm = fake
-        self.addCleanup(setattr, SF, 'disasm', orig)
+        orig = FB.disasm
+        FB.disasm = fake
+        self.addCleanup(setattr, FB, 'disasm', orig)
 
 
 class TestWriterExtent(_Patched):
     """structfields._writer_insns: a ``b`` inside the serialiser's extent (entry .. the next
-    method IMP) that is not itself a function is one of its blocks, however far; a ``b`` to a
-    function (a method IMP, a named symbol, a stub) is a tail call, however near."""
+    function entry) is one of its blocks, however far; a ``b`` to a function entry or past
+    the next one is a tail call, however near."""
 
-    def _addrs(self, blocks, names=None, imps=()):
-        from types import SimpleNamespace
-        from unittest import mock
+    def _addrs(self, blocks, entries=()):
         insns, fd = asm(*blocks)
         self.patch(fd)
-        ctx = SimpleNamespace(_method_imps=set(imps))
-        with mock.patch.object(SF, 'callee_name', lambda c, va: (names or {}).get(va)), \
-                mock.patch.object(SF, 'stub_selector', lambda c, va: None):
-            return {i.addr for i in SF._writer_insns(ctx, 0x1000)}
+        return {i.addr for i in SF._writer_insns(NoImage(_function_entries=set(entries)), 0x1000)}
 
     def test_a_far_block_of_the_same_function_is_followed(self):
         got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x2000')]),
-                           (0x2000, [('mov', 'x0, x19'), ('ret', '')])], imps=(0x1000, 0x3000))
+                           (0x2000, [('mov', 'x0, x19'), ('ret', '')])], entries=(0x1000, 0x3000))
         self.assertIn(0x2000, got)                     # 0x1000 bytes away, still this function
 
-    def test_a_near_named_function_is_a_tail_call(self):
+    def test_a_near_function_entry_is_a_tail_call(self):
         got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x1040')]),
                            (0x1040, [('mov', 'x0, x19'), ('ret', '')])],
-                          names={0x1040: '_GEOOtherWriteTo'}, imps=(0x1000, 0x3000))
+                          entries=(0x1000, 0x1040, 0x3000))
         self.assertNotIn(0x1040, got)
 
-    def test_a_jump_past_the_next_method_is_a_tail_call(self):
+    def test_a_jump_past_the_next_entry_is_a_tail_call(self):
         got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x3100')]),
-                           (0x3100, [('ret', '')])], imps=(0x1000, 0x3000))
+                           (0x3100, [('ret', '')])], entries=(0x1000, 0x3000))
         self.assertNotIn(0x3100, got)
 
 
@@ -153,14 +149,14 @@ class TestDecodeStructWriter(_Patched):
     def test_members_numbers_and_helpers_are_read_from_the_writer(self):
         _, fake = asm(_PD_TIMERANGE_WRITER, _PD_TIMERANGE_WRITER_TAIL)
         self.patch(fake)
-        writes = SF.decode_struct_writer(None, 0x18c241b50)
+        writes = SF.decode_struct_writer(NoImage(), 0x18c241b50)
         self.assertEqual(sorted((w.offset, w.number, w.width) for w in writes),
                          [(0, 2, 4), (4, 1, 4)])
 
     def test_a_function_that_writes_no_member_is_not_a_struct_writer(self):
         _, fake = asm((0x1000, [('mov', 'x19, x1'), ('bl', '#0x2000'), ('ret', '')]))
         self.patch(fake)
-        self.assertEqual(SF.decode_struct_writer(None, 0x1000), [])
+        self.assertEqual(SF.decode_struct_writer(NoImage(), 0x1000), [])
 
 
 class TestMatchWritesToLayout(unittest.TestCase):
@@ -973,14 +969,14 @@ class TestDecodeStructWriterNewerToolchain(_Patched):
     def test_a_tail_write_behind_the_return_address_check_is_read(self):
         _, fake = asm(_PD_TIMERANGE_WRITER_ARM64E)
         self.patch(fake)
-        writes = SF.decode_struct_writer(None, 0x19848d78c)
+        writes = SF.decode_struct_writer(NoImage(), 0x19848d78c)
         self.assertEqual(sorted((w.offset, w.number, w.width, w.helper) for w in writes),
                          [(0, 2, 4, 0x1a0103de0), (4, 1, 4, 0x1a0103de0)])
 
     def test_float_values_ride_in_v0_with_the_field_number_in_w1(self):
         _, fake = asm(_TIMEPOINT_WRITER_ARM64E)
         self.patch(fake)
-        writes = SF.decode_struct_writer(None, 0x19850174c)
+        writes = SF.decode_struct_writer(NoImage(), 0x19850174c)
         self.assertEqual(sorted((w.offset, w.number, w.width) for w in writes),
                          [(0, 4, 8), (8, 1, 8), (16, 2, 4)])
         layout = SF.parse_struct_encoding('{GEOTimepoint="_time"d"_currentUserTime"d"_type"i'
@@ -993,7 +989,7 @@ class TestDecodeStructWriterNewerToolchain(_Patched):
                                 ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x2000'),
                                 ('ret', '')]))
         self.patch(fake)
-        self.assertEqual(SF.decode_struct_writer(None, 0x1000), [])
+        self.assertEqual(SF.decode_struct_writer(NoImage(), 0x1000), [])
 
 
 # Real listing (macOS 27): -[GEOCoarseLocationRing writeTo:] up to the end mark of field 1, a
@@ -1079,16 +1075,16 @@ class TestDictrepBodyOfAStrippedMethod(_Patched):
 
     def setUp(self):
         import proto.enums as EN
-        orig_d, orig_t = EN.disasm, EN._in_image_text
-        self.addCleanup(setattr, EN, 'disasm', orig_d)
+        orig_d, orig_t = FB.disasm, EN._in_image_text
+        self.addCleanup(setattr, FB, 'disasm', orig_d)
         self.addCleanup(setattr, EN, '_in_image_text', orig_t)
         self.EN = EN
         EN._in_image_text = lambda ctx, va: va is not None and 0x2000 <= va < 0x3000
 
     def find(self, cls, *blocks):
         _, fake = asm(*blocks)
-        self.EN.disasm = fake
-        return self.EN._find_dictrep_c_func(None, cls)
+        FB.disasm = fake
+        return self.EN._find_dictrep_c_func(NoImage(), cls)
 
     def test_the_registered_method_wins(self):
         cls = _FakeClass({'_dictionaryRepresentation:': 0x2400, 'dictionaryRepresentation': 0x1000})

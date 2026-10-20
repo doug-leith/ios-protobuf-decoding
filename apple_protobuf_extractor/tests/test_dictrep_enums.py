@@ -246,35 +246,6 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
         ])
 
 
-class TestDirectBranchTarget(unittest.TestCase):
-    """TODO #40: _direct_branch_target extracts the PC-relative target of a DIRECT
-    branch and returns None for calls (bl/blr) and indirect jumps (br), so a tail
-    call or jump-table dispatch never extends the function extent."""
-
-    def _t(self, mnemonic, op_str):
-        from proto.enums import _direct_branch_target
-        from types import SimpleNamespace
-        return _direct_branch_target(SimpleNamespace(mnemonic=mnemonic, op_str=op_str))
-
-    def test_b_and_cond(self):
-        self.assertEqual(self._t('b', '#0x18d001000'), 0x18d001000)
-        self.assertEqual(self._t('b.eq', '#0x2000'), 0x2000)
-        self.assertEqual(self._t('b.hi', '#0x2abc'), 0x2abc)
-
-    def test_compare_and_test_branches(self):
-        self.assertEqual(self._t('cbz', 'w8, #0x3000'), 0x3000)
-        self.assertEqual(self._t('cbnz', 'x0, #0x3010'), 0x3010)
-        self.assertEqual(self._t('tbz', 'w8, #5, #0x4000'), 0x4000)   # target is LAST tok
-        self.assertEqual(self._t('tbnz', 'x9, #0x3f, #0x4010'), 0x4010)
-
-    def test_calls_and_indirect_are_none(self):
-        self.assertIsNone(self._t('bl', '#0x5000'))   # call — not a body branch
-        self.assertIsNone(self._t('blr', 'x8'))
-        self.assertIsNone(self._t('br', 'x8'))        # indirect jump-table dispatch
-        self.assertIsNone(self._t('add', 'x0, x1, #0x10'))
-        self.assertIsNone(self._t('ret', ''))
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Live tests against the real GeoServices cache
 # ══════════════════════════════════════════════════════════════════════════════
@@ -480,11 +451,11 @@ class TestDictRepEnumsLive(unittest.TestCase):
     # TestBiasedDictRepEnumsLive; the genuine xAsString-owned side (no double bias) by
     # the f28 TestKind fixture and TestFieldRoutesThroughXAsString.)
 
-    def test_function_body_extent_closes_on_terminal(self):
-        """The extent finder returns a contiguous body ending in a terminal (the
-        function's own `ret`), well under the hard-cap, for the overrunning classes."""
-        from proto.enums import _function_body_extent, _DICTREP_HARD_CAP
-        from macho.disasm import _STOP_MNEMONICS
+    def test_dictrep_body_is_its_whole_extent(self):
+        """The dictRep body of the classes whose bodies are longest is read whole: the linear
+        listing of its extent, up to the next function entry, nothing left unread."""
+        from proto.enums import _dictrep_body
+        from proto.function_body import function_end
         names = ('GEOPDSearchQueryIntentMetadata', 'GEOAnalyticsPipelineStateData',
                  'GEOLogMsgStateCuratedCollection')
         seen = 0
@@ -494,15 +465,14 @@ class TestDictRepEnumsLive(unittest.TestCase):
             m = cls.get_method('_dictionaryRepresentation:')
             if m is None or m.imp == 0:
                 continue
-            body = _function_body_extent(self.ctx, m.imp, _DICTREP_HARD_CAP)
-            self.assertTrue(body, f'{cls.name}: empty extent')
-            self.assertIn(body[-1].mnemonic, _STOP_MNEMONICS,
-                          f'{cls.name}: extent did not close on a terminal')
-            self.assertLess(len(body), _DICTREP_HARD_CAP,
-                            f'{cls.name}: body hit the safety ceiling')
+            body = _dictrep_body(self.ctx, m.imp)
+            self.assertTrue(body, f'{cls.name}: empty body')
+            self.assertFalse(body.truncated, f'{cls.name}: body read only in part')
+            self.assertEqual(body[-1].addr + 4, function_end(self.ctx, m.imp),
+                             f'{cls.name}: body does not reach its extent')
             seen += 1
         if seen == 0:
-            self.skipTest('overrunning classes not in this cache')
+            self.skipTest('longest-body classes not in this cache')
 
 
 class TestEnumRecoveryTruncatedRendering(unittest.TestCase):
@@ -796,11 +766,9 @@ class TestLongMethodNotFalselyTruncatedLive(unittest.TestCase):
     """TODO #58: a long-but-complete xAsString: method must NOT be flagged
     `values_truncated`.
 
-    The LogMsg-family methods are ~12k instructions, so the cheap 1000-insn probe
-    runs out of budget before their `ret` — but every enum value lives in the first
-    ~1000 insns.  The function-extent fallback recomputes the contiguous body and
-    closes on the method's own `ret`, so `_disasm_truncated` no longer false-flags
-    these enums.  Ground truth: `-[GEOLogMsgEventUserAction userActionEventActionAsString:]`
+    The LogMsg-family methods are ~12k instructions; a 1000-insn probe used to run out of
+    budget before their `ret`.  The body is now the linear listing of its extent
+    (proto.function_body.function_listing), read whole, so nothing flags these enums.  Ground truth: `-[GEOLogMsgEventUserAction userActionEventActionAsString:]`
     (1171 values) and `-[GEORPFeedbackFieldOption keyAsString:]` (124) — both fully
     recovered (incl. the #53 negadd-biased ranges) and therefore complete."""
 
@@ -938,24 +906,24 @@ class TestBiasedDictRepEnumsLive(unittest.TestCase):
 @unittest.skipUnless(_CACHE_MAIN is not None, _SKIP_MSG)
 class TestDictRepBodyLive(unittest.TestCase):
     """_dictrep_body bounds -[cls _dictionaryRepresentation:] by structure: the linear range
-    from its IMP to the next method IMP.  iPhone 8 iOS 16 GeoServices, checked against the
-    cache's .symbols (the next symbol after the IMP):
+    from its IMP to the next function entry (LC_FUNCTION_STARTS).  iPhone 8 iOS 16
+    GeoServices, checked against the cache's .symbols (the next symbol after the IMP):
 
       GEOPDSearchQueryIntentMetadata   0x18cbe0068..0x18cbe1b90 (jsonRepresentation next)
       GEOLogMsgStateCuratedCollection  0x18d4ca87c..0x18d4d2084
       GEOPDPlace                       0x18c1e2cc0..0x18c1e33c8
-      GEOLatLng                        0x18c1c1688..0x18c1c21b4: its C reader sits between
-                                       the dictRep (.symbols end 0x18c1c18a8) and the next
-                                       method, unreachable from the entry
+      GEOLatLng                        0x18c1c1688..0x18c1c18a8: its C reader starts there,
+                                       before the next method (0x18c1c21b4), which the
+                                       next-method-IMP bound used to read up to
 
-    The stop-at-ret probe / _function_body_extent ran past every one of these (to 11,296 /
-    24,647 / 508 / 704 insns) because a dictRep leaves by a tail call, not a `ret`."""
+    A read to the first `ret` ran past every one of these (to 11,296 / 24,647 / 508 / 704
+    insns) because a dictRep leaves by a tail call, not a `ret`."""
 
     CASES = {
         'GEOPDSearchQueryIntentMetadata': (0x18cbe0068, 0x18cbe1b90),
         'GEOLogMsgStateCuratedCollection': (0x18d4ca87c, 0x18d4d2084),
         'GEOPDPlace': (0x18c1e2cc0, 0x18c1e33c8),
-        'GEOLatLng': (0x18c1c1688, 0x18c1c21b4),
+        'GEOLatLng': (0x18c1c1688, 0x18c1c18a8),
     }
 
     @classmethod
@@ -978,7 +946,7 @@ class TestDictRepBodyLive(unittest.TestCase):
         syms = cls.reader.image_local_symbols(mv)
         if syms:
             apply_to_classes(clist, syms)
-        ctx._method_imps = {m.imp for c in clist for m in c.methods if m.imp}
+        ctx._function_entries = {m.imp for c in clist for m in c.methods if m.imp}
         for c in clist:
             if c.is_meta or c.name not in cls.CASES:
                 continue
@@ -990,7 +958,7 @@ class TestDictRepBodyLive(unittest.TestCase):
     def tearDownClass(cls):
         cls.reader.close()
 
-    def test_body_is_the_range_to_the_next_method(self):
+    def test_body_is_the_range_to_the_next_function(self):
         if len(self.bodies) != len(self.CASES):
             self.skipTest('GeoServices classes not at the pinned addresses in this cache')
         for name, (imp, end) in self.CASES.items():
@@ -1035,7 +1003,7 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
         syms = cls.reader.image_local_symbols(mv)
         if syms:
             apply_to_classes(clist, syms)
-        ctx._method_imps = {m.imp for c in clist for m in c.methods if m.imp}
+        ctx._function_entries = {m.imp for c in clist for m in c.methods if m.imp}
         c = next((c for c in clist
                   if c.name == 'GEOPDSUserActionMetadataElement' and not c.is_meta), None)
         if c is None:
@@ -1097,7 +1065,7 @@ class TestNoArgDictRepLive(unittest.TestCase):
             if syms:
                 apply_to_classes(clist, syms)
             # the method-IMP set extract_all threads onto ctx bounds the body
-            ctx._method_imps = {m.imp for c in clist for m in c.methods if m.imp}
+            ctx._function_entries = {m.imp for c in clist for m in c.methods if m.imp}
             c = next((c for c in clist if c.name == cn and not c.is_meta), None)
             if c is None or c.get_method('_dictionaryRepresentation:') is not None:
                 continue

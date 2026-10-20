@@ -32,6 +32,7 @@ from macho.disasm    import disasm, _parse_imm
 
 from proto.writeto   import _extract_writeto_field_numbers
 from proto.writer_flow import WriterFlow
+from proto.dispatch  import build_function_index
 from proto.arm64cfg  import split_ops
 from proto.arm64_operands import NO_DEST, RETURNS, BLOCK_ENDS
 from proto.callees   import import_name, real_target
@@ -375,8 +376,9 @@ def _refine_scalar_by_family(type_name: str, fam: str, where: str = "") -> str:
 def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
     """Lazily build + cache the binary-wide ``writeTo:`` pre-pass on ``ctx``: the image's
     :class:`proto.writer_flow.WriterFlow` (``_writer_flow``, which the bindings
-    :func:`_extract_writeto_field_numbers` read) and the set of every method IMP
-    (``_method_imps``, the method extents the map / struct / enum passes use).
+    :func:`_extract_writeto_field_numbers` read) and the image's function index
+    (:func:`proto.dispatch.build_function_index`: the method IMPs, which bound the map /
+    struct / enum passes' function extents beside ``LC_FUNCTION_STARTS``).
 
     :func:`proto.extractor.extract_all` builds it once up front, but
     :func:`proto.extractor.extract_proto_message` may also be called standalone
@@ -386,8 +388,8 @@ def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
     wf = getattr(ctx, "_writer_flow", None)
     if wf is None or wf.cl is not cl:
         _ctx_store(ctx, "_writer_flow", WriterFlow(ctx, cl))
-    if getattr(ctx, "_method_imps", None) is None:
-        _ctx_store(ctx, "_method_imps", {m.imp for c in cl for m in c.methods if m.imp})
+    if getattr(ctx, "_function_entries", None) is None:
+        build_function_index(ctx, cl)
 
 
 def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSet[int]":

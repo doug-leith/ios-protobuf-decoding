@@ -5,16 +5,10 @@ the writer flow and the decoders: basic blocks, predecessors / reverse postorder
 dominators, and operand helpers.  They carry no writeTo: or readFrom: meaning and operate
 on decoded ``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
 """
-import bisect
 
 from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS as TERMINALS
 from proto.arm64_operands import split_ops, parse_mem, writes  # noqa: F401  (re-export)
 from proto.arm64_operands import CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES
-
-
-# [cap:INPUT-SANITY] 0x4000 — only used when an imp is the LAST method in the
-# image (no successor to bound the scan); 16 KiB is a generous per-method span.
-_LAST_METHOD_SPAN = 0x4000
 
 
 def _is_cond(mn: str) -> bool:
@@ -61,11 +55,6 @@ def _cond_target(ins):
         toks = [t for t in ins.op_str.replace(',', ' ').split() if t.startswith('#')]
         return _parse_imm(toks[-1]) if toks else None
     return _parse_imm(ins.op_str)
-
-
-def _next_imp(imps_sorted, imp):
-    i = bisect.bisect_right(imps_sorted, imp)
-    return imps_sorted[i] if i < len(imps_sorted) else imp + _LAST_METHOD_SPAN
 
 
 # ══════════════════════════════════════════════════════════════════════════════

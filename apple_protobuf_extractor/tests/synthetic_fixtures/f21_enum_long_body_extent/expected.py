@@ -10,11 +10,10 @@ fixture.m, not derived from any tool output.
       Mode mode = 3;
     }
 
-This fixture proves _extract_jumptable_enum_values' TODO #58 extent-recompute
-fallback (a >1000-insn xAsString: body forces _function_body_extent instead
-of trusting the cheap 1000-insn probe): disasm(ctx, imp, max_insns=1000)
-confirms truncated at exactly 1000 insns, and the recompute finds the real
-~1200-insn extent closing on `ret`. The padding is REAL COMPILED CODE (400
+This fixture proves a >1000-insn xAsString: body is read whole (TODO #58; since #111 the
+body is the linear listing of its extent, proto.function_body.function_listing, where it
+used to be a 1000-insn probe re-read by its extent when it ran out): the real ~1200-insn
+extent closes on `ret`. The padding is REAL COMPILED CODE (400
 plain `pad_sink += 1;` statements on a local `volatile int32_t`, see
 fixture.m) — not hand-asm; see fixture.m's header for a real footgun found
 replacing the original NOP-hand-asm padding with code: a GLOBAL padding
