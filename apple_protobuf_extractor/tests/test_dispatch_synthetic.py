@@ -146,6 +146,32 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
         self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns),
                          {0x1010, 0x1018, 0x1020, 0x1028})
 
+    def test_a_shift_bounded_index(self):
+        # lsr x8, x1, #62: a value's two tag bits (Foundation.Data's representation in
+        # swift-protobuf's BytesValue.traverse), every value 0..3 an entry of a byte table
+        insns = self._listing([
+            'lsr x8, x1, #0x3e', 'adrp x9, #0x2000', 'add x9, x9, #0x0', 'adr x10, #0x101c',
+            'ldrb w11, [x9, x8]', 'add x10, x10, x11, lsl #2', 'br x10',
+            'ret', 'ret', 'ret', 'ret'])
+        mem = self._Mem(0x2000, bytes((0, 1, 2, 3)))
+        self.assertEqual(_jump_table_arm_addrs(mem, insns), {0x101c, 0x1020, 0x1024, 0x1028})
+
+    def test_a_ubfx_bounded_index(self):
+        insns = self._listing([
+            'ubfx w8, w0, #3, #1', 'adr x9, #0x1010', 'add x9, x9, x8, lsl #3', 'br x9',
+            'ret', 'nop', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns), {0x1010, 0x1018})
+
+    def test_arms_past_a_partial_listing_within_bounds(self):
+        # a listing read only up to its br: the arms lie past its last instruction, so they are
+        # found only within the function's extent passed as bounds
+        insns = self._listing(['and w8, w0, #1', 'adr x9, #0x1010', 'add x9, x9, x8, lsl #3',
+                               'br x9'])
+        mem = self._Mem(0, b'')
+        self.assertEqual(_jump_table_arm_addrs(mem, insns), set())
+        self.assertEqual(_jump_table_arm_addrs(mem, insns, bounds=(0x1000, 0x1020)),
+                         {0x1010, 0x1018})
+
     def test_a_table_reached_only_through_another_tables_arm(self):
         # the second br is behind the first table's arm 0x101c: decoded once that arm is an edge
         insns = self._listing([

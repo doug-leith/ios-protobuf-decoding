@@ -14,7 +14,7 @@ from __future__ import annotations
 import bisect
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ObjcClass
@@ -111,8 +111,9 @@ def _index_bound(flow, k: int):
     indexed by: a compare with an immediate whose flags an unsigned range branch reads
     (``cmp w8, #N ; b.hi`` -- or ``b.hs`` / ``b.ls`` / ``b.lo`` -- guarding the table),
     evaluated from the compare itself with values 0 .. N+1, the gate deciding which reach the
-    ``br``; or a low-bit mask (``and w8, w0, #2^k-1``), evaluated from just after it with
-    every value the mask lets through.  None for anything else."""
+    ``br``; or a low-bit mask (``and w8, w0, #2^k-1``) or a field taken off the top or the
+    middle of a register (``lsr x8, x1, #62`` -- a value's tag bits; ``ubfx w8, w0, #3, #2``),
+    evaluated from just after it with every value it lets through.  None for anything else."""
     from proto.arm64_eval import _MAX_GATE_SPAN
     ins = flow.insns[k]
     ops = split_ops(ins.op_str)
@@ -128,6 +129,16 @@ def _index_bound(flow, k: int):
         if mask is None or r is None or mask <= 0 or mask & (mask + 1) or mask >= _MAX_GATE_SPAN:
             return None
         return k + 1, r, mask + 1
+    if ins.mnemonic in ('lsr', 'ubfx') and len(ops) == (3 if ins.mnemonic == 'lsr' else 4) \
+            and all(o.startswith('#') for o in ops[2:]):
+        r = _norm_reg(ops[0])
+        imm = _parse_imm(ops[2] if ins.mnemonic == 'lsr' else ops[3])
+        if r is None or imm is None:
+            return None
+        bits = (64 if ops[0].startswith('x') else 32) - imm if ins.mnemonic == 'lsr' else imm
+        if not 0 < bits or 1 << bits > _MAX_GATE_SPAN:
+            return None
+        return k + 1, r, 1 << bits
     return None
 
 
@@ -205,7 +216,8 @@ def _evaluated_arms(flow, idom, kb: int, lo: int, hi: int) -> set:
         d = up
 
 
-def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool = False):
+def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool = False,
+                          bounds: Optional[Tuple[int, int]] = None):
     """Arm-target addresses of every ``br Xn`` jump table in *insns*, decided by evaluation
     (:func:`_evaluated_arms`): each value the index's bound lets through is run to the ``br``.
     That covers every compiler idiom alike -- an index table (``ldrb``/``ldrh`` entry scaled by
@@ -220,27 +232,29 @@ def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool 
     only through another table's arms (a segmented switch) is decoded once those arms are CFG
     edges; a ``br`` the entry never reaches is not decoded.
     Read-only; returns in-range arm addresses -- with *per_br*, as ``{br address: its arms}``.
-    Memoised on *ctx* per instruction listing."""
+    The range is the listing's span, or *bounds* ``(lo, hi)`` (a function's extent, for a
+    listing still being read that has not reached the arms).  Memoised on *ctx* per listing."""
     if ctx is None or not insns:
         return {} if per_br else set()
-    by_br = _decoded(ctx, insns)[0]
+    by_br = _decoded(ctx, insns, bounds)[0]
     if per_br:
         return {b: set(a) for b, a in by_br.items()}
     return set().union(*by_br.values())
 
 
-def _decoded(ctx: BinaryContext, insns: List["Insn"]) -> list:
+def _decoded(ctx: BinaryContext, insns: List["Insn"],
+             bounds: Optional[Tuple[int, int]] = None) -> list:
     """``[{br address: arms}, Flow or None, sorted listing]`` for *insns*, memoised on *ctx* per
     listing: the decoder's last Flow is kept when it was built with the final arms."""
     from proto.arm64_eval import Flow
     ins = sorted(insns, key=lambda i: i.addr)
-    key = tuple(i.addr for i in ins)
+    key = (tuple(i.addr for i in ins), bounds)
     memo = _ctx_cache(ctx, "_jump_table_arms", dict)
     hit = memo.get(key)
     if hit is None:
         by_br: Dict[int, frozenset] = {}
         final = None
-        lo, hi = ins[0].addr, ins[-1].addr + 4
+        lo, hi = bounds or (ins[0].addr, ins[-1].addr + 4)
         todo = {k for k, i in enumerate(ins) if i.mnemonic == 'br'}
         while todo:
             flow = Flow(ctx, ins, br_arms=by_br)

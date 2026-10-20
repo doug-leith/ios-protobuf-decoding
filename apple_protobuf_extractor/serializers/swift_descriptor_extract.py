@@ -73,6 +73,7 @@ from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import callee_name
+from proto.dispatch import _jump_table_arm_addrs, listing_flow
 from proto.arm64_operands import (CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS,
                                   is_cond_branch, parse_mem, split_ops, writes)
 from serializers.swift_type_recovery import demangle_idents
@@ -210,7 +211,7 @@ def _flow_of(ctx: BinaryContext, insns) -> Flow:
     """The Flow of a listing, built once per :class:`_Listing`."""
     flow = getattr(insns, "flow", None)
     if flow is None:
-        flow = Flow(ctx, list(insns))
+        flow = listing_flow(ctx, list(insns))     # each ``br`` reaching its decoded table
         if isinstance(insns, _Listing):
             insns.flow = flow
     return flow
@@ -234,8 +235,11 @@ def _listing(ctx: BinaryContext, va: int) -> _Listing:
     both sides of each conditional branch and the target of each ``b`` inside the function
     (its extent: *va* up to the next function entry, :meth:`BinaryContext.function_starts`), each path
     on to a return, an indirect jump, or a branch out of the function (a tail call, which
-    is not followed).  Calls return.  Without a function index a ``b`` ends its path
-    unless it goes to the next instruction.  Raises when *va* itself cannot be read."""
+    is not followed).  A ``br`` jump table goes on to its arms in the extent, decoded by
+    evaluation (:func:`proto.dispatch._jump_table_arm_addrs`); a table reached only through
+    another's arms is decoded once those are read.  Calls return.  Without a function index a
+    ``b`` ends its path unless it goes to the next instruction (and no table is decoded).
+    Raises when *va* itself cannot be read."""
     end = _function_end(ctx, va)
 
     def inside(t: Optional[int]) -> bool:
@@ -243,42 +247,50 @@ def _listing(ctx: BinaryContext, va: int) -> _Listing:
 
     out: Dict[int, object] = {}
     work = [va]
-    while work:
-        a = work.pop()
-        while a is not None and a not in out and (end is None or a < end):
-            try:
-                chunk = disasm(ctx, a, max_insns=_READ_CHUNK, stop_at_ret=False)
-            except READ_ERRORS:
-                if a == va:
-                    raise
-                break
-            if not chunk:
-                break
-            nxt: Optional[int] = chunk[-1].addr + 4
-            for ins in chunk:
-                if ins.addr in out or (end is not None and ins.addr >= end):
-                    nxt = None
+    while True:
+        while work:
+            a = work.pop()
+            while a is not None and a not in out and (end is None or a < end):
+                try:
+                    chunk = disasm(ctx, a, max_insns=_READ_CHUNK, stop_at_ret=False)
+                except READ_ERRORS:
+                    if a == va:
+                        raise
                     break
-                if end is None and len(out) >= _INLINE_MAX_INSNS:
-                    listing = _Listing(sorted(out.values(), key=lambda i: i.addr))
-                    listing.truncated = True
-                    return listing
-                out[ins.addr] = ins
-                mn = ins.mnemonic
-                if mn in _PATH_ENDS:
-                    nxt = None
+                if not chunk:
                     break
-                if mn == "b":
-                    t = _branch_target(ins)
-                    if inside(t) if end is not None else t == ins.addr + 4:
-                        work.append(t)
-                    nxt = None
-                    break
-                if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
-                    t = _branch_target(ins)
-                    if inside(t):
-                        work.append(t)
-            a = nxt
+                nxt: Optional[int] = chunk[-1].addr + 4
+                for ins in chunk:
+                    if ins.addr in out or (end is not None and ins.addr >= end):
+                        nxt = None
+                        break
+                    if end is None and len(out) >= _INLINE_MAX_INSNS:
+                        listing = _Listing(sorted(out.values(), key=lambda i: i.addr))
+                        listing.truncated = True
+                        return listing
+                    out[ins.addr] = ins
+                    mn = ins.mnemonic
+                    if mn in _PATH_ENDS:
+                        nxt = None
+                        break
+                    if mn == "b":
+                        t = _branch_target(ins)
+                        if inside(t) if end is not None else t == ins.addr + 4:
+                            work.append(t)
+                        nxt = None
+                        break
+                    if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
+                        t = _branch_target(ins)
+                        if inside(t):
+                            work.append(t)
+                a = nxt
+        if end is None:
+            break
+        arms = _jump_table_arm_addrs(ctx, sorted(out.values(), key=lambda i: i.addr),
+                                     per_br=True, bounds=(va, end))
+        work = sorted({t for ts in arms.values() for t in ts if t not in out})
+        if not work:
+            break
     return _Listing(sorted(out.values(), key=lambda i: i.addr))
 
 
