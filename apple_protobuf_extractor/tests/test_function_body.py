@@ -7,16 +7,13 @@ from unittest import mock
 
 from proto import dispatch as D
 from proto import function_body as FB
-from tests._fakes import NoImage
+from tests._fakes import TextImage
 from tests._listing import layout
 
 
-class _Ctx(NoImage):
-    def __init__(self, starts):
-        self._starts = starts
-
-    def function_starts(self):
-        return self._starts
+def _Ctx(starts):
+    """Function starts *starts* in a ``__text`` of 0x1000-0x3000."""
+    return TextImage((0x1000, 0x3000), starts)
 
 
 def _read(lines, starts, entries=(), arms=None):
@@ -43,11 +40,19 @@ class TestExtent(unittest.TestCase):
         self.assertEqual(_read(_NORETURN, [0x1000, 0x2000], entries=[0x1008]), [0x1000, 0x1004])
         self.assertEqual(_read(_NORETURN, [0x1000, 0x1008], entries=[0x2000]), [0x1000, 0x1004])
 
+    def test_is_function_entry(self):
+        ctx = _Ctx([0x1000, 0x1100])
+        self.assertTrue(FB.is_function_entry(ctx, 0x1100))
+        self.assertTrue(FB.is_function_entry(ctx, 0x1080, D.FunctionEntries([0x1080])))
+        self.assertFalse(FB.is_function_entry(ctx, 0x1004))
+
     def test_function_end(self):
         ctx = _Ctx([0x1000, 0x1100])
         self.assertEqual(FB.function_end(ctx, 0x1000), 0x1100)
         self.assertEqual(FB.function_end(ctx, 0x1000, D.FunctionEntries([0x1080])), 0x1080)
-        self.assertIsNone(FB.function_end(ctx, 0x1100))
+        self.assertEqual(FB.function_end(ctx, 0x1100), 0x3000)        # the last: __text's end
+        # outside __text (a stub island, another image) the index bounds nothing
+        self.assertIsNone(FB.function_end(ctx, 0x3000, D.FunctionEntries([0x4000])))
 
 
 class TestGivenArms(unittest.TestCase):

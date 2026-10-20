@@ -30,7 +30,7 @@ from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, writes, writeback_base, operand_regs, STORE_BYTES,
                                   PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
                                   INDIRECT_BRANCHES, CALL_ARG_GPRS, ARG_FPRS, CALLS, CALLER_SAVED,
-                                  LOAD_BYTES, PAIR_LOADS,
+                                  LOAD_BYTES, PAIR_LOADS, TRAPS,
                                   is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
@@ -265,13 +265,13 @@ def call_clobbers(ctx, target: Optional[int]) -> Optional[Tuple[str, ...]]:
 #: AAPCS64 argument registers (x8: an indirect result's address): what a function with a
 #: calling convention reads.
 ABI_ARGS = CALL_ARG_GPRS + ARG_FPRS
-#: Every register a callee could read.
+#: Every register a callee could read as a value its caller hands it (not the frame pointer or
+#: the link register).
 _ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
 #: What a return hands its caller: the result register (a function that does not write v0
 #: returns no floating-point value).
 _RETURN_REGS = frozenset(("x0",))
-_TRAPS = frozenset(("brk", "udf", "hlt"))
 #: Instructions that read their destination too (they change only some of its bits).
 _READS_DEST = frozenset(("movk", "bfi", "bfxil", "bfm"))
 
@@ -291,9 +291,9 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
         return memo[target]
     res = None
     try:
-        text = ctx.section("__TEXT", "__text") if ctx.has_section("__TEXT", "__text") else None
+        text = text_holding(ctx, target)
         starts = ctx.function_starts() if text is not None else []
-        if text is not None and text.vmaddr <= target < text.vmaddr + text.vmsize and starts:
+        if starts:
             i = bisect.bisect_right(starts, target)
             end = starts[i] if i < len(starts) else text.vmaddr + text.vmsize
             body = disasm(ctx, target, max_insns=max(0, (end - target) // 4), stop_at_ret=True)
@@ -306,11 +306,19 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
     return res
 
 
+def text_holding(ctx, va: int):
+    """The image's ``__TEXT,__text`` section when it holds *va*, else None."""
+    if not ctx.has_section("__TEXT", "__text"):
+        return None
+    text = ctx.section("__TEXT", "__text")
+    return text if text.vmaddr <= va < text.vmaddr + text.vmsize else None
+
+
 def _runs_in_caller(ins) -> bool:
     """*ins* may run as part of the calling function: not a control transfer, and it leaves sp
     and the link register (x30) as the caller has them."""
     mn = ins.mnemonic
-    if mn in BLOCK_ENDS or is_cond_branch(mn) or mn in ("brk", "udf", "hlt", "svc"):
+    if mn in BLOCK_ENDS or is_cond_branch(mn) or mn in TRAPS or mn == "svc":
         return False
     ops = split_ops(ins.op_str)
     if "x30" in writes(ins) or writeback_base(ops) == "sp":
@@ -320,10 +328,10 @@ def _runs_in_caller(ins) -> bool:
 def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     """The registers a call to *target* may read: a runtime function's ABI contract
     (:data:`RUNTIME_CONTRACTS`: ``objc_retain_x19`` reads x19); any other named function or
-    message send -- or an unknown target -- the AAPCS64 argument registers
-    (:data:`ABI_ARGS`); an unnamed function of the image (with a calling convention, or a
-    machine-outlined fragment with none) the registers it reads before writing them
-    (:func:`_live_in`).  Memoised on *ctx*.
+    message send, function outside this image's ``__text`` -- or an unknown target -- the
+    AAPCS64 argument registers (:data:`ABI_ARGS`); an unnamed function of the image's
+    ``__text`` (with a calling convention, or a machine-outlined fragment with none) the
+    registers it reads before writing them (:func:`_live_in`).  Memoised on *ctx*.
 
     Unnamed functions that call one another in a cycle are solved together, as the least
     fixpoint: a call back to a function still being read sees what is known of it so far
@@ -333,7 +341,8 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     contract = RUNTIME_CONTRACTS.get(name) if name else None
     if contract is not None:
         return contract[0]
-    if target is None or name is not None or stub_selector(ctx, target) is not None:
+    if (target is None or name is not None or stub_selector(ctx, target) is not None
+            or text_holding(ctx, target) is None):
         return ABI_ARGS
     memo = _ctx_cache(ctx, "_call_reads", dict)
     if target in memo:
@@ -431,7 +440,7 @@ def _live_before(ctx, ins, live_after: set, own: frozenset) -> set:
     ops = split_ops(ins.op_str)
     if mn in RETURNS:
         return set(_RETURN_REGS)
-    if mn in _TRAPS:
+    if mn in TRAPS:
         return set()
     if mn == "b":
         t = _parse_imm(ops[0]) if ops else None

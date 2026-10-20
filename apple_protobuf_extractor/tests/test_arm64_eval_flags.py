@@ -137,5 +137,26 @@ class TestSecondOperand(unittest.TestCase):
         self.assertIsNone(self.x3('mov x9, #1', 'mov w10, #1', 'add x3, x9, w10, msl #8'))
 
 
+class TestConstantOnEveryPath(unittest.TestCase):
+    """const_before: a register is a constant when every definition reaching it is that constant
+    (a jump table's base set the same way on each path into its loop)."""
+
+    def x15(self, other):
+        insns = listing('cbz x0, @other', 'adrp x15, #0x5000', 'add x15, x15, #0x44', 'b @end',
+                        'other:', 'adrp x15, #0x5000', f'add x15, x15, #{other}',
+                        'end:', f'bl {CALL}', 'ret')
+        return Flow(None, insns).const_before(at_mark(insns), 'x15')
+
+    def test_the_same_constant_on_both_paths(self):
+        self.assertEqual(self.x15('0x44'), 0x5044)
+
+    def test_different_constants_are_unknown(self):
+        self.assertIsNone(self.x15('0x48'))
+
+    def test_a_path_from_the_entry_is_unknown(self):
+        insns = listing('cbz x0, @end', 'mov x15, #3', 'end:', f'bl {CALL}', 'ret')
+        self.assertIsNone(Flow(None, insns).const_before(at_mark(insns), 'x15'))
+
+
 if __name__ == '__main__':
     unittest.main()

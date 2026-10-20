@@ -14,15 +14,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 from proto.arm64_eval import Flow
 from proto.arm64_operands import CALLER_SAVED, writes
+from tests._fakes import NoImage
 from tests._listing import insns
 
 PROBE = 0x9000             # ____chkstk_darwin
 SLOT = 0x6010              # its GOT slot
 
 
-class _Ctx:
-    is_cache_backed = False
-
+class _Ctx(NoImage):
     def read_ptr(self, va):
         if va == SLOT:
             return PROBE

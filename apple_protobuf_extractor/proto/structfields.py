@@ -48,9 +48,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from macho.disasm import _parse_imm, _norm_reg
 from macho.memory import READ_ERRORS, _ctx_cache
 
-from proto.arm64cfg import split_ops, mem_operand
+from proto.arm64cfg import mem_operand
 from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
-                                  reg_name)
+                                  reg_name, split_ops)
 from proto import arm64_eval, dictrep_flow
 from proto.callees import stub_selector
 from macho.strings import read_cfstring_text

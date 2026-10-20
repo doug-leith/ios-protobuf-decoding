@@ -11,6 +11,8 @@ import contextlib
 import os
 import unittest
 
+from tests._fakes import NoImage
+
 from macho.classlist import ObjcClass, ObjcIvar, ClassList
 import proto.extractor as E
 import proto.protoclass_set as PS
@@ -26,7 +28,7 @@ def _cls(va, name, super_va, ivars=()):
                      methods=[], ivars=list(ivars))
 
 
-class _NoReadCtx:
+class _NoReadCtx(NoImage):
     """Standalone-binary-like ctx: cross-image reads always fail, so the name-anchor
     contributes nothing and the VA-cluster anchor must carry detection."""
     def read_ptr(self, va):

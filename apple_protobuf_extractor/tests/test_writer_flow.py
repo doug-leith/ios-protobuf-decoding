@@ -13,7 +13,7 @@ import unittest
 import artifacts
 from macho.export_trie import decode_export_trie
 from proto.writer_flow import WriterFlow, writer_reachable_ivars
-from tests._fakes import NoImage
+from tests._fakes import NoImage, TextImage
 
 
 def _uleb(n):
@@ -137,6 +137,27 @@ class TestOutlinedFragments(unittest.TestCase):
                            ('ldur', 'x1, [sp, #-0x10]')])
         self.assertEqual(set(site.value_origins), {('I', '_a')})
 
+class TestTailCallToACFunction(unittest.TestCase):
+    """A ``b`` out of the function window to a C function of the image (an LC_FUNCTION_STARTS
+    entry, neither a method IMP nor named) is a tail call: a helper handed self that ends
+    ``ldr x0, [x0, #ivar] ; b <C function>`` returns what that call returns (iPhone 8
+    GeoServices' GEOPDSearchAttributeIntent and three more were undecided on it)."""
+
+    def test_the_summary_is_the_tail_calls_result(self):
+        from unittest import mock
+        import proto.writer_flow as WF
+        from tests._listing import layout
+
+        _order, fd = layout((0x1000, [('ldr', 'x0, [x0, #8]'), ('b', '#0x3000')]),
+                            (0x3000, [('ldrb', 'w0, [x0, #4]'), ('ret', '')]))   # reads x0
+        wf = WF.WriterFlow(TextImage(starts=[0x1000, 0x3000], segments=[]), [])
+        wf.off_to_ivar = {8: '_a'}
+        with mock.patch('proto.function_body.disasm', fd), \
+                mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
+                mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
+            self.assertEqual(wf._summary(0x1000, 0), frozenset({('I', '_a')}))
+
+
 try:
     import live_artifacts as _V
     _HAVE = artifacts.cache_file() is not None
@@ -213,6 +234,11 @@ class TestWriterFlowLive(unittest.TestCase):
         self._check("GeoServices", "GEOMapItemStorage",
                     gone=("_trampoline", "_geoMapItem", "_geoMapItemIsolater"),
                     kept=("_placeData", "_mapsURL", "_additionalPlaceDatas"))
+
+    def test_a_self_handed_helper_tail_calling_a_c_function(self):
+        # -[GEOPDSearchAttributeIntent writeTo:] hands self to a C helper that ends in a tail
+        # call to another C function of the image
+        self._check("GeoServices", "GEOPDSearchAttributeIntent")
 
     def test_class_that_serialises_no_ivar_says_so(self):
         import proto.extractor as E

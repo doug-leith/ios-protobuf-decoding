@@ -51,7 +51,8 @@ from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
 from proto.callees import real_target, stub_selector
 
-from proto.arm64cfg import split_ops, mem_operand
+from proto.arm64cfg import mem_operand
+from proto.arm64_operands import split_ops
 from proto.dispatch import FunctionEntries, function_entries
 from proto.function_body import function_body, function_listing
 from proto.writeto import BoundWrite, field_number_at

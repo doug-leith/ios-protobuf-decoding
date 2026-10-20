@@ -15,7 +15,7 @@ extractor on the dyld cache.
 import os
 import unittest
 from tests._listing import layout
-from tests._fakes import NoImage
+from tests._fakes import NoImage, TextImage
 
 import artifacts
 import proto.extractor as E
@@ -68,7 +68,7 @@ class TestWriterExtent(_Patched):
     def _addrs(self, blocks, entries=()):
         insns, fd = asm(*blocks)
         self.patch(fd)
-        return {i.addr for i in SF._writer_insns(NoImage(_function_entries=set(entries)), 0x1000)}
+        return {i.addr for i in SF._writer_insns(TextImage(_function_entries=set(entries)), 0x1000)}
 
     def test_a_far_block_of_the_same_function_is_followed(self):
         got = self._addrs([(0x1000, [('mov', 'x19, x0'), ('b', '#0x2000')]),

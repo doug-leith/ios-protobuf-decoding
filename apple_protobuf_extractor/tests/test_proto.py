@@ -25,6 +25,7 @@ from typing import List, Optional, Set
 # conftest.py.  No per-file sys.path juggling needed.
 
 from proto.protocore import _field_label, _is_real_field_ivar, _type_from_enc
+from tests._fakes import NoImage
 from proto.protoclass_heuristic import _is_proto_class
 from proto.config import _class_to_proto_name
 from proto.extractor import extract_all, extract_proto_message, is_proto_class
@@ -740,7 +741,7 @@ class TestExtractProtoMessageSynthetic(unittest.TestCase):
 
 # ── minimal stubs for no-binary tests ────────────────────────────────────────
 
-class _MinimalCtxStub:
+class _MinimalCtxStub(NoImage):
     """Bare-minimum BinaryContext stub for synthetic tests."""
 
     def has_section(self, segname: str, sectname: str) -> bool:
@@ -806,7 +807,7 @@ class TestDisasmAdrpAdd(unittest.TestCase):
         from macho.disasm import disasm as _disasm
         from proto.arm64_eval import Flow
 
-        class _FakeCtx:
+        class _FakeCtx(NoImage):
             def read_bytes(self, va, length):
                 off = va - text_va
                 if off < 0 or off + length > len(raw):
@@ -1161,8 +1162,6 @@ class TestMetaclassTypeMethodResolution(unittest.TestCase):
             imp_va:  imp_bytes,         # +valuesType instructions
             slot_va: slot_ptr_bytes,    # class-ref pointer → GEOPDComponentValue
         }
-
-        from tests._fakes import NoImage
 
         class _FakeCtx(NoImage):
             def vmaddr_to_offset(self, va, length=1):

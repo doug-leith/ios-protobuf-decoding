@@ -21,7 +21,7 @@ from serializers import swift_descriptor_extract as S
 from proto import function_body as FB
 from tests.conftest import encode_adrp, encode_add_imm64, encode_movz, NOP_BYTES, RET_BYTES
 from tests._listing import insns as _listing
-from tests._fakes import NoImage
+from tests._fakes import NoImage, TextImage
 
 
 # ── a minimal in-memory ctx where vmaddr == file offset (image_base 0) ────────
@@ -1138,16 +1138,13 @@ class TestTailCallArgs(unittest.TestCase):
                                                       ("add", "x0, x0, #8")])))
 
 
-class _ListingCtx:
+class _ListingCtx(TextImage):
     """A disasm-able ctx over a hand-built listing, with a function index
     (``BinaryContext.function_starts``) so :func:`FB.function_body` can be driven offline."""
     def __init__(self, lines, base, starts):
         from tests._listing import layout
+        super().__init__(starts=starts)
         self.order, self.fake = layout((base, lines))
-        self._starts = starts
-
-    def function_starts(self):
-        return self._starts
 
 
 class TestListing(unittest.TestCase):

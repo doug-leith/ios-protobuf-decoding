@@ -3,9 +3,10 @@ extent.  The one reader of a function body for the ObjC readers (:mod:`proto.dis
 :mod:`proto.writer_flow`) and the swift serializers
 (:mod:`serializers.swift_descriptor_extract`).
 
-* :func:`function_end` -- where the function at an address ends: the next function entry the
-  image's ``LC_FUNCTION_STARTS`` or a caller's own index (method IMPs, ReadAllFrom cores) knows,
-  else the end of ``__text``.
+* :func:`function_end` -- where the function at an address of the image's ``__text`` ends: the
+  next function entry the image's ``LC_FUNCTION_STARTS`` or a caller's own index (method IMPs,
+  ReadAllFrom cores) knows, else the end of ``__text``.
+* :func:`is_function_entry` -- whether a function starts at an address, by the same index.
 * :func:`function_body` -- the instructions its entry reaches before that, following ``b`` and
   conditional branches inside the extent and each ``br``'s decoded jump table.  A branch out
   of the extent is a tail call.
@@ -18,12 +19,13 @@ from typing import Dict, Iterable, Optional
 
 from macho.memory import READ_ERRORS, BinaryContext
 from macho.disasm import disasm, _parse_imm
-from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, is_cond_branch,
-                                  split_ops)
+from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, TRAPS,
+                                  is_cond_branch, split_ops)
+from proto.callees import text_holding
 from proto.dispatch import _jump_table_arm_addrs
 
 # What ends a path through a function: a return, an indirect jump, a trap.
-_PATH_ENDS = RETURNS | INDIRECT_BRANCHES | frozenset(("brk", "udf", "hlt"))
+_PATH_ENDS = RETURNS | INDIRECT_BRANCHES | TRAPS
 # [cap:INPUT-SANITY] runaway guard on a body read with no known extent (:func:`function_body`;
 # with one, the extent bounds it).  A body that reaches it is marked truncated.
 _UNBOUNDED_MAX_INSNS = 4000
@@ -46,18 +48,28 @@ def function_end(ctx: BinaryContext, va: int, entries=None) -> Optional[int]:
     """Where the function at *va* ends: the first function entry above it that
     :meth:`BinaryContext.function_starts` or *entries* (a
     :class:`proto.dispatch.FunctionEntries`) holds, else -- the image's last function -- the
-    end of the ``__TEXT,__text`` section holding *va*.  None: neither is known."""
+    end of the image's ``__TEXT,__text``.  None when *va* is not in that section (another
+    image's code, a stub island): this image's function index does not bound it."""
+    text = text_holding(ctx, va)
+    if text is None:
+        return None
+    end = text.vmaddr + text.vmsize
     starts = ctx.function_starts()
     i = bisect.bisect_right(starts, va)
-    end = starts[i] if i < len(starts) else None
+    if i < len(starts):
+        end = min(end, starts[i])
     nxt = entries.next_after(va) if entries else None
-    if nxt is not None and (end is None or nxt < end):
-        end = nxt
-    if end is None and ctx.has_section("__TEXT", "__text"):
-        text = ctx.section("__TEXT", "__text")
-        if text.vmaddr <= va < text.vmaddr + text.vmsize:
-            end = text.vmaddr + text.vmsize
-    return end
+    return min(end, nxt) if nxt is not None else end
+
+
+def is_function_entry(ctx: BinaryContext, va: int, entries=None) -> bool:
+    """*va* is where a function starts: in :meth:`BinaryContext.function_starts` or *entries*
+    (a :class:`proto.dispatch.FunctionEntries`)."""
+    if entries is not None and va in entries.members:
+        return True
+    starts = ctx.function_starts()
+    i = bisect.bisect_left(starts, va)
+    return i < len(starts) and starts[i] == va
 
 
 def _branch_target(ins) -> Optional[int]:

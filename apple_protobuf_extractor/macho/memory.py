@@ -447,10 +447,6 @@ class BinaryContext:
         return self._cpu_type
 
     @property
-    def cpu_subtype(self) -> int:
-        return self._cpu_subtype
-
-    @property
     def is_arm64e(self) -> bool:
         """True if cpu_subtype encodes ARM64E (subtype & 0xFF == 2)."""
         return (self._cpu_subtype & 0xFF) == 2

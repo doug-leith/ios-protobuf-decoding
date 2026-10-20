@@ -87,8 +87,9 @@ class TestFieldCountGateRemoval(unittest.TestCase):
         from macho.strings import StringTable
         from macho.classlist import ClassList
 
-        class _MinCtx:
-            is_cache_backed = False
+        from tests._fakes import NoImage
+
+        class _MinCtx(NoImage):
             def has_section(self, *a): return False
             def section(self, *a): raise ValueError
             def read_ptr(self, va): raise ValueError

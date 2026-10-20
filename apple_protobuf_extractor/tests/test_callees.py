@@ -94,17 +94,19 @@ class TestCallReads(unittest.TestCase):
     """proto.callees.call_reads: one answer to "what may this call read" for both
     interpreters (WriterFlow and arm64_eval.Flow)."""
 
-    def _reads(self, name=None, sel=None, blocks=(), names=None):
+    def _reads(self, name=None, sel=None, blocks=(), names=None, text=(0x1000, 0x100000)):
         import proto.callees as C
-        from tests._fakes import NoImage
+        from tests._fakes import TextImage
         from tests._listing import layout
+
         _o, fd = layout(*blocks) if blocks else ([], lambda *a, **k: [])
         named = names or {}
         with mock.patch.object(C, 'callee_name',
                                lambda ctx, va: name if va == 0x9000 else named.get(va)), \
                 mock.patch.object(C, 'stub_selector', lambda ctx, va: sel if va == 0x9000 else None), \
                 mock.patch('proto.function_body.disasm', fd):
-            return set(C.call_reads(NoImage(), 0x9000))
+            image = TextImage(text, starts={a for a, _body in blocks} | set(named))
+            return set(C.call_reads(image, 0x9000))
 
     def test_a_runtime_contract_is_what_it_reads(self):
         self.assertEqual(self._reads("_objc_retain_x19"), {"x19"})
@@ -117,6 +119,17 @@ class TestCallReads(unittest.TestCase):
     def test_an_outlined_fragment_reads_what_it_reads_before_writing(self):
         got = self._reads(blocks=[(0x9000, [('mov', 'x0, x21'), ('add', 'x1, x22, #8'), ('ret', '')])])
         self.assertEqual(got, {'x21', 'x22'})            # x0 written before it returns
+
+    def test_a_function_of_another_image_reads_the_abi_arguments(self):
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('add', 'x1, x22, #8'), ('ret', '')])],
+                          text=(0x10000, 0x20000))
+        self.assertEqual(got, set(ABI_ARGS))
+
+    def test_a_load_or_store_reads_its_address_registers(self):
+        got = self._reads(blocks=[(0x9000, [('ldr', 'x8, [x1, #8]'), ('str', 'x8, [x2, x3]'),
+                                            ('mov', 'x0, #0'), ('ret', '')])])
+        self.assertEqual(got, {'x1', 'x2', 'x3'})
 
     def test_a_return_hands_back_x0(self):
         self.assertEqual(self._reads(blocks=[(0x9000, [('add', 'x1, x22, #8'), ('ret', '')])]),

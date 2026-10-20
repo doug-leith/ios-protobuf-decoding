@@ -122,6 +122,10 @@ CALLS = frozenset(('bl', 'blr', 'blraa', 'blrab', 'blraaz', 'blrabz'))
 INDIRECT_BRANCHES = frozenset(('br', 'braa', 'brab', 'braaz', 'brabz'))
 
 
+# Traps: a path that reaches one ends there.
+TRAPS = frozenset(('brk', 'udf', 'hlt'))
+
+
 # Every branch but ``b.cond`` (:func:`is_cond_branch`): what ends a straight-line run.
 BLOCK_ENDS = frozenset(('b',)) | CALLS | INDIRECT_BRANCHES | RETURNS | COMPARE_BRANCHES
 
@@ -163,11 +167,16 @@ def operand_regs(tokens) -> List[str]:
     bases and indices included -- other than ``xzr`` / ``sp``."""
     out = []
     for t in tokens:
-        t = t.strip().strip('[]!')
-        t = t.split()[0] if t else t
-        r = reg_name(t) if t else None
-        if r and r not in ('xzr', 'sp'):
-            out.append(r)
+        t = t.strip()
+        if '[' in t:
+            pm = parse_mem(t)
+            names = [n for n in (pm[0], pm[1]) if n] if pm else []
+        else:
+            names = t.split()[:1]
+        for n in names:
+            r = reg_name(n)
+            if r and r not in ('xzr', 'sp'):
+                out.append(r)
     return out
 
 

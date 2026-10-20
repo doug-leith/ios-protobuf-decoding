@@ -68,7 +68,7 @@ def _flow(*blocks, names=None):
 class TestFlowStaysInImage(unittest.TestCase):
     def test_image_text_range(self):
         self.assertEqual(WF_image_text_range(_CTX), (0x1000, 0x2000))
-        self.assertIsNone(WF_image_text_range(None))           # unit-test stub: no bound
+        self.assertIsNone(WF_image_text_range(NoImage()))      # no __TEXT segment: no bound
 
     def test_tail_call_into_another_images_function_is_a_call(self):
         # `b 0x9000` to a function another image exports (the newer toolchain's direct

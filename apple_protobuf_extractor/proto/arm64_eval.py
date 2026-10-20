@@ -24,12 +24,12 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set
 
 from macho.disasm import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
-                            predecessors, reverse_postorder, split_ops)
+                            predecessors, reverse_postorder)
 from macho.strings import read_cfstring_text
 from proto.callees import call_reads, call_clobbers as callee_clobbers, outlined_fragment
 from proto.arm64_operands import (
     ARG_GPRS, CALL_ARG_GPRS, CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES,
-    SIGNED_LOADS, STORE_BYTES,
+    SIGNED_LOADS, STORE_BYTES, TRAPS, split_ops,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
     parse_mem, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
     operand2,
@@ -519,15 +519,18 @@ class Flow:
     # ── constants ───────────────────────────────────────────────────────────
 
     def const_before(self, k: int, reg: str) -> Optional[int]:
-        """Value of *reg* before ``insns[k]`` if exactly one constant definition reaches it."""
+        """Value of *reg* before ``insns[k]`` if every definition reaching it is that constant
+        (e.g. a table base set the same way on each path into a loop)."""
         if reg == 'xzr':
             return 0
         key = (k, reg)
         if key in self._const_memo:
             return self._const_memo[key]
         self._const_memo[key] = None                     # break cycles (loops)
-        d = self.only_def(k, reg)
-        val = self._const_of_def(d, reg) if d is not None else None
+        defs = self.defs_before(k, reg)
+        vals = ({None} if not defs or _ENTRY in defs
+                else {self._const_of_def(d, reg) for d in defs})
+        val = vals.pop() if len(vals) == 1 else None
         self._const_memo[key] = val
         return val
 
@@ -747,7 +750,7 @@ class Flow:
         other side.  Any other untracked test cannot be decided and aborts the value."""
         def traps(i: Optional[int]) -> bool:
             return i is not None and 0 <= i < len(self.insns) \
-                and self.insns[i].mnemonic in ('brk', 'udf')
+                and self.insns[i].mnemonic in TRAPS
         t = self.addr_idx.get(target) if target is not None else None
         if traps(t) and not traps(k + 1):
             return k + 1
@@ -1219,7 +1222,13 @@ class Flow:
         return call_reads(self.ctx, target)
 
     def _propagate_step(self, m: "_Machine", k: int, call_result=None,
-                        trace: Optional[List[Dict[str, int]]] = None) -> None:
+                        trace: Optional[List[Dict[str, int]]] = None,
+                        on_call: Optional[Callable[[Optional[int]], None]] = None) -> None:
+        """Run ``insns[k]`` in *m*: an outlined fragment's instructions; a call with a contract
+        (:meth:`call_clobbers`); any other call as one that reads what its target reads
+        (:meth:`_call_reads`), clobbers the caller-saved registers and returns *call_result*'s
+        x0; a branch changes nothing.  *on_call(target)*, when given, is told of each of those
+        other calls before it runs."""
         ins = self.insns[k]
         mn = ins.mnemonic
         if self.fragment(k) is not None:
@@ -1231,12 +1240,11 @@ class Flow:
             if clobbers is not None:
                 m.call((), clobbers)
                 return
-            if call_result is None:
-                m.call(self._call_reads(target if mn == 'bl' else None))
-                return
+            if on_call is not None:
+                on_call(target)
             x0 = m.copy_of('x0')
             m.call(self._call_reads(target))
-            v = call_result(k, target, x0)
+            v = call_result(k, target, x0) if call_result is not None else None
             if v is not None:
                 m.put('x0', v)
         elif (mn == 'b' or mn in INDIRECT_BRANCHES or mn in RETURNS
@@ -1290,36 +1298,19 @@ class Flow:
         if start_blk is None:
             return region
 
+        def record_call(st: _Machine, k: int, target: Optional[int], tail: bool) -> None:
+            args = {r: v for r in ARG_GPRS if (v := st.copy_of(r)) is not None}
+            region.calls.append(CallSite(k, self.insns[k].addr, target, args, tail))
+
         def step(st: _Machine, k: int, record: bool) -> None:
             ins = self.insns[k]
-            mn = ins.mnemonic
-            tgt = _parse_imm(ins.op_str) if mn == 'b' else None
-            tail = tgt is not None and (tgt not in self.addr_idx or tgt in tail_targets)
-            if self.fragment(k) is not None:
-                self._run_fragment(st, k)
-            elif mn in CALLS and (clobbers := self.call_clobbers(
-                    k, self._call_target(st, ins), evaluated=True)) is not None:
-                st.call((), clobbers)
-            elif mn in CALLS or tail:
-                if record:
-                    target = (_parse_imm(ins.op_str) if mn in ('bl', 'b')
-                              else m_get_target(st, ins))
-                    args = {r: v for r in ARG_GPRS if (v := st.copy_of(r)) is not None}
-                    region.calls.append(CallSite(k, ins.addr, target, args, tail))
-                if mn != 'b':
-                    x0 = st.copy_of('x0')
-                    target = (m_get_target(st, ins) if mn != 'bl' else _parse_imm(ins.op_str))
-                    st.call(self._call_reads(target))
-                    cr = objects.call_result
-                    v = cr(k, target, x0) if cr is not None else None
-                    if v is not None:
-                        st.put('x0', v)
-            else:
-                self._propagate_step(st, k)
-
-        def m_get_target(st: _Machine, ins: Insn) -> Optional[int]:
-            ops = split_ops(ins.op_str)
-            return st.get(ops[0]) if ops else None
+            if ins.mnemonic == 'b':
+                tgt = _parse_imm(ins.op_str)
+                if record and tgt is not None and (tgt not in self.addr_idx or tgt in tail_targets):
+                    record_call(st, k, tgt, True)
+                return
+            self._propagate_step(st, k, objects.call_result, on_call=(
+                (lambda target: record_call(st, k, target, False)) if record else None))
 
         def successors(blk: int, st: _Machine) -> List[int]:
             last = cfg.blocks[blk][-1]
@@ -1332,7 +1323,7 @@ class Flow:
                 step(st, k, record)
             last = cfg.blocks[blk][-1]
             if record and last.mnemonic == 'br':
-                v = m_get_target(st, last)
+                v = self._call_target(st, last)
                 if v is None:
                     region.unresolved_br.append(last.addr)
                 else:

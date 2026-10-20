@@ -42,15 +42,15 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_store
-from proto.arm64cfg import split_ops
 from proto.arm64_eval import Flow, Objects, _STACK_TOP, _is_stack
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, decoded_flow
 from proto.dispatch_eval import _function_insns
+from proto.function_body import is_function_entry
 from proto.callees import (callee_name, stub_selector, call_reads,
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
 from proto.arm64_operands import (writes, reg_name, operand_regs, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
-                                  CALLS, INDIRECT_BRANCHES, ARG_GPRS)
+                                  CALLS, INDIRECT_BRANCHES, ARG_GPRS, split_ops)
 
 log = logging.getLogger(__name__)
 
@@ -102,18 +102,15 @@ _FRAME_OBJECTS = Objects(object_escape=True)
 
 
 def _image_text_range(ctx):
-    """``(lo, hi)`` of the image's own ``__TEXT`` segment, or None when the context
-    does not expose one (a unit-test stub) — then nothing is treated as out-of-image.
+    """``(lo, hi)`` of the image's own ``__TEXT`` segment, or None when it has none -- then
+    nothing is treated as out-of-image.
 
     The newer toolchain (iOS 27, macOS 27) tail-calls a function in another image
     directly (``b <objc_sync_exit>``; the old one branched to a stub in the image's own
     ``__stubs``)."""
-    try:
-        for seg in ctx.segments:
-            if seg.name == "__TEXT" and seg.vmsize:
-                return seg.vmaddr, seg.vmaddr + seg.vmsize
-    except AttributeError:
-        pass
+    for seg in ctx.segments:
+        if seg.name == "__TEXT" and seg.vmsize:
+            return seg.vmaddr, seg.vmaddr + seg.vmsize
     return None
 
 
@@ -284,7 +281,6 @@ class WriterFlow:
     def __init__(self, ctx: BinaryContext, cl: ClassList):
         self.ctx, self.cl = ctx, cl
         self.entries = FunctionEntries(m.imp for c in cl for m in c.methods if m.imp)
-        self.entry_set = self.entries.members
         self._summary_memo: Dict[int, FrozenSet] = {}
         self.cls: Optional[ObjcClass] = None
         self.own_imps: Dict[int, str] = {}
@@ -472,7 +468,7 @@ class WriterFlow:
             return None
 
     def _is_function(self, va: int) -> bool:
-        return (va in self.entry_set or callee_name(self.ctx, va) is not None
+        return (is_function_entry(self.ctx, va, self.entries) or callee_name(self.ctx, va) is not None
                 or stub_selector(self.ctx, va) is not None)
 
     # ── calls ────────────────────────────────────────────────────────────────

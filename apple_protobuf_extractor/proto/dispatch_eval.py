@@ -50,7 +50,8 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 from macho.disasm import _norm_reg
 from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store
 from macho.classlist import class_name_at
-from proto.arm64cfg import dominators, dominates, split_ops
+from proto.arm64cfg import dominators, dominates
+from proto.arm64_operands import split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.callees import callee_name, stub_selector
