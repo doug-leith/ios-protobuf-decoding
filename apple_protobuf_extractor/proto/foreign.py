@@ -35,7 +35,7 @@ from serializers import swift_descriptor_extract as _swift
 from .models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage
 from .protoclass_set import _proto_class_set
 from .foreign_detect import (google_protobuf_classes, swift_protobuf_messages,
-                             cpp_protobuf_namespaces, protobufc_descriptors)
+                             cpp_file_protos, cpp_protobuf_namespaces, protobufc_descriptors)
 
 log = logging.getLogger(__name__)
 
@@ -234,17 +234,6 @@ def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
             seen[key] = keep
             out[out.index(prev)] = keep
     return out
-
-
-def cpp_messages(data: bytes) -> List[ProtoMessage]:
-    """Every C++ libprotobuf message embedded in *data*, as ProtoMessage objects."""
-    return _cpp_protos_to_messages(_cpp.extract_cpp_protos(data))
-
-
-def cpp_messages_from_ctx(ctx) -> List[ProtoMessage]:
-    """Cache-native C++ recovery: read the embedded ``FileDescriptorProto``s from
-    the image's descriptor sections through *ctx* (no on-disk byte image)."""
-    return _cpp_protos_to_messages(_cpp.extract_cpp_protos_from_ctx(ctx))
 
 
 # ── swift-protobuf ────────────────────────────────────────────────────────────
@@ -495,8 +484,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
 
     cpp_names = []
     try:
-        file_protos = (_cpp.extract_cpp_protos(data) if data
-                       else _cpp.extract_cpp_protos_from_ctx(ctx))
+        file_protos = cpp_file_protos(ctx, data)
         for fp in file_protos:
             for m in fp.messages:
                 pfx = (fp.package + ".") if fp.package else ""
@@ -599,7 +587,7 @@ def collect_foreign_messages(ctx, data: Optional[bytes]) -> List[ProtoMessage]:
     descriptor sections / ``.symbols`` nlist through *ctx*."""
     out: List[ProtoMessage] = []
     try:
-        out += cpp_messages(data) if data else cpp_messages_from_ctx(ctx)
+        out += _cpp_protos_to_messages(cpp_file_protos(ctx, data))
     except (NameError, ImportError):
         raise
     except Exception as exc:

@@ -54,7 +54,7 @@ from proto.arm64cfg import dominators, dominates
 from proto.arm64_operands import split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
-from proto.callees import callee_name, stub_selector
+from proto.callees import callee_name, stub_selector, text_holding
 from proto.function_body import function_body
 from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, ret_value,
                                object_model)
@@ -219,10 +219,6 @@ def _outermost(flow: Flow, idom, sites: List[int]) -> Set[int]:
     return out
 
 
-def _in_image_text(ctx, va: Optional[int]) -> bool:
-    return va is not None and D._section_name(ctx, va) == '__text'
-
-
 # ── 1. which function dispatches ────────────────────────────────────────────
 
 def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Dict[int, tuple]] = None
@@ -258,7 +254,7 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
                 flows[va] = (insns, per_br, flow)
             return
         for c in region.calls:
-            if c.args.get('x0') == SELF and _in_image_text(ctx, c.target):
+            if c.args.get('x0') == SELF and text_holding(ctx, c.target) is not None:
                 descend(c.target, dict(c.args), depth + 1)
 
     descend(m.imp, {'x0': SELF, 'x2': READER}, 0)
@@ -476,7 +472,7 @@ def _writes_foreign_object(ctx, flow: Flow, blocks: Set[int], calls, own_slots: 
         if c.target in own_imps:
             return False
         used |= {v for v in c.args.values() if v in all_slots}     # handed an offset variable
-        if c.args.get('x0') == SELF and _in_image_text(ctx, c.target):
+        if c.args.get('x0') == SELF and text_holding(ctx, c.target) is not None:
             used |= _slots_loaded(ctx, c.target) & all_slots
     return bool(used) and not (used & own_slots)
 

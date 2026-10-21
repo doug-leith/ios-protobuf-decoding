@@ -1075,16 +1075,13 @@ class TestDictrepBodyOfAStrippedMethod(_Patched):
 
     def setUp(self):
         import proto.enums as EN
-        orig_d, orig_t = FB.disasm, EN._in_image_text
-        self.addCleanup(setattr, FB, 'disasm', orig_d)
-        self.addCleanup(setattr, EN, '_in_image_text', orig_t)
+        self.addCleanup(setattr, FB, 'disasm', FB.disasm)
         self.EN = EN
-        EN._in_image_text = lambda ctx, va: va is not None and 0x2000 <= va < 0x3000
 
     def find(self, cls, *blocks):
         _, fake = asm(*blocks)
         FB.disasm = fake
-        return self.EN._find_dictrep_c_func(NoImage(), cls)
+        return self.EN._find_dictrep_c_func(TextImage((0x2000, 0x3000)), cls)   # the image's __text
 
     def test_the_registered_method_wins(self):
         cls = _FakeClass({'_dictionaryRepresentation:': 0x2400, 'dictionaryRepresentation': 0x1000})

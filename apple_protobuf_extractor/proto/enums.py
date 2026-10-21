@@ -27,7 +27,7 @@ from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs, function_entries
 from proto.dictrep_flow import Flow
-from proto.dispatch_eval import _in_image_text
+from proto.callees import text_holding
 from proto.eval_tokens import SELF, OPAQUE, opaque
 from proto.function_body import FunctionBody, function_listing
 from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, RETURNS, TRAPS
@@ -192,7 +192,7 @@ def _wrapper_tail(ctx: BinaryContext, cls: ObjcClass,
     if first is None:
         return None
     c, flow = first
-    if not c.tail or c.args.get('x0') != SELF or not _in_image_text(ctx, c.target):
+    if not c.tail or c.args.get('x0') != SELF or text_holding(ctx, c.target) is None:
         return None
     x1 = c.args.get('x1')
     if x1 is not None and not opaque(x1):

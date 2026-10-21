@@ -281,11 +281,6 @@ class Bracket:
     writes: Tuple[Tuple[int, int, int], ...]   # inline member writes: (index, field#, helper)
 
 
-# [cap:INPUT-SANITY] runaway backstop for the bracket walk, not a tuned bound: a sub-message
-# body is a few dozen instructions (an inlined struct with has-bit jump tables a few hundred).
-_BRACKET_MAX_INSNS = 4096
-
-
 def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     """Analyse the sub-message write whose BEGIN mark (``bl`` with a stack-scratch ``x1`` and a
     literal field number) is at ``insns[begin_idx]`` in the owner's linear ``writeTo:``
@@ -314,8 +309,6 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     while work:
         k = work.pop()
         while k is not None and 0 <= k < len(insns) and k not in seen:
-            if len(seen) > _BRACKET_MAX_INSNS:
-                return None
             seen.add(k)
             ins, mn, nxt = insns[k], insns[k].mnemonic, k + 1
             if mn in RETURNS:

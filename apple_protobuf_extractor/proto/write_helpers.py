@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional, Set
 
-from macho.memory    import BinaryContext, _ctx_cache, _ctx_store
+from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcIvar
 from macho.disasm    import disasm
 
@@ -265,9 +265,7 @@ def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
             cache[helper_va] = named
             return named
         fam = _family_by_evaluation(ctx, target)
-    except (NameError, ImportError):
-        raise                       # our own wiring bug — never mask it
-    except Exception as exc:
+    except READ_ERRORS as exc:
         # Unreadable helper: its fields are flagged as an unconfirmed integer encoding.
         log.debug("write-helper classify failed at 0x%x: %s", helper_va or 0, exc)
         fam = "unknown"

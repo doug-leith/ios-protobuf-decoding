@@ -14,6 +14,7 @@ class NoImage:
     """Its keyword arguments become attributes: ``NoImage(segments=[...])``."""
     is_cache_backed = False
     segments = ()
+    image_bytes = b""
 
     def __init__(self, **attrs):
         self.__dict__.update(attrs)

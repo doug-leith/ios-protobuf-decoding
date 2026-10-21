@@ -54,9 +54,9 @@ def google_protobuf_classes(
     subs: List[str] = []
     bases: Set[str] = set()
     for c in non_meta:
-        cur, seen, depth = c.superclass_vmaddr, set(), 0
-        while cur and cur not in seen and depth < 16:
-            seen.add(cur); depth += 1
+        cur, seen = c.superclass_vmaddr, set()
+        while cur and cur not in seen:
+            seen.add(cur)
             nm = _name(cur)
             if nm is None:
                 break
@@ -227,6 +227,14 @@ def cpp_protobuf_symbol_count(ctx: BinaryContext) -> int:
     return sum(cpp_protobuf_namespaces(ctx).values())
 
 
+def cpp_file_protos(ctx: BinaryContext, data: Optional[bytes] = None) -> list:
+    """The image's embedded C++ ``FileDescriptorProto``s: a sweep of its bytes (*data*, by
+    default the binary-mode image's own) or, cache-native, of its descriptor sections through
+    *ctx*.  The one scan the warning, ``--list-serializers`` and the emitted files share."""
+    data = ctx.image_bytes if data is None else data
+    return _cpp.extract_cpp_protos(data) if data else _cpp.extract_cpp_protos_from_ctx(ctx)
+
+
 def protobufc_descriptors(ctx: BinaryContext) -> ProtobufCDescriptors:
     """protobuf-c (C runtime, e.g. Apple MMCS) message/enum descriptors and runtime
     symbols in *ctx* — detection only (see :mod:`serializers.protobufc_detect`).
@@ -268,7 +276,7 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
             " (a vendored static copy, e.g. Apple Wireless Diagnostics telemetry)"
             if any(n != "google::protobuf" for n in cpp_ns) else "")
         try:
-            has_descriptors = bool(_cpp.extract_cpp_protos_from_ctx(ctx))
+            has_descriptors = bool(cpp_file_protos(ctx))
         except (NameError, ImportError):
             raise
         except Exception as exc:

@@ -43,12 +43,13 @@ from macho.classlist import ClassList, ObjcClass
 from macho.disasm import disasm, _parse_imm, _norm_reg
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_store
 from proto.arm64_eval import Flow, Objects, _STACK_TOP, _is_stack
-from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, decoded_flow
+from proto.dispatch import (_jump_table_arm_addrs, build_function_index, decoded_flow,
+                            function_entries)
 from proto.dispatch_eval import _function_insns
 from proto.function_body import is_function_entry
-from proto.callees import (callee_name, stub_selector, call_reads,
+from proto.callees import (callee_name, stub_selector, call_reads, text_holding,
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
-from proto.arm64_operands import (writes, reg_name, operand_regs, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
+from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
                                   CALLS, INDIRECT_BRANCHES, ARG_GPRS, split_ops)
 
@@ -99,19 +100,6 @@ _FAST_ENUMERATION_STATE_BYTES = 64
 # The Flow run the register values come from: a callee handed a pointer into the frame may
 # write from it upward, never below (as this analysis's own frame origins assume).
 _FRAME_OBJECTS = Objects(object_escape=True)
-
-
-def _image_text_range(ctx):
-    """``(lo, hi)`` of the image's own ``__TEXT`` segment, or None when it has none -- then
-    nothing is treated as out-of-image.
-
-    The newer toolchain (iOS 27, macOS 27) tail-calls a function in another image
-    directly (``b <objc_sync_exit>``; the old one branched to a stub in the image's own
-    ``__stubs``)."""
-    for seg in ctx.segments:
-        if seg.name == "__TEXT" and seg.vmsize:
-            return seg.vmaddr, seg.vmaddr + seg.vmsize
-    return None
 
 
 class _St:
@@ -280,13 +268,13 @@ class WriterFlow:
 
     def __init__(self, ctx: BinaryContext, cl: ClassList):
         self.ctx, self.cl = ctx, cl
-        self.entries = FunctionEntries(m.imp for c in cl for m in c.methods if m.imp)
+        build_function_index(ctx, cl)
+        self.entries = function_entries(ctx)
         self._summary_memo: Dict[int, FrozenSet] = {}
         self.cls: Optional[ObjcClass] = None
         self.own_imps: Dict[int, str] = {}
         self.slot_to_ivar: Dict[int, str] = {}
         self.off_to_ivar: Dict[int, str] = {}
-        self.text = _image_text_range(ctx)
         self._analysed: Dict[int, tuple] = {}
 
     # ── public entry ─────────────────────────────────────────────────────────
@@ -600,8 +588,7 @@ class WriterFlow:
                 imp = m.imp if m is not None else None
             elif tgt in self.own_imps:
                 imp = tgt
-            elif (tgt is not None and self.text is not None
-                  and self.text[0] <= tgt < self.text[1]):
+            elif text_holding(self.ctx, tgt) is not None:
                 imp = tgt                            # a C function of this image handed self
         if imp is not None and imp != top:
             return self._summary(imp, depth)
@@ -679,7 +666,7 @@ class WriterFlow:
             return
         # anything else: each destination derives from every source register
         src: Set = set()
-        for r in operand_regs(ops[1:] if dsts else ops):
+        for r in reads(ins):
             src |= st.p(r)
             if self._frame(vals, r) is not None:
                 src.add('STK')

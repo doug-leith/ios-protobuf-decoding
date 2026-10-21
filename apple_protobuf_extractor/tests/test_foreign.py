@@ -13,6 +13,7 @@ from serializers import swift_descriptor_extract as SW
 from proto import foreign as F
 from proto.emitter import build_proto_files
 from proto.models import FieldLabel, ProtoField, ProtoMessage
+from tests._fakes import NoImage
 
 
 class TestHelpers(unittest.TestCase):
@@ -249,7 +250,7 @@ def _cpp_file_blob(name):
     return _ld(1, name.encode()) + _ld(2, b"pkg") + _ld(4, _ld(1, b"Msg") + _ld(2, fx))
 
 
-class _SectionCtx:
+class _SectionCtx(NoImage):
     """ctx exposing one __TEXT,__const section of bytes (for the cache C++ path)."""
     class _Sec:
         def __init__(self, va, size):
@@ -271,10 +272,10 @@ class _SectionCtx:
 
 
 class TestCppFromCtxAdapter(unittest.TestCase):
-    """The cache-native C++ adapter reads descriptor blobs through ctx sections."""
+    """Cache-native (no image bytes) the C++ scan reads descriptor blobs through ctx sections."""
     def test_cpp_messages_from_ctx(self):
         ctx = _SectionCtx(0x4000, b"\x00" * 8 + _cpp_file_blob("widget.proto"))
-        msgs = F.cpp_messages_from_ctx(ctx)
+        msgs = F._cpp_protos_to_messages(F.cpp_file_protos(ctx))
         by = {m.name: m for m in msgs}
         self.assertIn("Msg", by)
         self.assertEqual(by["Msg"].serializer, F.CPP_SERIALIZER)
@@ -282,7 +283,7 @@ class TestCppFromCtxAdapter(unittest.TestCase):
         self.assertEqual(by["Msg"].fields[0].type_name, "int32")
 
     def test_cpp_messages_from_ctx_empty(self):
-        self.assertEqual(F.cpp_messages_from_ctx(_SectionCtx(0x4000, b"no protos here")), [])
+        self.assertEqual(F.cpp_file_protos(_SectionCtx(0x4000, b"no protos here")), [])
 
 
 class TestCollectForeignMessages(unittest.TestCase):
@@ -519,7 +520,7 @@ class TestSummarizeLite(unittest.TestCase):
         F.cpp_protobuf_namespaces = lambda ctx: cpp_ns
         F._cpp.extract_cpp_protos_from_ctx = lambda ctx: cpp_protos
         try:
-            return {s.label: s for s in F.summarize_serializers(object(), [], None)}
+            return {s.label: s for s in F.summarize_serializers(NoImage(), [], None)}
         finally:
             (F._proto_class_set, F.google_protobuf_classes,
              F.swift_protobuf_messages, F.cpp_protobuf_namespaces,
@@ -577,7 +578,7 @@ def _remindd():
 class TestLiveCppIntegration(unittest.TestCase):
     def test_locationd_cpp_messages_emit(self):
         data = open(_locationd(), "rb").read()
-        msgs = F.cpp_messages(data)
+        msgs = F._cpp_protos_to_messages(F.cpp_file_protos(NoImage(), data))
         self.assertGreater(len(msgs), 50)                 # AWD telemetry protos
         self.assertTrue(all(m.serializer == F.CPP_SERIALIZER for m in msgs))
         self.assertTrue(all(m.package for m in msgs))

@@ -80,11 +80,11 @@ _IMM_RE  = re.compile(r'#(-?0x[0-9a-fA-F]+|-?\d+)')
 def _norm_reg(name: str) -> Optional[str]:
     """Normalise an arm64 register name to 'xN' form.
 
-    'x8' → 'x8', 'w8' → 'x8', 'sp' → 'sp', 'xzr'/'wzr' → 'xzr'.
+    'x8' → 'x8', 'w8' → 'x8', 'sp'/'wsp' → 'sp', 'xzr'/'wzr' → 'xzr'.
     Returns None for unrecognised names.
     """
     name = name.strip().lower()
-    if name == 'sp':
+    if name in ('sp', 'wsp'):
         return 'sp'
     if name in ('xzr', 'wzr'):
         return 'xzr'

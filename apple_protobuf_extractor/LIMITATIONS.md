@@ -511,8 +511,8 @@ framework extracted from the dyld cache, a field whose type lives outside the im
 
 **Source sites.** `swift_type_recovery.py` (`_SWIFT_SCALAR`/`_DIRECT`,
 `decode_mangled`); `swift_namemap_bytecode.py` (the iOS 27 packed name map);
-`swift_descriptor_extract.py` (`_single_field_tail_call`,
-`_attach_field_types`); `proto/foreign.py` (`_swift_field`). The integer-subtype
+`swift_descriptor_extract.py` (`_attach_field_types`,
+`_attach_visit_types`); `proto/foreign.py` (`_swift_field`). The integer-subtype
 limit is documented in the module docstring.
 
 

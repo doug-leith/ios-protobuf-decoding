@@ -14,18 +14,19 @@ from macho.disasm import Insn, _norm_reg, _parse_imm, _SOURCE_FIRST_MNEMONICS
 
 
 def split_ops(op_str):
-    """Split an operand string on TOP-LEVEL commas (commas inside ``[...]`` stay
-    put), returning stripped, lowercased operand tokens.
+    """Split an operand string on TOP-LEVEL commas (commas inside ``[...]`` or a register list
+    ``{...}`` stay put), returning stripped, lowercased operand tokens.
 
-        'w1, [x20, x8]'   -> ['w1', '[x20, x8]']
-        'x8, x8, #0x200'  -> ['x8', 'x8', '#0x200']
-        'ret' / ''        -> []
+        'w1, [x20, x8]'             -> ['w1', '[x20, x8]']
+        'x8, x8, #0x200'            -> ['x8', 'x8', '#0x200']
+        '{v0.16b, v1.16b}, [x0]'    -> ['{v0.16b, v1.16b}', '[x0]']
+        'ret' / ''                  -> []
     """
     out, depth, start = [], 0, 0
     for i, ch in enumerate(op_str):
-        if ch == '[':
+        if ch in '[{':
             depth += 1
-        elif ch == ']':
+        elif ch in ']}':
             depth -= 1
         elif ch == ',' and depth == 0:
             out.append(op_str[start:i].strip().lower())
@@ -40,7 +41,8 @@ REG_BYTES = {'x': 8, 'w': 4, 'd': 8, 's': 4, 'q': 16, 'h': 2, 'b': 1}
 
 
 def reg_bytes(tok: str) -> int:
-    return REG_BYTES.get(tok.strip()[:1].lower(), 8)
+    t = tok.strip().lower()
+    return 8 if t == 'sp' else REG_BYTES.get(t[:1], 8)
 
 
 def reg_mask(tok: str) -> int:
@@ -52,7 +54,7 @@ def reg_bits(tok: str) -> int:
     return 32 if tok.strip().lower().startswith('w') else 64
 
 
-_FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?$')
+_FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?(\[\d+\])?$')    # a lane: v0.s[1]
 
 
 def reg_name(tok: str) -> Optional[str]:
@@ -162,15 +164,22 @@ def parse_mem(op: str):
     return MemOperand(base, index, disp, ext, shift, idx_w)
 
 
+def _list_regs(tok: str) -> List[str]:
+    """The registers of a vector register list ``{v0.16b, v1.16b}`` (``vN`` form)."""
+    return [r for r in (reg_name(t) for t in tok.strip().strip('{}').split(',')) if r]
+
+
 def operand_regs(tokens) -> List[str]:
     """The registers (``xN`` / ``vN`` form) named by operand tokens -- memory operands'
     bases and indices included -- other than ``xzr`` / ``sp``."""
     out = []
     for t in tokens:
         t = t.strip()
-        if '[' in t:
+        if t.startswith('['):
             pm = parse_mem(t)
             names = [n for n in (pm[0], pm[1]) if n] if pm else []
+        elif t.startswith('{'):
+            names = _list_regs(t)
         else:
             names = t.split()[:1]
         for n in names:
@@ -198,6 +207,20 @@ def writeback_base(ops: List[str]) -> Optional[str]:
     return None
 
 
+# Exclusive stores: the first operand is the status register they write.
+STORE_EXCLUSIVE = frozenset(('stxr', 'stxrb', 'stxrh', 'stlxr', 'stlxrb', 'stlxrh', 'stxp', 'stlxp'))
+# LSE atomics that return the old value in their SECOND operand (``ldadd ws, wt, [xn]``);
+# ``cas`` writes its first, ``casp`` its first pair.
+_LSE_LOAD = re.compile(r'(ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp)(a|l|al)?[bh]?$')
+_CASP = re.compile(r'casp(a|l|al)?$')
+# Their store aliases (``stadd ws, [xn]``) write no register.
+_LSE_STORE = re.compile(r'st(add|clr|eor|set|smax|smin|umax|umin)l?[bh]?$')
+# Instructions that read their destination too (they change only some of its bits).
+_READS_DEST = frozenset(('movk', 'bfi', 'bfxil', 'bfm'))
+# Loads that write two registers.
+_PAIR_DESTS = PAIR_LOADS | frozenset(('ldxp', 'ldaxp'))
+
+
 def writes(ins: Insn) -> List[str]:
     """Registers (xN / vN form) *ins* overwrites."""
     mn = ins.mnemonic
@@ -210,18 +233,52 @@ def writes(ins: Insn) -> List[str]:
     wb = writeback_base(ops)
     if wb is not None and wb not in ('xzr', 'sp'):
         out.append(wb)
-    if mn in NO_DEST:
+    if (mn in NO_DEST and mn not in STORE_EXCLUSIVE) or _LSE_STORE.match(mn):
         return out
-    if ops:
-        r = reg_name(ops[0])
-        if r is not None and r != 'xzr' and r != 'sp':
-            out.append(r)
-    if mn in PAIR_LOADS and len(ops) > 1:
-        r = reg_name(ops[1])
+    if ops and ops[0].startswith('{'):
+        dests = _list_regs(ops[0]) if mn.startswith('ld') else []
+    elif _LSE_LOAD.match(mn):
+        dests = ops[1:2]
+    elif mn in _PAIR_DESTS or _CASP.match(mn):
+        dests = ops[:2]
+    else:
+        dests = ops[:1]
+    for d in dests:
+        r = reg_name(d)
         if r is not None and r != 'xzr' and r != 'sp':
             out.append(r)
     return out
 
+
+
+def reads(ins: Insn) -> List[str]:
+    """Registers (xN / vN form) *ins* reads, as :func:`writes` sees its operands: a load its
+    address registers (an LSE atomic also the value it adds / swaps in); a store, compare or
+    test every register; an exclusive store all but its status; a call through a register
+    that register (what the callee reads is :func:`proto.callees.call_reads`'); ``movk`` /
+    ``bfi`` / a lane write also the destination they change only part of; anything else every
+    register but the destination(s)."""
+    mn = ins.mnemonic
+    ops = split_ops(ins.op_str)
+    if mn == 'bl' or mn == 'b' or is_cond_branch(mn):
+        return []
+    mem = [o for o in ops if o.startswith('[')]
+    if mn in CALLS or mn in INDIRECT_BRANCHES:
+        srcs = ops
+    elif mn in STORE_EXCLUSIVE:
+        srcs = ops[1:]
+    elif _LSE_LOAD.match(mn):
+        srcs = ops[:1] + mem
+    elif mn.startswith('cas'):
+        srcs = ops
+    elif (mn in NO_DEST or _LSE_STORE.match(mn) or mn in _READS_DEST
+          or (ops and '[' in ops[0] and not ops[0].startswith('['))):
+        srcs = ops
+    elif mem and mn.startswith('ld'):
+        srcs = mem
+    else:
+        srcs = ops[1:] if writes(ins) else ops
+    return operand_regs(srcs)
 
 SHIFT_MNEMONICS = ('lsr', 'lsl', 'asr')
 

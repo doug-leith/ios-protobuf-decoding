@@ -15,6 +15,7 @@ from macho.classlist import ObjcClass, ClassList
 import proto.extractor as E
 import proto.foreign_detect as FD
 import proto.protoclass_set as PS
+from tests._fakes import NoImage
 
 
 def _cls(va, name, super_va):
@@ -100,15 +101,13 @@ class TestGoogleProtobufNoFalsePositive(unittest.TestCase):
 
 # ── Swift-protobuf + C++ libprotobuf detection ───────────────────────────────
 
-class _SymCtx:
+class _SymCtx(NoImage):
     """Minimal ctx for the symbol-based Swift/C++ detectors: symbol names and no
     sections (so no embedded C++ descriptors)."""
     def __init__(self, names):
         self._names = list(names)
     def iter_symbol_names(self):
         return iter(self._names)
-    def has_section(self, seg, sect):
-        return False
 
 
 # Real conformance-descriptor symbols (from bookdatastored / synthesised siblings).

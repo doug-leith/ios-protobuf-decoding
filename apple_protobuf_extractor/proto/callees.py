@@ -27,10 +27,10 @@ from typing import Dict, NamedTuple, Optional, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
-from proto.arm64_operands import (parse_mem, split_ops, writes, writeback_base, operand_regs, STORE_BYTES,
+from proto.arm64_operands import (parse_mem, split_ops, reads, writes, writeback_base, STORE_BYTES,
                                   PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
                                   INDIRECT_BRANCHES, CALL_ARG_GPRS, ARG_FPRS, CALLS, CALLER_SAVED,
-                                  LOAD_BYTES, PAIR_LOADS, TRAPS,
+                                  TRAPS,
                                   is_cond_branch)
 from proto.arm64cfg import parse_adrp
 
@@ -272,8 +272,6 @@ _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" fo
 #: What a return hands its caller: the result register (a function that does not write v0
 #: returns no floating-point value).
 _RETURN_REGS = frozenset(("x0",))
-#: Instructions that read their destination too (they change only some of its bits).
-_READS_DEST = frozenset(("movk", "bfi", "bfxil", "bfm"))
 
 
 def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
@@ -289,13 +287,11 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
     memo = _ctx_cache(ctx, "_outlined_fragments", dict)
     if target in memo:
         return memo[target]
+    from proto.function_body import function_end      # (function_body imports this module)
     res = None
     try:
-        text = text_holding(ctx, target)
-        starts = ctx.function_starts() if text is not None else []
-        if starts:
-            i = bisect.bisect_right(starts, target)
-            end = starts[i] if i < len(starts) else text.vmaddr + text.vmsize
+        end = function_end(ctx, target) if ctx.function_starts() else None
+        if end is not None:
             body = disasm(ctx, target, max_insns=max(0, (end - target) // 4), stop_at_ret=True)
             if body and body[-1].mnemonic in RETURNS and all(
                     _runs_in_caller(ins) for ins in body[:-1]):
@@ -306,9 +302,9 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
     return res
 
 
-def text_holding(ctx, va: int):
+def text_holding(ctx, va: Optional[int]):
     """The image's ``__TEXT,__text`` section when it holds *va*, else None."""
-    if not ctx.has_section("__TEXT", "__text"):
+    if va is None or not ctx.has_section("__TEXT", "__text"):
         return None
     text = ctx.section("__TEXT", "__text")
     return text if text.vmaddr <= va < text.vmaddr + text.vmsize else None
@@ -454,23 +450,19 @@ def _live_before(ctx, ins, live_after: set, own: frozenset) -> set:
                 live = _live_before(ctx, fi, live, own)
             live.discard("x30")
             return live
-        reads = set(call_reads(ctx, t))
-        if mn != "bl":
-            reads |= {r for r in (_norm_reg(o) for o in ops) if r}   # the target (and modifier)
+        used = set(call_reads(ctx, t)) | set(reads(ins))      # reads(): the target (and modifier)
         if callee_name(ctx, t) in NORETURN:
-            return reads
+            return used
         clob = call_clobbers(ctx, t)
-        return (set(live_after) - set(clob if clob is not None else CALLER_SAVED)) | reads
-    dst = set(writes(ins))
-    if mn in NO_DEST or mn in COMPARE_BRANCHES:
-        src = set(operand_regs(ops[:1] if mn in COMPARE_BRANCHES else ops))
-        if (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
-            src -= _CALLEE_SAVED                        # a prologue spill is not a read
-    elif mn in LOAD_BYTES or mn in PAIR_LOADS:
-        src = set(operand_regs([o for o in ops if "[" in o]))     # the address only
-    else:
-        src = set(operand_regs(ops if mn in _READS_DEST else ops[1:] if dst else ops))
-    return (set(live_after) - dst) | src
+        return (set(live_after) - set(clob if clob is not None else CALLER_SAVED)) | used
+    src = set(reads(ins))
+    if (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
+        src -= _CALLEE_SAVED                            # a prologue spill is not a read
+    if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
+        t = _parse_imm(ops[-1]) if ops else None
+        if t not in own:                                # a conditional tail call
+            src |= set(call_reads(ctx, t))
+    return (set(live_after) - set(writes(ins))) | src
 
 
 #: Functions that never return.

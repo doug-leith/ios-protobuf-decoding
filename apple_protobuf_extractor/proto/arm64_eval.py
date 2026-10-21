@@ -118,10 +118,11 @@ def _eval_cond(cond: str, flags: Nzcv) -> Optional[bool]:
     return None if r is None else bool(r)
 
 
+_SIGN_EXTENDS = {'sxtb': 8, 'sxth': 16, 'sxtw': 32}    # the bits each sign-extends
+
 #: Instructions that set the condition flags.  Any of them the evaluator does not model (or
 #: models only in some operand forms) makes the flags unknown, so a later branch on them is
 #: undecided rather than decided on an earlier comparison's flags.
-_SIGN_EXTENDS = {'sxtb': 8, 'sxth': 16, 'sxtw': 32}    # the bits each sign-extends
 _FLAG_SETTERS = frozenset((
     'cmp', 'cmn', 'tst', 'ccmp', 'ccmn', 'adds', 'subs', 'ands', 'bics', 'adcs', 'sbcs',
     'negs', 'ngcs', 'fcmp', 'fcmpe', 'fccmp', 'fccmpe', 'setf8', 'setf16', 'rmif', 'cfinv',
@@ -1151,11 +1152,13 @@ class Flow:
 
     @staticmethod
     def _call_target(m: "_Machine", ins: Insn) -> Optional[int]:
-        """The address the call ``ins`` reaches under *m*: a ``bl`` immediate, or its register."""
+        """The address the call ``ins`` reaches under *m*: a ``bl`` immediate, or its register
+        (not a frame address, which is no code)."""
         if ins.mnemonic == 'bl':
             return _parse_imm(ins.op_str)
         ops = split_ops(ins.op_str)
-        return m.get(ops[0]) if ops else None
+        v = m.get(ops[0]) if ops else None
+        return None if _is_stack(v) else v
 
     def call_clobbers(self, k: int, target: Optional[int] = None, evaluated: bool = False
                       ) -> Optional[Tuple[str, ...]]:

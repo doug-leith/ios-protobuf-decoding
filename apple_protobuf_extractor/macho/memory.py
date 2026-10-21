@@ -462,6 +462,12 @@ class BinaryContext:
         return list(self._segments)
 
     @property
+    def image_bytes(self) -> bytes:
+        """The image's own bytes in binary mode (the thin slice); ``b''`` cache-native, where
+        every read goes through the cache reader."""
+        return self._data
+
+    @property
     def is_cache_backed(self) -> bool:
         """True if this context reads through a DyldCacheReader (cache-native mode).
 

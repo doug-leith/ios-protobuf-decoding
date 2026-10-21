@@ -131,6 +131,12 @@ class TestCallReads(unittest.TestCase):
                                             ('mov', 'x0, #0'), ('ret', '')])])
         self.assertEqual(got, {'x1', 'x2', 'x3'})
 
+    def test_a_conditional_tail_call_reads_what_its_target_reads(self):
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('cbz', 'x0, #0xa000'), ('mov', 'x0, #0'),
+                                            ('ret', '')])], names={0xa000: '_f'})
+        self.assertEqual(got, set(ABI_ARGS))          # x0 tested, and _f's arguments read
+
     def test_a_return_hands_back_x0(self):
         self.assertEqual(self._reads(blocks=[(0x9000, [('add', 'x1, x22, #8'), ('ret', '')])]),
                          {'x22', 'x0'})

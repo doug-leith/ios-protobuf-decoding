@@ -24,11 +24,10 @@ Those runs are NOT golden-guarded; these assertions are the guard.
 import os
 import unittest
 from tests._listing import insns, layout
-from tests._fakes import NoImage
+from tests._fakes import NoImage, TextImage
 
 import artifacts
-from proto.writer_flow import _image_text_range as WF_image_text_range
-from macho.memory import Segment
+from proto.callees import text_holding
 
 
 # ── offline: the writer flow on hand-built code ──────────────────────────────
@@ -37,14 +36,8 @@ def _asm(*blocks):
     return layout(*blocks)[1]
 
 
-class _ImageCtx(NoImage):
-    """Stand-in context exposing only ``segments`` (what ``_image_text_range`` reads)."""
-    def __init__(self, lo, size):
-        self.segments = [Segment(name="__TEXT", vmaddr=lo, vmsize=size, fileoff=0, filesize=size)]
-
-
 # Image text is [0x1000, 0x2000); 0x9000 is another image's code.
-_CTX = _ImageCtx(0x1000, 0x1000)
+_CTX = TextImage((0x1000, 0x2000))
 # writeTo: entry: self in x0, the writer in x2, kept in x19 across calls
 _KEEP_WRITER = [('mov', 'x19, x2')]
 
@@ -57,7 +50,7 @@ def _flow(*blocks, names=None):
     fd, names = _asm(*blocks), names or {}
     # a fresh context per listing: the evaluator memoises a listing's Flow on its context by
     # address, and every listing here starts at 0x1000
-    wf = WF.WriterFlow(_ImageCtx(0x1000, 0x1000), [])
+    wf = WF.WriterFlow(TextImage((0x1000, 0x2000)), [])
     with mock.patch.object(WF, 'disasm', fd), mock.patch('proto.function_body.disasm', fd), \
             mock.patch.object(WF, 'callee_name', lambda ctx, va: names.get(va)), \
             mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
@@ -66,9 +59,10 @@ def _flow(*blocks, names=None):
 
 
 class TestFlowStaysInImage(unittest.TestCase):
-    def test_image_text_range(self):
-        self.assertEqual(WF_image_text_range(_CTX), (0x1000, 0x2000))
-        self.assertIsNone(WF_image_text_range(NoImage()))      # no __TEXT segment: no bound
+    def test_image_text(self):
+        self.assertIsNotNone(text_holding(_CTX, 0x1800))
+        self.assertIsNone(text_holding(_CTX, 0x9000))            # another image's code
+        self.assertIsNone(text_holding(NoImage(), 0x1800))       # no __text: nothing is in it
 
     def test_tail_call_into_another_images_function_is_a_call(self):
         # `b 0x9000` to a function another image exports (the newer toolchain's direct

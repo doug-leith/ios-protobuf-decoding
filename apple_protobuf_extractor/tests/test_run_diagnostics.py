@@ -240,10 +240,9 @@ class TestForeignRuntimeFailuresAreNotSilent(unittest.TestCase):
     def test_cpp_collection_failure_is_recorded_and_warned(self):
         from proto import foreign
 
-        class Ctx:
-            pass
-        ctx = Ctx()
-        with mock.patch.object(foreign, 'cpp_messages_from_ctx', side_effect=OSError('nope')), \
+        from tests._fakes import NoImage
+        ctx = NoImage()
+        with mock.patch.object(foreign, 'cpp_file_protos', side_effect=OSError('nope')), \
                 mock.patch.object(foreign, 'swift_messages', return_value=[]), \
                 self.assertLogs('proto.foreign', 'WARNING') as logs:
             foreign.collect_foreign_messages(ctx, None)

@@ -13,7 +13,6 @@ evaluator (:mod:`proto.arm64_eval`) is imported inside the functions that run it
 from __future__ import annotations
 import bisect
 import logging
-import re
 from typing import Dict, List, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
@@ -21,8 +20,8 @@ from macho.classlist import ObjcClass
 from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.arm64_operands import (NO_DEST, PAIR_LOADS, INDIRECT_BRANCHES, RETURNS, TRAPS,
-                                  imm_operand, is_cond_branch, split_ops)
+from proto.arm64_operands import (INDIRECT_BRANCHES, RETURNS, TRAPS, imm_operand, is_cond_branch,
+                                  reads, split_ops)
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -70,17 +69,6 @@ def _find_readfrom_c_func(
     first = region.calls[0]
     if first.args.get('x0') == SELF and first.args.get('x1') == READER:
         return first.target
-    return None
-
-
-def _section_name(ctx: BinaryContext, va: int) -> Optional[str]:
-    """Name of the section containing *va*, or ``None`` if unmapped."""
-    for seg in ctx.segments:
-        if seg.vmaddr <= va < seg.vmaddr + seg.vmsize:
-            for sec in seg.sections:
-                if sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
-                    return sec.name
-            return None
     return None
 
 
@@ -141,23 +129,6 @@ def _index_bound(flow, k: int):
     return None
 
 
-_GPR = re.compile(r'\b[xw](\d+)\b')
-
-
-def _reads(ins) -> set:
-    """The general registers (``xN`` form) *ins* reads: every register operand but the
-    destination(s)."""
-    ops = split_ops(ins.op_str)
-    mn = ins.mnemonic
-    if mn in NO_DEST or mn == 'movk' or is_cond_branch(mn):
-        src = ops
-    elif mn in PAIR_LOADS:
-        src = ops[2:]
-    else:
-        src = ops[1:]
-    return {f"x{m}" for o in src for m in _GPR.findall(o)}
-
-
 def _sources(flow, kb: int, reg: str) -> set:
     """The definitions *reg*'s value at ``insns[kb]`` is computed from, transitively by
     reaching definitions: instruction indices, and ``('entry', r)`` for a register's value on
@@ -172,7 +143,7 @@ def _sources(flow, kb: int, reg: str) -> set:
                 continue
             out.add(node)
             if d >= 0:
-                work.extend((d, s) for s in _reads(flow.insns[d]))
+                work.extend((d, s) for s in reads(flow.insns[d]) if s.startswith('x'))
     return out
 
 
