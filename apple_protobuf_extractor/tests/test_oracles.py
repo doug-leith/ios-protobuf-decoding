@@ -261,6 +261,61 @@ class TestObjcMessagesAgainstEmulation(unittest.TestCase):
             self.assertTrue(any("ALCLBodyMetrics" in r[1] for r in rep.findings[kind]), kind)
 
 
+@unittest.skipUnless(IPHONE8_CACHE and _unicorn(), "iPhone 8 cache or unicorn not available")
+class TestCacheImagesAgainstEmulation(unittest.TestCase):
+    """The oracles on images of the iPhone 8 dyld cache (:class:`oracles.flow_emulation.CacheMachine`:
+    other images' memory read from the cache, calls into them answered at their exports):
+    CoreParsec (maps, oneofs) and CoreLocationProtobuf (packed arrays) through writeTo:, readFrom:
+    and AsString:, and Flow over a sample of CoreLocationProtobuf's functions; GeoServices (inline
+    C structs, lazily read messages) too with MACHO_TEST_ORACLE_FULL=1."""
+
+    IMAGES = ("CoreParsec", "CoreLocationProtobuf") + (("GeoServices",) if FULL else ())
+
+    @classmethod
+    def setUpClass(cls):
+        import contextlib
+        import io
+        from macho.dyld_cache import DyldCacheReader
+        from macho.load import load_cache_image
+        from proto import extractor as E
+        reader = DyldCacheReader(IPHONE8_CACHE)
+        cls.images = {}
+        for image in cls.IMAGES:
+            img = load_cache_image(reader, reader.find_image_header(image))
+            with contextlib.redirect_stdout(io.StringIO()):
+                cls.images[image] = (img, E.extract_all(img.ctx, img.st, img.cl))
+
+    def _each(self, module):
+        for image, (img, msgs) in self.images.items():
+            with self.subTest(image=image):
+                rep = module.compare(img.ctx, img.st, img.cl, msgs)
+                self.assertEqual(dict(rep.findings), {})
+                yield image, rep
+
+    def test_writeto(self):
+        from oracles import writer_emulation as W
+        for image, rep in self._each(W):
+            self.assertEqual(rep.stats["runs returned"], rep.stats["messages"])
+            if image == "CoreParsec":
+                self.assertGreaterEqual(rep.stats["nested fields"], 4)     # its maps
+
+    def test_readfrom(self):
+        from oracles import reader_emulation as RD
+        for _image, rep in self._each(RD):
+            self.assertEqual(rep.stats["runs returned"], rep.stats["fields run"])
+
+    def test_enums(self):
+        from oracles import enum_emulation as EN
+        list(self._each(EN))
+
+    def test_flow(self):
+        from oracles.flow_emulation import compare
+        img, _msgs = self.images["CoreLocationProtobuf"]
+        rep = compare(img.ctx, img.ctx.function_starts()[::4 if FULL else 20], runs=4)
+        self.assertGreater(rep.stats["known values"], 100_000)
+        self.assertEqual(dict(rep.findings), {})
+
+
 @unittest.skipUnless(IPHONE8_CACHE, "iPhone 8 cache not available")
 class TestMethodNamesAgainstSymbols(unittest.TestCase):
     """The class-list parser's method names against ``.symbols`` (TODO #123): none unnamed, none

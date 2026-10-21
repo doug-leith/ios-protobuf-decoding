@@ -1,17 +1,19 @@
 """The ObjC messages the extractor emits against concrete runs of each class's ``-writeTo:`` in an
 emulator (Unicorn): what really reaches the ``PBDataWriter``.
 
-A run calls ``-[Cls writeTo:]`` on a stand-in ``self`` whose every has-bit is set, whose object
-ivars are distinct stand-in objects, whose repeated C arrays (``{list, count, size}``) hold two
-elements and whose scalars are small numbers.  The ProtocolBuffer runtime's C functions record
-what they are handed -- ``PBDataWriterWrite<T>Field(writer, value, tag)``, by AAPCS64 the value in
-x1 (v0 for a float / double, the tag then in x1) and the tag in x2; ``PBDataWriterPlaceMark
-(writer, &mark, tag)`` opens a length-delimited field (a submessage, a packed array) that
-``PBDataWriterRecallMark`` closes; ``PBDataWriterWriteSubmessage(writer, message, tag)`` writes a
-submessage whole.  ``objc_msgSend`` to ``self`` runs the class's own method
+A run calls ``-[Cls writeTo:]`` on a stand-in ``self`` built in memory -- every has-bit set, no
+reader it was read lazily from and no unknown fields (``PBDataReader`` / ``PBUnknownFields`` ivars
+nil), the other object ivars distinct stand-in objects, whose repeated C arrays (``{list, count,
+size}``) hold two elements and whose scalars are small numbers. The ProtocolBuffer runtime's C
+functions record what they are handed -- ``PBDataWriterWrite<T>Field(writer, value, tag)``, by
+AAPCS64 the value in x1 (v0 for a float / double, the tag then in x1) and the tag in x2;
+``PBDataWriterPlaceMark (writer, &mark, tag)`` opens a length-delimited field (a submessage, a
+packed array) that ``PBDataWriterRecallMark`` closes; ``PBDataWriterWriteSubmessage(writer,
+message, tag)`` writes a submessage whole. ``objc_msgSend`` to ``self`` runs the class's own method
 (its superclasses' in the image); to a stand-in object it answers ``writeTo:`` (a submessage),
-``count`` / ``objectAtIndex:`` / fast enumeration (two elements, themselves stand-ins).  Any other
-call returns 0; the ARC calls return their argument (``objc_retain_xN``: xN), a release nothing.
+``count`` / ``objectAtIndex:`` / fast enumeration (two elements, themselves stand-ins) and
+``enumerateKeysAndObjectsUsingBlock:`` (the block run for two entries). Any other call returns 0;
+the ARC calls return their argument (``objc_retain_xN``: xN), a release nothing.
 
 Which ivar a tag's value comes from: a stand-in object is its ivar's (an element, its array's);
 a scalar's is found by a second run with that ivar alone changed -- the tags whose writes change
@@ -35,6 +37,8 @@ from proto.callees import RETURNS_ARGUMENT
 
 OBJ_BASE, OBJ_SIZE, OBJ_STRIDE = 0x700000000, 0x400000, 0x100   # the stand-in objects
 SELF = 0x780000000
+TRAMPOLINE = 0x7b0000000             # code that calls a block for each entry of a dictionary
+LITERAL = TRAMPOLINE + 0x100
 NO_TAG = 0xFFFFFFFF                  # a writer's field number -1: the value alone (a packed element)
 WRITER = 0x790000000
 _X = [getattr(A, f"UC_ARM64_REG_X{i}") for i in range(29)]
@@ -180,11 +184,39 @@ class Run:
                 uc.mem_write(state, struct.pack("<QQQ", 1, buf, OBJ_BASE))   # state, items, mutations
                 self.enumerated[(recv, state)] = True
                 result = 2
+        elif sel == "enumerateKeysAndObjectsUsingBlock:":
+            self._enumerate(uc, recv, what, x[2])
+            return
         elif sel in ("length", "isEqual:", "isEqualToString:"):
             result = 1
+        elif sel and sel.endswith("Value") and sel[0].islower():   # NSNumber: intValue ...
+            result = 2
+            uc.reg_write(_D0, struct.unpack("<Q", struct.pack("<d", 2.0))[0])
         else:
             self.unanswered["-[obj %s]" % sel] += 1
         uc.reg_write(_X[0], result)
+
+    def _enumerate(self, uc, recv, what, block):
+        """``[dictionary enumerateKeysAndObjectsUsingBlock:block]`` over two entries (stand-ins):
+        a trampoline calls the block's invoke (``block + 16``) with (block, key, value, &stop)
+        for each, then returns to the send's caller."""
+        lr = uc.reg_read(A.UC_ARM64_REG_X30)
+        invoke = struct.unpack("<Q", bytes(uc.mem_read(block + 16, 8)))[0]
+        data = TRAMPOLINE + 0x200
+        stop = data + 0x60
+        entries = [(self.obj(("key", what[1], i)), self.obj(("value", what[1], i))) for i in range(2)]
+        blob = b"".join(struct.pack("<QQQQ", block, k, v, stop) for k, v in entries)
+        uc.mem_write(data, blob + struct.pack("<QQQ", invoke, lr, 0))
+        code = []
+        for i in range(2):
+            code += [_ldr_literal(9, TRAMPOLINE + 4 * len(code), LITERAL),
+                     _ldp(0, 1, 9, 32 * i), _ldp(2, 3, 9, 32 * i + 16),
+                     _ldr(16, 9, 64), 0xD63F0200]                       # blr x16
+        code += [_ldr_literal(9, TRAMPOLINE + 4 * len(code), LITERAL), _ldr(30, 9, 72),
+                 0xD65F03C0]                                              # ret
+        uc.mem_write(TRAMPOLINE, struct.pack("<%dI" % len(code), *code))
+        uc.mem_write(LITERAL, struct.pack("<Q", data))
+        uc.reg_write(A.UC_ARM64_REG_PC, TRAMPOLINE)
 
     def go(self):
         uc = self.uc
@@ -208,10 +240,26 @@ def _ensure_regions(machine):
     if getattr(machine, "_writer_regions", False):
         return
     uc = machine.uc
-    for base, size in ((OBJ_BASE, OBJ_SIZE), (SELF, 0x100000), (WRITER, 0x1000)):
+    for base, size in ((OBJ_BASE, OBJ_SIZE), (SELF, 0x100000), (WRITER, 0x1000),
+                       (TRAMPOLINE, 0x1000)):
         uc.mem_map(base, size)
     # (each import's block starts with a ret: a call into it returns once the hook has answered)
     machine._writer_regions = True
+
+
+def _ldr_literal(rt, pc, target):
+    """``ldr x<rt>, <target>`` (PC-relative literal) at *pc*."""
+    return 0x58000000 | (((target - pc) // 4) & 0x7FFFF) << 5 | rt
+
+
+def _ldp(rt, rt2, rn, off):
+    """``ldp x<rt>, x<rt2>, [x<rn>, #off]``."""
+    return 0xA9400000 | ((off // 8) & 0x7F) << 15 | rt2 << 10 | rn << 5 | rt
+
+
+def _ldr(rt, rn, off):
+    """``ldr x<rt>, [x<rn>, #off]``."""
+    return 0xF9400000 | (off // 8) << 10 | rn << 5 | rt
 
 
 def _method(cl, cls, sel):
@@ -241,7 +289,9 @@ def _values(run_obj, ivars, changed=None):
     vals = []
     for i, iv in enumerate(ivars):
         enc, size, bump = iv.type_enc, max(iv.size, 1), iv is changed
-        if enc.startswith("@"):
+        if enc in _NOT_BUILT:                              # a message built in memory has none
+            vals.append((iv, bytes(8)))
+        elif enc.startswith("@"):
             vals.append((iv, struct.pack("<Q", run_obj.obj(("ivar", iv.name, bump)))))
         elif enc.startswith("{") and "b" in enc.split("=", 1)[-1] and '"' in enc and \
                 all(t.startswith("b") for t in enc.split('"')[2::2] if t):
@@ -301,6 +351,9 @@ def observe(machine, cl, cls, seed=0):
 
 
 _INTEGERS = set("cCsSiIlLqQ")
+# what a message read lazily from data keeps (its reader, the fields it did not know): nil in a
+# message built in memory, whose writeTo: then writes its fields rather than copying its bytes
+_NOT_BUILT = ('@"PBDataReader"', '@"PBUnknownFields"')
 
 
 def cover(machine, cl, cls, tags, wanted, seed=0):
@@ -328,14 +381,15 @@ def _field_name(ivar):
     return ivar[1:] if ivar.startswith("_") else ivar
 
 
-def compare(ctx, st, cl, messages=None, report=None):
-    """Findings for every emitted ObjC message whose class has a ``writeTo:`` in the image."""
+def compare(ctx, st, cl, messages=None, report=None, known=None):
+    """Findings for every emitted ObjC message (of *messages*, default all) whose class has a
+    ``writeTo:`` in the image; *known*, the messages a nested field may name (default the same)."""
     from oracles.flow_emulation import Report
     from proto import extractor as E
     report = report or Report()
     machine = make_machine(ctx)
     msgs = messages if messages is not None else E.extract_all(ctx, st, cl)
-    by_name = {m.name: m for m in msgs}
+    by_name = {k: m for m in (known or msgs) for k in (m.class_name, m.name)}
     for msg in msgs:
         cls = cl.find(msg.class_name)
         if cls is None or _method(cl, cls, "writeTo:") is None:
@@ -352,7 +406,9 @@ def compare(ctx, st, cl, messages=None, report=None):
         report.stats["runs " + base.ended.split(":")[0]] += 1
         for name, n in base.unanswered.items():
             report.unanswered[name] += n
-        fields = {f.number: f for f in msg.fields}
+        # a subclass the extractor emits as serialised by its superclass's message: those fields
+        owner = by_name.get(msg.serialised_by) if msg.serialised_by and not msg.fields else None
+        fields = {f.number: f for f in (owner or msg).fields}
         for tag, (kinds, count, deps) in sorted(tags.items(), key=lambda t: (t[0] is None, t[0] or 0)):
             report.stats["tags written"] += 1
             f = fields.get(tag)

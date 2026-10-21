@@ -1,8 +1,10 @@
 """The ObjC messages the extractor emits against concrete runs of each class's ``-readFrom:`` in an
 emulator (Unicorn): where the class itself puts each field it reads.
 
-For each emitted field a run hands ``-[Cls readFrom:]`` a stand-in ``PBDataReader`` holding a
-message of that field alone (twice when it is repeated), encoded as the emitted type says: a
+For each emitted field a run hands ``-[Cls readFrom:]`` -- and then ``-readAll:``, where a class
+reads lazily (GeoServices': ``readFrom:`` keeps the reader, ``readAll:`` reads the fields) -- a
+stand-in ``PBDataReader`` (answering ``position`` / ``length`` / ``seekToOffset:`` itself) holding
+a message of that field alone (twice when it is repeated), encoded as the emitted type says: a
 varint (zigzag for ``sint``), 4 or 8 fixed bytes, or a length-delimited string, bytes or empty
 submessage.  The reader's ivars are where its imported offset variables
 (``_OBJC_IVAR_$_PBDataReader._bytes`` ...) say; the ProtocolBuffer runtime's C functions do what
@@ -14,10 +16,10 @@ the class constructors (``alloc``, ``new``, ``array``, ...) make a stand-in inst
 handed, ``objc_storeStrong`` / ``objc_setProperty_*`` store, ``objc_msgSend`` to self runs the
 class's own method and to a stand-in answers ``init`` / ``readFrom:`` / ``addObject:`` / ``copy``.
 
-What must hold for each field: the class reads it (does not skip it), into the ivar the field is
-named for; a scalar decodes to the value encoded (a field read as another integer encoding or
+What must hold for each field: the class reads it into the ivar the field is named for (a lazy
+class may skip a field in one pass and read it in the other) (what an empty message's run changes too -- the reader kept, marks, locks -- aside); a scalar decodes to the value encoded (a field read as another integer encoding or
 width lands as another value); a message field allocates the class the field's type names; a
-repeated field is appended to, twice.
+repeated field is appended to, twice (an inline C struct's array: its count 2).
 
     python -m oracles.reader_emulation BINARY"""
 import collections
@@ -63,8 +65,10 @@ def _is_enum(f):
     return (f.type_class or "").startswith("ENUM:")
 
 
-def encode(f):
-    """``(wire bytes of one value, the value an ivar should hold)`` for field *f* as emitted."""
+def encode(f, structs=None):
+    """``(wire bytes of one value, the value an ivar should hold)`` for field *f* as emitted; a
+    field of an inline C struct (*structs*: class name -> its emitted message) carries each of
+    its members, which the class reads into the struct in place."""
     t, tag = f.type_name, f.number
     if t in _VARINT or _is_enum(f):
         v = 1 if t == "bool" else VALUE
@@ -77,6 +81,9 @@ def encode(f):
         raw = struct.pack("<d", 1.5) if t == "double" else struct.pack("<Q", VALUE)
         return _varint(tag << 3 | 1) + raw, struct.unpack("<Q", raw)[0]
     body = b"s" if t == "string" else b"\x01\x02" if t == "bytes" else b""
+    nested = (structs or {}).get(f.type_class or t)
+    if nested is not None:
+        body = b"".join(encode(g, structs)[0] for g in nested.fields)
     return _varint(tag << 3 | 2) + _varint(len(body)) + body, None
 
 
@@ -87,6 +94,7 @@ class Run:
         import random
         self.m, self.cl, self.cls, self.budget = machine, cl, cls, budget
         self.objects, self.appended, self.repeated = {}, [], []
+        self.heap = OBJ_BASE + OBJ_SIZE // 2           # malloc's bump allocator
         self.skipped, self.unanswered = [], collections.Counter()
         uc = self.uc = machine.reset(random.Random(seed))
         _ensure_regions(machine)
@@ -159,6 +167,12 @@ class Run:
             kind = name[len("_PBRepeated"):-len("Add")]
             v = uc.reg_read(_D0) if kind in ("Double", "Float") else x[1]
             self.repeated.append((x[0] - SELF, kind, v))
+        elif name in ("_malloc", "_calloc", "_realloc"):   # a bump allocator (calloc: zeroed)
+            size = x[0] * x[1] if name == "_calloc" else x[1] if name == "_realloc" else x[0]
+            result = self.heap
+            self.heap += (max(size, 16) + 15) & ~15
+            if name == "_realloc" and x[0]:
+                uc.mem_write(result, bytes(uc.mem_read(x[0], min(size, 0x1000))))
         elif name in ("_objc_alloc", "_objc_alloc_init", "_objc_opt_new"):
             result = self.obj(("instance", self._class_name(x[0])))
         elif name == "_objc_storeStrong":
@@ -204,6 +218,21 @@ class Run:
                 uc.reg_write(A.UC_ARM64_REG_PC, imp)
                 return
             self.unanswered["-[self %s]" % sel] += 1
+        elif recv == READER:                     # the reader's own messages
+            if sel == "position":
+                result = self._get("_pos")
+            elif sel == "length":
+                result = self._get("_length")
+            elif sel == "seekToOffset:":
+                self._set("_pos", x[2])
+                result = 1
+            elif sel in ("hasMoreData", "isAtEnd"):
+                more = self._get("_pos") < self._get("_length")
+                result = int(more if sel == "hasMoreData" else not more)
+            elif sel in ("copy", "retain", "autorelease"):
+                result = READER
+            else:
+                self.unanswered["-[reader %s]" % sel] += 1
         elif recv in self.objects:
             if sel in ("init", "copy", "mutableCopy", "autorelease", "retain"):
                 result = recv
@@ -228,6 +257,14 @@ class Run:
         try:
             uc.emu_start(_method(self.cl, self.cls, "readFrom:"), RET_SENTINEL, count=self.budget)
             self.ended = "returned" if uc.reg_read(A.UC_ARM64_REG_PC) == RET_SENTINEL else "budget"
+            read_all = _method(self.cl, self.cls, "readAll:")
+            if self.ended == "returned" and read_all is not None:   # a lazy message: its fields
+                uc.reg_write(_X[0], SELF)                             # are read when asked for
+                uc.reg_write(_X[2], 1)
+                uc.reg_write(A.UC_ARM64_REG_X30, RET_SENTINEL)
+                uc.emu_start(read_all, RET_SENTINEL, count=self.budget)
+                if uc.reg_read(A.UC_ARM64_REG_PC) != RET_SENTINEL:
+                    self.ended = "budget"
         except UcError as e:
             self.ended = "fault: %s" % e
         finally:
@@ -280,11 +317,14 @@ def landed(run, ivars):
     return out
 
 
-def compare(ctx, st, cl, messages=None, report=None):
+def compare(ctx, st, cl, messages=None, report=None, known=None):
+    """Findings for every emitted ObjC message (of *messages*, default all) with a ``readFrom:``;
+    *known*, the messages a field's inline C struct may be (default the same)."""
     from proto import extractor as E
     report = report or Report()
     machine = make_machine(ctx)
     msgs = messages if messages is not None else E.extract_all(ctx, st, cl)
+    structs = {m.class_name: m for m in (known or msgs) if m.inline_struct}
     for msg in msgs:
         cls = cl.find(msg.class_name)
         if cls is None or _method(cl, cls, "readFrom:") is None:
@@ -292,6 +332,8 @@ def compare(ctx, st, cl, messages=None, report=None):
         ivars = _all_ivars(cl, cls)
         by_name = {iv.name: iv for iv in ivars}
         report.stats["messages"] += 1
+        # what reading changes whatever the message holds (the reader kept, its marks, locks)
+        bookkeeping = set(landed(Run(machine, cl, cls, b"").go(), ivars))
         for f in msg.fields:
             if f.map_key_type:
                 report.stats["map fields not run"] += 1
@@ -300,20 +342,26 @@ def compare(ctx, st, cl, messages=None, report=None):
             if f.type_name == "bytes" and f.type_inference_note:
                 report.stats["a flagged bytes filler not run (LIMITATIONS.md (2))"] += 1
                 continue
-            one, want = encode(f)
+            one, want = encode(f, structs)
             run = Run(machine, cl, cls, one * (2 if rep_label else 1)).go()
             where = "%s #%d %s (%s)" % (msg.class_name, f.number, f.name, f.type_name)
             report.stats["fields run"] += 1
             report.stats["runs " + run.ended.split(":")[0]] += 1
             for n, c in run.unanswered.items():
                 report.unanswered[n] += c
-            if run.skipped:
-                report.find("an emitted field the class skips", 0, where, key=where)
-                continue
-            changed = landed(run, ivars)
+            changed = {k: v for k, v in landed(run, ivars).items() if k not in bookkeeping}
             ivar = "_" + f.name if "_" + f.name in by_name else f.name
+            struct_type = (f.type_class or f.type_name) in structs
+            count = "_%sCount" % f.name                  # a repeated C struct's element count
+            if struct_type and rep_label:
+                got = int.from_bytes(changed.get(count, b"\0")[:8], "little")
+                if ivar not in changed or got != 2:
+                    report.find("a repeated field not appended twice", 0,
+                                "%s: %s %d" % (where, count, got), key=where)
+                continue
             if ivar not in changed and not (rep_label and (run.repeated or run.appended)):
-                report.find("a field read into another ivar (or none)", 0,
+                report.find("an emitted field the class skips" if run.skipped else
+                            "a field read into another ivar (or none)", 0,
                             "%s: changed %s" % (where, sorted(changed)), key=where)
                 continue
             iv = by_name.get(ivar)
@@ -335,13 +383,15 @@ def compare(ctx, st, cl, messages=None, report=None):
                                 "%s: encoded %#x, appended %s" % (where, want, [hex(v) for v in vals]),
                                 key=where)
             made = [w[1] for w in run.objects.values() if w[0] == "instance"]
-            if f.type_class and not _is_enum(f) and f.type_name not in _VARINT | _FIXED32 | \
-                    _FIXED64 | {"string", "bytes"}:
+            if f.type_class and not _is_enum(f) and not struct_type and f.type_name not in \
+                    _VARINT | _FIXED32 | _FIXED64 | {"string", "bytes"}:
                 report.stats["message fields"] += 1
                 if f.type_class not in made:
                     report.find("a message field that allocates another class", 0,
                                 "%s: type %s, allocated %s" % (where, f.type_class, made),
                                 key=where)
+            elif struct_type:
+                report.stats["inline struct fields"] += 1
     return report
 
 

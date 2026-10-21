@@ -26,7 +26,8 @@ import random
 import struct
 import sys
 
-from unicorn import Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_UNMAPPED
+from unicorn import (Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_HOOK_MEM_UNMAPPED,
+                     UC_HOOK_MEM_WRITE)
 from unicorn import arm64_const as A
 
 from proto.arm64_eval import Flow, _ENTRY, _STACK_TOP, _is_stack, _is_symbolic
@@ -43,6 +44,9 @@ HEAP_BASE, HEAP_SIZE = 0x500000000, 0x100000
 RET_SENTINEL = 0x6ffff0000000                  # the caller's return address
 BIND_BASE, BIND_STRIDE = 0x600000000, 0x40     # where each import's bound slot points
 RET = struct.pack("<I", 0xd65f03c0)            # an import block's first word: a callee's return
+# where the oracles put their stand-ins (objects, self, the writer / reader, its bytes): never
+# mapped on demand
+RESERVED = (0x700000000, 0x7c0000000)
 CALLER_SAVED = [f"x{i}" for i in range(19)] + [f"v{i}" for i in range(8)] + \
     [f"v{i}" for i in range(16, 32)]
 _X = {f"x{i}": getattr(A, f"UC_ARM64_REG_X{i}") for i in range(29)}
@@ -53,8 +57,9 @@ MASK64 = (1 << 64) - 1
 
 class Machine:
     """One emulator with the image mapped (each segment's bytes, its rebases applied), reset for
-    each run: the writable segments restored, the stack and heap random, any page mapped on
-    demand dropped."""
+    each run: the pages a run wrote of the image's writable segments restored, the stack and heap
+    random, each page mapped on demand given its first contents again (a page is mapped once:
+    unmapping makes Unicorn drop the code it has translated)."""
 
     def __init__(self, ctx):
         self.ctx = ctx
@@ -85,7 +90,13 @@ class Machine:
         if self.bind_size:
             uc.mem_map(BIND_BASE, self.bind_size)
         uc.mem_map(RET_SENTINEL, PAGE)
-        self.on_demand = []
+        self._paging()
+
+    def _paging(self):
+        """The pages mapped on demand, and the record of which writable pages a run writes."""
+        uc = self.uc
+        self.on_demand = {}                     # page -> its first contents (None: random words)
+        self.dirty = set()
         self.rng = random.Random(0)
         # random memory contents, made once (a run picks one for its stack and one for its heap)
         self.fillers = [random_words(random.Random(i), max(STACK_SIZE, HEAP_SIZE)) for i in range(4)]
@@ -93,25 +104,44 @@ class Machine:
         def unmapped(uc_, _access, addr, _size, _value, _data):
             page = addr & ~(PAGE - 1)
             self.bad = addr
-            if page >= 1 << 47:
+            if page >= 1 << 47 or RESERVED[0] <= page < RESERVED[1]:
                 return False
+            first = self._first_contents(page)
             try:
                 uc_.mem_map(page, PAGE)
-                uc_.mem_write(page, random_words(self.rng, PAGE))
+                uc_.mem_write(page, first if first is not None else self._random_page(page))
             except UcError:
                 return False
-            self.on_demand.append(page)
+            self.on_demand[page] = first
             return True
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, unmapped)
+
+        def written(_uc, _access, addr, size, _value, _data):
+            self.dirty.add(addr & ~(PAGE - 1))
+            self.dirty.add((addr + size - 1) & ~(PAGE - 1))
+        for va, data in self.writable:
+            uc.hook_add(UC_HOOK_MEM_WRITE, written, begin=va, end=va + len(data) - 1)
+
+    def _first_contents(self, page):
+        """What a page mapped on demand holds first: random words (None)."""
+        return None
+
+    def _random_page(self, page):
+        filler = self.fillers[(page // PAGE) % len(self.fillers)]
+        at = (page // PAGE * PAGE) % (len(filler) - PAGE)
+        return filler[at:at + PAGE]
 
     def reset(self, rng):
         uc = self.uc
         self.rng = rng
-        for page in self.on_demand:
-            uc.mem_unmap(page, PAGE)
-        self.on_demand = []
-        for va, data in self.writable:
-            uc.mem_write(va, data)
+        for page, first in self.on_demand.items():
+            uc.mem_write(page, first if first is not None else self._random_page(page))
+        for page in self.dirty:
+            for va, data in self.writable:
+                lo, hi = max(page, va), min(page + PAGE, va + len(data))
+                if lo < hi:
+                    uc.mem_write(lo, data[lo - va:hi - va])
+        self.dirty = set()
         uc.mem_write(STACK_BASE, self.fillers[rng.randrange(len(self.fillers))][:STACK_SIZE])
         uc.mem_write(HEAP_BASE, self.fillers[rng.randrange(len(self.fillers))][:HEAP_SIZE])
         if self.bind_size:                      # each import's block: random words after a ret
@@ -176,33 +206,31 @@ class CacheMachine(Machine):
         uc.mem_map(STACK_BASE, STACK_SIZE)
         uc.mem_map(HEAP_BASE, HEAP_SIZE)
         uc.mem_map(RET_SENTINEL, PAGE)
-        self.on_demand, self.names = [], {}
-        self.rng = random.Random(0)
-        self.fillers = [random_words(random.Random(i), max(STACK_SIZE, HEAP_SIZE)) for i in range(4)]
+        self.names = {}
+        self._paging()
 
-        def unmapped(uc_, _access, addr, _size, _value, _data):
-            page = addr & ~(PAGE - 1)
-            self.bad = addr
-            if page >= 1 << 47:
-                return False
-            raw = self.reader.read_raw(page, PAGE) if self.reader.has_vmaddr(page) else None
-            try:
-                uc_.mem_map(page, PAGE)
-                uc_.mem_write(page, self.slide.apply(page, raw) if raw and len(raw) == PAGE
-                              else random_words(self.rng, PAGE))
-            except UcError:
-                return False
-            self.on_demand.append(page)
-            return True
-        uc.hook_add(UC_HOOK_MEM_UNMAPPED, unmapped)
+    def _first_contents(self, page):
+        """A page of the cache: its bytes with their pointers decoded; elsewhere random words."""
+        raw = self.reader.read_raw(page, PAGE) if self.reader.has_vmaddr(page) else None
+        return self.slide.apply(page, raw) if raw and len(raw) == PAGE else None
 
     def _map(self, lo, hi):
-        """Map [lo, hi), skipping the pages a neighbouring segment has mapped already."""
-        for page in range(lo, hi, PAGE):
-            try:
-                self.uc.mem_map(page, PAGE)
-            except UcError:
-                pass
+        """Map [lo, hi) -- in one piece, or around the pages a neighbouring segment mapped."""
+        try:
+            self.uc.mem_map(lo, hi - lo)
+            return
+        except UcError:
+            pass
+        mapped = [(b, e) for b, e, _p in self.uc.mem_regions()]
+        page = lo
+        while page < hi:
+            covering = next((e for b, e in mapped if b <= page <= e), None)
+            if covering is not None:
+                page = covering + 1
+                continue
+            end = min([hi] + [b for b, _e in mapped if b > page])
+            self.uc.mem_map(page, end - page)
+            page = end
 
     def callee_name(self, address):
         if address not in self.names:
