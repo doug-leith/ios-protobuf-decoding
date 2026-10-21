@@ -49,8 +49,10 @@ class TestSelectorValidation(unittest.TestCase):
         self.assertFalse(_is_valid_selector('some thing'))
         self.assertFalse(_is_valid_selector('foo{bar}'))
 
-    def test_too_long_rejected(self):
-        self.assertFalse(_is_valid_selector('a' * 201))
+    def test_no_length_limit(self):
+        # a many-argument initialiser's selector runs to hundreds of characters
+        self.assertTrue(_is_valid_selector('a' * 201))
+        self.assertTrue(_is_valid_selector('initWith:' + 'x:' * 300))
 
     def test_max_length_accepted(self):
         self.assertTrue(_is_valid_selector('a' * 200))

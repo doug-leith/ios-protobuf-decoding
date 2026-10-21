@@ -1185,6 +1185,20 @@ class TestListing(unittest.TestCase):
 
 
 
+
+class TestVisitTypeReplacesAGuess(unittest.TestCase):
+    """The Visitor method a field is written with names its scalar type; it replaces a guessed
+    filler (`repeated bytes` with a type note) as well as an untyped field (swift session, #122)."""
+
+    def test_a_guess_is_replaced_and_its_note_cleared(self):
+        f = S.SwiftField(1, "scores", proto_type="repeated bytes", type_note="type not recovered")
+        g = S.SwiftField(2, "name", proto_type="string")
+        m = S.SwiftMessage("M", "Msg", fields=[f, g])
+        S._attach_visit_types(m, [(1, "repeated float"), (2, "bytes")])
+        self.assertEqual((f.proto_type, f.type_note), ("repeated float", None))
+        self.assertEqual(g.proto_type, "string")              # a decoded type is kept
+
+
 def _pegasus_path():
     try:
         import artifacts

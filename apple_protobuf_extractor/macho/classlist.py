@@ -529,7 +529,11 @@ def _parse_relative_method(
     # which overshoots the local __objc_methname into unrelated data, leaving
     # name=None for cache images that lack a .symbols sub-cache.)
     rel_sel_base = getattr(ctx, '_rel_sel_base', None)
-    if has_direct and rel_sel_base is not None:
+    # With the base known it is the only reading of a direct selector: va + nameOffset is then no
+    # selector address, and reading a string there picks up the tail of another (iPhone 8
+    # GeoServices: 'te', 'on:', 'precated' for long initialiser selectors once rejected).
+    from_base = has_direct and rel_sel_base is not None
+    if from_base:
         try:
             candidate = ctx.read_cstring(rel_sel_base + name_rel)
             if _is_valid_selector(candidate):
@@ -542,7 +546,7 @@ def _parse_relative_method(
         # Step 1 — check whether sel_ref_va is directly in __objc_methname
         # (works for both direct and non-direct formats when the selector
         # string has been inlined into the binary's own methname section).
-        if name is None and ctx.has_section('__TEXT', '__objc_methname'):
+        if name is None and not from_base and ctx.has_section('__TEXT', '__objc_methname'):
             mn = ctx.section('__TEXT', '__objc_methname')
             if mn.vmaddr <= sel_ref_va < mn.vmaddr + mn.vmsize:
                 candidate = ctx.read_cstring(sel_ref_va)
@@ -558,7 +562,7 @@ def _parse_relative_method(
         # routes through the cache reader and can reach the unified selector
         # pool.  For a plain binary context, addresses outside mapped segments
         # raise ValueError, which the outer except catches (leaving name=None).
-        if name is None and has_direct:
+        if name is None and has_direct and not from_base:
             candidate = ctx.read_cstring(sel_ref_va)
             if _is_valid_selector(candidate):
                 name = candidate

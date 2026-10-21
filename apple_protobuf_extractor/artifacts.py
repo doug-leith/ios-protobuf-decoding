@@ -114,6 +114,20 @@ def disk_image_dir():
     return os.path.join(data_dir(), "disk_image")
 
 
+def ios27_cache_dir():
+    """iOS 27 cache directory: ``MACHO_TEST_IOS27_CACHE``, else ``<repo>/ios27_data/dylib``."""
+    return os.environ.get("MACHO_TEST_IOS27_CACHE", "").strip() or \
+        os.path.join(REPO_ROOT, "ios27_data", "dylib")
+
+
+def remote_mirror_lib():
+    """Apple's Swift Remote Mirror library (``libswiftRemoteMirror.dylib``, from a swift.org
+    toolchain), the oracle of :mod:`oracles.swift_mirror`: ``MACHO_REMOTE_MIRROR``, else
+    ``<repo>/tools/libswiftRemoteMirror.dylib``."""
+    return os.environ.get("MACHO_REMOTE_MIRROR", "").strip() or \
+        os.path.join(REPO_ROOT, "tools", "libswiftRemoteMirror.dylib")
+
+
 def swift_oracle_path():
     """Path to the committed swift-protobuf ORACLE fixture binary (see
     tests/swift_oracle_fixture/README.md) — a genuinely-compiled, known-schema

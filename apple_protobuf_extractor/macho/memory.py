@@ -562,8 +562,9 @@ class BinaryContext:
             return struct.unpack_from('<q', raw)[0]
         return struct.unpack_from('<q', self._data, self.vmaddr_to_offset(vmaddr, 8))[0]
 
-    def read_cstring(self, vmaddr: int, max_len: int = 4096) -> str:
-        """Read a null-terminated C string, clamped to the segment boundary."""
+    def read_cstring(self, vmaddr: int, max_len: Optional[int] = 4096) -> str:
+        """Read a null-terminated C string, clamped to the segment boundary (and to *max_len*
+        bytes unless it is None)."""
         if self._cache_reader is not None:
             s = self._cache_reader.read_cstring(vmaddr, max_len=max_len)
             if s is None:
@@ -573,7 +574,7 @@ class BinaryContext:
             return s
         off     = self.vmaddr_to_offset(vmaddr, 1)
         seg_end = self._segment_end_offset(vmaddr)
-        cap     = min(off + max_len, seg_end)
+        cap     = seg_end if max_len is None else min(off + max_len, seg_end)
         null    = self._data.find(b'\x00', off, cap)
         if null < 0:
             raise ValueError(

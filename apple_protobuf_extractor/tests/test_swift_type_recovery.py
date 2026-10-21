@@ -105,7 +105,8 @@ class TestFieldRecordsBoundedBySection(unittest.TestCase):
             return self.data[va - self.base:va - self.base + n]
 
         def read_cstring(self, va, max_len=4096):
-            raw = self.read_bytes(va, min(max_len, self.base + len(self.data) - va))
+            end = self.base + len(self.data) - va
+            raw = self.read_bytes(va, end if max_len is None else min(max_len, end))
             return raw.split(b"\0", 1)[0].decode()
 
     def _image(self, nfields):
@@ -134,6 +135,69 @@ class TestFieldRecordsBoundedBySection(unittest.TestCase):
         mem, desc, fd, _names = self._image(3)
         self.assertEqual(TR._read_field_types(mem, desc, (fd, fd + 0x10 + 2 * 12)),
                          ({}, set(), set()))
+
+
+class TestUnresolvedElementIsAFlaggedFiller(unittest.TestCase):
+    """An Array whose element does not resolve (a symbolic reference to no descriptor) keeps its
+    ``repeated`` label with a ``bytes`` filler, and the field is flagged incomplete (#67, #69)."""
+
+    def test_filler_flagged(self):
+        import struct
+        mem, desc, fd, _names = TestFieldRecordsBoundedBySection()._image(1)
+        buf = bytearray(mem.data)
+        type_va = 0x1400 + 0x10                     # f0's type string: Say<ref to nothing>G
+        buf[type_va - mem.base:type_va - mem.base + 9] = b"Say\x01" + struct.pack("<i", 0x40) + b"G"
+        mem = TestFieldRecordsBoundedBySection._Mem(mem.base, buf)
+        fields, inc, names = TR._read_field_types(mem, desc, (fd, fd + 0x10 + 12))
+        self.assertEqual((fields, inc, names), ({"f0": "repeated bytes"}, {"f0"}, {"f0"}))
+
+
+class TestCopyOnWritePointerSkippedByType(unittest.TestCase):
+    """The message struct's ``_storage`` (typed ``_StorageClass``) is the copy-on-write pointer;
+    inside the storage class a ``_storage`` is the proto field ``storage`` (BiomeStreams'
+    PgQuery_ColumnDef, found by the Remote Mirror oracle)."""
+
+    def _image(self):
+        import struct
+        base = 0x1000
+        buf = bytearray(0x1000)
+
+        def cstr(va, text):
+            buf[va - base:va - base + len(text) + 1] = text + b"\0"
+            return va
+
+        def desc(va, kind, parent, name_va):
+            struct.pack_into("<Iii", buf, va - base, kind, parent - (va + 4) if parent else 0,
+                             name_va - (va + 8))
+
+        mod, msg, cls = 0x1000, 0x1040, 0x1080
+        desc(mod, 0, 0, cstr(0x1800, b"Mod"))
+        desc(msg, TR._STRUCT_KIND, mod, cstr(0x1810, b"Msg"))
+        desc(cls, TR._CLASS_KIND, msg, cstr(0x1820, b"_StorageClass"))
+
+        def fields(owner, fd, recs):
+            struct.pack_into("<i", buf, owner + 0x10 - base, fd - (owner + 0x10))
+            struct.pack_into("<HHI", buf, fd + 0x08 - base, 0, 12, len(recs))
+            for i, (name_va, type_va) in enumerate(recs):
+                rec = fd + 0x10 + 12 * i
+                struct.pack_into("<Iii", buf, rec - base, 0, type_va - (rec + 4), name_va - (rec + 8))
+
+        ref = 0x1900                               # a direct symbolic reference to the class
+        buf[ref - base] = 1
+        struct.pack_into("<i", buf, ref + 1 - base, cls - (ref + 1))
+        buf[ref + 5 - base] = 0
+        string, storage = cstr(0x1910, b"SS"), cstr(0x1920, b"_storage")
+        fields(msg, 0x1200, [(storage, ref)])
+        fields(cls, 0x1300, [(storage, string), (cstr(0x1930, b"_name"), string)])
+        return TestFieldRecordsBoundedBySection._Mem(base, buf), msg, cls
+
+    def test_the_pointer_is_skipped_and_the_field_kept(self):
+        mem, msg, cls = self._image()
+        section = (0x1000, 0x2000)
+        self.assertEqual(TR._read_field_types(mem, msg, section), ({}, set(), set()))
+        fields, _inc, names = TR._read_field_types(mem, cls, section)
+        self.assertEqual(names, {"storage", "name"})
+        self.assertEqual(fields, {"storage": "string", "name": "string"})
 
 
 @unittest.skipUnless(_swift_oracle(),
@@ -238,6 +302,46 @@ class TestIndirectablePointers(unittest.TestCase):
                          0x9000)                                    # kind 1: indirect
         self.assertEqual(T._type_record(self._Ctx({0x2000: 0x42}, {}), 0x2000), 0)   # ObjC
         self.assertEqual(T._type_record(self._Ctx({0x2000: 0x43}, {}), 0x2000), 0)
+
+
+
+class TestGenericArgumentTokens(unittest.TestCase):
+    """An Array / Dictionary argument is parsed one type token at a time (Apple's Remote Mirror
+    oracle: `SaySSG` -- [String] -- had read as `repeated bytes`, the terminator `G` defeating a
+    whole-string match; a map value after a non-String key was never read)."""
+
+    class _Bytes:
+        def __init__(self, b):
+            self.b = b + b"\0" * 40
+
+        def read_bytes(self, va, n):
+            if va + n > len(self.b):
+                raise ValueError(va)
+            return self.b[va:va + n]
+
+        def read_cstring(self, va, n=256):
+            t = self.b[va:self.b.index(b"\0", va)]
+            return t.decode() if all(32 <= c < 127 for c in t) else None
+
+    def d(self, mangled):
+        from serializers import swift_type_recovery as T
+        return T.decode_mangled(self._Bytes(mangled), 0)
+
+    def test_arrays_of_standard_types(self):
+        self.assertEqual(self.d(b"SaySSG"), ("string", "repeated"))
+        self.assertEqual(self.d(b"SaySfG"), ("float", "repeated"))
+        self.assertEqual(self.d(b"Says5Int32VG"), ("int32", "repeated"))
+        self.assertEqual(self.d(b"Say10Foundation4DataVG"), ("bytes", "repeated"))
+        self.assertEqual(self.d(b"SaySSSgG"), ("string", "repeated"))      # [String?]
+
+    def test_maps_of_standard_types(self):
+        self.assertEqual(self.d(b"SDySSSfG"), ("map<string, float>", "map"))
+        self.assertEqual(self.d(b"SDys5Int32VSdG"), ("map<int32, double>", "map"))
+        self.assertEqual(self.d(b"SDyS2SG"), ("map<string, string>", "map"))
+
+    def test_no_proto_form_stays_a_flagged_guess(self):
+        self.assertEqual(self.d(b"SaySaySSGG"), ("bytes", "repeated?"))   # [[String]]
+        self.assertEqual(self.d(b"SDySSSaySSGG")[1], "map?")              # [String: [String]]
 
 
 if __name__ == "__main__":

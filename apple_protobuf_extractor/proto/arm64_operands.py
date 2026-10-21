@@ -54,7 +54,7 @@ def reg_bits(tok: str) -> int:
     return 32 if tok.strip().lower().startswith('w') else 64
 
 
-_FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?(\[\d+\])?$')    # a lane: v0.s[1]
+_FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?(\[(?:0x[0-9a-f]+|\d+)\])?$')    # a lane: v0.s[1], v0.b[0xa]
 
 
 def reg_name(tok: str) -> Optional[str]:
@@ -198,12 +198,13 @@ def mem_regs(op: str):
 
 
 def writeback_base(ops: List[str]) -> Optional[str]:
-    """Base register a pre-index (``[Rn, #imm]!``) or post-index (``[Rn], #imm``) memory
-    operand updates, else None."""
+    """Base register a pre-index (``[Rn, #imm]!``) or post-index memory operand updates (an
+    operand after it: ``[Rn], #imm``, or a register, ``[x26], x19`` in a vector load / store),
+    else None."""
     i = next((j for j, o in enumerate(ops) if o.startswith('[')), None)
     if i is None:
         return None
-    if ops[i].endswith('!') or (len(ops) > i + 1 and ops[i + 1].startswith('#')):
+    if ops[i].endswith('!') or len(ops) > i + 1:
         pm = parse_mem(ops[i])
         return pm[0] if pm else None
     return None
@@ -215,8 +216,13 @@ STORE_EXCLUSIVE = frozenset(('stxr', 'stxrb', 'stxrh', 'stlxr', 'stlxrb', 'stlxr
 # ``cas`` writes its first, ``casp`` its first pair.
 _LSE_LOAD = re.compile(r'(ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp)(a|l|al)?[bh]?$')
 _CASP = re.compile(r'casp(a|l|al)?$')
-# Their store aliases (``stadd ws, [xn]``) write no register.
-_LSE_STORE = re.compile(r'st(add|clr|eor|set|smax|smin|umax|umin)l?[bh]?$')
+
+
+def _is_store(mn: str) -> bool:
+    """*mn* stores and writes no register but a writeback base: every ``st...`` (``str``,
+    ``stlur``, ``st1``, an LSE store alias ``stadd``, an MTE tag store ``stz2g`` ...) except
+    an exclusive store's status (:data:`STORE_EXCLUSIVE`)."""
+    return mn.startswith('st') and mn not in STORE_EXCLUSIVE
 # Instructions that read their destination too: they change only some of its bits (movk, the
 # bitfield inserts, a shift-insert), accumulate into it (multiply-add, shift-right-accumulate,
 # the bitwise selects, a table lookup's extension) or authenticate / sign / strip the pointer
@@ -224,9 +230,18 @@ _LSE_STORE = re.compile(r'st(add|clr|eor|set|smax|smin|umax|umin)l?[bh]?$')
 _READS_DEST = frozenset((
     'movk', 'bfi', 'bfxil', 'bfm', 'bfc', 'sli', 'sri',
     'mla', 'mls', 'fmla', 'fmls', 'usra', 'ssra', 'ursra', 'srsra', 'bsl', 'bit', 'bif', 'tbx',
+    'smlal', 'smlal2', 'umlal', 'umlal2', 'smlsl', 'smlsl2', 'umlsl', 'umlsl2', 'sqdmlal',
+    'sqdmlal2', 'sqdmlsl', 'sqdmlsl2', 'sdot', 'udot', 'fmlal', 'fmlsl', 'sadalp', 'uadalp',
     'autia', 'autib', 'autda', 'autdb', 'autiza', 'autizb', 'autdza', 'autdzb',
     'pacia', 'pacib', 'pacda', 'pacdb', 'paciza', 'pacizb', 'pacdza', 'pacdzb',
     'xpaci', 'xpacd'))
+# Pointer authentication with implicit operands: (registers read, registers written).  The
+# return-address forms sign / authenticate / strip x30 in place (with sp or zero as the
+# modifier); the 1716 forms sign x17 with x16.
+_IMPLICIT = {mn: (('x30',), ('x30',)) for mn in (
+    'paciasp', 'pacibsp', 'autiasp', 'autibsp', 'paciaz', 'pacibz', 'autiaz', 'autibz', 'xpaclri')}
+_IMPLICIT.update({mn: (('x16', 'x17'), ('x17',)) for mn in (
+    'pacia1716', 'pacib1716', 'autia1716', 'autib1716')})
 # Loads that write two registers.
 _PAIR_DESTS = PAIR_LOADS | frozenset(('ldxp', 'ldaxp'))
 
@@ -238,12 +253,14 @@ def writes(ins: Insn) -> List[str]:
         return list(CALLER_SAVED)
     if is_cond_branch(mn):
         return []
+    if mn in _IMPLICIT:
+        return list(_IMPLICIT[mn][1])
     ops = split_ops(ins.op_str)
     out = []
     wb = writeback_base(ops)
     if wb is not None and wb not in ('xzr', 'sp'):
         out.append(wb)
-    if (mn in NO_DEST and mn not in STORE_EXCLUSIVE) or _LSE_STORE.match(mn):
+    if (mn in NO_DEST or _is_store(mn)) and mn not in STORE_EXCLUSIVE:
         return out
     if ops and ops[0].startswith('{'):
         dests = _list_regs(ops[0]) if mn.startswith('ld') else []      # a lane load: the list
@@ -272,6 +289,10 @@ def reads(ins: Insn) -> List[str]:
     ops = split_ops(ins.op_str)
     if mn == 'bl' or mn == 'b' or is_cond_branch(mn):
         return []
+    if mn in _IMPLICIT:
+        return list(_IMPLICIT[mn][0])
+    if mn in RETURNS and not ops:
+        return ['x30']                          # the return address
     mem = [o for o in ops if o.startswith('[')]
     if mn in CALLS or mn in INDIRECT_BRANCHES:
         srcs = ops
@@ -281,7 +302,7 @@ def reads(ins: Insn) -> List[str]:
         srcs = ops[:1] + mem
     elif mn.startswith('cas'):
         srcs = ops
-    elif (mn in NO_DEST or _LSE_STORE.match(mn) or mn in _READS_DEST
+    elif (mn in NO_DEST or _is_store(mn) or mn in _READS_DEST
           or (ops and '[' in ops[0] and not ops[0].startswith('['))):
         srcs = ops
     elif mem and mn.startswith('ld'):

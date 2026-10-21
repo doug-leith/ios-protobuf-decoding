@@ -31,6 +31,7 @@ NAME against the nameMap (number↔name).  Binary mode only.
 """
 from __future__ import annotations
 
+import re
 import struct
 from typing import Dict, NamedTuple, Optional, Set
 
@@ -123,8 +124,10 @@ def _type_record(ctx, va):
 
 
 def _cstr(ctx, va):
+    """A name the metadata points at: up to its terminator, within its segment (no length cap
+    -- one that cut a long name made the field vanish)."""
     try:
-        return ctx.read_cstring(va, 256)
+        return ctx.read_cstring(va, None)
     except READ_ERRORS:
         return None
 
@@ -353,6 +356,43 @@ def _local_desc_name(ctx, desc):
 
 # ── mangled-type decoder ───────────────────────────────────────────────────────
 
+_NOMINAL = re.compile(rb"(s|10Foundation)(\d+)")
+
+
+def _type_token(ctx, va):
+    """``(proto_type, length)`` of the one type mangled at *va* inside a generic argument list
+    (``Say<T>G``, ``SDy<K><V>G``): a symbolic reference (control byte and 4-byte offset), a
+    standard substitution (``SS``, ``Sf``, ...), a Swift or Foundation struct by name
+    (``s5Int32V``, ``10Foundation4DataV``), each optionally followed by ``Sg`` (Optional).
+    None when the token is none of these (it is not guessed past)."""
+    try:
+        raw = ctx.read_bytes(va, 40)          # the longest token, 10Foundation4DataVSg, is 20
+    except READ_ERRORS:                       # a token ending the section: a symbolic ref at most
+        try:
+            raw = ctx.read_bytes(va, 5)
+        except READ_ERRORS:
+            return None
+    if raw[:1] in (b"\x01", b"\x02"):
+        proto, n = _resolve_symbolic(ctx, va), 5
+    elif len(raw) > 1 and raw[:1] == b"S" and chr(raw[1]) in _STD_SUB:
+        proto, n = _STD_SUB[chr(raw[1])], 2
+    else:
+        m = _NOMINAL.match(raw)
+        if not m:
+            return None
+        k = m.end()
+        size = int(m.group(2))
+        name = raw[k:k + size].decode("ascii", "replace")
+        if raw[k + size:k + size + 1] != b"V" or name not in _SWIFT_SCALAR:
+            return None
+        proto, n = _SWIFT_SCALAR[name], k + size + 1
+    if not proto:
+        return None
+    if raw[n:n + 2] == b"Sg":
+        n += 2
+    return proto, n
+
+
 def decode_mangled(ctx, va):
     """Decode a FieldRecord mangled type at *va* to a (proto_type, label) pair,
     where label is '', 'repeated', or 'map'.  Returns (None, '') if undecodable."""
@@ -376,8 +416,12 @@ def decode_mangled(ctx, va):
     # element doesn't decode we still know it's repeated, but the `bytes` filler is
     # a GUESS — flag it with the `repeated?` label so the caller can note it (#67).
     if raw[:3] == b"Say":
-        elem, _ = decode_mangled(ctx, va + 3)
-        return (elem, "repeated") if elem else ("bytes", "repeated?")
+        tok = _type_token(ctx, va + 3)
+        if tok and ctx.read_bytes(va + 3 + tok[1], 1) == b"G":
+            return tok[0], "repeated"
+        elem, lbl = decode_mangled(ctx, va + 3)
+        # an Array or Dictionary element has no proto form: a flagged guess
+        return (elem, "repeated") if elem and not lbl else ("bytes", "repeated?")
     # Dictionary -> SDy<key><val>   => map<key,val>
     if raw[:3] == b"SDy" or raw[:2] == b"SD":
         body = va + (3 if raw[:3] == b"SDy" else 2)
@@ -387,13 +431,20 @@ def decode_mangled(ctx, va):
         scalars = _runlength_types(btxt)
         if len(scalars) >= 2:
             return f"map<{scalars[0]}, {scalars[1]}>", "map"
+        # One key token and one value token, each a symbolic reference, a standard
+        # substitution or a Swift / Foundation struct, then the list's end.
+        key_tok = _type_token(ctx, body)
+        val_tok = _type_token(ctx, body + key_tok[1]) if key_tok else None
+        if val_tok and ctx.read_bytes(body + key_tok[1] + val_tok[1], 1) == b"G":
+            return f"map<{key_tok[0]}, {val_tok[0]}>", "map"
         # Otherwise the value is structural (symbolic-ref message, Data, ...):
         # decode the key, then the value that follows the common String key.  A
         # `string`/`bytes` filler for an unresolved key/value is a GUESS -> `map?`.
         key, _ = decode_mangled(ctx, body)
         val = None
         if btxt.startswith("SS"):
-            val, _ = decode_mangled(ctx, body + 2)
+            val, vlbl = decode_mangled(ctx, body + 2)
+            val = None if vlbl else val          # an Array / Dictionary value: no proto form
         lbl = "map" if (key and val) else "map?"
         return f"map<{key or 'string'}, {val or 'bytes'}>", lbl
     # direct scalar codes
@@ -408,8 +459,11 @@ def decode_mangled(ctx, va):
 
 # ── top level ──────────────────────────────────────────────────────────────────
 
-# field names that are swift-protobuf bookkeeping, never proto fields
-_SKIP_FIELDS = {"unknownFields", "_storage"}
+# swift-protobuf's bookkeeping, never a proto field: the unknown-field store by name (a proto
+# field of that name is renamed), the copy-on-write pointer by its type (a ``_storage`` typed
+# ``_StorageClass``; inside the storage class, ``_storage`` is a proto field ``storage`` --
+# BiomeStreams' PgQuery_ColumnDef)
+_SKIP_FIELDS = {"unknownFields"}
 _CLASS_KIND = 16
 # the copy-on-write backing classes swift-protobuf emits for larger messages —
 # the real stored properties live here, not in the message struct's own fieldmd.
@@ -453,8 +507,10 @@ def _read_field_types(ctx, desc, fieldmd):
         if not fname or fname in _SKIP_FIELDS or mva == 0:
             continue
         clean = fname.lstrip("_")
-        names.add(clean)
         ptype, label = decode_mangled(ctx, mva)
+        if ptype and ptype.rsplit(".", 1)[-1] in _STORAGE_CLASS_NAMES:
+            continue                     # the copy-on-write pointer
+        names.add(clean)
         if not ptype:
             continue
         fields[clean] = f"repeated {ptype}" if label.startswith("repeated") else ptype

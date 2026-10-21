@@ -78,6 +78,22 @@ class TestWrites(unittest.TestCase):
             self.assertEqual(self.w(mn, ops), [], mn)
         self.assertEqual(self.w('bl', '#0x9000'), list(O.CALLER_SAVED))
 
+    def test_implicit_pointer_authentication_operands(self):
+        self.assertEqual((self.w('pacibsp', ''), O.reads(_ins('pacibsp', ''))), (['x30'], ['x30']))
+        self.assertEqual(self.w('autibsp', ''), ['x30'])
+        self.assertEqual((self.w('pacia1716', ''), O.reads(_ins('pacia1716', ''))),
+                         (['x17'], ['x16', 'x17']))
+
+    def test_a_lane_with_a_hex_index(self):
+        self.assertEqual(self.w('mov', 'v0.b[0xa], w20'), ['v0'])
+        self.assertEqual(O.reads(_ins('mov', 'v0.b[0xa], w20')), ['v0', 'x20'])
+
+    def test_stores_write_only_a_writeback_base(self):
+        self.assertEqual(self.w('stlur', 'w8, [x0, #-4]'), [])
+        self.assertEqual(self.w('stz2g', 'x5, [x23, #0xd20]!'), ['x23'])          # an MTE tag store
+        self.assertEqual(self.w('st1', '{v30.2s}, [x26], x19'), ['x26'])          # register post-index
+        self.assertEqual(self.w('stadd', 'w8, [x0]'), [])
+
     def test_exclusive_store_writes_its_status(self):
         self.assertEqual(self.w('stlxr', 'w9, x0, [x1]'), ['x9'])
         self.assertEqual(self.w('stxp', 'w8, x0, x1, [x2]'), ['x8'])
@@ -118,6 +134,7 @@ class TestReads(unittest.TestCase):
         self.assertEqual(self.r('mla', 'w0, w1, w2'), ['x0', 'x1', 'x2'])           # accumulates
         self.assertEqual(self.r('fmla', 'v0.4s, v1.4s, v2.4s'), ['v0', 'v1', 'v2'])
         self.assertEqual(self.r('bsl', 'v0.16b, v1.16b, v2.16b'), ['v0', 'v1', 'v2'])
+        self.assertEqual(self.r('smlal', 'v14.4s, v18.4h, v12.h[2]'), ['v14', 'v18', 'v12'])
         self.assertEqual(self.r('autia', 'x16, x17'), ['x16', 'x17'])              # the pointer
         self.assertEqual(self.r('xpaci', 'x30'), ['x30'])
         self.assertEqual(self.r('st1', '{v0.s}[1], [x0]'), ['v0', 'x0'])
@@ -137,6 +154,9 @@ class TestReads(unittest.TestCase):
         self.assertEqual(self.r('blr', 'x16'), ['x16'])
         self.assertEqual(self.r('braa', 'x16, x17'), ['x16', 'x17'])
         self.assertEqual(self.r('b.eq', '#0x1000'), [])
+        self.assertEqual(self.r('ret', ''), ['x30'])                     # the return address
+        self.assertEqual(self.r('retab', ''), ['x30'])
+        self.assertEqual(self.r('ret', 'x5'), ['x5'])
 
 
 class TestSecondOperand(unittest.TestCase):

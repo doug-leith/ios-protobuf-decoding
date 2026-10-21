@@ -363,6 +363,14 @@ class TestReadCstringBoundary:
         s    = ctx.read_cstring(TEXT_VA)
         assert s == 'hello'
 
+    def test_uncapped_read_goes_to_the_terminator(self):
+        """max_len=None: clamped by the segment only (a Swift name is read so)."""
+        name = b'n' * 5000
+        ctx  = BinaryContext(build_text_binary(name + b'\x00', vmaddr=TEXT_VA))
+        assert ctx.read_cstring(TEXT_VA, None) == name.decode()
+        with pytest.raises(ValueError):
+            ctx.read_cstring(TEXT_VA)
+
     def test_no_null_within_segment_raises(self):
         """If there's no null within the segment, read_cstring must raise."""
         code = b'abcde'   # no null terminator anywhere

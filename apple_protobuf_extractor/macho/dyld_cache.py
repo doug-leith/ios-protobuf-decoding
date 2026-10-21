@@ -183,6 +183,7 @@ _MAX_SUBCACHES      = 256    # sanity cap for total sub-cache count
 # around ~100 chars, so this 1024 ceiling never truncates a real one — it only stops a
 # runaway read on unterminated bytes.  Huge headroom; leave.
 _MAX_CSTRING_LEN    = 1024   # max selector string length we'll return
+_CSTRING_CHUNK      = 256    # bytes read at a time looking for a terminator [cap:COSMETIC]
 
 # ── Image-discovery constants (find_image_header / image_sections) ────────────
 
@@ -711,7 +712,7 @@ class DyldCacheReader:
             Virtual address in the shared-cache address space.
         max_len:
             Maximum number of bytes to read before giving up on finding the
-            null terminator.
+            null terminator; None reads to the end of the mapping.
         """
         mapping = self._find_mapping(vmaddr)
         if mapping is None:
@@ -719,18 +720,27 @@ class DyldCacheReader:
 
         file_off = mapping.translate(vmaddr)
         # Don't read past the end of the mapping or beyond max_len.
-        max_read = min(max_len + 1, mapping.vmend - vmaddr)
+        max_read = mapping.vmend - vmaddr
+        if max_len is not None:
+            max_read = min(max_len + 1, max_read)
         if max_read <= 0:
             return None
 
+        # read in chunks: a string ends long before a mapping does
+        raw, nul = b'', -1
         try:
             fh = self._fh(mapping.path)
             fh.seek(file_off)
-            raw = fh.read(max_read)
+            while nul == -1 and len(raw) < max_read:
+                chunk = fh.read(min(_CSTRING_CHUNK, max_read - len(raw)))
+                if not chunk:
+                    break
+                nul = chunk.find(b'\x00')
+                nul = nul if nul == -1 else len(raw) + nul
+                raw += chunk
         except OSError:
             return None
 
-        nul = raw.find(b'\x00')
         if nul == -1:
             return None   # no null terminator within max_len bytes
 

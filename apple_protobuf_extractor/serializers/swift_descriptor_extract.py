@@ -1105,7 +1105,8 @@ def _attach_visit_types(m: SwiftMessage, visits: List[Tuple[int, Optional[str]]]
     """Types from the Visitor method each field is written with (:func:`_traverse_visits`):
     the integer encoding Swift reflection cannot tell (an ``Int32`` written zigzag is ``sint32``,
     a ``UInt64`` written fixed is ``fixed64``), and the scalar type of a field reflection did not
-    type at all."""
+    type at all or only guessed (a ``bytes`` filler with its ``type_note``: the guess is replaced
+    and the note cleared)."""
     typed = {}
     for num, typ in visits:
         if typ is not None:
@@ -1114,8 +1115,9 @@ def _attach_visit_types(m: SwiftMessage, visits: List[Tuple[int, Optional[str]]]
         typ = typed.get(f.number)
         if typ is None:
             continue
-        if f.proto_type is None or typ.split()[-1] in _VISIT_ENCODINGS:
+        if f.proto_type is None or f.type_note or typ.split()[-1] in _VISIT_ENCODINGS:
             f.proto_type = typ
+            f.type_note = None
 
 
 # ── fat-binary slice helper ───────────────────────────────────────────────────

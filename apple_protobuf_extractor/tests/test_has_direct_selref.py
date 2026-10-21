@@ -107,11 +107,16 @@ class TestSelectorValidation(unittest.TestCase):
         self.assertFalse(_is_valid_selector('foo{bar}'))
         self.assertFalse(_is_valid_selector('%@"'))   # oslogstring content
 
-    def test_too_long_rejected(self):
-        self.assertFalse(_is_valid_selector('a' * 201))
+    def test_long_selectors_accepted(self):
+        # a many-argument initialiser: iPhone 8 GeoServices' -[GEOPDPlaceRequest
+        # initWithMerchantCode:...] is over 600 characters (a length cap left it unnamed, or
+        # named by a fragment of another string)
+        self.assertTrue(_is_valid_selector('initWithMerchantCode:' + 'arg:' * 160))
 
-    def test_max_length_accepted(self):
-        self.assertTrue(_is_valid_selector('a' * 200))
+    def test_empty_keywords_accepted(self):
+        # ObjC allows an empty keyword: UIKitCore's -[_IntArray2D ::newValue:]
+        self.assertTrue(_is_valid_selector('::newValue:'))
+        self.assertTrue(_is_valid_selector(':'))
 
     def test_starts_with_digit_rejected(self):
         self.assertFalse(_is_valid_selector('2bad'))
@@ -234,3 +239,26 @@ class TestSingleCharSelectorLive(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+
+
+class TestDirectSelectorReadFromTheBaseOnly(unittest.TestCase):
+    """A preoptimised direct selector is read at the cache's selector base + nameOffset only:
+    va + nameOffset is no selector address, and a string there is a fragment of another."""
+
+    def test_no_fallback_read_once_the_base_is_known(self):
+        import struct
+        from macho.classlist import _parse_relative_method
+        from tests._fakes import NoImage
+
+        class Ctx(NoImage):
+            _rel_sel_base = 0x100000
+            strings = {0x100040: "%@ not a selector", 0x1040: "te"}   # base+0x40, va+0x40
+
+            def read_s32(self, va):
+                return {0x1000: 0x40, 0x1004: 0, 0x1008: 0x10}[va]
+
+            def read_cstring(self, va):
+                return self.strings[va]
+
+        m = _parse_relative_method(Ctx(), 0x1000, None, has_direct=True)
+        self.assertIsNone(m.name)                 # left for .symbols, not named 'te'

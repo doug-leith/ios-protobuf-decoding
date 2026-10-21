@@ -6,6 +6,8 @@
 /iphone12_data
 /ios27_data
 /macos27_data
+# the Swift Remote Mirror library the Swift oracle loads (from a swift.org toolchain)
+/tools
 /dylib
 /locationd
 /geod

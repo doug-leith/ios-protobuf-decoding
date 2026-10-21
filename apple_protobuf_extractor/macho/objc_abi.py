@@ -47,12 +47,13 @@ METHOD_FLAG_RELATIVE = 0x80000000
 MIN_RELATIVE_METHOD_ENTSIZE = 12
 
 # Pre-compiled selector-name validator.  A valid ObjC selector contains only
-# alphanumerics, underscores, and colons, starts with a letter or underscore,
+# alphanumerics, underscores, and colons, starts with a letter, underscore or colon
+# (a keyword may be empty: UIKitCore's -[_IntArray2D ::newValue:]),
 # and has a reasonable length -- or is one of the two clang generates for a class
 # with C++ / ARC ivars, ``.cxx_destruct`` and ``.cxx_construct``.  Crucially, binary
 # code or data accidentally read as a cstring will contain control characters, high
 # bytes, whitespace, or other punctuation that fail this check.
-_SELECTOR_RE = _re.compile(r'^(?:[A-Za-z_][A-Za-z0-9_:]*|\.cxx_(?:destruct|construct))$')
+_SELECTOR_RE = _re.compile(r'^(?:[A-Za-z_:][A-Za-z0-9_:]*|\.cxx_(?:destruct|construct))$')
 
 
 def is_valid_selector(s):
@@ -60,10 +61,8 @@ def is_valid_selector(s):
 
     Single-character selectors such as ``x``, ``y``, ``z`` are legal ObjC
     property-getter selectors and must be accepted; a lower bound of
-    ``len > 1`` would incorrectly reject them.
+    ``len > 1`` would incorrectly reject them.  Nor is there an upper bound: a
+    many-argument initialiser's selector runs to hundreds of characters (iPhone 8
+    GeoServices' -[GEOPDPlaceRequest initWithMerchantCode:...] is over 600).
     """
-    return bool(
-        s
-        and 0 < len(s) <= 200
-        and _SELECTOR_RE.match(s)
-    )
+    return bool(s and _SELECTOR_RE.match(s))

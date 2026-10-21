@@ -71,7 +71,7 @@ SIRI = {
         2: ("includesConfirm", "bool"), 3: ("includesDisambiguate", "bool"),
         4: ("includesUnsupportedPrompt", "bool")},
     "ProtoSiriTaskEvaluationSummary": {
-        1: ("requestIds", "repeated bytes"),          # TRUE: repeated <id msg>? elem unrec — #68/#39
+        1: ("requestIds", "repeated string"),         # [String] (Remote Mirror; #124)
         2: ("taskCompletion", "ProtoSiriTaskCompletionType"),
         3: ("taskSuccess", "ProtoSiriTaskSuccessType"),
         4: ("interactionType", "ProtoSiriTaskInteractionType"),
@@ -222,20 +222,14 @@ class TestRuntimeNameMap(unittest.TestCase):
         self.assertEqual(smr["archivePath"], "string")
         self.assertEqual(smr["credential"], "StartMigrationRequest.Credential")   # nested message member (qualified)
 
-    def test_repeated_label_preserved_when_elem_unrecovered(self):
-        # #69: a repeated field whose element type doesn't resolve keeps the
-        # `repeated` label (-> `repeated bytes`) instead of collapsing to the
-        # misleading `optional bytes`.  Google_Protobuf_Type.oneofs is repeated;
-        # its element didn't resolve here, so it must read `repeated bytes`.
-        t = {f.name: f.proto_type for f in self.msgs["Google_Protobuf_Type"].fields}
-        self.assertEqual(t["oneofs"], "repeated bytes")
-
-    def test_filler_bytes_is_flagged_not_silent(self):
-        # #67: a `repeated bytes` whose element is a GUESS filler carries a note,
-        # while a resolved field does not -- the bytes isn't read as certain.
+    def test_string_array_element_recovered(self):
+        # Google_Protobuf_Type.oneofs is `repeated string` (google/protobuf/type.proto): the
+        # `[String]` element (SaySSG) is read, not left a flagged `bytes` filler (#124; the
+        # filler and its note for an element that does not resolve: test_swift_type_recovery).
         byname = {f.name: f for f in self.msgs["Google_Protobuf_Type"].fields}
-        self.assertIsNotNone(byname["oneofs"].type_note)        # filler -> flagged
-        self.assertIsNone(byname["name"].type_note)             # resolved -> clean
+        self.assertEqual(byname["oneofs"].proto_type, "repeated string")
+        self.assertIsNone(byname["oneofs"].type_note)
+        self.assertIsNone(byname["name"].type_note)
         self.assertIsNone(byname["fields"].type_note)           # repeated <msg> ok
 
     def test_qualified_keys_avoid_short_name_collision(self):
