@@ -115,6 +115,21 @@ class TestCallReads(unittest.TestCase):
             image._function_entries = set(then_index)      # build_function_index, later
             return got, set(C.call_reads(image, 0x9000))
 
+    def test_a_named_swift_function_reads_self_error_and_async_registers_too(self):
+        from proto.callees import ABI_ARGS
+        got = self._reads("_$s13SwiftProtobuf7VisitorP17visitSingularInt32Field5value11fieldNumberys0F0V_SitKFTj")
+        self.assertEqual(got, set(ABI_ARGS) | {'x20', 'x21', 'x22'})
+
+    def test_which_names_are_swift_functions(self):
+        from proto.callees import _is_swift_name
+        self.assertTrue(_is_swift_name('_$s4main5thingyyF'))           # Swift 5
+        self.assertTrue(_is_swift_name('_$S4main5thingyyF'))           # Swift 4.2
+        self.assertTrue(_is_swift_name('__T04main5thingyyF'))          # Swift 4
+        self.assertFalse(_is_swift_name('_$s4main5ThingC3baryyFTo'))   # an @objc thunk: C convention
+        self.assertFalse(_is_swift_name('_T0something'))               # a C function named T0something
+        self.assertFalse(_is_swift_name('_objc_msgSend'))
+        self.assertFalse(_is_swift_name(None))
+
     def test_a_runtime_contract_is_what_it_reads(self):
         self.assertEqual(self._reads("_objc_retain_x19"), {"x19"})
 
@@ -181,6 +196,16 @@ class TestCallReads(unittest.TestCase):
                                                 ('mov', 'x19, x21'), ('mov', 'x0, x19'),
                                                 ('ldp', 'x20, x19, [sp], #0x20'), ('ret', '')])])
         self.assertIn('x21', got)
+        self.assertEqual(len(logs.output), 1)
+
+    def test_the_return_address_check_reads_x30_unremarked(self):
+        # arm64e, before a tail call: `eor x16, x30, x30, lsl #1 ; tbz x16, #62, ok ; brk`
+        logger = logging.getLogger('proto.models')
+        with self.assertLogs(logger, 'WARNING') as logs:
+            logger.warning("sentinel")
+            self._reads(blocks=[(0x9000, [('sub', 'sp, sp, #0x10'), ('add', 'sp, sp, #0x10'),
+                                          ('eor', 'x16, x30, x30, lsl #1'), ('mov', 'x0, #0'),
+                                          ('ret', '')])])
         self.assertEqual(len(logs.output), 1)
 
     def test_an_undecoded_jump_table_is_reported(self):

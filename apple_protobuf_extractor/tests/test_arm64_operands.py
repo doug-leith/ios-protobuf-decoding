@@ -91,6 +91,8 @@ class TestWrites(unittest.TestCase):
     def test_register_list_load(self):
         self.assertEqual(self.w('ld1', '{v0.16b, v1.16b}, [x0]'), ['v0', 'v1'])
         self.assertEqual(self.w('ld1r', '{v0.4s}, [x0], #4'), ['x0', 'v0'])
+        self.assertEqual(self.w('ld1', '{v0.s}[1], [x0]'), ['v0'])               # one lane
+        self.assertEqual(self.w('ld2', '{v0.s, v1.s}[1], [x0]'), ['v0', 'v1'])
 
 
 class TestReads(unittest.TestCase):
@@ -112,6 +114,13 @@ class TestReads(unittest.TestCase):
     def test_partial_writes_read_their_destination(self):
         self.assertEqual(self.r('movk', 'x8, #1, lsl #16'), ['x8'])
         self.assertEqual(self.r('bfi', 'x8, x9, #4, #4'), ['x8', 'x9'])
+        self.assertEqual(self.r('bfc', 'x8, #4, #4'), ['x8'])
+        self.assertEqual(self.r('mla', 'w0, w1, w2'), ['x0', 'x1', 'x2'])           # accumulates
+        self.assertEqual(self.r('fmla', 'v0.4s, v1.4s, v2.4s'), ['v0', 'v1', 'v2'])
+        self.assertEqual(self.r('bsl', 'v0.16b, v1.16b, v2.16b'), ['v0', 'v1', 'v2'])
+        self.assertEqual(self.r('autia', 'x16, x17'), ['x16', 'x17'])              # the pointer
+        self.assertEqual(self.r('xpaci', 'x30'), ['x30'])
+        self.assertEqual(self.r('st1', '{v0.s}[1], [x0]'), ['v0', 'x0'])
         self.assertEqual(self.r('mov', 'v0.s[1], w8'), ['v0', 'x8'])
         self.assertEqual(self.r('mov', 'w8, v0.s[1]'), ['v0'])            # a lane is no address
 

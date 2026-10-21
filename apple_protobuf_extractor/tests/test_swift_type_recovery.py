@@ -205,5 +205,40 @@ class TestEndToEndTypesBound(unittest.TestCase):
         self.assertEqual(fld["options"].proto_type, "repeated Google_Protobuf_Option")
 
 
+
+class TestIndirectablePointers(unittest.TestCase):
+    """A context descriptor's parent is a relative *indirectable* pointer and a __swift5_types
+    record carries a TypeReferenceKind in its low two bits: with the indirect bit / kind 1 the
+    target is a pointer slot (iOS 27 GeoServices' Polygon2D, whose parent MapGeometry is
+    reached so)."""
+
+    class _Ctx:
+        def __init__(self, words, ptrs):
+            self.words, self.ptrs = words, ptrs
+
+        def read_bytes(self, va, n):
+            import struct
+            return struct.pack("<i", self.words[va])
+
+        def read_ptr(self, va):
+            return self.ptrs[va]
+
+    def test_parent_direct_and_indirect(self):
+        from serializers import swift_type_recovery as T
+        direct = self._Ctx({0x1004: 0x100}, {})
+        self.assertEqual(T._parent_desc(direct, 0x1000), 0x1104)
+        indirect = self._Ctx({0x1004: 0x101}, {0x1104: 0x9000})     # low bit: via the slot
+        self.assertEqual(T._parent_desc(indirect, 0x1000), 0x9000)
+        self.assertEqual(T._parent_desc(self._Ctx({0x1004: 0}, {}), 0x1000), 0)
+
+    def test_type_record_kinds(self):
+        from serializers import swift_type_recovery as T
+        self.assertEqual(T._type_record(self._Ctx({0x2000: 0x40}, {}), 0x2000), 0x2040)
+        self.assertEqual(T._type_record(self._Ctx({0x2000: 0x41}, {0x2040: 0x9000}), 0x2000),
+                         0x9000)                                    # kind 1: indirect
+        self.assertEqual(T._type_record(self._Ctx({0x2000: 0x42}, {}), 0x2000), 0)   # ObjC
+        self.assertEqual(T._type_record(self._Ctx({0x2000: 0x43}, {}), 0x2000), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

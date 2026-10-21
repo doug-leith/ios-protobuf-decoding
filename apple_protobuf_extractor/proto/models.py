@@ -356,6 +356,7 @@ class ExtractionDiagnostics:
     # a bound reached ([cap:] constants) or a heuristic applied where it may be wrong: what it
     # decided may be missing or wrong there -- (name, where)
     heuristics_hit: List[Tuple[str, str]] = field(default_factory=list)
+    _hits_seen: set = field(default_factory=set, repr=False)    # (name, where), and names
 
     @property
     def n_errors(self) -> int:
@@ -383,14 +384,15 @@ def record_heuristic_hit(ctx, name: str, where: str) -> None:
     what it decided there may be missing or wrong.  Warned the first time each one bites in a
     run; every place is listed in the run summary."""
     import logging
-    hits = get_diagnostics(ctx).heuristics_hit
-    if (name, where) in hits:
+    diag = get_diagnostics(ctx)
+    if (name, where) in diag._hits_seen:
         return
-    if all(n != name for n, _w in hits):
+    if name not in diag._hits_seen:
         logging.getLogger(__name__).warning(
             "%s hit (%s); what it decided there may be missing or wrong (every place is listed "
             "in the run summary)", name, where)
-    hits.append((name, where))
+    diag._hits_seen.update(((name, where), name))
+    diag.heuristics_hit.append((name, where))
 
 
 def record_analysis_failure(ctx, cls_name: str, analysis: str, detail: str) -> None:

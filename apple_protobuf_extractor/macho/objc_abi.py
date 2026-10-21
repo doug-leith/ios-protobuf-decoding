@@ -48,10 +48,11 @@ MIN_RELATIVE_METHOD_ENTSIZE = 12
 
 # Pre-compiled selector-name validator.  A valid ObjC selector contains only
 # alphanumerics, underscores, and colons, starts with a letter or underscore,
-# and has a reasonable length.  Crucially, binary code or data accidentally
-# read as a cstring will contain control characters, high bytes, whitespace,
-# or other punctuation that fail this check.
-_SELECTOR_RE = _re.compile(r'^[A-Za-z_][A-Za-z0-9_:]*$')
+# and has a reasonable length -- or is one of the two clang generates for a class
+# with C++ / ARC ivars, ``.cxx_destruct`` and ``.cxx_construct``.  Crucially, binary
+# code or data accidentally read as a cstring will contain control characters, high
+# bytes, whitespace, or other punctuation that fail this check.
+_SELECTOR_RE = _re.compile(r'^(?:[A-Za-z_][A-Za-z0-9_:]*|\.cxx_(?:destruct|construct))$')
 
 
 def is_valid_selector(s):

@@ -271,6 +271,26 @@ _ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32)
 #: The callee-saved registers the Swift calling convention passes arguments in: self (x20), the
 #: error register (x21), the async context (x22).
 _SWIFT_ARGS = frozenset(("x20", "x21", "x22"))
+#: What a named function of the Swift calling convention may read: those and the AAPCS64 arguments.
+SWIFT_CALL_ARGS = ABI_ARGS + ("x20", "x21", "x22")
+#: Swift mangled-symbol prefixes as Mach-O names them (Swift 5 `$s`, 4.2 `$S`, 4 `_T0`, each
+#: with the Mach-O underscore).
+_SWIFT_SYMBOL_PREFIXES = ("_$s", "_$S", "__T0")
+
+
+def _is_swift_name(name: Optional[str]) -> bool:
+    """*name* is a function of the Swift calling convention: a mangled Swift symbol that is not
+    an ``@objc`` thunk (mangled ``...To``, which has the C convention).
+
+    Such a call is assumed to succeed: a throwing Swift function writes its error to x21 (which
+    its caller zeroes and tests after the call), but x21 is kept across the call like the other
+    callee-saved registers, so the error path is not followed (heuristic registry
+    ``swift-call-succeeds``)."""
+    return bool(name) and name.startswith(_SWIFT_SYMBOL_PREFIXES) and not name.endswith("To")
+
+#: The frame pointer and link register: read on entry by design (arm64e's return-address check
+#: before a tail call reads x30), saved with the callee-saved registers.
+_FRAME_LINK = frozenset(("x29", "x30"))
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
 #: What a return hands its caller: the result register (a function that does not write v0
 #: returns no floating-point value).
@@ -330,7 +350,8 @@ def _runs_in_caller(ins) -> bool:
 
 def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     """The registers a call to *target* may read: a runtime function's ABI contract
-    (:data:`RUNTIME_CONTRACTS`: ``objc_retain_x19`` reads x19); any other named function or
+    (:data:`RUNTIME_CONTRACTS`: ``objc_retain_x19`` reads x19); a named Swift function (a
+    mangled ``$s`` symbol) the Swift convention's (:data:`SWIFT_CALL_ARGS`); any other named function or
     message send, function outside this image's ``__text`` -- or an unknown target -- the
     AAPCS64 argument registers (:data:`ABI_ARGS`); an unnamed function of the image's
     ``__text`` (with a calling convention, or a machine-outlined fragment with none) the
@@ -344,6 +365,8 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     contract = RUNTIME_CONTRACTS.get(name) if name else None
     if contract is not None:
         return contract[0]
+    if _is_swift_name(name):
+        return SWIFT_CALL_ARGS
     if (target is None or name is not None or stub_selector(ctx, target) is not None
             or text_holding(ctx, target) is None):
         return ABI_ARGS
@@ -459,7 +482,7 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
         record_heuristic_hit(ctx, "undecoded jump table",
                              f"the br at {a:#x} in the function at {target:#x}: every register "
                              f"taken as read")
-    saved = sorted(entry & _CALLEE_SAVED - _SWIFT_ARGS)
+    saved = sorted(entry & _CALLEE_SAVED - _FRAME_LINK - _SWIFT_ARGS)
     if frame and saved and not unresolved:
         # A function with a calling convention has no use for its caller's callee-saved
         # registers but to save them: a save the spill test does not see (through x29, say)?

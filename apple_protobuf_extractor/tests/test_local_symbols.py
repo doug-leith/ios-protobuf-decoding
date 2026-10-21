@@ -270,9 +270,13 @@ class TestLocalSymbolsLive(unittest.TestCase):
         ctx = BinaryContext.from_cache(self.reader, self.mach_va)
         st = build_string_table(ctx)
         cl = CL.build_class_list(ctx, st)
+        unnamed = sum(1 for c in cl for m in c.methods if m.name is None)
         counts = apply_to_classes(cl, self.syms)
-        # Substantial recovery is expected for this preoptimised image.
-        self.assertGreater(counts['renamed'] + counts['corrected'], 1000)
+        # The method lists name nearly every method themselves (the relative-selector base,
+        # .cxx_destruct accepted, #122): before, 383 were unnamed (347 of them .cxx_destruct)
+        # and over 1000 renamed or corrected by .symbols; now 36 unnamed, 41 fixed.
+        self.assertLess(unnamed, 100)
+        self.assertLess(counts['renamed'] + counts['corrected'], 100)
         # The method at the readFrom: IMP must now be named readFrom: (it parses
         # as a false-positive selector from the stripped method list otherwise).
         klass = cl.find('GEOCoarseLocationTerritoryInfo')

@@ -100,12 +100,26 @@ def _relptr(ctx, va):
     """Swift RelativeDirectPointer: target = address + signed int32.
 
     The FieldDescriptor / FieldRecord pointers (type name, field name, field
-    descriptor) and the __swift5_types entries are all *direct* — the low bit is
-    a real address bit (names are byte-aligned, often odd), NOT an indirect flag.
-    Symbolic references inside a mangled name carry their own control byte and are
-    handled separately in :func:`_resolve_symbolic`."""
+    descriptor) are all *direct* — the low bit is a real address bit (names are
+    byte-aligned, often odd), NOT an indirect flag.  The exceptions are read by their
+    own helpers: a context descriptor's parent, an indirectable pointer
+    (:func:`_parent_desc`), and a ``__swift5_types`` record, which carries a kind in its
+    low bits (:func:`_type_record`).  Symbolic references inside a mangled name carry
+    their own control byte and are handled separately in :func:`_resolve_symbolic`."""
     v = _i32(ctx, va)
     return 0 if v == 0 else va + v
+
+
+def _type_record(ctx, va):
+    """The nominal type descriptor a ``__swift5_types`` record at *va* names: a relative
+    pointer whose low two bits are its TypeReferenceKind -- 0 the descriptor itself, 1 a
+    pointer to it (another image's, or behind a fixup); 0 for an ObjC class reference
+    (2 / 3), which has no Swift descriptor."""
+    v = _i32(ctx, va)
+    kind, target = v & 3, va + (v & ~3)
+    if v == 0 or kind > 1:
+        return 0
+    return ctx.read_ptr(target) if kind == 1 else target
 
 
 def _cstr(ctx, va):
@@ -316,7 +330,7 @@ def local_enum_names(ctx):
         return out
     for i in range(sec.vmsize // 4):
         try:
-            desc = _relptr(ctx, sec.vmaddr + i * 4)
+            desc = _type_record(ctx, sec.vmaddr + i * 4)
             if not desc or _desc_kind(ctx, desc) != _ENUM_KIND:
                 continue
             name = _desc_name(ctx, desc)
@@ -450,9 +464,15 @@ def _read_field_types(ctx, desc, fieldmd):
 
 
 def _parent_desc(ctx, desc):
-    """The parent context descriptor (relative pointer at ``desc + 0x04``)."""
+    """The parent context descriptor: a relative indirectable pointer at ``desc + 0x04`` -- with
+    its low bit set, the address of a pointer to the parent (one in another image, or behind a
+    fixup: iOS 27 GeoServices' Polygon2D, whose parent MapGeometry is reached so)."""
     v = _i32(ctx, desc + 0x04)
-    return desc + 0x04 + v if v else 0
+    if not v:
+        return 0
+    if v & 1:
+        return ctx.read_ptr(desc + 0x04 + (v & ~1))
+    return desc + 0x04 + v
 
 
 def _qualified_name(ctx, desc) -> Optional[str]:
@@ -476,6 +496,11 @@ def _qualified_name(ctx, desc) -> Optional[str]:
             cur = _parent_desc(ctx, cur)
         except READ_ERRORS:
             break                        # bad parent pointer: degrade to what we have
+    else:
+        from proto.models import record_heuristic_hit
+        record_heuristic_hit(ctx, "_MAX_CONTEXT_DEPTH",
+                             f"the type at {desc:#x}: its qualified name stops at "
+                             f"{_MAX_CONTEXT_DEPTH} enclosing contexts")
     return ".".join(reversed(names)) if names else None
 
 
@@ -484,7 +509,10 @@ def _owner_type_name(ctx, desc) -> Optional[str]:
     ``_StorageClass`` / ``OneOf_*`` enum, whose own name is not wanted.  Starts the
     qualified-name walk at *desc*'s parent (swift-protobuf nests these inside the
     message struct via a private anonymous context)."""
-    return _qualified_name(ctx, _parent_desc(ctx, desc))
+    try:
+        return _qualified_name(ctx, _parent_desc(ctx, desc))
+    except READ_ERRORS:                  # an unreadable indirect parent pointer
+        return None
 
 
 class FieldMetadata(NamedTuple):
@@ -525,7 +553,7 @@ def collect_field_types(ctx) -> FieldMetadata:
     for i in range(sec.vmsize // 4):
         # one malformed descriptor must never abort whole-image recovery.
         try:
-            desc = _relptr(ctx, sec.vmaddr + i * 4)
+            desc = _type_record(ctx, sec.vmaddr + i * 4)
             if not desc:
                 continue
             kind = _desc_kind(ctx, desc)

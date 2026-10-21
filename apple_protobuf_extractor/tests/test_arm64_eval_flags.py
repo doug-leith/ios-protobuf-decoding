@@ -153,6 +153,29 @@ class TestConstantOnEveryPath(unittest.TestCase):
     def test_different_constants_are_unknown(self):
         self.assertIsNone(self.x15('0x48'))
 
+    def test_a_constant_parked_across_a_call_and_copied_back(self):
+        # locationd's readFrom core: the table base x30 (the link register) is moved to x20
+        # around each call and back; by reaching definitions that is a copy cycle (unknown),
+        # by the forward evaluation it is the constant on every path
+        insns = listing('adrp x30, #0x5000', 'add x30, x30, #0x70', 'end:', 'mov x20, x30',
+                        f'bl {CALL}', 'mov x30, x20', 'cbnz x0, @end', 'ret')
+        flow = Flow(None, insns)
+        k = at_mark(insns)
+        self.assertIsNone(flow.const_before(k, 'x30'))
+        self.assertEqual(flow.known_before(k).get('x30'), 0x5070)
+
+    def test_a_swift_call_is_assumed_to_succeed(self):
+        # x21, Swift's error register, is kept across a Swift call (heuristic registry
+        # swift-call-succeeds): the caller's `cbnz x21, <error>` after it is decided
+        from unittest import mock
+        import proto.callees as C
+        from tests._fakes import NoImage
+        insns = listing('mov x21, #0', f'bl {CALL}', 'ret')
+        with mock.patch.object(C, 'callee_name', lambda ctx, va: '_$s4main5thingyyKF'), \
+                mock.patch.object(C, 'stub_selector', lambda ctx, va: None):
+            flow = Flow(NoImage(), insns)
+            self.assertEqual(flow.known_before(len(insns) - 1).get('x21'), 0)
+
     def test_a_path_from_the_entry_is_unknown(self):
         insns = listing('cbz x0, @end', 'mov x15, #3', 'end:', f'bl {CALL}', 'ret')
         self.assertIsNone(Flow(None, insns).const_before(at_mark(insns), 'x15'))

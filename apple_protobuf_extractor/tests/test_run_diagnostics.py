@@ -283,3 +283,28 @@ class TestCapstoneRequired(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestHeuristicHits(unittest.TestCase):
+    """models.record_heuristic_hit: one warning per bound or heuristic, every place listed once,
+    and the run summary says so."""
+
+    def test_warned_once_listed_once_each(self):
+        import io
+        from proto.models import record_heuristic_hit
+        from proto.emitter import print_summary
+        from tests._fakes import NoImage
+        ctx = NoImage()
+        with self.assertLogs('proto.models', 'WARNING') as logs:
+            record_heuristic_hit(ctx, "_CAP", "at 1")
+            record_heuristic_hit(ctx, "_CAP", "at 2")
+            record_heuristic_hit(ctx, "_CAP", "at 1")          # the same place again
+            record_heuristic_hit(ctx, "_OTHER", "at 3")
+        self.assertEqual(len(logs.output), 2)
+        diag = get_diagnostics(ctx)
+        self.assertEqual(diag.heuristics_hit, [("_CAP", "at 1"), ("_CAP", "at 2"), ("_OTHER", "at 3")])
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch('sys.stderr', err):
+            print_summary([], [], source_name="x", file=out, diagnostics=diag)
+        self.assertIn("bounds / heuristics hit", out.getvalue())
+        self.assertIn("_CAP: at 2", err.getvalue())

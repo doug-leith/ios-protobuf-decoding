@@ -75,6 +75,7 @@ from proto.callees import callee_name
 from proto.dispatch import listing_flow
 from proto.function_body import FunctionBody, _branch_target, function_body
 from proto.arm64_operands import CALLS, parse_mem, split_ops, writes
+from proto.models import record_heuristic_hit
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
@@ -318,8 +319,13 @@ def _static_blob_stride(ctx: BinaryContext, blob_va: int, enum: bool = False) ->
         return None
     if count < 2 or _static_entry(ctx, blob_va, 0x20, enum) is None:
         return None
-    return next((st for st in range(0x18, _MAX_ELEMENT_STRIDE + 8, 8)
-                 if _static_entry(ctx, blob_va, 0x20 + st, enum) is not None), None)
+    stride = next((st for st in range(0x18, _MAX_ELEMENT_STRIDE + 8, 8)
+                   if _static_entry(ctx, blob_va, 0x20 + st, enum) is not None), None)
+    if stride is None:
+        record_heuristic_hit(ctx, "_MAX_ELEMENT_STRIDE",
+                             f"the static name map at {blob_va:#x}: its first element parses, a "
+                             f"second at no stride up to {_MAX_ELEMENT_STRIDE:#x}")
+    return stride
 
 
 def _parse_static_blob(ctx: BinaryContext, blob_va: int,
@@ -667,6 +673,9 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
     if oracle and not oracle <= {f.number for f in got}:
         return False
     if got and all(f.number == len(f.name) for f in got):
+        record_heuristic_hit(ctx, "swift name-map number == len(name)",
+                             f"{len(got)} entries of the name map read for the traverse at "
+                             f"{traverse_va or 0:#x} are rejected as (length, pointer) pairs")
         return False
     return True
 

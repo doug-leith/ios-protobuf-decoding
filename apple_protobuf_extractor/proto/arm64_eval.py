@@ -435,6 +435,8 @@ class Flow:
         self._ivar_memo: Dict[int, Optional[int]] = {}
         self._reg_targets: Optional[Dict[int, int]] = None   # :meth:`_register_call_targets`
         self._fragments: Dict[int, Optional[Tuple[Insn, ...]]] = {}   # :meth:`fragment`
+        self._known: Dict[int, Dict[str, int]] = {}                   # :meth:`known_before`
+        self._entry_states: Optional[Dict[int, "_Machine"]] = None    # :meth:`known_before`
 
     # ── reaching definitions ────────────────────────────────────────────────
 
@@ -828,13 +830,43 @@ class Flow:
             k = nxt
         return {}
 
+    def known_before(self, k: int) -> Dict[str, int]:
+        """The registers known before ``insns[k]`` whatever the listing was entered with: what
+        :meth:`propagate` (entered with nothing known) finds every path there agrees on --
+        through loops and calls, so a table base the compiler parks in a callee-saved register
+        across a call and copies back is still that constant.  One fixpoint per Flow (its
+        blocks' entry states), replayed to *k*; memoised per index."""
+        if k not in self._known:
+            if self._entry_states is None:
+                start = NO_OBJECTS.machine({})
+                start.put('sp', _STACK_TOP)
+
+                def run_block(blk: int, st: _Machine):
+                    for j in self.block_range(blk):
+                        self._propagate_step(st, j)
+                    return [(succ, st) for succ in self._live_successors(blk, st)]
+                self._entry_states = (self.forward([(self.cfg.entry, start)], run_block)
+                                      if self.cfg.entry is not None else {})
+            b = self._block_of.get(k)
+            st0 = self._entry_states.get(b)
+            if st0 is None:                     # unreachable with nothing known
+                self._known[k] = {}
+            else:
+                st = st0.copy()
+                for j in range(self._first_in_block[b], k):
+                    self._propagate_step(st, j)
+                self._known[k] = dict(st.regs)
+        return self._known[k]
+
     def value_at(self, k0: int, regs: Dict[str, int], kt: int, reg: str) -> Optional[int]:
         """*reg*'s value on reaching ``insns[kt]`` when the code is run from ``insns[k0]`` with
-        *regs* known (any other register: its reaching-definition constant at ``insns[k0]``),
-        following the branches the run decides.  None when the run does not reach *kt* -- a
-        call, a return, a jump out of the listing, a branch it cannot decide, a loop -- or the
-        value there is unknown."""
-        m = _Machine(regs, fallback=lambda r: self.const_before(k0, r))
+        *regs* known (any other register: what :meth:`known_before` knows at ``insns[k0]``, else
+        its reaching-definition constant there), following the branches the run decides.  None
+        when the run does not reach *kt* -- a call, a return, a jump out of the listing, a branch
+        it cannot decide, a loop -- or the value there is unknown."""
+        m = _Machine({}, fallback=lambda r: self.const_before(k0, r))
+        for r, v in {**self.known_before(k0), **regs}.items():
+            m.put(r, v)                         # put: a stack address marks the frame escaped
         seen: Set[int] = set()
         k = k0
         while 0 <= k < len(self.insns) and k not in seen:
@@ -1204,15 +1236,14 @@ class Flow:
             self._exec(m, fi)
 
     def _register_call_targets(self) -> Dict[int, int]:
-        """``{index: target}`` of the calls through a register whose register :meth:`propagate`
-        evaluates, solved once (propagation reads no reaching definitions)."""
+        """``{index: target}`` of the calls through a register whose register the forward
+        evaluation knows (:meth:`known_before`; it reads no reaching definitions)."""
         if self._reg_targets is None:
             ks = [k for k, i in enumerate(self.insns) if i.mnemonic in CALLS and i.mnemonic != 'bl']
-            values = self.propagate({}, ks) if ks else {}
             self._reg_targets = {}
             for k in ks:
                 ops = split_ops(self.insns[k].op_str)
-                v = values.get(k, {}).get(_norm_reg(ops[0])) if ops else None
+                v = self.known_before(k).get(_norm_reg(ops[0])) if ops else None
                 if v is not None and not _is_stack(v):
                     self._reg_targets[k] = v
         return self._reg_targets

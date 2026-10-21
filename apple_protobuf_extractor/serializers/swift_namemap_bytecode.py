@@ -196,7 +196,20 @@ def bytecode_literal_from_getter(ctx, insns, enum: bool = False,
     return None
 
 
+def _in_cstrings(ctx, va) -> bool:
+    """*va* lies in the image's ``__TEXT,__cstring`` (where a literal lives: a length read off
+    a pair of registers that hold something else is not one)."""
+    if not ctx.has_section("__TEXT", "__cstring"):
+        return False
+    sec = ctx.section("__TEXT", "__cstring")
+    return sec.vmaddr <= va < sec.vmaddr + sec.vmsize
+
+
 def _read(ctx, va, length) -> Optional[bytes]:
+    if length > _MAX_LITERAL_LEN and _in_cstrings(ctx, va):
+        from proto.models import record_heuristic_hit
+        record_heuristic_hit(ctx, "_MAX_LITERAL_LEN",
+                             f"the name-map literal at {va:#x} ({length} bytes) is refused")
     if not 1 <= length <= _MAX_LITERAL_LEN:
         return None
     try:

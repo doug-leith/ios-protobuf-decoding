@@ -182,9 +182,6 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
                          {0x100c: {0x1014, 0x101c}, 0x1028: {0x1030, 0x1034}})
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestProvisionalDecodes(unittest.TestCase):
     """A jump table decoded while call_reads was still solving a cycle (its evaluation used a
@@ -209,7 +206,78 @@ class TestProvisionalDecodes(unittest.TestCase):
 
         with mock.patch.object(D, '_evaluated_arms', evaluated):
             self.assertEqual(D._jump_table_arm_addrs(ctx, listing), {0x1010})
-            with self.assertLogs('proto.dispatch', 'WARNING') as logs:
+            with self.assertLogs('proto.models', 'WARNING') as logs:
                 D.recheck_provisional_decodes(ctx)
-        self.assertIn('decode differently', logs.output[0])
+        self.assertIn('decodes differently', logs.output[0])
         self.assertEqual(D._jump_table_arm_addrs(ctx, listing), {0x100c})
+
+    def test_a_table_that_decodes_the_same_is_not_remarked(self):
+        from unittest import mock
+        import proto.dispatch as D
+        from proto.callees import provisional_answers
+        from proto.models import get_diagnostics
+        from tests._fakes import NoImage
+        from tests._listing import insns
+        listing = insns([('cmp', 'w8, #1'), ('b.hi', '#0x1010'), ('adr', 'x9, #0x1010'),
+                         ('br', 'x9'), ('ret', '')])
+        ctx = NoImage()
+        calls = []
+
+        def evaluated(flow, idom, kb, lo, hi):
+            if not calls:
+                provisional_answers(ctx)[0] += 1
+            calls.append(kb)
+            return {0x1010}
+
+        with mock.patch.object(D, '_evaluated_arms', evaluated):
+            D._jump_table_arm_addrs(ctx, listing)
+            D.recheck_provisional_decodes(ctx)
+        self.assertEqual(len(calls), 2)                 # decoded again once settled
+        self.assertEqual(get_diagnostics(ctx).heuristics_hit, [])
+
+
+class TestTableBaseParkedAcrossACall(unittest.TestCase):
+    """#121, locationd's readFrom core (0x100bdbcf0): the table base x30 is parked in x20 around
+    a call (which clobbers x30) and copied back.  By reaching definitions that is a copy cycle
+    (unknown); the decoder starts from the forward evaluation, where it is the constant."""
+
+    def _arms(self):
+        from unittest import mock
+        import proto.callees as C
+        import proto.dispatch as D
+        from tests._fakes import NoImage
+        from tests._listing import insns
+
+        class Image(NoImage):
+            def read_bytes(self, va, n):
+                table = {0x5070: 0, 0x5071: 1, 0x5072: 2}
+                if all(va + i in table for i in range(n)):
+                    return bytes(table[va + i] for i in range(n))
+                raise ValueError(va)
+
+            def read_ptr(self, va):
+                raise ValueError(va)
+
+        listing = insns([('adrp', 'x30, #0x5000'), ('add', 'x30, x30, #0x70'),
+                         ('mov', 'x20, x30'), ('bl', '#0x9000'), ('mov', 'x30, x20'),   # 0x1008
+                         ('cmp', 'w8, #2'), ('b.hi', '#0x1034'), ('adr', 'x9, #0x102c'),
+                         ('ldrb', 'w10, [x30, x8]'), ('add', 'x9, x9, x10, lsl #2'),
+                         ('br', 'x9'),                                                   # 0x1028
+                         ('b', '#0x1008'), ('b', '#0x1008'),                             # arms
+                         ('cbnz', 'x0, #0x1008'), ('ret', '')])   # 0x1034: the loop's own edge
+        with mock.patch.object(C, 'callee_name', lambda ctx, va: None), \
+                mock.patch.object(C, 'stub_selector', lambda ctx, va: None):
+            return D._jump_table_arm_addrs(Image(), listing, per_br=True).get(0x1028, set())
+
+    def test_the_table_decodes(self):
+        self.assertEqual(self._arms(), {0x102c, 0x1030, 0x1034})
+
+    def test_by_reaching_definitions_alone_it_would_not(self):
+        from unittest import mock
+        from proto.arm64_eval import Flow
+        with mock.patch.object(Flow, 'known_before', lambda self, k: {}):
+            self.assertEqual(self._arms(), set())
+
+
+if __name__ == "__main__":
+    unittest.main()

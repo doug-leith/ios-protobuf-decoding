@@ -22,6 +22,7 @@ from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
 from proto.arm64_operands import (INDIRECT_BRANCHES, RETURNS, TRAPS, imm_operand, is_cond_branch,
                                   reads, split_ops)
+from proto.models import record_heuristic_hit
 from proto.protoclass_set import _proto_class_set
 
 log = logging.getLogger(__name__)
@@ -268,10 +269,12 @@ def recheck_provisional_decodes(ctx: BinaryContext) -> None:
         memo.pop((key[0], None), None)
         new = _decoded(ctx, ins, bounds)
         if old is not None and old[0] != new[0]:
-            log.warning("the jump table(s) of the listing at %#x decode differently once the "
-                        "call_reads cycle they were decoded in has settled (%d -> %d arms); "
-                        "the cycle's call_reads may be stale (TODO #119)", key[0][0],
-                        sum(len(a) for a in old[0].values()), sum(len(a) for a in new[0].values()))
+            record_heuristic_hit(
+                ctx, "jump table decoded in an unsettled call_reads cycle",
+                f"the listing at {key[0][0]:#x} decodes differently once the cycle has settled "
+                f"({sum(len(a) for a in old[0].values())} -> "
+                f"{sum(len(a) for a in new[0].values())} arms); the cycle's call_reads may be "
+                f"stale (TODO #119)")
 
 
 def decoded_flow(ctx: BinaryContext, insns: List["Insn"]):

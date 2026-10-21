@@ -30,6 +30,14 @@ class TestSelectorValidation(unittest.TestCase):
         self.assertTrue(_is_valid_selector('x'))
         self.assertTrue(_is_valid_selector('z'))
 
+    def test_the_compiler_generated_cxx_selectors_accepted(self):
+        # clang's C++ / ARC ivar destructor and constructor; macOS 27 GeoServices'
+        # GEOComposedRouteAnchorPoint has .cxx_destruct (no .symbols file restores it there)
+        self.assertTrue(_is_valid_selector('.cxx_destruct'))
+        self.assertTrue(_is_valid_selector('.cxx_construct'))
+        self.assertFalse(_is_valid_selector('.cxx_other'))
+        self.assertFalse(_is_valid_selector('.x'))
+
     def test_control_chars_rejected(self):
         self.assertFalse(_is_valid_selector('\x01\\'))   # bytes from chained fixup
         self.assertFalse(_is_valid_selector('\x00abc'))

@@ -22,6 +22,35 @@ class _Ctx(NoImage):
         return self._d[off:off + n]
 
 
+class TestLiteralLengthBound(unittest.TestCase):
+    """A literal longer than _MAX_LITERAL_LEN is refused, and reported when it lies in
+    __cstring (a "length" read off registers that hold something else is not remarked)."""
+
+    def _ctx(self):
+        from types import SimpleNamespace
+
+        class Strings(_Ctx):
+            def has_section(self, seg, sect):
+                return (seg, sect) == ('__TEXT', '__cstring')
+
+            def section(self, seg, sect):
+                return SimpleNamespace(vmaddr=0x4000, vmsize=0x10000)
+        return Strings(b"\0" * 0x10000, 0x4000)
+
+    def test_reported_in_cstrings(self):
+        from proto.models import get_diagnostics
+        ctx = self._ctx()
+        with self.assertLogs('proto.models', 'WARNING'):
+            self.assertIsNone(B._read(ctx, 0x4000, B._MAX_LITERAL_LEN + 1))
+        self.assertEqual([n for n, _w in get_diagnostics(ctx).heuristics_hit], ['_MAX_LITERAL_LEN'])
+
+    def test_not_remarked_elsewhere(self):
+        from proto.models import get_diagnostics
+        ctx = self._ctx()
+        self.assertIsNone(B._read(ctx, 0x90000, B._MAX_LITERAL_LEN + 1))
+        self.assertEqual(get_diagnostics(ctx).heuristics_hit, [])
+
+
 class TestDecode(unittest.TestCase):
     def test_sequential_same_next(self):
         # CipherML AspireApiEvaluationKeyMetadata

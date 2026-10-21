@@ -165,8 +165,10 @@ def parse_mem(op: str):
 
 
 def _list_regs(tok: str) -> List[str]:
-    """The registers of a vector register list ``{v0.16b, v1.16b}`` (``vN`` form)."""
-    return [r for r in (reg_name(t) for t in tok.strip().strip('{}').split(',')) if r]
+    """The registers of a vector register list ``{v0.16b, v1.16b}`` or one lane of them
+    ``{v0.s, v1.s}[1]`` (``vN`` form)."""
+    inner = tok[tok.index('{') + 1:tok.index('}')] if '{' in tok and '}' in tok else tok
+    return [r for r in (reg_name(t) for t in inner.split(',')) if r]
 
 
 def operand_regs(tokens) -> List[str]:
@@ -215,8 +217,16 @@ _LSE_LOAD = re.compile(r'(ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|sw
 _CASP = re.compile(r'casp(a|l|al)?$')
 # Their store aliases (``stadd ws, [xn]``) write no register.
 _LSE_STORE = re.compile(r'st(add|clr|eor|set|smax|smin|umax|umin)l?[bh]?$')
-# Instructions that read their destination too (they change only some of its bits).
-_READS_DEST = frozenset(('movk', 'bfi', 'bfxil', 'bfm'))
+# Instructions that read their destination too: they change only some of its bits (movk, the
+# bitfield inserts, a shift-insert), accumulate into it (multiply-add, shift-right-accumulate,
+# the bitwise selects, a table lookup's extension) or authenticate / sign / strip the pointer
+# it holds.
+_READS_DEST = frozenset((
+    'movk', 'bfi', 'bfxil', 'bfm', 'bfc', 'sli', 'sri',
+    'mla', 'mls', 'fmla', 'fmls', 'usra', 'ssra', 'ursra', 'srsra', 'bsl', 'bit', 'bif', 'tbx',
+    'autia', 'autib', 'autda', 'autdb', 'autiza', 'autizb', 'autdza', 'autdzb',
+    'pacia', 'pacib', 'pacda', 'pacdb', 'paciza', 'pacizb', 'pacdza', 'pacdzb',
+    'xpaci', 'xpacd'))
 # Loads that write two registers.
 _PAIR_DESTS = PAIR_LOADS | frozenset(('ldxp', 'ldaxp'))
 
@@ -236,7 +246,7 @@ def writes(ins: Insn) -> List[str]:
     if (mn in NO_DEST and mn not in STORE_EXCLUSIVE) or _LSE_STORE.match(mn):
         return out
     if ops and ops[0].startswith('{'):
-        dests = _list_regs(ops[0]) if mn.startswith('ld') else []
+        dests = _list_regs(ops[0]) if mn.startswith('ld') else []      # a lane load: the list
     elif _LSE_LOAD.match(mn):
         dests = ops[1:2]
     elif mn in _PAIR_DESTS or _CASP.match(mn):

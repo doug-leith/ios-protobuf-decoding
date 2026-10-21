@@ -365,9 +365,12 @@ class TestNameMapBuilderValidation(unittest.TestCase):
     but the name LENGTH in the newer packed-bytecode form, so the walker can
     mis-read lengths as numbers (e.g. nptocompaniond: 6=len'domain', 4='code')."""
     def test_length_form_rejected(self):
-        # every entry's number == len(name) -> the (length, ptr) packed form
+        # every entry's number == len(name) -> the (length, ptr) packed form; the rejection
+        # (a heuristic, kept by choice) is reported
         got = [S.SwiftField(6, "domain"), S.SwiftField(4, "code")]
-        self.assertFalse(S._namemap_builder_validated(None, got, None))
+        with self.assertLogs('proto.models', 'WARNING') as logs:
+            self.assertFalse(S._namemap_builder_validated(NoImage(), got, None))
+        self.assertIn('number == len(name) hit', logs.output[0])
 
     def test_genuine_numbers_accepted(self):
         # numbers differ from name lengths, no oracle to contradict -> accept
