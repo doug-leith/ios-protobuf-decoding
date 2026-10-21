@@ -4,9 +4,9 @@ Swift Remote Mirror -- ``libswiftRemoteMirror``, the reflection library behind l
 
 The library comes from a swift.org toolchain (6.2: ``swift-6.2-RELEASE-osx.pkg``, at
 ``usr/lib/swift/macosx/libswiftRemoteMirror.dylib`` in its payload; Xcode no longer ships it):
-``MACHO_REMOTE_MIRROR``, else ``data/tools/libswiftRemoteMirror.dylib``
-(:func:`artifacts.remote_mirror_lib`).  It reads the target's memory through callbacks; here
-they read the cache, with its slide info's pointer chains applied (:mod:`oracles.cache_memory`).
+``MACHO_REMOTE_MIRROR``, else the repository's default (:func:`artifacts.remote_mirror_lib`). It
+reads the target's memory through callbacks; here they read the cache, with its slide info's
+pointer chains applied (:mod:`oracles.cache_memory`).
 
 For each message: the image and every image it links are in one reflection context; a
 copy-on-write message's fields are its ``_StorageClass``'s (a private class, whose mangled name
