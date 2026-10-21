@@ -353,5 +353,51 @@ class TestGenericArgumentTokens(unittest.TestCase):
         self.assertEqual(self.d(b"SDySSSaySSGG")[1], "map?")              # [String: [String]]
 
 
+
+def _ios27_cache():
+    import artifacts
+    for name in artifacts.CACHE_BASENAMES:
+        p = os.path.join(artifacts.ios27_cache_dir(), name)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+@unittest.skipUnless(_ios27_cache(), "iOS 27 cache not available")
+class TestOneofEnumOfItsOwn(unittest.TestCase):
+    """Apple's own generator gives a oneof an enum of its own (TokenGenerationCore's
+    ``Tokengenerationcore_Wireformat_ValueEnum``), not a nested ``OneOf_``, and some of its cases
+    no payload: their cases are the message's fields, by the property of the enum's type; a proto
+    enum's property (its only payload case UNRECOGNIZED) brings none (TODO #128)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.load import load_cache_image
+        r = DyldCacheReader(_ios27_cache())
+        cls.metas = {im: TR.collect_field_types(load_cache_image(r, r.find_image_header(im)).ctx)
+                     for im in ("TokenGenerationCore", "CipherML")}
+
+    def test_the_cases_are_fields(self):
+        meta = self.metas["TokenGenerationCore"]
+        choice = meta.types["Tokengenerationcore_Wireformat_ToolChoice"]
+        self.assertEqual(choice["function"], "Tokengenerationcore_Wireformat_ToolChoice.Function")
+        self.assertEqual(meta.stored["Tokengenerationcore_Wireformat_ToolChoice"],
+                         {"value", "none", "automatic", "required", "function", "functions"})
+
+    def test_a_case_with_no_payload_is_a_field_untyped(self):
+        meta = self.metas["TokenGenerationCore"]
+        q = "Tokengenerationcore_Wireformat_FinishReason"
+        self.assertIn("producedStopToken", meta.stored[q])
+        self.assertNotIn("producedStopToken", meta.types[q])
+        self.assertEqual(meta.types[q]["encounteredStopSequence"], "string")
+
+    def test_a_proto_enum_brings_no_cases(self):
+        meta = self.metas["CipherML"]
+        args = meta.types["AspirePirPirPreprocessDbArgs"]
+        self.assertEqual(args["algorithm"], "AspirePirPirAlgorithm")
+        self.assertNotIn("UNRECOGNIZED", args)
+
+
 if __name__ == "__main__":
     unittest.main()

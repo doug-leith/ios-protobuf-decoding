@@ -248,9 +248,11 @@ RUNTIME_CONTRACTS["____chkstk_darwin"] = (("x9",), None)
 #: Callees that change fewer registers than AAPCS64 lets a call change (every caller-saved one,
 #: and the frame slots it can reach): the registers each changes; none writes memory its caller
 #: owns.  The stack probe a frame over a page calls first (``mov w9, #size ; adrp x17 ;
-#: add x17 ; ldr x16, [x17] ; blraa x16, x17``) saves and restores its scratch registers below
-#: sp, so the caller's x0 (self) survives it.
-CALL_CLOBBERS: Dict[str, Tuple[str, ...]] = {"____chkstk_darwin": ("x16", "x17", "x30")}
+#: add x17 ; ldr x16, [x17] ; blraa x16, x17``) saves and restores its other scratch registers
+#: below sp, so the caller's x0 (self) survives it; x9, the size, it counts down a page at a time
+#: as it probes (its caller allocates the frame by an immediate) -- run from the iPhone 8 cache's
+#: libsystem_pthread, :mod:`oracles.call_models` (TODO #128).
+CALL_CLOBBERS: Dict[str, Tuple[str, ...]] = {"____chkstk_darwin": ("x9", "x16", "x17", "x30")}
 for _name in ("_objc_opt_class", "_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
     RUNTIME_CONTRACTS[_name] = (("x0", "x1"), None)
 

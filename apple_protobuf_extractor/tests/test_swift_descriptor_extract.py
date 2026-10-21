@@ -1572,5 +1572,19 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
         self.assertTrue(fields[0].number_confirmed)
 
 
+
+class TestPropertyNameJoin(unittest.TestCase):
+    """A name-map field joins its Swift property less the ``_p`` swift-protobuf adds to a name that
+    would collide (``has_aggs`` -> ``hasAggs_p``; BiomeStreams' PgQuery_Query), on the property's
+    side only: ``foo_p`` is the property ``fooP`` (TODO #128)."""
+
+    def test_the_join(self):
+        from serializers.swift_descriptor_extract import _norm, _norm_property
+        self.assertEqual(_norm("has_aggs"), _norm_property("hasAggs_p"))
+        self.assertEqual(_norm("user_id"), _norm_property("userID"))
+        self.assertEqual(_norm("foo_p"), _norm_property("fooP"))
+        self.assertNotEqual(_norm("foo_p"), _norm_property("foo"))
+
+
 if __name__ == "__main__":
     unittest.main()

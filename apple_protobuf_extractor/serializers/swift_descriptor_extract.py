@@ -1038,6 +1038,14 @@ def _norm(name: str) -> str:
     return name.replace("_", "").lower()
 
 
+def _norm_property(name: str) -> str:
+    """:func:`_norm` of a Swift property's name, less the ``_p`` swift-protobuf appends to one
+    that would collide (``has_version`` -> ``hasVersion_p``: an accessor prefix, a reserved
+    word) -- only on this side: a proto name may end in ``_p`` itself (``foo_p`` -> ``fooP``).
+    Remote Mirror showed 21 fields left untyped by the plain join (TODO #128)."""
+    return _norm(name[:-2] if name.endswith("_p") else name)
+
+
 # Readings with no cross-check of their own (one builder entry): kept only when Swift reflection
 # agrees the message has that field.
 _REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single"})
@@ -1067,7 +1075,7 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
             # reflection must list that field, or the reading is another type's
             # (e.g. an empty message whose getter reaches a sibling's closure).  Any
             # stored field record counts, whether or not its type decodes.
-            refl = {_norm(k) for k in stored.get(m.name, ())}
+            refl = {_norm_property(k) for k in stored.get(m.name, ())}
             if _norm(m.fields[0].name) not in refl:
                 m.fields, m.shape = [], "none"
         if not m.fields and m.name in fieldless:
@@ -1089,8 +1097,8 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
                 types, inc = cands[0][1], incomplete.get(cands[0][0], set())
         if not types:
             continue
-        norm = {_norm(k): v for k, v in types.items()}
-        norm_inc = {_norm(k) for k in inc}
+        norm = {_norm_property(k): v for k, v in types.items()}
+        norm_inc = {_norm_property(k) for k in inc}
         for f in m.fields:
             key = _norm(f.name)
             t = norm.get(key)

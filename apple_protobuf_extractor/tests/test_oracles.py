@@ -440,6 +440,42 @@ class TestMethodNamesAgainstSymbols(unittest.TestCase):
         self._check(IOS27_CACHE, self.IOS27)
 
 
+@unittest.skipUnless(IPHONE8_CACHE and _unicorn(), "iPhone 8 cache or unicorn not available")
+class TestCallModelsAgainstTheRuntime(unittest.TestCase):
+    """RUNTIME_CONTRACTS, CALL_CLOBBERS and RETURNS_ARGUMENT against runs of the functions
+    themselves, from the iPhone 8 cache (:mod:`oracles.call_models`, TODO #128): before, the
+    stack probe's x9 was taken as kept."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        cls.reader = DyldCacheReader(IPHONE8_CACHE)
+
+    def test_the_tables(self):
+        from oracles.call_models import compare
+        res = compare(self.reader)
+        self.assertEqual(res.findings, [])
+        self.assertGreaterEqual(len(res.checked), 70)
+        self.assertEqual(sorted(res.not_run), ["_objc_enumerationMutation",
+                                               "_objc_opt_respondsToSelector"], res.not_run)
+
+    def test_planted_errors_are_reported(self):
+        """The probe's x9 kept again, isKindOfClass: without its class (x1), and
+        objc_opt_class taken to return its argument."""
+        import oracles.call_models as M
+        names = ["____chkstk_darwin", "_objc_opt_isKindOfClass", "_objc_opt_class"]
+        with mock.patch.dict(M.CALL_CLOBBERS, {"____chkstk_darwin": ("x16", "x17", "x30")}), \
+                mock.patch.dict(M.RUNTIME_CONTRACTS, {"_objc_opt_isKindOfClass": (("x0",), None)}), \
+                mock.patch.object(M, "RETURNS_ARGUMENT", M.RETURNS_ARGUMENT | {"_objc_opt_class"}):
+            res = M.compare(self.reader, names)
+        got = {(n, what) for n, what, _d in res.findings}
+        self.assertIn(("____chkstk_darwin", "a register changed that CALL_CLOBBERS does not list"),
+                      got)
+        self.assertIn(("_objc_opt_isKindOfClass", "reads a register its contract does not list"),
+                      got)
+        self.assertIn(("_objc_opt_class", "does not return its argument"), got)
+
+
 def _remote_mirror():
     try:
         from oracles.swift_mirror import library
@@ -451,9 +487,11 @@ def _remote_mirror():
 @unittest.skipUnless(IOS27_CACHE and _remote_mirror(),
                      "iOS 27 cache or libswiftRemoteMirror (MACHO_REMOTE_MIRROR) not available")
 class TestSwiftAgainstRemoteMirror(unittest.TestCase):
-    """Every emitted Swift message's stored fields and their types against Remote Mirror (TODO
-    #124): all agree; the one not compared is CipherML's AspireApiPIRShardConfigs, a one-case
-    oneof."""
+    """Every emitted Swift message's stored fields and their types, and the types of the fields
+    it emits, against Remote Mirror (TODO #124, #128): all agree; not compared, two one-case oneofs
+    (CipherML's AspireApiPIRShardConfigs, one of TokenGeneration's).  Before #128 the oneofs of
+    Apple's own generator (an enum of their own, not a nested OneOf_) went untyped and unread,
+    and the fields swift-protobuf names with a ``_p`` were emitted with no type."""
 
     IMAGES = ("BiomeStreams", "TokenGenerationCore", "TokenGeneration", "WorkoutKit",
               "CopresenceCore", "PaperKit", "SiriKitRuntime", "WorkoutCore", "EnergyKitFoundation",
@@ -464,20 +502,28 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
     def test_ios27_images(self):
         from oracles.swift_mirror import CacheMirror, compare
         mirror = CacheMirror(IOS27_CACHE)
-        not_compared = {}
+        not_compared, unpaired, compared = {}, {}, {}
         for image in self.IMAGES:
             with self.subTest(image=image):
                 res = compare(mirror, image)
                 self.assertGreater(res.stats["messages"], 0)
                 self.assertEqual(res.differences, [])
                 for skipped in ("not compared: no mangled name", "fields with no type recovered",
-                                "not compared: emitted, no type descriptor"):
+                                "not compared: emitted, no type descriptor",
+                                "emitted fields with no type"):
                     self.assertEqual(res.stats[skipped], 0, skipped)
                 left = res.stats["messages"] - res.stats["agree"]
                 if left:
-                    not_compared[image] = dict(res.stats)
-        self.assertEqual(list(not_compared), ["CipherML"], not_compared)
-        self.assertEqual(not_compared["CipherML"].get("not compared: a one-case oneof"), 1)
+                    not_compared[image] = res.stats["not compared: a one-case oneof"]
+                if res.stats["emitted fields with no one property of their name"]:
+                    unpaired[image] = res.stats["emitted fields with no one property of their name"]
+                compared[image] = res.stats["emitted fields compared"]
+        self.assertEqual(not_compared, {"CipherML": 1, "TokenGeneration": 1})
+        # (EnergyKitFoundation's GridCleanlinessStats: its name map's clean / reduce, properties
+        # cleaner / lessClean -- OPEN, TODO #128)
+        self.assertEqual(unpaired, {"EnergyKitFoundation": 2})
+        self.assertGreaterEqual(compared["TokenGenerationCore"], 190)       # its oneofs' cases
+        self.assertGreater(sum(compared.values()), 5_800)
 
     def test_a_planted_error_is_reported(self):
         """TokenGeneration's stopSequences typed back to the old filler (``repeated bytes``)."""
@@ -494,6 +540,21 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
             res = M.compare(M.CacheMirror(IOS27_CACHE), "TokenGeneration")
         self.assertTrue(any(what == "field types" and any(f == "stopSequences" for f, *_ in detail)
                             for _q, what, detail in res.differences), res.differences)
+
+    def test_a_planted_emitted_error_is_reported(self):
+        """An emitted field's type changed after recovery: sint64 for a string."""
+        import oracles.swift_mirror as M
+        real = M.SW.swift_messages
+
+        def wrong(ctx):
+            msgs = real(ctx)
+            f = next(f for m in msgs for f in m.fields if f.proto_type == "string")
+            f.proto_type = "sint64"
+            return msgs
+        with mock.patch.object(M.SW, "swift_messages", wrong):
+            res = M.compare(M.CacheMirror(IOS27_CACHE), "TokenGeneration")
+        self.assertTrue(any(what == "emitted field types" for _q, what, _d in res.differences),
+                        res.differences)
 
 
 

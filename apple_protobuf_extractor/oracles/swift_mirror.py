@@ -1,6 +1,9 @@
-"""The Swift type recovery's stored fields and field types (``collect_field_types``) against Apple's
+"""The Swift type recovery's stored fields and field types (``collect_field_types``), and the types
+of the fields the Swift serializer emits (``swift_messages``, each paired with its property by
+name, compared as the Swift type tells it: ``fixed64`` is a ``UInt64``), against Apple's
 Swift Remote Mirror -- ``libswiftRemoteMirror``, the reflection library behind lldb and
 ``swift-inspect`` -- served from a dyld cache, for every message the Swift serializer emits.
+Field numbers are not in the layout: they are checked by decoding real traffic (ios_decoder).
 
 The library comes from a swift.org toolchain (6.2: ``swift-6.2-RELEASE-osx.pkg``, at
 ``usr/lib/swift/macosx/libswiftRemoteMirror.dylib`` in its payload; Xcode no longer ships it):
@@ -11,7 +14,8 @@ pointer chains applied (:mod:`oracles.cache_memory`).
 For each message: the image and every image it links are in one reflection context; a
 copy-on-write message's fields are its ``_StorageClass``'s (a private class, whose mangled name
 carries a discriminator, so they are asked of a stand-in instance whose isa is the class
-metadata); a oneof contributes its property and its cases.  Not compared: a message with a
+metadata); a oneof (a property of an optional enum whose cases carry payloads: ``OneOf_X`` in the
+message, or a type of its own) contributes its property and its cases.  Not compared: a message with a
 one-case oneof -- a one-case enum is laid out as its payload, and Remote Mirror gives the
 payload's fields, not the case.
 
@@ -245,6 +249,25 @@ def proto_of(t):
     return t.split(".", 1)[1] if "." in t else t       # a nominal type: the module dropped
 
 
+def _same_name(name, prop=False):
+    """A field's proto name and its Swift property's (*prop*), alike: swift-protobuf's property is
+    the name in lower camel case, ``_p`` added where it would collide (``has_version`` ->
+    ``hasVersion_p``, ``user_id`` -> ``userID``; a proto name may end in ``_p`` itself)."""
+    n = name[:-2] if prop and name.endswith("_p") else name
+    return n.replace("_", "").lower()
+
+
+# the proto scalar types each Swift scalar stands for, by the one proto_of names
+_SAME_SWIFT = {"sint32": "int32", "sfixed32": "int32", "sint64": "int64", "sfixed64": "int64",
+               "fixed32": "uint32", "fixed64": "uint64"}
+
+
+def _as_swift(proto_type):
+    """*proto_type* as its Swift type tells it: the encodings of one width alike."""
+    return re.sub(r"\b(%s)\b" % "|".join(_SAME_SWIFT), lambda m: _SAME_SWIFT[m.group(1)],
+                  proto_type)
+
+
 def _storage_metadata(ctx, types):
     """message name -> its ``_StorageClass``'s metadata: a Swift class's metadata is an ObjC class
     object (in ``__objc_classlist``) whose nominal type descriptor is at +0x40."""
@@ -274,7 +297,7 @@ def compare(mirror, image):
     mirror.add(image)
     ctx = load_cache_image(mirror.reader, mirror.reader.find_image_header(image)).ctx
     meta = TR.collect_field_types(ctx)
-    emitted = {m.qualified.split(".", 1)[1] for m in SW.swift_messages(ctx)}
+    emitted = {m.qualified.split(".", 1)[1]: m for m in SW.swift_messages(ctx)}
     sec = ctx.section("__TEXT", "__swift5_types")
     descs = []
     for i in range(sec.vmsize // 4):
@@ -285,6 +308,7 @@ def compare(mirror, image):
         if d:
             descs.append(d)
     storage = _storage_metadata(ctx, descs)
+    by_name = {TR._qualified_name(ctx, d): d for d in descs}
     stats, differences, seen = collections.Counter(), [], set()
     for desc in descs:
         if TR._desc_kind(ctx, desc) != TR._STRUCT_KIND:
@@ -313,13 +337,17 @@ def compare(mirror, image):
             theirs.update({n.lstrip("_"): t for n, t in st if n})
         one_case = False
         for t in list(theirs.values()):        # a oneof: its property and its cases
-            m = re.search(r"\.(OneOf_\w+)>?$", t)
-            if m:
-                enum = mn + "%d%sO" % (len(m.group(1)), m.group(1))
-                if mirror.layout_kind(enum) == STRUCT_LAYOUT:
-                    one_case = True
-                    break
-                theirs.update({n: ct for n, ct in mirror.fields(enum) or [] if n})
+            m = re.fullmatch(r"Swift\.Optional<[^.<>]+\.([\w.]+)>", t)
+            ed = by_name.get(m.group(1)) if m else None
+            if ed is None or TR._desc_kind(ctx, ed) != TR._ENUM_KIND or not _mangled(ctx, ed):
+                continue
+            enum = _mangled(ctx, ed)           # (OneOf_X nested in the message, or X a type
+            if mirror.layout_kind(enum) == STRUCT_LAYOUT:   # of its own: Apple's generators)
+                one_case = True
+                break
+            cases = [(n, ct) for n, ct in mirror.fields(enum) or [] if n]
+            if any(ct for n, ct in cases if n != "UNRECOGNIZED"):   # cases with payloads: a
+                theirs.update(cases)           # oneof (an enum's only payload: UNRECOGNIZED(Int))
         if one_case:
             stats["not compared: a one-case oneof"] += 1
             continue
@@ -329,14 +357,35 @@ def compare(mirror, image):
             differences.append((q, "field set", "ours only %s, theirs only %s"
                                 % (sorted(ours - set(theirs)), sorted(set(theirs) - ours))))
             continue
-        stats["fields with no type recovered"] += len(ours - set(ours_t))
+        untyped = ours - set(ours_t)           # (a case with no payload has no type to recover)
+        stats["fields with no payload"] += sum(1 for f in untyped if theirs.get(f) == "")
+        stats["fields with no type recovered"] += sum(1 for f in untyped if theirs.get(f) != "")
         bad = [(f, ours_t[f], proto_of(theirs[f])) for f in sorted(ours_t)
                if theirs.get(f) and proto_of(theirs[f]) != ours_t[f]]
+        # what is emitted: each field the serializer gives, paired with its property by name
+        props = collections.defaultdict(list)
+        for n in theirs:
+            props[_same_name(n, prop=True)].append(n)
+        out = []
+        for f in emitted[q].fields:
+            p = props.get(_same_name(f.name), [])
+            if len(p) != 1:
+                stats["emitted fields with no one property of their name"] += 1
+                continue
+            if f.proto_type is None:
+                stats["emitted fields with no type" if theirs[p[0]] else
+                      "emitted fields with no payload"] += 1
+                continue
+            stats["emitted fields compared"] += 1
+            if _as_swift(f.proto_type) != _as_swift(proto_of(theirs[p[0]])):
+                out.append((f.name, f.proto_type, proto_of(theirs[p[0]])))
         if bad:
             differences.append((q, "field types", bad))
-        else:
+        if out:
+            differences.append((q, "emitted field types", out))
+        if not bad and not out:
             stats["agree"] += 1
-    stats["not compared: emitted, no type descriptor"] += len(emitted - seen)
+    stats["not compared: emitted, no type descriptor"] += len(set(emitted) - seen)
     return Result(stats, differences)
 
 

@@ -483,7 +483,8 @@ def _read_field_types(ctx, desc, fieldmd):
     ``incomplete`` is the subset of names whose ``proto_type`` contains a GUESS
     filler (an Array element / map key-or-value that didn't decode, shown as
     ``bytes``) — flagged so the emitter can note it (#67) — and ``names`` is every
-    stored proto field the records list.  A field whose mangled type doesn't decode
+    stored proto field the records list (an enum's case with no payload too: Apple's generators
+    give a oneof such cases).  A field whose mangled type doesn't decode
     (e.g. a reference to a type outside the image that an extracted image no longer
     names) is in ``names`` but not ``fields``; bookkeeping fields are in neither."""
     fd = _relptr(ctx, desc + 0x10)
@@ -504,9 +505,12 @@ def _read_field_types(ctx, desc, fieldmd):
         fname = _cstr(ctx, _relptr(ctx, rec + 0x08))
         mva = _relptr(ctx, rec + 0x04)
         rec += recsize
-        if not fname or fname in _SKIP_FIELDS or mva == 0:
+        if not fname or fname in _SKIP_FIELDS:
             continue
         clean = fname.lstrip("_")
+        if mva == 0:                     # an enum's case with no payload: a field, untyped
+            names.add(clean)
+            continue
         ptype, label = decode_mangled(ctx, mva)
         if ptype and ptype.rsplit(".", 1)[-1] in _STORAGE_CLASS_NAMES:
             continue                     # the copy-on-write pointer
@@ -595,7 +599,8 @@ def collect_field_types(ctx) -> FieldMetadata:
     Covers the message struct's directly-stored proto fields, the fields moved into
     a copy-on-write ``_StorageClass`` for larger messages, AND the members of a
     proto ``oneof`` (the nested ``OneOf_<name>`` enum), all linked to the owning
-    message via the descriptor parent chain (#60)."""
+    message via the descriptor parent chain (#60) -- or, a oneof enum of its own, by the
+    property of its type (#128)."""
     try:
         sec = ctx.section("__TEXT", "__swift5_types")
         fmd = ctx.section("__TEXT", "__swift5_fieldmd")
@@ -606,6 +611,7 @@ def collect_field_types(ctx) -> FieldMetadata:
     stored: Dict[str, Set[str]] = {}
     incomplete: Dict[str, set] = {}
     structs: set = set()
+    enums: Dict[str, tuple] = {}
     for i in range(sec.vmsize // 4):
         # one malformed descriptor must never abort whole-image recovery.
         try:
@@ -624,6 +630,11 @@ def collect_field_types(ctx) -> FieldMetadata:
                 key = _owner_type_name(ctx, desc)   # link storage to its message
             elif kind == _ENUM_KIND and name.startswith(_ONEOF_PREFIX):
                 key = _owner_type_name(ctx, desc)   # oneof members -> owning message
+            elif kind == _ENUM_KIND:
+                q = _qualified_name(ctx, desc)      # perhaps a oneof's (below)
+                if q:
+                    enums[q] = _read_field_types(ctx, desc, fieldmd)
+                continue
             else:
                 continue
             if not key:
@@ -639,5 +650,19 @@ def collect_field_types(ctx) -> FieldMetadata:
                 stored.setdefault(key, set()).update(names)
         except READ_ERRORS:
             continue
+    # A oneof whose enum is a type of its own, not a nested OneOf_ (Apple's generators:
+    # TokenGenerationCore's ``Tokengenerationcore_Wireformat_ValueEnum``): a message's property of
+    # an enum whose cases carry payloads beyond UNRECOGNIZED(Int), a proto enum's only one --
+    # its cases are the message's fields (checked against Remote Mirror, TODO #128).
+    for key, fields in list(out.items()):
+        for ptype in list(fields.values()):
+            cases = enums.get(ptype)
+            if not cases or not set(cases[0]) - {"UNRECOGNIZED"}:
+                continue
+            for n, t in cases[0].items():
+                fields.setdefault(n, t)
+            stored.setdefault(key, set()).update(cases[2])
+            if cases[1]:
+                incomplete.setdefault(key, set()).update(cases[1])
     return FieldMetadata(out, incomplete, structs - set(stored), stored)
 

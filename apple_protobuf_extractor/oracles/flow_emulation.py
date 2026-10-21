@@ -18,7 +18,7 @@ The runs model what Flow assumes of the rest of the program, and nothing more: a
 than an outlined fragment, which runs) returns with every caller-saved register and the flags
 random, the callee-saved ones kept, and the stack from the lowest frame address any argument
 register hands it up to the entry ``sp`` overwritten; the runtime functions Flow has contracts
-for keep them (the ARC calls return their argument, the stack probe writes x16 / x17).  The
+for keep them (the ARC calls return their argument, the stack probe writes x9, x16, x17).  The
 image's own memory is as loaded (chained-fixup rebases applied, each bound slot pointing at its
 import's block); any other address reads random words.  A run ends at the return to its caller,
 a branch out of the function, a fault, or a step budget.
