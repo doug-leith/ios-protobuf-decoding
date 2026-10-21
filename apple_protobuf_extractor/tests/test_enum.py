@@ -258,6 +258,9 @@ class TestReadCfstringTextLayouts(unittest.TestCase):
                 # The struct head (isa/flags) is not a valid C string.
                 raise ValueError(va)
 
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
+
             def read_ptr(self, va):
                 # Proper decode of the +16 char* field → the real char address,
                 # regardless of the high tag bits in the raw word.

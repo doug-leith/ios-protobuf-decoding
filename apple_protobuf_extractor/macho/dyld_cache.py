@@ -39,7 +39,7 @@ import warnings
 from typing import Dict, List, Optional, Set, Tuple
 
 from .memory import (LC_DYLD_EXPORTS_TRIE, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_FUNCTION_STARTS,
-                     LC_SEGMENT_64, decode_function_starts)
+                     LC_SEGMENT_64, PROGRAM_DATA_SECTIONS, decode_function_starts)
 from .local_symbols import (
     load_image_local_symbols,
     load_image_symbol_addrs,
@@ -1169,6 +1169,20 @@ class DyldCacheReader:
                 by_addr.setdefault(va, name)     # aliases (objc_retain = objc_retain_x0): first
             names[mh] = by_addr
         return names[mh].get(vmaddr)
+
+    def is_program_data(self, vmaddr: int) -> bool:
+        """Whether *vmaddr* lies in a section its image's program writes
+        (:data:`macho.memory.PROGRAM_DATA_SECTIONS`: ``__data``, ``__bss``, ...), whose
+        run-time contents the cache file does not give.  Each image's table is built once."""
+        hit = self._segment_at(vmaddr)
+        if hit is None:
+            return False
+        tables = self.__dict__.setdefault('_program_data', {})
+        mh = hit[2]
+        if mh not in tables:
+            tables[mh] = sorted(r for key, r in self.image_sections(mh).items()
+                                if '/' in key and key.split('/', 1)[1] in PROGRAM_DATA_SECTIONS)
+        return any(lo <= vmaddr < hi for lo, hi in tables[mh])
 
     def image_containing(self, vmaddr: int) -> Optional[Tuple[int, str]]:
         """``(mach_header vmaddr, path)`` of the cache image one of whose segments holds

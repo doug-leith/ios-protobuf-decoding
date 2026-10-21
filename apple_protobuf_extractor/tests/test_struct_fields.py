@@ -268,6 +268,9 @@ class _CfCtx(_NoStringsMixin):
             return self.TEXT[va][1].decode()[:max_len]
         raise ValueError(f"no string at {va:#x}")
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va):
         return self.TEXT[va - 16][0]
 
@@ -687,6 +690,9 @@ class _TextCtx(_NoStringsMixin):
         if va in self.texts:
             return self.texts[va][:max_len]
         raise ValueError(f"no string at {va:#x}")
+
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
 
     def read_ptr(self, va):
         return 0x100000 + (va - 16)

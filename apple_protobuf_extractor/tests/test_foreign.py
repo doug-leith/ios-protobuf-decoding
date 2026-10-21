@@ -265,6 +265,9 @@ class _SectionCtx(NoImage):
     def section(self, seg, sec):
         return self._Sec(self._va, len(self._data))
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_bytes(self, va, n):
         if self._va <= va and va + n <= self._va + len(self._data):
             return self._data[va - self._va: va - self._va + n]

@@ -13,8 +13,9 @@ from typing import Optional
 from proto.arm64_eval import Objects
 from proto.callees import callee_name, RETURNS_ARGUMENT
 
-# Above every image address, below 2^48, and outside the stack partition.
-TOKEN_BASE = 0xE000_0000_0000
+# Symbolic, like a frame address (proto.arm64_eval._SYMBOLIC): above the 64-bit value space, so
+# no constant is taken for one; above the stack partition (2^80 +- 2^32).
+TOKEN_BASE = 1 << 81
 SELF = TOKEN_BASE
 READER = TOKEN_BASE + 0x1000_0000
 _RET_BASE = TOKEN_BASE + 0x2000_0000           # + 16 * insn index: x0 after that call

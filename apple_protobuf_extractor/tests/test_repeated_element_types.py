@@ -59,6 +59,9 @@ class _FakeCtx:
     def __init__(self, ptrs=None, strings=None, binds=None):
         self.ptrs, self.strings, self.binds = ptrs or {}, strings or {}, binds or {}
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va):
         return self.ptrs.get(va, 0)
 

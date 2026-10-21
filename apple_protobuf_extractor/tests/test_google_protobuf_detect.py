@@ -26,6 +26,9 @@ def _cls(va, name, super_va):
 
 class _NoReadCtx:
     """External supers don't resolve (so a plain NSObject super yields no name)."""
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va): raise ValueError("unmapped")
     def read_cstring(self, va): raise ValueError("unmapped")
     def import_name_for_bind(self, raw): return None
@@ -196,6 +199,9 @@ class TestCppProtobufDetect(unittest.TestCase):
 
 class _SymClassCtx(_SymCtx):
     """_SymCtx plus the no-op pointer/bind resolvers google_protobuf_classes needs."""
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va): raise ValueError("unmapped")
     def read_cstring(self, va): raise ValueError("unmapped")
     def import_name_for_bind(self, raw): return None

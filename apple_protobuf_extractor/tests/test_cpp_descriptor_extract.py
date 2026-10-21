@@ -371,6 +371,9 @@ class _FakeSectionCtx:
         va, b = self._s[(seg, sec)]
         return _FakeSec(va, len(b))
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_bytes(self, va, n):
         for _va, b in self._s.values():
             if _va <= va and va + n <= _va + len(b):

@@ -174,17 +174,148 @@ def _evaluated_arms(flow, idom, kb: int, lo: int, hi: int) -> set:
                 {('entry', r) if x < 0 else x for x in flow.defs_before(k, r)}
             if not bounded & sources:
                 continue                     # the target is not computed from this value
+            same = _same_value(flow, start, r)
             arms = set()
             for v in range(count):
-                t = flow.value_at(start, {r: v}, kb, reg)
+                t = flow.value_at(start, dict.fromkeys(same, v), kb, reg)
                 if t is not None and lo <= t < hi:
                     arms.add(t)
             if arms:
                 return arms
         up = idom.get(d)
         if up is None or up == d:
-            return set()
+            return _value_set_arms(flow, kb, reg, lo, hi)
         d = up
+
+
+def _copy_origin(flow, k: int, reg: str):
+    """``(origin, blocks)``: where *reg*'s value before ``insns[k]`` was made, following register
+    copies (``mov xd, xs``) back -- ``('entry', r)`` for a register's value on entry, ``('def',
+    d)`` for the instruction that computed it, None when more than one definition reaches -- and
+    the blocks the chain passes through."""
+    blocks = {flow._block_of[k]}
+    while True:
+        defs = flow.defs_before(k, reg)
+        if len(defs) != 1:
+            return None, blocks
+        (d,) = defs
+        if d < 0:
+            return ('entry', reg), blocks
+        blocks.add(flow._block_of[d])
+        ops = split_ops(flow.insns[d].op_str)
+        src = _norm_reg(ops[1]) if len(ops) == 2 and not ops[1].startswith('#') else None
+        if flow.insns[d].mnemonic != 'mov' or src in (None, 'xzr', 'sp'):
+            return ('def', d), blocks
+        k, reg = d, src
+
+
+def _same_value(flow, k: int, reg: str) -> set:
+    """The registers holding *reg*'s value before ``insns[k]``: their copy chains reach the
+    definition *reg*'s does, and that definition runs once on the way -- the function's entry,
+    or an instruction in ``insns[k]``'s block with every copy (a straight line: nothing runs it
+    again between).  A gate compares one of them; the table may be indexed by another (locationd
+    0x100ed2d68: ``mov x21, x2`` ... ``cmp w2, #6; b.hi`` ... ``mov w8, w21``)."""
+    origin, blocks = _copy_origin(flow, k, reg)
+    out = {reg}
+    if origin is None:
+        return out
+    for r in (f"x{i}" for i in range(29)):
+        if r != reg:
+            o, b = _copy_origin(flow, k, r)
+            if o == origin and (origin[0] == 'entry' or len(blocks | b) == 1):
+                out.add(r)
+    return out
+
+
+def _value_set(flow, k: int, reg: str, memo: dict) -> Optional[frozenset]:
+    """Every value *reg* can hold before ``insns[k]``, when its reaching definitions give
+    finitely many: constants, register copies, selects (``csel`` / ``cinc`` / ``csinc`` /
+    ``cset``) and a constant added or subtracted, each of values so made.  None when a
+    definition is anything else (a load, the value on entry), the definitions run through
+    themselves (a loop), or there would be more than an ordered gate can let through
+    (:data:`proto.arm64_eval._MAX_GATE_SPAN`)."""
+    from proto.arm64_eval import _MAX_GATE_SPAN
+    if reg == 'xzr':
+        return frozenset((0,))
+    key = (k, reg)
+    if key in memo:
+        return memo[key]
+    memo[key] = None                                  # a definition reached again: a loop
+    out = set()
+    for d in flow.defs_before(k, reg):
+        vs = None if d < 0 else _def_values(flow, d, reg, memo)
+        if vs is None:
+            return None
+        out |= vs
+        if len(out) > _MAX_GATE_SPAN:
+            return None
+    memo[key] = frozenset(out)
+    return memo[key]
+
+
+def _def_values(flow, d: int, reg: str, memo: dict) -> Optional[set]:
+    from proto.arm64_operands import reg_mask
+    c = flow._const_of_def(d, reg)
+    if c is not None:
+        return {c}
+    ins = flow.insns[d]
+    mn, ops = ins.mnemonic, split_ops(ins.op_str)
+    if not ops:
+        return None
+    mask = reg_mask(ops[0])
+
+    def of(tok):
+        r = _norm_reg(tok)
+        return None if r is None else _value_set(flow, d, r, memo)
+    if mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
+        vs = of(ops[1])
+        return None if vs is None else {v & mask for v in vs}
+    if mn == 'csel' and len(ops) == 4:
+        a, b = of(ops[1]), of(ops[2])
+        return None if a is None or b is None else {v & mask for v in a | b}
+    if mn == 'csinc' and len(ops) == 4:
+        a, b = of(ops[1]), of(ops[2])
+        return None if a is None or b is None else {v & mask for v in a} | {(v + 1) & mask for v in b}
+    if mn == 'cinc' and len(ops) == 3:
+        a = of(ops[1])
+        return None if a is None else {v & mask for v in a} | {(v + 1) & mask for v in a}
+    if mn == 'cset' and len(ops) == 2:
+        return {0, 1}
+    if mn in ('add', 'sub') and len(ops) == 3 and ops[2].startswith('#'):
+        a, n = of(ops[1]), _parse_imm(ops[2])
+        if a is None or n is None:
+            return None
+        return {(v + n if mn == 'add' else v - n) & mask for v in a}
+    return None
+
+
+def _value_set_arms(flow, kb: int, reg: str, lo: int, hi: int) -> set:
+    """The targets of a ``br`` no gate bounds (:func:`_evaluated_arms`): nearest the ``br`` first,
+    a register its target is computed from whose every value is known (:func:`_value_set`), each
+    value run to the ``br`` -- locationd 0x100dc8a98 indexes its table by ``w22``, set to 0, to 1
+    and by ``cinc w22, w8, ge`` on the paths in."""
+    memo: dict = {}
+    seen: set = set()
+    work = [(kb, _norm_reg(reg))]
+    while work:
+        k, r = work.pop(0)
+        for d in sorted(flow.defs_before(k, r), reverse=True):
+            if d < 0 or d in seen:
+                continue
+            seen.add(d)
+            srcs = [x for x in reads(flow.insns[d]) if x.startswith('x')]
+            for x in srcs:
+                vs = _value_set(flow, d, x, memo)
+                if not vs or len(vs) < 2:
+                    continue                          # a constant: not what selects the arm
+                same = _same_value(flow, d, x)
+                arms = {t for v in vs
+                        if (t := flow.value_at(d, dict.fromkeys(same, v), kb, reg)) is not None
+                        and lo <= t < hi}
+                if arms:
+                    return arms
+            work.extend((d, x) for x in srcs)
+    return set()
 
 
 def _jump_table_arm_addrs(ctx: BinaryContext, insns: List["Insn"], per_br: bool = False,

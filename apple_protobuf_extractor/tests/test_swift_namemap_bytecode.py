@@ -15,6 +15,9 @@ class _Ctx(NoImage):
     def __init__(self, data, base):
         self._d, self._b = data, base
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_bytes(self, va, n):
         off = va - self._b
         if off < 0 or off + n > len(self._d):

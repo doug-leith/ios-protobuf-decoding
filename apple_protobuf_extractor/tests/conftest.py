@@ -251,6 +251,9 @@ class WordCtx:
             return s[va]
         raise ValueError(f"no string at {va:#x}")
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va):
         """64-bit pointer read from two consecutive words (low word first),
         raising ValueError if either is missing — like an unmapped read.  Data

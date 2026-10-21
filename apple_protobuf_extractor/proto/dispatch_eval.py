@@ -56,7 +56,7 @@ from proto.arm64_eval import Flow, _MAX_GATE_SPAN
 from proto.repeated import _adder_array_ivar
 from proto.callees import callee_name, stub_selector, text_holding
 from proto.function_body import function_body
-from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, ret_value,
+from proto.eval_tokens import (SELF, READER, FIELD_BASE, opaque, ret_value,
                                object_model)
 from proto import dispatch as D
 from proto.models import record_analysis_failure, record_heuristic_hit
@@ -154,7 +154,7 @@ def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
     """Name of the ObjC class whose ``class_t`` is at *va* (an argument value: None for an
     opaque token or an unknown value).  Callers accept it only when it is a known proto
     class."""
-    if va is None or not 0 < va < TOKEN_BASE:
+    if va is None or not 0 < va < 1 << 64:          # a token or a frame address: no class
         return None
     return class_name_at(ctx, va)
 

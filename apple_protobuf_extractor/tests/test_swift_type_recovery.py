@@ -99,6 +99,9 @@ class TestFieldRecordsBoundedBySection(unittest.TestCase):
         def __init__(self, base, data):
             self.base, self.data = base, bytes(data)
 
+        def is_variable(self, vmaddr):        # no program data, no binds
+            return False
+
         def read_bytes(self, va, n):
             if not self.base <= va <= va + n <= self.base + len(self.data):
                 raise ValueError(va)
@@ -284,6 +287,9 @@ class TestIndirectablePointers(unittest.TestCase):
             import struct
             return struct.pack("<i", self.words[va])
 
+        def is_variable(self, vmaddr):        # no program data, no binds
+            return False
+
         def read_ptr(self, va):
             return self.ptrs[va]
 
@@ -313,6 +319,9 @@ class TestGenericArgumentTokens(unittest.TestCase):
     class _Bytes:
         def __init__(self, b):
             self.b = b + b"\0" * 40
+
+        def is_variable(self, vmaddr):        # no program data, no binds
+            return False
 
         def read_bytes(self, va, n):
             if va + n > len(self.b):

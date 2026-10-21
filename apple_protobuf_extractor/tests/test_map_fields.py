@@ -47,6 +47,9 @@ class FakeCtx(NoImage):
             return self.u32[addr].to_bytes(4, 'little', signed=self.u32[addr] < 0)
         raise ValueError(f"unmapped {addr:#x}")
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, addr):
         return self.ptrs[addr]
 

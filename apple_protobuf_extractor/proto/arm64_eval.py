@@ -50,12 +50,22 @@ _STRICT_CONDS = frozenset(('hs', 'cs', 'lo', 'cc', 'ge', 'lt'))
 _MAX_GATE_SPAN = 1 << 12
 
 
-# sp on entry to an evaluated function.  A stack address is then an ordinary integer that
-# arithmetic carries through ``sub sp`` / ``add x29, sp, #k`` / writeback, told apart from image
-# and heap addresses (below 2^48 on arm64) by where it lives; a frame is far smaller than the
-# 2^32 bytes either side of the entry sp this partition gives the stack.
-_STACK_TOP = 1 << 62
+# Symbolic values -- a frame address, an object token (:mod:`proto.eval_tokens`) -- live above the
+# 64-bit value space: no constant can be taken for one, and no 64-bit arithmetic can make one.
+# The machine carries them through what keeps their meaning only (:meth:`_Machine.put`); a
+# result past 2^72 that is not one of them (a frame address plus a 64-bit constant) is unknown.
+_SYMBOLIC = 1 << 72
+# sp on entry to an evaluated function.  A frame address is the entry sp plus an offset: copies,
+# loads and stores of all 64 bits carry it, adding or subtracting a number moves it, the
+# difference of two is that number, and clearing the low four bits aligns it (the entry sp is
+# 16-byte aligned, AAPCS64).  Any other use of one is unknown: its 32-bit half, a shift, a
+# compare with a number -- what they give depends on where the stack really is.  A frame is far
+# smaller than the 2^32 bytes either side of the entry sp this partition gives the stack.
+_STACK_TOP = 1 << 80
 _STACK_SPAN = 1 << 32
+_MASK64 = (1 << 64) - 1
+# Where flags comparing two frame addresses are computed: an sp far from wrapping either way.
+_REPRESENTATIVE_SP = 1 << 62
 _FRAME_REGS = ('sp', 'x29')
 # Registers that may carry a flag argument into a function: x0 holds the object / struct.
 _FLAG_ARG_REGS = ARG_GPRS[1:]
@@ -75,6 +85,50 @@ _POINTER_AUTH = frozenset((
 
 def _is_stack(v: Optional[int]) -> bool:
     return v is not None and _STACK_TOP - _STACK_SPAN <= v < _STACK_TOP + _STACK_SPAN
+
+
+def _is_symbolic(v: Optional[int]) -> bool:
+    return v is not None and (v >= _SYMBOLIC or v <= -_SYMBOLIC)
+
+
+def _wide(tok: str) -> bool:
+    """*tok* names all 64 bits of a general register (``xN`` / ``sp``), not a ``w`` half."""
+    t = tok.strip().lower()
+    return t.startswith('x') or t == 'sp'
+
+
+def _signed64(v: int) -> int:
+    return v - (1 << 64) if v >= 1 << 63 else v
+
+
+def _add_sub(add: bool, a: Optional[int], b: Optional[int]) -> Optional[int]:
+    """``a + b`` / ``a - b`` where either may be a frame address: one plus or minus a number
+    (read as signed 64-bit) is a frame address, the difference of two is a number, and a
+    number minus one -- or the sum of two -- is unknown."""
+    if a is None or b is None:
+        return None
+    sa, sb = _is_stack(a), _is_stack(b)
+    if sa and sb:
+        return None if add else a - b
+    if sb:
+        return b + _signed64(a) if add and not _is_symbolic(a) else None
+    if sa:
+        b = _signed64(b)
+    return a + b if add else a - b
+
+
+def _flag_operands(a: Optional[int], b: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
+    """The operands a compare's flags are computed from: two numbers as they are; two frame
+    addresses as offsets from one sp (their order does not depend on where the stack is);
+    a frame address against a number, unknown."""
+    if a is None or b is None:
+        return None, None
+    sa, sb = _is_stack(a), _is_stack(b)
+    if sa and sb:
+        return a - _STACK_TOP + _REPRESENTATIVE_SP, b - _STACK_TOP + _REPRESENTATIVE_SP
+    if sa or sb or _is_symbolic(a) or _is_symbolic(b):
+        return None, None
+    return a, b
 
 
 #: The condition flags N, Z, C, V (each 0 or 1), exactly as the instruction that set them left
@@ -232,7 +286,14 @@ class _Machine:
                 return None
         if self.opaque is not None and self.opaque(v):
             return None
+        if _is_symbolic(v):
+            return v if _wide(tok) else None
         return v & reg_mask(tok)
+
+    def number(self, tok: str) -> Optional[int]:
+        """*tok*'s value when it is a number (not a frame address)."""
+        v = self.get(tok)
+        return None if _is_symbolic(v) else v
 
     def copy_of(self, tok: str) -> Optional[int]:
         """The value a register copy (``mov Rd, Rn``) moves: as :meth:`get`, except that an
@@ -250,7 +311,14 @@ class _Machine:
             self.regs.pop(r, None)
             self.top.add(r)
             return
-        v &= reg_mask(tok)
+        if _is_symbolic(v):
+            symbol = _is_stack(v) or (self.opaque is not None and self.opaque(v))
+            if not symbol or not _wide(tok):        # stack-derived arithmetic, or half of one
+                self.regs.pop(r, None)
+                self.top.add(r)
+                return
+        else:
+            v &= reg_mask(tok)
         self.regs[r] = v
         self.top.discard(r)
         if r not in _FRAME_REGS and _is_stack(v):
@@ -292,8 +360,8 @@ class _Machine:
             return                              # memory outside the frame is not modelled
         for a in [a for a, (s, _v) in self.slots.items() if a < addr + size and addr < a + s]:
             del self.slots[a]
-        if v is not None:
-            self.slots[addr] = (size, v & ((1 << (8 * size)) - 1))
+        if v is not None and (size == 8 or not _is_symbolic(v)):
+            self.slots[addr] = (size, v if _is_symbolic(v) else v & ((1 << (8 * size)) - 1))
 
 
 @dataclass(frozen=True)
@@ -469,20 +537,19 @@ class Flow:
         while changed:
             changed = False
             for b in rpo:
-                if b == cfg.entry:
-                    inn = entry_state
+                # the entry block is also a loop head when a branch comes back to it
+                ps = ([entry_state] if b == cfg.entry else []) + \
+                    [out[p] for p in preds[b] if p in out]
+                if not ps:
+                    continue
+                if len(ps) == 1:
+                    inn = ps[0]
                 else:
-                    ps = [out[p] for p in preds[b] if p in out]
-                    if not ps:
-                        continue
-                    if len(ps) == 1:
-                        inn = ps[0]
-                    else:
-                        inn = {}
-                        for r in _REGS:
-                            first = ps[0][r]
-                            inn[r] = first if all(o[r] is first or o[r] == first for o in ps[1:]) \
-                                else frozenset().union(*(o[r] for o in ps))
+                    inn = {}
+                    for r in _REGS:
+                        first = ps[0][r]
+                        inn[r] = first if all(o[r] is first or o[r] == first for o in ps[1:]) \
+                            else frozenset().union(*(o[r] for o in ps))
                 self._in[b] = inn
                 state = dict(inn)
                 state.update(gens[b])
@@ -918,6 +985,8 @@ class Flow:
         if mn in ('tbz', 'tbnz') and len(ops) == 3:
             v = m.get(ops[0])
             bit = _parse_imm(ops[1]) or 0
+            if _is_stack(v):                        # only the alignment bits are the frame's
+                v = v - _STACK_TOP if bit < 4 else None
             return (None if v is None else (((v >> bit) & 1) == 0) == (mn == 'tbz')), _parse_imm(ops[2])
         return None, None
 
@@ -925,9 +994,9 @@ class Flow:
         """One non-branching instruction's effect on *m* (registers, flags, stack slots).
         Anything not modelled makes the registers it writes unknown."""
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
-        get, put = m.get, m.put
+        get, put = m.number, m.put                 # a frame address only where it keeps its meaning
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12`` / ``w9, lsl #2``
-            a, b = get(ops[0]), operand2(ops, 1, get)
+            a, b = _flag_operands(m.get(ops[0]), operand2(ops, 1, m.get if len(ops) == 2 else get))
             m.flags = None if a is None or b is None else \
                 (_nzcv_sub if mn == 'cmp' else _nzcv_add)(a, b, reg_bits(ops[0]))
         elif mn in ('ccmp', 'ccmn') and len(ops) == 4:     # ccmp a, b, #nzcv, cond
@@ -959,21 +1028,27 @@ class Flow:
             v = (parse_adrp(ins.op_str) or (None, None))[1] if mn == 'adrp' else _parse_imm(ops[1])
             put(ops[0], v)
         elif mn in ('add', 'sub') and len(ops) in (3, 4):
-            a, b = get(ops[1]), operand2(ops, 2, get)
-            put(ops[0], None if a is None or b is None else (a + b if mn == 'add' else a - b))
+            a, b = m.get(ops[1]), operand2(ops, 2, m.get if len(ops) == 3 else get)
+            put(ops[0], _add_sub(mn == 'add', a, b))
         elif mn == 'csel' and len(ops) == 4:
             if m.flags is None:
                 put(ops[0], None)
             else:
                 c = _eval_cond(ops[3], m.flags)
-                put(ops[0], None if c is None else get(ops[1] if c else ops[2]))
+                put(ops[0], None if c is None else m.get(ops[1] if c else ops[2]))
         elif mn in SHIFT_MNEMONICS and len(ops) == 3:
             a = get(ops[1])
             n = _parse_imm(ops[2]) if ops[2].startswith('#') else get(ops[2])
             put(ops[0], None if a is None or n is None else shift_value(mn, a, n, ops[0]))
         elif mn in ('and', 'orr', 'eor', 'ands') and len(ops) in (3, 4):
-            a = get(ops[1])
+            a = m.get(ops[1])
             b = _parse_imm(ops[2]) if ops[2].startswith('#') else operand2(ops, 2, get)
+            if _is_stack(a):                       # aligning a frame address (and sp, x9, #-16)
+                b = None if b is None else b & _MASK64
+                r = (_STACK_TOP + ((a - _STACK_TOP) & _signed64(b))
+                     if mn == 'and' and b is not None and b | 0xF == _MASK64 else None)
+                put(ops[0], r)
+                return
             r = None if a is None or b is None else \
                 {'and': a & b, 'ands': a & b, 'orr': a | b, 'eor': a ^ b}[mn]
             put(ops[0], r)
@@ -997,14 +1072,11 @@ class Flow:
             b = _parse_imm(ops[1]) if ops[1].startswith('#') else operand2(ops, 1, get)
             m.flags = None if a is None or b is None else _nzcv_logic(a & b, reg_bits(ops[0]))
         elif mn in ('subs', 'adds') and len(ops) in (3, 4):
-            a, b = get(ops[1]), operand2(ops, 2, get)
-            if a is not None and b is not None:
-                bits = reg_bits(ops[0])
-                m.flags = (_nzcv_sub if mn == 'subs' else _nzcv_add)(a, b, bits)
-                put(ops[0], a - b if mn == 'subs' else a + b)
-            else:
-                m.flags = None
-                put(ops[0], None)
+            a, b = m.get(ops[1]), operand2(ops, 2, m.get if len(ops) == 3 else get)
+            fa, fb = _flag_operands(a, b)
+            m.flags = None if fa is None or fb is None else \
+                (_nzcv_sub if mn == 'subs' else _nzcv_add)(fa, fb, reg_bits(ops[0]))
+            put(ops[0], _add_sub(mn == 'adds', a, b))
         elif mn in LOAD_BYTES and len(ops) in (2, 3):
             ft = (self._field_load(m, ops[1])
                   if len(ops) == 2 and mn == 'ldr' and ops[0].strip().lower().startswith('x')
@@ -1071,7 +1143,7 @@ class Flow:
         b = m.get(base) if base else None
         addr = b
         if addr is not None and index:
-            iv = m.get(index)
+            iv = m.number(index)
             if iv is None:
                 addr = None
             else:
@@ -1088,10 +1160,14 @@ class Flow:
             m.put(base, None if b is None or imm is None else b + imm)
         elif addr is not None:
             addr += disp
-        return None if addr is None else addr & 0xFFFFFFFFFFFFFFFF
+        if addr is None or _is_stack(addr):
+            return addr
+        return None if _is_symbolic(addr) else addr & _MASK64
 
     def _read(self, m: "_Machine", addr: Optional[int], size: int, signed: bool) -> Optional[int]:
-        """The *size*-byte value at *addr*: a stack slot stored with that width, or the image."""
+        """The *size*-byte value at *addr*: a stack slot stored with that width, or the image's
+        -- unless the file does not give its run-time value (:meth:`BinaryContext.is_variable`:
+        a variable the program writes, a slot bound to an import)."""
         if addr is None:
             return None
         if _is_stack(addr):
@@ -1100,6 +1176,8 @@ class Flow:
                 return None
             raw = slot[1]
         else:
+            if self.ctx is None or self.ctx.is_variable(addr):
+                return None
             try:
                 if size == 8:
                     return self.ctx.read_ptr(addr)

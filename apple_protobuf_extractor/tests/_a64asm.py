@@ -165,6 +165,9 @@ class FlowCtx(WordCtx):
     """``WordCtx`` plus what the data-flow evaluator reads: byte/halfword reads inside the
     word store, and direct C-strings standing in for CFStrings (``ctx._strings``)."""
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_bytes(self, va, length):
         if length % 4 == 0:
             return super().read_bytes(va, length)

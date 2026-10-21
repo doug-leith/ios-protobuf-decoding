@@ -54,6 +54,9 @@ class TestJumpTableArmAddrsRangeGuardRedundant(unittest.TestCase):
     class _TableCtx:
         _TABLE = bytes([0, 1, 200])
 
+        def is_variable(self, vmaddr):        # no program data, no binds
+            return False
+
         def read_bytes(self, va, n):
             assert 0x2100 <= va and va + n <= 0x2100 + len(self._TABLE)
             return self._TABLE[va - 0x2100:va - 0x2100 + n]
@@ -104,6 +107,9 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
                 raise ValueError(va)
             return self.data[va - self.base:va - self.base + n]
 
+        def is_variable(self, vmaddr):        # no program data, no binds
+            return False
+
         def read_ptr(self, va):
             return int.from_bytes(self.read_bytes(va, 8), 'little')
 
@@ -137,6 +143,30 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
         mem = self._Mem(0x2000, self._deltas(0x10, 0x14, -0x18))
         self.assertEqual(_jump_table_arm_addrs(mem, insns, per_br=True),
                          {0x1028: {0x1034, 0x1038, 0x100c}})
+
+    def test_an_index_copied_from_the_gated_register(self):
+        # locationd 0x100ed2d68: the gate compares w2, the table is indexed by its copy w21
+        insns = self._listing([
+            'mov x21, x2', 'cmp w2, #2', 'b.hi #0x1030', 'mov w8, w21', 'adr x9, #0x1020',
+            'add x9, x9, x8, lsl #3', 'br x9', 'nop', 'ret', 'nop', 'ret', 'nop', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns, per_br=True),
+                         {0x1018: {0x1020, 0x1028, 0x1030}})
+
+    def test_an_ungated_index_set_on_each_path(self):
+        # locationd 0x100dc8a98: no gate; the index is 0 or 2 by the path in, then maybe one
+        # more (cinc) -- each of its values is run to the br
+        insns = self._listing([
+            'cbz w0, #0x100c', 'mov w22, #0', 'b #0x1010', 'mov w22, #2', 'cmp w1, #5',
+            'cinc w22, w22, ge', 'mov w8, w22', 'adr x9, #0x1030', 'add x9, x9, x8, lsl #3',
+            'br x9', 'nop', 'nop', 'ret', 'nop', 'ret', 'nop', 'ret', 'nop', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns, per_br=True),
+                         {0x1024: {0x1030, 0x1038, 0x1040, 0x1048}})
+
+    def test_an_index_from_a_load_is_not_guessed(self):
+        insns = self._listing([
+            'ldr w22, [x0]', 'mov w8, w22', 'adr x9, #0x1018', 'add x9, x9, x8, lsl #3',
+            'br x9', 'nop', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, bytes(8)), insns), set())
 
     def test_a_mask_bounded_index(self):
         # and w8, w0, #3 on a wire type: no compare, every value the mask lets through
@@ -254,6 +284,9 @@ class TestTableBaseParkedAcrossACall(unittest.TestCase):
                 if all(va + i in table for i in range(n)):
                     return bytes(table[va + i] for i in range(n))
                 raise ValueError(va)
+
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
 
             def read_ptr(self, va):
                 raise ValueError(va)

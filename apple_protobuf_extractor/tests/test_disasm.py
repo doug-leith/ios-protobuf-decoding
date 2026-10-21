@@ -721,6 +721,9 @@ class TestDisasmCacheNativeMode:
                     return off
                 raise ValueError(f"unmapped 0x{va:x}")
 
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
+
             def read_bytes(self, va, length):
                 off = va - self._VA
                 if 0 <= off and off + length <= len(self._CODE):

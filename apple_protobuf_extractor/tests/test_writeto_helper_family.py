@@ -86,6 +86,9 @@ class _RegionCtx(NoImage):
                 return base, buf
         raise ValueError(f"unmapped {va:#x}")
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_bytes(self, va, length):
         base, buf = self._find(va, length)
         return buf[va - base: va - base + length]

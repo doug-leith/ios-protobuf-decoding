@@ -183,3 +183,93 @@ class TestFlagRuns(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestSymbolicValues(unittest.TestCase):
+    """A frame address is not a number: it lives above the 64-bit value space, keeps its meaning
+    only through copies, adding or subtracting a number, the difference of two and 16-byte
+    alignment, and no constant can be taken for one (the emulation oracle,
+    oracles/flow_emulation.py: locationd's `mov x8, #0x4000000000000000` -- the double 2.0 --
+    and 2^62 - 1 were frame addresses, `sp + 0xaee7507db13ae316` a known number)."""
+
+    def known(self, *body, reg='x8'):
+        insns = listing(*body, f'bl {CALL}')
+        k = at_mark(insns)
+        return Flow(None, insns).propagate({}, [k])[k].get(reg)
+
+    def test_a_constant_is_never_a_frame_address(self):
+        for c in ('#0x4000000000000000', '#0x3fffffffffffffff'):
+            with self.subTest(c=c):
+                self.assertEqual(self.known(f'mov x8, {c}'), int(c[1:], 16))
+
+    def test_a_frame_address_plus_a_number(self):
+        self.assertEqual(self.known('add x8, sp, #0x40'), _STACK_TOP + 0x40)
+        self.assertEqual(self.known('mov x9, #-0x10', 'add x8, sp, x9'), _STACK_TOP - 0x10)
+        self.assertEqual(self.known('sub x8, sp, #0x40', 'and x8, x8, #-0x10'), _STACK_TOP - 0x40)
+        self.assertEqual(self.known('add x9, sp, #0x40', 'add x10, sp, #8', 'sub x8, x9, x10'), 0x38)
+
+    def test_what_depends_on_where_the_stack_is_is_unknown(self):
+        big = ('mov x8, #0xe316', 'movk x8, #0xb13a, lsl #16', 'movk x8, #0x507d, lsl #32',
+               'movk x8, #0xaee7, lsl #48')
+        for body in ((*big, 'add x9, sp, #0x5b0', 'add x8, x9, x8'),   # locationd 0x1000dac54
+                     ('mov x9, sp', 'mov w8, w9'),                      # its low half
+                     ('mov x9, sp', 'lsr x8, x9, #4'),
+                     ('mov x9, sp', 'and x8, x9, #-0x40'),              # beyond the ABI's alignment
+                     ('mov x9, #0x40', 'sub x8, x9, sp'),
+                     ('mov x9, sp', 'eor x8, x9, #1')):
+            with self.subTest(body=body):
+                self.assertIsNone(self.known(*body))
+
+    def test_flags_of_a_frame_address(self):
+        """Two frame addresses compare by their offsets; against a number, unknown."""
+        decided = listing('add x9, sp, #0x10', 'add x10, sp, #0x20', 'cmp x9, x10',
+                          'b.lo @lo', 'mov x8, #1', f'bl {CALL}', 'ret', 'lo:', 'mov x8, #2',
+                          f'bl {CALL}', 'ret')
+        ks = [k for k, i in enumerate(decided) if i.mnemonic == 'bl']
+        got = Flow(None, decided).propagate({}, ks)
+        self.assertEqual([got.get(k, {}).get('x8') for k in ks], [None, 2])
+        undecided = listing('mov x9, sp', 'cmp x9, #0x10', 'b.lo @lo', 'mov x8, #1',
+                            f'bl {CALL}', 'ret', 'lo:', 'mov x8, #2', f'bl {CALL}', 'ret')
+        ks = [k for k, i in enumerate(undecided) if i.mnemonic == 'bl']
+        got = Flow(None, undecided).propagate({}, ks)
+        self.assertEqual([got[k].get('x8') for k in ks], [1, 2])     # both paths run
+
+
+class TestRunTimeMemory(unittest.TestCase):
+    """A load gives the file's bytes only where they are the run-time value: not a variable the
+    program writes (locationd 0x100d0d9ac read its __data global's file value 0x19 after storing
+    to it), nor a slot bound to an import (its raw chained-fixup encoding was a known number)."""
+
+    class _Ctx(NoImage):
+        def __init__(self, variable):
+            self.variable = variable
+
+        def is_variable(self, va):
+            return va in self.variable
+
+        def read_ptr(self, va):
+            return 0x8010000000000696
+
+        def read_bytes(self, va, n):
+            return (0x19).to_bytes(n, 'little')
+
+    def test_variable_memory_is_unknown(self):
+        insns = listing('adrp x9, #0x7000', 'ldr w8, [x9, #0x788]', 'ldr x10, [x9, #0x790]',
+                        f'bl {CALL}')
+        k = at_mark(insns)
+        fixed = Flow(self._Ctx(set()), insns).propagate({}, [k])[k]
+        self.assertEqual((fixed.get('x8'), fixed.get('x10')), (0x19, 0x8010000000000696))
+        variable = Flow(self._Ctx({0x7788, 0x7790}), insns).propagate({}, [k])[k]
+        self.assertEqual((variable.get('x8'), variable.get('x10')), (None, None))
+
+
+class TestEntryBlockLoop(unittest.TestCase):
+    """A function whose first instruction heads a loop (locationd 0x1013769ac): the definitions
+    reaching the entry block are the entry's and the back edge's (the emulation oracle found
+    defs_before giving the entry's alone)."""
+
+    def test_back_edge_into_the_entry_block(self):
+        insns = listing('loop:', 'ldrb w8, [x0, #-0x18]', 'sub x8, x0, #0x48', 'cbz w9, @out',
+                        'mov x0, x8', 'b @loop', 'out:', 'ret')
+        flow = Flow(None, insns)
+        self.assertEqual(flow.defs_before(0, 'x0'), frozenset((-1, 3)))

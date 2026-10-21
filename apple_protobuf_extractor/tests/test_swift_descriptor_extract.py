@@ -49,6 +49,9 @@ class _FakeCtx:
             raise ValueError("oob")
         return self._data[va:va + n]
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va: int) -> int:
         return self._fixups.get(va, struct.unpack("<Q", self.read_bytes(va, 8))[0])
 

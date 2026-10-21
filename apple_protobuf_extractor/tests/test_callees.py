@@ -61,6 +61,9 @@ class TestCalleeName(unittest.TestCase):
 
 class _SelrefCtx:
     """__objc_selrefs slot 0x2008 -> selector string at 0x3000."""
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va):
         return {0x2008: 0x3000}.get(va)
 

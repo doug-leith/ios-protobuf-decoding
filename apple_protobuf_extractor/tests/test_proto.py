@@ -750,6 +750,9 @@ class _MinimalCtxStub(NoImage):
     def section(self, segname: str, sectname: str):
         raise ValueError(f"Section {segname}/{sectname} not available in stub")
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va: int) -> int:
         raise ValueError(f"No binary available in stub ctx (va={va:#x})")
 
@@ -808,6 +811,9 @@ class TestDisasmAdrpAdd(unittest.TestCase):
         from proto.arm64_eval import Flow
 
         class _FakeCtx(NoImage):
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
+
             def read_bytes(self, va, length):
                 off = va - text_va
                 if off < 0 or off + length > len(raw):
@@ -1181,6 +1187,9 @@ class TestMetaclassTypeMethodResolution(unittest.TestCase):
                     avail = memory[imp_va][va - imp_va:]
                     return avail + b'\x00' * (length - len(avail))
                 raise ValueError(f"no test memory at 0x{va:x}")
+
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
 
             def read_ptr(self, va):
                 # isa-pointer read: GEOPDComponent.vmaddr → metaclass.vmaddr

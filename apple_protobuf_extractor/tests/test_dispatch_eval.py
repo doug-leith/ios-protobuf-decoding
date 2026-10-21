@@ -89,10 +89,13 @@ class TestOpaqueValues(unittest.TestCase):
         self.assertIsNone(self.run_x1('add x1, x0, #8'))
         self.assertIsNone(self.run_x1('ldr x1, [x0, #8]'))
 
-    def test_without_the_predicate_a_token_is_an_ordinary_number(self):
-        insns, _ = listing('add x1, x0, #8', f'bl {CALL}', 'ret')
+    def test_without_the_predicate_a_token_is_no_number(self):
+        """A token lives above the 64-bit value space (like a frame address): a run that is not
+        told what it stands for knows nothing of it, rather than taking it for a number."""
+        insns, _ = listing('mov x2, x0', 'add x1, x0, #8', f'bl {CALL}', 'ret')
         r = Flow(None, insns).run_from(0, {'x0': SELF})
-        self.assertEqual(calls_by_target(r)[0x9000].args.get('x1'), SELF + 8)
+        args = calls_by_target(r)[0x9000].args
+        self.assertEqual((args.get('x1'), args.get('x2')), (None, None))
 
 
 class TestObjectEscape(unittest.TestCase):

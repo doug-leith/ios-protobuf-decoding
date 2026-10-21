@@ -46,6 +46,9 @@ class _Ctx:
         self.is_cache_backed = cache
         self.ptrs, self.binds = ptrs or {}, binds or {}
 
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, addr):
         if addr not in self.ptrs:
             raise ValueError(addr)

@@ -102,6 +102,7 @@ class TestArm64eUserlandFormatDecode(unittest.TestCase):
             def __init__(self):            # no Mach-O: drive _walk_chain only
                 self._fixup_map = {}
                 self._bind_name_map = {}
+                self._bind_slots = set()
                 self._segments = []
                 self._data = b""
 
@@ -121,6 +122,7 @@ class TestArm64eUserlandFormatDecode(unittest.TestCase):
             imports = [f"sym_{hex(i)}" for i in range(0x12346)]
             c._walk_chain(0x1000, fmt, imports)
             self.assertEqual(c._bind_name_map.get(0x1000), want, fmt)
+            self.assertIn(0x1000, c._bind_slots)        # a bound slot (BinaryContext.is_variable)
 
 
 def _load_expected():

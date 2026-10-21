@@ -83,6 +83,15 @@ _MAX_NCMDS  = 1024
 _MAX_NSECTS = 256
 
 
+#: The sections a program writes -- initialised and zero-fill data, thread-locals: what one holds
+#: at run time need not be what the file does.  The rest of a data segment is the linker's and
+#: the runtime's (pointers fixed at load, ObjC metadata, CFStrings, constants).
+PROGRAM_DATA_SECTIONS = frozenset(("__data", "__bss", "__common", "__thread_vars",
+                                   "__thread_data", "__thread_bss"))
+#: S_NON_LAZY_SYMBOL_POINTERS, S_LAZY_SYMBOL_POINTERS: the slots dyld binds to imports (in a
+#: binary without chained fixups, which says per slot).
+_SYMBOL_POINTER_TYPES = (0x6, 0x7)
+
 # ─── Data structures ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -253,6 +262,8 @@ class BinaryContext:
         self._sections:  Dict[Tuple[str,str], Section] = {}
         self._fixup_map: Dict[int, int]              = {}   # vmaddr → decoded vmaddr
         self._bind_name_map: Dict[int, str]          = {}   # vmaddr → import symbol name
+        self._bind_slots: set                        = set()  # every chained-fixup bind
+        self._chained = False                        # LC_DYLD_CHAINED_FIXUPS present
         self._imports:   List[str]                   = []   # ordinal → import symbol name
         self._image_base: Optional[int]              = None  # cached after load commands
         # LC_SYMTAB (symoff, nsyms, stroff, strsize) — file offsets into _data.
@@ -365,6 +376,8 @@ class BinaryContext:
         self._sections: Dict[Tuple[str,str], Section] = {}
         self._fixup_map: Dict[int, int]             = {}
         self._bind_name_map: Dict[int, str]         = {}
+        self._bind_slots: set                       = set()  # a cache binds nothing at load
+        self._chained = False
         self._imports:   List[str]                  = []   # unused in cache mode
         self._symtab:    Optional[Tuple[int, int, int, int]] = None  # see binary __init__
         self._export_trie: Optional[Tuple[int, int]] = None
@@ -653,6 +666,23 @@ class BinaryContext:
             return decoded
         return self._decode_packed_ptr(self.read_u64(vmaddr))
 
+    def is_variable(self, vmaddr: int) -> bool:
+        """Whether the file does not give *vmaddr*'s run-time value: it lies in a section the
+        program writes (:data:`PROGRAM_DATA_SECTIONS`), or is a slot dyld binds to an import
+        (its value is that import's address, in another image: a chained-fixup bind, or a
+        symbol-pointer section's slot in a binary without chained fixups).  A dyld cache was
+        bound when it was built, so there only the first applies, in whichever image holds
+        *vmaddr*."""
+        if self._cache_reader is not None:
+            return self._cache_reader.is_program_data(vmaddr)
+        if vmaddr in self._bind_slots:
+            return True
+        for sec in self._sections.values():
+            if sec.vmaddr <= vmaddr < sec.vmaddr + sec.vmsize:
+                return (sec.name in PROGRAM_DATA_SECTIONS or
+                        (not self._chained and (sec.flags & 0xFF) in _SYMBOL_POINTER_TYPES))
+        return False
+
     def iter_ptrs(self, vmaddr: int, count: int) -> Iterator[int]:
         """Iterate over *count* consecutive pointer values starting at vmaddr.
 
@@ -825,6 +855,7 @@ class BinaryContext:
             if cmd == LC_SEGMENT_64:
                 self._parse_segment_lc(off, cmdsize)
             elif cmd == LC_DYLD_CHAINED_FIXUPS:
+                self._chained = True
                 self._parse_chained_fixups_lc(off)
             elif cmd == LC_SYMTAB and cmdsize >= 24:
                 # symtab_command: cmd, cmdsize, symoff, nsyms, stroff, strsize
@@ -1050,6 +1081,7 @@ class BinaryContext:
                 ordinal = int(raw & 0xFFFF)
 
             if is_bind:
+                self._bind_slots.add(vmaddr)
                 if imports and 0 <= ordinal < len(imports):
                     sym = imports[ordinal]
                     if sym:

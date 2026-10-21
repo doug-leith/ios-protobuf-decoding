@@ -6,8 +6,7 @@ The library comes from a swift.org toolchain (6.2: ``swift-6.2-RELEASE-osx.pkg``
 ``usr/lib/swift/macosx/libswiftRemoteMirror.dylib`` in its payload; Xcode no longer ships it):
 ``MACHO_REMOTE_MIRROR``, else ``data/tools/libswiftRemoteMirror.dylib``
 (:func:`artifacts.remote_mirror_lib`).  It reads the target's memory through callbacks; here
-they read the cache, with its slide info's pointer chains applied (version 5 caches: iOS / macOS
-26 and later).
+they read the cache, with its slide info's pointer chains applied (:mod:`oracles.cache_memory`).
 
 For each message: the image and every image it links are in one reflection context; a
 copy-on-write message's fields are its ``_StorageClass``'s (a private class, whose mangled name
@@ -26,6 +25,7 @@ import sys
 
 import artifacts
 import serializers.swift_descriptor_extract as SW
+from oracles.cache_memory import SlideInfo
 import serializers.swift_type_recovery as TR
 from macho.dyld_cache import DyldCacheReader
 from macho.load import load_cache_image
@@ -80,68 +80,6 @@ def library():
 
 
 # ── the cache as Remote Mirror's memory ──────────────────────────────────────
-
-class SlideInfo:
-    """The cache's pointer locations, from each slid mapping's slide info: a u16 start per page,
-    then each pointer's 11-bit ``next`` (bits 52-62) in 8-byte strides; a pointer decodes to
-    ``value_add`` plus its low 34 bits.  The mappingWithSlide array is at header 0x138 (count
-    0x13C), 56-byte records: address, size, fileOffset, slideInfoFileOffset, slideInfoFileSize."""
-
-    def __init__(self, reader):
-        self.reader, self.maps, self._pages = reader, [], {}
-        for path in {m.path for m in reader._mappings}:
-            with open(path, "rb") as fh:
-                off, cnt = struct.unpack_from("<II", fh.read(0x140), 0x138)
-                fh.seek(off)
-                raw = fh.read(cnt * 56)
-                for i in range(cnt):
-                    addr, size, _fo, info_off, info_size = struct.unpack_from("<QQQQQ", raw, i * 56)
-                    if not info_size:
-                        continue
-                    fh.seek(info_off)
-                    blob = fh.read(info_size)
-                    version, page_size, n = struct.unpack_from("<III", blob, 0)
-                    if version != 5:
-                        raise NotImplementedError("slide info version %d" % version)
-                    value_add = struct.unpack_from("<Q", blob, 16)[0]
-                    self.maps.append((addr, addr + size, page_size,
-                                      struct.unpack_from("<%dH" % n, blob, 24), value_add))
-        self.maps.sort()
-        self._starts = [m[0] for m in self.maps]
-
-    def _page(self, m, pg):
-        """{offset in page: decoded target} of page *pg* of mapping *m*."""
-        key = (m[0], pg)
-        if key not in self._pages:
-            addr, _end, page_size, starts, value_add = m
-            out, off = {}, starts[pg]
-            if off != 0xFFFF:                  # DYLD_CACHE_SLIDE_V5_PAGE_ATTR_NO_REBASE
-                while True:
-                    raw = struct.unpack("<Q", self.reader.read_raw(addr + pg * page_size + off, 8))[0]
-                    out[off] = value_add + (raw & ((1 << 34) - 1))
-                    step = (raw >> 52) & 0x7FF
-                    if not step:
-                        break
-                    off += step * 8
-            self._pages[key] = out
-        return self._pages[key]
-
-    def apply(self, addr, raw):
-        """*raw* (the bytes at *addr*) with every pointer location in it decoded."""
-        i = bisect.bisect_right(self._starts, addr) - 1
-        if i < 0 or addr >= self.maps[i][1]:
-            return raw
-        m = self.maps[i]
-        buf, a, end = bytearray(raw), addr, addr + len(raw)
-        while a < end:
-            pg = (a - m[0]) // m[2]
-            base = m[0] + pg * m[2]
-            for off, v in self._page(m, pg).items():
-                if addr <= base + off and base + off + 8 <= end:
-                    struct.pack_into("<Q", buf, base + off - addr, v)
-            a = base + m[2]
-        return bytes(buf)
-
 
 FAKE_OBJECT = 0x7ff000000000       # no cache mapping lies here: a stand-in instance's address
 

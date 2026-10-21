@@ -712,6 +712,9 @@ class TestMethodListRobustness:
             """Minimal ctx stub: normal reads work except for UNMAPPED_VA."""
             _data = b'\x00' * 64   # enough for the method struct itself
 
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
+
             def read_ptr(self, va):
                 # method_t layout: name_ptr @0, types_ptr @8, imp @16
                 # For our test method VA=0: name=UNMAPPED_VA, types=0, imp=0xCAFE

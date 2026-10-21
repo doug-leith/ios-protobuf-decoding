@@ -31,6 +31,9 @@ def _cls(va, name, super_va, ivars=()):
 class _NoReadCtx(NoImage):
     """Standalone-binary-like ctx: cross-image reads always fail, so the name-anchor
     contributes nothing and the VA-cluster anchor must carry detection."""
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va):
         raise ValueError("unmapped (binary mode)")
     def read_cstring(self, va):

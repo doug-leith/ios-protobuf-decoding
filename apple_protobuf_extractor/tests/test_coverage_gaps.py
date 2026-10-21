@@ -92,6 +92,9 @@ class TestFieldCountGateRemoval(unittest.TestCase):
         class _MinCtx(NoImage):
             def has_section(self, *a): return False
             def section(self, *a): raise ValueError
+            def is_variable(self, vmaddr):        # no program data, no binds
+                return False
+
             def read_ptr(self, va): raise ValueError
             def read_u32(self, va): raise ValueError
             def read_bytes(self, va, n): raise ValueError

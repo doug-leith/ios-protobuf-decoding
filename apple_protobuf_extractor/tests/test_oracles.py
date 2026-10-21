@@ -1,6 +1,7 @@
 """The independent oracles (:mod:`oracles`) over whole images: operand semantics against capstone,
 method names against the cache's ``.symbols``, Swift fields and types against Apple's Remote
-Mirror.  Each asserts no difference the oracle's own known errors do not explain.
+Mirror, Flow and the emitted ObjC messages and enums against concrete runs in an emulator.  Each asserts no difference the oracle's own
+known errors do not explain.
 
 By default the standard set (a few minutes): locationd's whole ``__text`` and the first 2M
 instructions of iOS 27 GeoServices; the method names of 14 cache images; the Swift messages of
@@ -82,6 +83,182 @@ class TestOperandsAgainstCapstone(unittest.TestCase):
         flagged = {(k[0], k[1]) for k in diffs}
         self.assertIn(("W", "ldr"), flagged)
         self.assertIn(("R", "add"), flagged)
+
+
+def _unicorn():
+    try:
+        import unicorn  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+_STRUCTURE = ("ran an instruction the body lacks", "an edge the CFG lacks",
+              "a reaching definition not in defs_before", "a block propagation does not reach")
+_VALUES = ("a known value that does not hold", "a known stack address that does not hold",
+           "a constant Flow takes for a stack address")
+
+
+@unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
+class TestFlowAgainstEmulation(unittest.TestCase):
+    """:class:`proto.arm64_eval.Flow`'s CFG, reaching definitions and known values against
+    concrete runs in Unicorn (:mod:`oracles.flow_emulation`): one function in 100 of locationd,
+    4 runs each (every one in 4 with MACHO_TEST_ORACLE_FULL=1)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from oracles.flow_emulation import compare
+        ctx = _binary_ctx(LOCATIOND)
+        cls.report = compare(ctx, ctx.function_starts()[::4 if FULL else 100], runs=4)
+
+    def _findings(self, kinds):
+        return {k: self.report.findings[k][:5] for k in kinds if self.report.stats[k]}
+
+    def test_structure(self):
+        self.assertGreater(self.report.stats["edges"], 10_000)
+        self.assertGreater(self.report.stats["reads"], 100_000)
+        self.assertEqual(self._findings(_STRUCTURE), {})
+
+    def test_values(self):
+        """Every value Flow knows holds.  Before TODO #125 frame addresses and import slots were
+        numbers in bands -- a constant passed for one (2^62 - 1, the double 2.0), arithmetic
+        broke one (a frame address plus a large constant, an import's slot value + 16) -- and a
+        writable __data variable was read as its file contents."""
+        self.assertGreater(self.report.stats["known values"], 100_000)
+        self.assertEqual(self._findings(_VALUES), {})
+
+    def test_runs_from_entry_values(self):
+        """propagate / run_from / value_at entered with self (a token) and numbers in some
+        argument registers: one function in 200."""
+        from oracles.flow_emulation import compare
+        ctx = _binary_ctx(LOCATIOND)
+        rep = compare(ctx, ctx.function_starts()[::40 if FULL else 200], runs=4, entry=True)
+        self.assertGreater(rep.stats["entry values"], 100_000)
+        self.assertGreater(rep.stats["call arguments"], 10_000)
+        self.assertEqual(dict(rep.findings), {})
+
+    def test_a_planted_error_is_reported(self):
+        """An add evaluated one too high is a known value that does not hold."""
+        import proto.arm64_eval as E
+        from oracles.flow_emulation import compare
+        real = E.Flow._exec
+
+        def wrong(self, m, ins):
+            real(self, m, ins)
+            if ins.mnemonic == "add" and ins.op_str.startswith("x8, x8, #"):
+                v = m.get("x8")
+                if v is not None:
+                    m.put("x8", v + 1)
+        ctx = _binary_ctx(LOCATIOND)
+        with mock.patch.object(E.Flow, "_exec", wrong):
+            rep = compare(ctx, ctx.function_starts()[::400], runs=2)
+            from_entry = compare(ctx, ctx.function_starts()[::400], runs=2, entry=True)
+        self.assertGreater(rep.stats["a known value that does not hold"], 0)
+        self.assertGreater(from_entry.stats["a value propagated from the entry that does not hold"], 0)
+
+
+@unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
+class TestCallReadsAgainstEmulation(unittest.TestCase):
+    """:func:`proto.callees.call_reads` against concrete runs of each function, its callees
+    in the image run too (:mod:`oracles.callreads_emulation`): one locationd function in 400
+    (one in 100 with MACHO_TEST_ORACLE_FULL=1)."""
+
+    def test_call_reads(self):
+        from oracles.callreads_emulation import compare
+        ctx = _binary_ctx(LOCATIOND)
+        rep = compare(ctx, ctx.function_starts()[::100 if FULL else 400], runs=4)
+        self.assertGreater(rep.stats["registers read"], 1000)
+        self.assertEqual(dict(rep.findings), {})
+
+    def test_a_planted_error_is_reported(self):
+        """call_reads without the first register it lists."""
+        import oracles.callreads_emulation as C
+        real = C.call_reads
+        ctx = _binary_ctx(LOCATIOND)
+        with mock.patch.object(C, "call_reads", lambda c, va: real(c, va)[1:]):
+            rep = C.compare(ctx, ctx.function_starts()[::800], runs=2)
+        self.assertGreater(rep.stats["a register read that call_reads does not list"], 0)
+
+
+@unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
+class TestObjcMessagesAgainstEmulation(unittest.TestCase):
+    """The emitted ObjC messages against concrete runs of each class's ``writeTo:`` (each tag
+    written: its field's number, type, name and label; :mod:`oracles.writer_emulation`), of its
+    ``readFrom:`` (each field read: into its ivar, decoded as its type, a message field's class;
+    :mod:`oracles.reader_emulation`) and of each enum field's ``AsString:`` (its values and their
+    names; :mod:`oracles.enum_emulation`) -- locationd's 65 messages and 46 enum fields."""
+
+    @classmethod
+    def setUpClass(cls):
+        from macho.load import load_classes
+        from proto import extractor as E
+        cls.img = load_classes(_binary_ctx(LOCATIOND))
+        cls.msgs = E.extract_all(cls.img.ctx, cls.img.st, cls.img.cl)
+
+    def _writer(self, msgs):
+        from oracles.writer_emulation import compare
+        return compare(self.img.ctx, self.img.st, self.img.cl, msgs)
+
+    def _enums(self, msgs):
+        from oracles.enum_emulation import compare
+        return compare(self.img.ctx, self.img.st, self.img.cl, msgs)
+
+    def test_writeto(self):
+        rep = self._writer(self.msgs)
+        self.assertGreater(rep.stats["tags written"], 400)
+        self.assertEqual(rep.stats["runs returned"], rep.stats["messages"])
+        self.assertEqual(dict(rep.findings), {})
+        self.assertEqual(rep.stats["fields not written in the run"], 0)
+
+    def test_enums(self):
+        rep = self._enums(self.msgs)
+        self.assertGreater(rep.stats["values agree"], 400)
+        self.assertEqual(dict(rep.findings), {})
+
+    def test_readfrom(self):
+        from oracles.reader_emulation import compare
+        rep = compare(self.img.ctx, self.img.st, self.img.cl, self.msgs)
+        self.assertGreater(rep.stats["fields run"], 400)
+        self.assertEqual(rep.stats["runs returned"], rep.stats["fields run"])
+        self.assertEqual(dict(rep.findings), {})
+
+    def test_planted_errors_are_reported_by_readfrom(self):
+        """An int64 called sint64 decodes otherwise, a number shifted is skipped, a message
+        field of another class allocates its own."""
+        import copy
+        from oracles.reader_emulation import compare
+        msgs = copy.deepcopy(self.msgs)
+        hr = next(m for m in msgs if m.class_name == "ALCLAllDayHeartRate")
+        mode = next(f for f in hr.fields if f.name == "mode")
+        mode.type_name = "sint64"
+        body = next(m for m in msgs if m.class_name == "ALCLBodyMetrics")
+        body.fields[1].number += 50
+        log = next(m for m in msgs if m.class_name == "ALActivityLog")
+        log.fields[1].type_class = "ALCLBodyMetrics"
+        rep = compare(self.img.ctx, self.img.st, self.img.cl, [hr, body, log])
+        for kind, cls in (("a value the class decodes differently", "ALCLAllDayHeartRate"),
+                          ("an emitted field the class skips", "ALCLBodyMetrics"),
+                          ("a message field that allocates another class", "ALActivityLog")):
+            self.assertTrue(any(cls in r[1] for r in rep.findings[kind]), kind)
+
+    def test_planted_errors_are_reported(self):
+        import copy
+        msgs = copy.deepcopy(self.msgs)
+        odo = next(m for m in msgs if m.class_name == "ALCLOdometer")
+        odo.fields[0].number += 100                      # a wrong number
+        odo.fields[1].type_name = "int32"                # a wrong type
+        odo.fields[2].name = "notIts"                    # a wrong name
+        gender = next(m for m in msgs if m.class_name == "ALCLBodyMetrics")
+        enum = next(e for e in gender.enums if e.values)
+        enum.values[0].name = enum.values[0].name + "_X"  # a value named for another string
+        del enum.values[1]                               # a value lost
+        rep = self._writer(msgs)
+        for kind in ("a written tag the message lacks", "a type the writer does not write",
+                     "a name other than its ivar's"):
+            self.assertTrue(any("ALCLOdometer" in r[1] for r in rep.findings[kind]), kind)
+        rep = self._enums(msgs)
+        for kind in ("a value the enum lacks", "a value named for another string"):
+            self.assertTrue(any("ALCLBodyMetrics" in r[1] for r in rep.findings[kind]), kind)
 
 
 @unittest.skipUnless(IPHONE8_CACHE, "iPhone 8 cache not available")
@@ -168,23 +345,39 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
         self.assertTrue(any(what == "field types" and any(f == "stopSequences" for f, *_ in detail)
                             for _q, what, detail in res.differences), res.differences)
 
-    def test_slide_info_decodes_as_the_reader(self):
-        """Every pointer of a data page, decoded from the slide info's chains, is what the
-        cache reader's own decode_ptr makes of it."""
+
+
+class TestCacheMemory(unittest.TestCase):
+    """The pointers :class:`oracles.cache_memory.SlideInfo` decodes from a cache's slide info
+    chains are what the reader's own ``decode_ptr`` makes of them (version 2, the iPhone 8 cache;
+    version 5, iOS 27) -- version 2 keeps a pointer's top-byte flag bits, as dyld does, which
+    ``decode_ptr`` strips."""
+
+    def _check(self, cache):
         import struct
-        from oracles.swift_mirror import CacheMirror, SlideInfo
-        reader = CacheMirror(IOS27_CACHE).reader
+        from macho.dyld_cache import DyldCacheReader
+        from oracles.cache_memory import SlideInfo
+        reader = DyldCacheReader(cache)
         slide = SlideInfo(reader)
-        m = slide.maps[0]
-        page = next(pg for pg, st in enumerate(m[3]) if st != 0xFFFF)
-        base = m[0] + page * m[2]
-        raw = reader.read_raw(base, m[2])
-        decoded = slide.apply(base, raw)
-        pointers = slide._page(m, page)
-        self.assertTrue(pointers)
-        for off in pointers:
-            v = struct.unpack_from("<Q", raw, off)[0]
-            self.assertEqual(struct.unpack_from("<Q", decoded, off)[0], reader.decode_ptr(v))
+        checked = 0
+        for m in slide.maps:
+            size = slide._page_size(m)
+            for pg in range(0, (m[1] - m[0]) // size, 211):
+                for off, v in slide._page(m, pg).items():
+                    raw = struct.unpack("<Q", reader.read_raw(m[0] + pg * size + off, 8))[0]
+                    want = reader.decode_ptr(raw)
+                    if v or want:
+                        self.assertEqual(v & ((1 << 56) - 1), want, hex(m[0] + pg * size + off))
+                        checked += 1
+        self.assertGreater(checked, 1000)
+
+    @unittest.skipUnless(IPHONE8_CACHE, "iPhone 8 cache not available")
+    def test_version_2(self):
+        self._check(IPHONE8_CACHE)
+
+    @unittest.skipUnless(IOS27_CACHE, "iOS 27 cache not available")
+    def test_version_5(self):
+        self._check(IOS27_CACHE)
 
 
 if __name__ == "__main__":

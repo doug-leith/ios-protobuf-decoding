@@ -22,6 +22,9 @@ SLOT = 0x6010              # its GOT slot
 
 
 class _Ctx(NoImage):
+    def is_variable(self, vmaddr):        # no program data, no binds
+        return False
+
     def read_ptr(self, va):
         if va == SLOT:
             return PROBE
