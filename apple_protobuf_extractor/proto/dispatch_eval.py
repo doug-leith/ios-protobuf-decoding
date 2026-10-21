@@ -59,7 +59,7 @@ from proto.function_body import function_body
 from proto.eval_tokens import (SELF, READER, TOKEN_BASE, FIELD_BASE, opaque, ret_value,
                                object_model)
 from proto import dispatch as D
-from proto.models import record_analysis_failure
+from proto.models import record_analysis_failure, record_heuristic_hit
 
 log = logging.getLogger(__name__)
 
@@ -238,7 +238,10 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
     objs = object_model(ctx)
 
     def descend(va: int, regs: Dict[str, int], depth: int) -> None:
-        if va in seen or depth > _DESCEND_DEPTH:
+        if va in seen:
+            return
+        if depth > _DESCEND_DEPTH:
+            record_heuristic_hit(ctx, "_DESCEND_DEPTH", f"{cls.name}: the call to {va:#x}")
             return
         seen.add(va)
         insns = _function_insns(ctx, va, entries=entries)
@@ -333,8 +336,13 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 r = run(n, dflt_blocks)
                 regions[n] = r
                 for b, t in r.br_targets:
-                    if t not in br_arms.get(b, ()) and core_va <= t < core_va + _ARM_REACH:
+                    if t in br_arms.get(b, ()) or t < core_va:
+                        continue
+                    if t < core_va + _ARM_REACH:
                         new_arms.setdefault(b, set()).add(t)
+                    else:
+                        record_heuristic_hit(ctx, "_ARM_REACH",
+                                           f"{cls.name}: br at {b:#x} -> {t:#x}")
             results.append((k, dest, regions, default_n))
         if not new_arms:
             break

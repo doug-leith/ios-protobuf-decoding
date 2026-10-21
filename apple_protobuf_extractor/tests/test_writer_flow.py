@@ -137,6 +137,20 @@ class TestOutlinedFragments(unittest.TestCase):
                            ('ldur', 'x1, [sp, #-0x10]')])
         self.assertEqual(set(site.value_origins), {('I', '_a')})
 
+class TestBoundsReachedAreReported(unittest.TestCase):
+    """A summary cut at _MAX_SUMMARY_DEPTH is an unknown part of self: the run says so."""
+
+    def test_the_summary_depth(self):
+        import proto.writer_flow as WF
+        from proto.models import get_diagnostics
+        ctx = NoImage(segments=[])
+        wf = WF.WriterFlow(ctx, [])
+        with self.assertLogs('proto.models', 'WARNING') as logs:
+            self.assertEqual(wf._summary(0x1000, WF._MAX_SUMMARY_DEPTH), frozenset({WF._T}))
+        self.assertIn('_MAX_SUMMARY_DEPTH hit', logs.output[0])
+        self.assertEqual([c for c, _w in get_diagnostics(ctx).heuristics_hit], ['_MAX_SUMMARY_DEPTH'])
+
+
 class TestTailCallToACFunction(unittest.TestCase):
     """A ``b`` out of the function window to a C function of the image (an LC_FUNCTION_STARTS
     entry, neither a method IMP nor named) is a tail call: a helper handed self that ends

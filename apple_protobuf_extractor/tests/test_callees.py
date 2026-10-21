@@ -5,6 +5,7 @@ into "no name", which in turn relaxed the objc_msgSend check of the shared selec
 (:func:`proto.callees.stub_selector`; code review 2026-10-18).  A context that has no names
 still gets None; a broken reader raises.
 """
+import logging
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -94,7 +95,8 @@ class TestCallReads(unittest.TestCase):
     """proto.callees.call_reads: one answer to "what may this call read" for both
     interpreters (WriterFlow and arm64_eval.Flow)."""
 
-    def _reads(self, name=None, sel=None, blocks=(), names=None, text=(0x1000, 0x100000)):
+    def _reads(self, name=None, sel=None, blocks=(), names=None, text=(0x1000, 0x100000),
+               starts=None, then_index=None):
         import proto.callees as C
         from tests._fakes import TextImage
         from tests._listing import layout
@@ -105,8 +107,13 @@ class TestCallReads(unittest.TestCase):
                                lambda ctx, va: name if va == 0x9000 else named.get(va)), \
                 mock.patch.object(C, 'stub_selector', lambda ctx, va: sel if va == 0x9000 else None), \
                 mock.patch('proto.function_body.disasm', fd):
-            image = TextImage(text, starts={a for a, _body in blocks} | set(named))
-            return set(C.call_reads(image, 0x9000))
+            image = TextImage(text, starts=({a for a, _body in blocks} | set(named))
+                              if starts is None else starts)
+            got = set(C.call_reads(image, 0x9000))
+            if then_index is None:
+                return got
+            image._function_entries = set(then_index)      # build_function_index, later
+            return got, set(C.call_reads(image, 0x9000))
 
     def test_a_runtime_contract_is_what_it_reads(self):
         self.assertEqual(self._reads("_objc_retain_x19"), {"x19"})
@@ -136,6 +143,52 @@ class TestCallReads(unittest.TestCase):
         got = self._reads(blocks=[(0x9000, [('cbz', 'x0, #0xa000'), ('mov', 'x0, #0'),
                                             ('ret', '')])], names={0xa000: '_f'})
         self.assertEqual(got, set(ABI_ARGS))          # x0 tested, and _f's arguments read
+
+    def test_an_answer_read_before_the_function_index_is_dropped_once_it_is_built(self):
+        # no LC_FUNCTION_STARTS: 0x9000 ends in a call, and 0x9004 (a method IMP) reads x20;
+        # until the index knows 0x9004 its code is read as 0x9000's
+        before, after = self._reads(blocks=[(0x9000, [('bl', '#0xf000')]),
+                                            (0x9004, [('mov', 'x0, x20'), ('ret', '')])],
+                                    names={0xf000: '_f'}, starts=[],
+                                    then_index={0x9000, 0x9004})
+        self.assertIn('x20', before)
+        self.assertNotIn('x20', after)
+
+    def test_a_spill_is_a_save_only_in_a_function_with_a_frame(self):
+        saves = self._reads(blocks=[(0x9000, [('stp', 'x20, x19, [sp, #-0x20]!'), ('mov', 'x0, #0'),
+                                            ('ldp', 'x20, x19, [sp], #0x20'), ('ret', '')])])
+        self.assertFalse(saves & {'x19', 'x20'})
+        # no frame of its own (an outlined fragment): [sp] is its caller's frame, so the
+        # caller's x19 is read (passed on the stack)
+        passes = self._reads(blocks=[(0x9000, [('str', 'x19, [sp, #8]'), ('mov', 'x0, #0'),
+                                             ('ret', '')])])
+        self.assertIn('x19', passes)
+
+    def test_a_save_through_x29_is_reported(self):
+        with self.assertLogs('proto.models', 'WARNING') as logs:
+            got = self._reads(blocks=[(0x9000, [('sub', 'sp, sp, #0x20'), ('stur', 'x19, [x29, #-8]'),
+                                                ('mov', 'x0, #0'), ('add', 'sp, sp, #0x20'),
+                                                ('ret', '')])])
+        self.assertIn('x19', got)                          # read as a use: the textual test
+        self.assertIn('callee-saved spill test hit', logs.output[0])
+
+    def test_swift_argument_registers_are_read_unremarked(self):
+        # Swift passes self, the error register and the async context in x20 / x21 / x22
+        logger = logging.getLogger('proto.models')
+        with self.assertLogs(logger, 'WARNING') as logs:
+            logger.warning("sentinel")
+            got = self._reads(blocks=[(0x9000, [('stp', 'x20, x19, [sp, #-0x20]!'),
+                                                ('mov', 'x19, x21'), ('mov', 'x0, x19'),
+                                                ('ldp', 'x20, x19, [sp], #0x20'), ('ret', '')])])
+        self.assertIn('x21', got)
+        self.assertEqual(len(logs.output), 1)
+
+    def test_an_undecoded_jump_table_is_reported(self):
+        with self.assertLogs('proto.models', 'WARNING') as logs:
+            got = self._reads(blocks=[(0x9000, [('br', 'x9')])])
+        from proto.callees import _ALL_REGS
+        self.assertEqual(got, set(_ALL_REGS))
+        self.assertIn('undecoded jump table hit', logs.output[0])
 
     def test_a_return_hands_back_x0(self):
         self.assertEqual(self._reads(blocks=[(0x9000, [('add', 'x1, x22, #8'), ('ret', '')])]),

@@ -439,6 +439,8 @@ def _parse_methods(
     # garbage ObjcMethod records (mostly unnamed) that could pollute
     # get_method() lookups elsewhere; returning no methods is honest and safe.
     if count >= _MAX_METHODS:
+        log.warning("method list at %#x claims %d methods (more than %d): taken as a misdecoded "
+                    "pointer, the class gets no methods", list_va, count, _MAX_METHODS)
         return []
     methods: List[ObjcMethod] = []
 

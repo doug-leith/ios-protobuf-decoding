@@ -23,6 +23,7 @@ from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, 
                                   is_cond_branch, split_ops)
 from proto.callees import text_holding
 from proto.dispatch import _jump_table_arm_addrs
+from proto.models import record_heuristic_hit
 
 # What ends a path through a function: a return, an indirect jump, a trap.
 _PATH_ENDS = RETURNS | INDIRECT_BRANCHES | TRAPS
@@ -129,6 +130,7 @@ def function_body(ctx: BinaryContext, va: int, entries=None,
                     open_path = True
                     break
                 if end is None and len(out) >= _UNBOUNDED_MAX_INSNS:
+                    record_heuristic_hit(ctx, "_UNBOUNDED_MAX_INSNS", f"the function at {va:#x}")
                     body = FunctionBody(sorted(out.values(), key=lambda i: i.addr))
                     body.truncated = True
                     return body

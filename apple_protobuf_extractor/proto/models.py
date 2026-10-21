@@ -353,6 +353,9 @@ class ExtractionDiagnostics:
     # per-class analyses that raised or did not settle; the fields they would have typed are
     # emitted flagged: (class, analysis, detail)
     analysis_failures: List[Tuple[str, str, str]] = field(default_factory=list)
+    # a bound reached ([cap:] constants) or a heuristic applied where it may be wrong: what it
+    # decided may be missing or wrong there -- (name, where)
+    heuristics_hit: List[Tuple[str, str]] = field(default_factory=list)
 
     @property
     def n_errors(self) -> int:
@@ -373,6 +376,21 @@ def record_failed_pass(ctx, name: str, exc: Exception, consequence: str) -> None
     err = f"{type(exc).__name__}: {exc}"
     get_diagnostics(ctx).failed_passes.append((name, err, consequence))
     logging.getLogger(__name__).warning("%s pre-pass FAILED (%s); %s", name, err, consequence)
+
+
+def record_heuristic_hit(ctx, name: str, where: str) -> None:
+    """The bound or heuristic *name* (a [cap:] constant's name, or a rule's) bit at *where*:
+    what it decided there may be missing or wrong.  Warned the first time each one bites in a
+    run; every place is listed in the run summary."""
+    import logging
+    hits = get_diagnostics(ctx).heuristics_hit
+    if (name, where) in hits:
+        return
+    if all(n != name for n, _w in hits):
+        logging.getLogger(__name__).warning(
+            "%s hit (%s); what it decided there may be missing or wrong (every place is listed "
+            "in the run summary)", name, where)
+    hits.append((name, where))
 
 
 def record_analysis_failure(ctx, cls_name: str, analysis: str, detail: str) -> None:

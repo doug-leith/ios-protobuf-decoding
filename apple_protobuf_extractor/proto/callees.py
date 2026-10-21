@@ -268,6 +268,9 @@ ABI_ARGS = CALL_ARG_GPRS + ARG_FPRS
 #: Every register a callee could read as a value its caller hands it (not the frame pointer or
 #: the link register).
 _ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
+#: The callee-saved registers the Swift calling convention passes arguments in: self (x20), the
+#: error register (x21), the async context (x22).
+_SWIFT_ARGS = frozenset(("x20", "x21", "x22"))
 _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
 #: What a return hands its caller: the result register (a function that does not write v0
 #: returns no floating-point value).
@@ -310,16 +313,20 @@ def text_holding(ctx, va: Optional[int]):
     return text if text.vmaddr <= va < text.vmaddr + text.vmsize else None
 
 
+def _moves_sp(ins) -> bool:
+    """*ins* changes sp: sp as its destination, or a pre/post-index access through sp."""
+    ops = split_ops(ins.op_str)
+    return writeback_base(ops) == "sp" or bool(
+        ops and ops[0] in ("sp", "wsp") and ins.mnemonic not in NO_DEST)
+
+
 def _runs_in_caller(ins) -> bool:
     """*ins* may run as part of the calling function: not a control transfer, and it leaves sp
     and the link register (x30) as the caller has them."""
     mn = ins.mnemonic
     if mn in BLOCK_ENDS or is_cond_branch(mn) or mn in TRAPS or mn == "svc":
         return False
-    ops = split_ops(ins.op_str)
-    if "x30" in writes(ins) or writeback_base(ops) == "sp":
-        return False
-    return not (ops and ops[0] in ("sp", "wsp") and mn not in NO_DEST)
+    return "x30" not in writes(ins) and not _moves_sp(ins)
 
 def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     """The registers a call to *target* may read: a runtime function's ABI contract
@@ -340,13 +347,22 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     if (target is None or name is not None or stub_selector(ctx, target) is not None
             or text_holding(ctx, target) is None):
         return ABI_ARGS
+    from proto.dispatch import function_entries, recheck_provisional_decodes
     memo = _ctx_cache(ctx, "_call_reads", dict)
+    # A body read ends at the next function entry the index knows: an answer read while the
+    # index was smaller may have read into the next function, so it is dropped once it grows.
+    stamp = _ctx_cache(ctx, "_call_reads_index_size", lambda: [None])
+    size = len(function_entries(ctx))
+    if stamp[0] != size:
+        memo.clear()
+        stamp[0] = size
     if target in memo:
         return memo[target]
     open_ = _ctx_cache(ctx, "_call_reads_open", dict)    # being read: target -> _Open
     if target in open_:
         frame = open_[target]
         _depends_on(open_, frame.index)
+        provisional_answers(ctx)[0] += 1
         return frame.reads
     frame = _Open(len(open_))
     open_[target] = frame
@@ -367,7 +383,16 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
         _depends_on(open_, frame.low)        # settled only once that outer function is
     else:
         memo[target] = res
+    if not open_:
+        recheck_provisional_decodes(ctx)     # every cycle has settled
     return res
+
+
+def provisional_answers(ctx) -> list:
+    """``[n]``: how many times :func:`call_reads` has answered with what was known so far of a
+    function still being read (a call back into an unsettled cycle).  A jump table decoded
+    while this grows used such an answer (:func:`proto.dispatch.recheck_provisional_decodes`)."""
+    return _ctx_cache(ctx, "_call_reads_provisional", lambda: [0])
 
 
 class _Open:
@@ -407,31 +432,47 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     flow = decoded_flow(ctx, list(body))
     cfg = flow.cfg
     own = frozenset(i.addr for i in flow.insns)
+    frame = any(_moves_sp(i) for i in flow.insns)     # it has a frame of its own
     live_in: Dict[int, frozenset] = {b: frozenset() for b in cfg.order}
+    unresolved = [cfg.blocks[b][-1].addr for b in cfg.order
+                  if cfg.blocks[b][-1].mnemonic in INDIRECT_BRANCHES and not cfg.succ.get(b)]
     changed = True
     while changed:
         changed = False
         for b in reversed(cfg.order):
             succ = cfg.succ.get(b, ())
             last = cfg.blocks[b][-1]
-            if last.mnemonic in INDIRECT_BRANCHES and not succ:
+            if last.addr in unresolved:
                 live = set(_ALL_REGS)                   # a jump nothing resolved
             else:
                 live = set().union(*(live_in[x] for x in succ)) if succ else set()
             for ins in reversed(cfg.blocks[b]):
-                live = _live_before(ctx, ins, live, own)
+                live = _live_before(ctx, ins, live, own, frame)
             if frozenset(live) != live_in[b]:
                 live_in[b] = frozenset(live)
                 changed = True
     entry = live_in.get(cfg.entry)
     if entry is None:
         return _ALL_REGS
+    from proto.models import record_heuristic_hit
+    for a in unresolved:
+        record_heuristic_hit(ctx, "undecoded jump table",
+                             f"the br at {a:#x} in the function at {target:#x}: every register "
+                             f"taken as read")
+    saved = sorted(entry & _CALLEE_SAVED - _SWIFT_ARGS)
+    if frame and saved and not unresolved:
+        # A function with a calling convention has no use for its caller's callee-saved
+        # registers but to save them: a save the spill test does not see (through x29, say)?
+        record_heuristic_hit(ctx, "callee-saved spill test",
+                             f"the function at {target:#x} reads {', '.join(saved)}")
     return tuple(r for r in _ALL_REGS if r in entry)
 
 
-def _live_before(ctx, ins, live_after: set, own: frozenset) -> set:
+def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) -> set:
     """The registers live before *ins* given *live_after* (:func:`_live_in`); *own*: the
-    addresses of the function's own instructions (a ``b`` elsewhere is a tail call)."""
+    addresses of the function's own instructions (a ``b`` elsewhere is a tail call); *frame*:
+    the function has a frame of its own, so a callee-saved register stored to ``[sp ...]`` is
+    saved there (without one, the store is into its caller's frame: a read)."""
     mn = ins.mnemonic
     ops = split_ops(ins.op_str)
     if mn in RETURNS:
@@ -447,7 +488,7 @@ def _live_before(ctx, ins, live_after: set, own: frozenset) -> set:
         if frag is not None:
             live = set(live_after)
             for fi in reversed(frag):
-                live = _live_before(ctx, fi, live, own)
+                live = _live_before(ctx, fi, live, own, frame)
             live.discard("x30")
             return live
         used = set(call_reads(ctx, t)) | set(reads(ins))      # reads(): the target (and modifier)
@@ -456,7 +497,7 @@ def _live_before(ctx, ins, live_after: set, own: frozenset) -> set:
         clob = call_clobbers(ctx, t)
         return (set(live_after) - set(clob if clob is not None else CALLER_SAVED)) | used
     src = set(reads(ins))
-    if (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
+    if frame and (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
         src -= _CALLEE_SAVED                            # a prologue spill is not a read
     if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
         t = _parse_imm(ops[-1]) if ops else None

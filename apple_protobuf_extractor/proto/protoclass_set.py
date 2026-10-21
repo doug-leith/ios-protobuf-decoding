@@ -75,9 +75,9 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                 name_memo[va] = _resolve_class_name_at(ctx, va)
             return name_memo[va]
 
-        def _reaches_pb_root(va: int, depth: int = 8) -> bool:
+        def _reaches_pb_root(va: int) -> bool:
             cur, seen = va, set()
-            for _ in range(depth):
+            while True:
                 if not cur or cur in seen:
                     return False
                 seen.add(cur)
@@ -90,7 +90,6 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                     cur = ctx.read_ptr(cur + 8)            # next superclass
                 except READ_ERRORS:
                     return False
-            return False
 
         # Track anchor 1's reach FULLY independently of the heuristic seed (run for
         # every class, not just ones the seed hasn't already claimed) so we can

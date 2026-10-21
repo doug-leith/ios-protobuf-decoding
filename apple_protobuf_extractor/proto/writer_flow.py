@@ -53,6 +53,8 @@ from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
                                   CALLS, INDIRECT_BRANCHES, ARG_GPRS, split_ops)
 
+from proto.models import record_heuristic_hit
+
 log = logging.getLogger(__name__)
 
 E: FrozenSet = frozenset()
@@ -379,6 +381,7 @@ class WriterFlow:
                               max_visits=_MAX_BLOCK_VISITS)
         if states is None:
             res.fail("fixpoint did not settle")
+            record_heuristic_hit(self.ctx, "_MAX_BLOCK_VISITS", f"writer flow of {imp:#x}")
             return res
         for b, st in states.items():
             self._block(st.copy(), b, res, run)
@@ -608,6 +611,9 @@ class WriterFlow:
             res = self._run(imp, {'x0': frozenset({_S})}, depth + 1, imp)
             if res is not None and res.complete:
                 out = frozenset(res.ret)
+        else:
+            record_heuristic_hit(self.ctx, "_MAX_SUMMARY_DEPTH",
+                               f"{self.cls.name if self.cls else '?'}: the method at {imp:#x}")
         self._summary_memo[imp] = out
         return out
 

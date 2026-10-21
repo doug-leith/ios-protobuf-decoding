@@ -184,3 +184,32 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProvisionalDecodes(unittest.TestCase):
+    """A jump table decoded while call_reads was still solving a cycle (its evaluation used a
+    provisional answer) is decoded again once the cycle settles, and a different result is
+    warned of (TODO #119) rather than kept silently."""
+
+    def test_a_table_that_decodes_differently_once_settled_is_warned_of(self):
+        from unittest import mock
+        import proto.dispatch as D
+        from proto.callees import provisional_answers
+        from tests._fakes import NoImage
+        from tests._listing import insns
+        listing = insns([('cmp', 'w8, #1'), ('b.hi', '#0x1010'), ('adr', 'x9, #0x1010'),
+                         ('br', 'x9'), ('ret', '')])
+        ctx = NoImage()
+        answers = [{0x1010}, {0x100c}]             # in the cycle, then once it has settled
+
+        def evaluated(flow, idom, kb, lo, hi):
+            if len(answers) == 2:
+                provisional_answers(ctx)[0] += 1   # it consulted a function still being read
+            return answers.pop(0)
+
+        with mock.patch.object(D, '_evaluated_arms', evaluated):
+            self.assertEqual(D._jump_table_arm_addrs(ctx, listing), {0x1010})
+            with self.assertLogs('proto.dispatch', 'WARNING') as logs:
+                D.recheck_provisional_decodes(ctx)
+        self.assertIn('decode differently', logs.output[0])
+        self.assertEqual(D._jump_table_arm_addrs(ctx, listing), {0x100c})

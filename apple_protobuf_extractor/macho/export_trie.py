@@ -18,11 +18,6 @@ from .leb import read_uleb
 EXPORT_SYMBOL_FLAGS_REEXPORT = 0x08
 EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER = 0x10
 
-# [cap:INPUT-SANITY] runaway backstop for a malformed trie, far above any real image's
-# node count (libobjc ~400 exports, the largest frameworks a few tens of thousands).
-_MAX_NODES = 2_000_000
-
-
 def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
     """``(symbol name, flags, image offset or None)`` for every terminal node of the trie in
     *data* (offset 0 = root), depth-first; a re-export has no offset of its own (None).
@@ -35,7 +30,7 @@ def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
 
     stack = [(0, "")]
     seen = set()
-    while stack and len(seen) < _MAX_NODES:
+    while stack:                    # each node is visited once (seen) and lies inside data
         node, prefix = stack.pop()
         if node >= end or node in seen:
             continue

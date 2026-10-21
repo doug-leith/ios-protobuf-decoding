@@ -1311,6 +1311,8 @@ def print_summary(
                   file=file)
         if diagnostics.analysis_failures:
             print(row("  class analyses failed", len(diagnostics.analysis_failures)), file=file)
+        if diagnostics.heuristics_hit:
+            print(row("  bounds / heuristics hit", len(diagnostics.heuristics_hit)), file=file)
         if diagnostics.failed_classes:
             print(row("!! classes FAILED (missing)", len(diagnostics.failed_classes)), file=file)
         if diagnostics.foreign_errors:
@@ -1353,6 +1355,15 @@ def print_summary(
             print(f"  {cls_name}: {analysis}: {detail}", file=sys.stderr)
         if len(fails) > 10:
             print(f"  … and {len(fails) - 10} more (run with -v)", file=sys.stderr)
+
+    if diagnostics is not None and diagnostics.heuristics_hit:
+        hits = diagnostics.heuristics_hit
+        print(f"\nwarning: a bound or heuristic bit {len(hits)} time(s); what it decided there "
+              f"may be missing or wrong:", file=sys.stderr)
+        for name, where in hits[:10]:
+            print(f"  {name}: {where}", file=sys.stderr)
+        if len(hits) > 10:
+            print(f"  … and {len(hits) - 10} more", file=sys.stderr)
 
     if diagnostics is not None and diagnostics.n_errors:
         for name, err, consequence in diagnostics.failed_passes:

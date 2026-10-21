@@ -217,11 +217,13 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
     """``[{br address: arms}, Flow or None, sorted listing]`` for *insns*, memoised on *ctx* per
     listing: the decoder's last Flow is kept when it was built with the final arms."""
     from proto.arm64_eval import Flow
+    from proto.callees import provisional_answers     # (callees imports this module lazily)
     ins = sorted(insns, key=lambda i: i.addr)
     key = (tuple(i.addr for i in ins), bounds)
     memo = _ctx_cache(ctx, "_jump_table_arms", dict)
     hit = memo.get(key)
     if hit is None:
+        provisional = provisional_answers(ctx)[0]
         by_br: Dict[int, frozenset] = {}
         final = None
         lo, hi = bounds or (ins[0].addr, ins[-1].addr + 4)
@@ -241,6 +243,8 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
                 break
             by_br = {**by_br, **new}
         hit = memo[key] = [by_br, final, ins]
+        if provisional_answers(ctx)[0] != provisional:
+            _ctx_cache(ctx, "_provisional_decodes", list).append((key, ins, bounds))
         if bounds is not None and all(ins[0].addr <= a < ins[-1].addr + 4
                                       for arms in by_br.values() for a in arms):
             # Every arm lies in the listing's span: decoding within the span accepts the same
@@ -248,6 +252,26 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
             # function body read with its extent's bounds, then decoded by its callers).
             memo.setdefault((key[0], None), hit)
     return hit
+
+
+def recheck_provisional_decodes(ctx: BinaryContext) -> None:
+    """Decode again each jump table first decoded while :func:`proto.callees.call_reads` was
+    still solving a cycle of functions, with what it read of the cycle then (the evaluation
+    reads calls' reads: which stack slots a call can write).  Called once every cycle has
+    settled.  A table that decodes differently now is warned of and replaced; what was read
+    with the old arms (the cycle's own reads) is not redone."""
+    todo = _ctx_cache(ctx, "_provisional_decodes", list)
+    memo = _ctx_cache(ctx, "_jump_table_arms", dict)
+    while todo:
+        key, ins, bounds = todo.pop()
+        old = memo.pop(key, None)
+        memo.pop((key[0], None), None)
+        new = _decoded(ctx, ins, bounds)
+        if old is not None and old[0] != new[0]:
+            log.warning("the jump table(s) of the listing at %#x decode differently once the "
+                        "call_reads cycle they were decoded in has settled (%d -> %d arms); "
+                        "the cycle's call_reads may be stale (TODO #119)", key[0][0],
+                        sum(len(a) for a in old[0].values()), sum(len(a) for a in new[0].values()))
 
 
 def decoded_flow(ctx: BinaryContext, insns: List["Insn"]):
