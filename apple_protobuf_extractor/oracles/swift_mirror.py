@@ -285,14 +285,18 @@ def compare(mirror, image):
         if d:
             descs.append(d)
     storage = _storage_metadata(ctx, descs)
-    stats, differences = collections.Counter(), []
+    stats, differences, seen = collections.Counter(), [], set()
     for desc in descs:
         if TR._desc_kind(ctx, desc) != TR._STRUCT_KIND:
             continue
         q, mn = TR._qualified_name(ctx, desc), _mangled(ctx, desc)
-        if q not in emitted or q not in meta.stored or not mn:
+        if q not in emitted:
             continue
+        seen.add(q)
         stats["messages"] += 1
+        if not mn:
+            stats["not compared: no mangled name"] += 1
+            continue
         rm = mirror.fields(mn)
         if rm is None:
             stats["not compared: no layout"] += 1
@@ -320,17 +324,19 @@ def compare(mirror, image):
             stats["not compared: a one-case oneof"] += 1
             continue
         theirs.pop("unknownFields", None)
-        ours, ours_t = meta.stored[q], meta.types.get(q, {})
+        ours, ours_t = meta.stored.get(q, set()), meta.types.get(q, {})   # (none: an empty message)
         if ours != set(theirs):
             differences.append((q, "field set", "ours only %s, theirs only %s"
                                 % (sorted(ours - set(theirs)), sorted(set(theirs) - ours))))
             continue
+        stats["fields with no type recovered"] += len(ours - set(ours_t))
         bad = [(f, ours_t[f], proto_of(theirs[f])) for f in sorted(ours_t)
                if theirs.get(f) and proto_of(theirs[f]) != ours_t[f]]
         if bad:
             differences.append((q, "field types", bad))
         else:
             stats["agree"] += 1
+    stats["not compared: emitted, no type descriptor"] += len(emitted - seen)
     return Result(stats, differences)
 
 

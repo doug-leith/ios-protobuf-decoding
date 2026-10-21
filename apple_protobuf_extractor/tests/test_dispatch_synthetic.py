@@ -162,6 +162,13 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
         self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns, per_br=True),
                          {0x1024: {0x1030, 0x1038, 0x1040, 0x1048}})
 
+    def test_an_ungated_value_set_is_all_or_nothing(self):
+        # the index is 0 or 9 on the paths in; 9 lands past the function: no arms at all
+        insns = self._listing([
+            'cbz w0, #0x100c', 'mov w22, #0', 'b #0x1010', 'mov w22, #9', 'mov w8, w22',
+            'adr x9, #0x1024', 'add x9, x9, x8, lsl #3', 'br x9', 'nop', 'ret', 'nop', 'ret'])
+        self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns), set())
+
     def test_an_index_from_a_load_is_not_guessed(self):
         insns = self._listing([
             'ldr w22, [x0]', 'mov w8, w22', 'adr x9, #0x1018', 'add x9, x9, x8, lsl #3',

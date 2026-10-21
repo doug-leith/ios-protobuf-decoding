@@ -63,12 +63,15 @@ class TestOperandsAgainstCapstone(unittest.TestCase):
         from oracles.operands import compare
         n, diffs, examples = compare(_cache_ctx(IOS27_CACHE, "GeoServices"),
                                      None if FULL else 2_000_000)
+        self.assertGreaterEqual(n, 2_000_000)
         self.assertEqual(sum(diffs.values()), 0, _report(diffs, examples))
 
     @unittest.skipUnless(LOCATIOND, "locationd binary not available")
     def test_planted_errors_are_reported(self):
-        """The known-error allowances leave our own errors visible: ldr's write of its
-        destination and add's read of its last operand, each dropped, are reported."""
+        """The corrections of capstone's errors leave our own visible, in the operands they
+        correct too: ldr's write of its destination, add's read of its last operand, cmp's and
+        tst's read of their first (capstone lists it as written) and lsl's of a source that is
+        also its destination (capstone lists any destination as read), each dropped."""
         import oracles.operands as O
         real_reads, real_writes = O.reads, O.writes
 
@@ -77,12 +80,15 @@ class TestOperandsAgainstCapstone(unittest.TestCase):
 
         def reads(ins):
             r = real_reads(ins)
+            if ins.mnemonic in ("cmp", "tst") or \
+                    (ins.mnemonic == "lsl" and r and r[0] in real_writes(ins)):
+                return r[1:]
             return r[:-1] if ins.mnemonic == "add" and ins.op_str.count(",") == 2 and r else r
         with mock.patch.object(O, "writes", writes), mock.patch.object(O, "reads", reads):
             _n, diffs, _ex = O.compare(_binary_ctx(LOCATIOND), 1_000_000)
         flagged = {(k[0], k[1]) for k in diffs}
-        self.assertIn(("W", "ldr"), flagged)
-        self.assertIn(("R", "add"), flagged)
+        for planted in (("W", "ldr"), ("R", "add"), ("R", "cmp"), ("R", "tst"), ("R", "lsl")):
+            self.assertIn(planted, flagged)
 
 
 def _unicorn():
@@ -94,7 +100,9 @@ def _unicorn():
 
 
 _STRUCTURE = ("ran an instruction the body lacks", "an edge the CFG lacks",
-              "a reaching definition not in defs_before", "a block propagation does not reach")
+              "a reaching definition not in defs_before", "a block propagation does not reach",
+              "ran past the end of the body", "a decoded br that jumps elsewhere",
+              "a register written that writes() does not list")
 _VALUES = ("a known value that does not hold", "a known stack address that does not hold",
            "a constant Flow takes for a stack address")
 
@@ -118,6 +126,14 @@ class TestFlowAgainstEmulation(unittest.TestCase):
         self.assertGreater(self.report.stats["edges"], 10_000)
         self.assertGreater(self.report.stats["reads"], 100_000)
         self.assertEqual(self._findings(_STRUCTURE), {})
+
+    def test_runs_reach_the_code(self):
+        """A third of the runs return, few fault: the checks above are not of first blocks
+        only."""
+        st = self.report.stats
+        runs = sum(v for k, v in st.items() if k.startswith("runs "))
+        self.assertGreater(st["runs returned"], runs // 3)
+        self.assertLess(st["runs faulted"], runs // 4)
 
     def test_values(self):
         """Every value Flow knows holds.  Before TODO #125 frame addresses and import slots were
@@ -156,6 +172,15 @@ class TestFlowAgainstEmulation(unittest.TestCase):
         self.assertGreater(rep.stats["a known value that does not hold"], 0)
         self.assertGreater(from_entry.stats["a value propagated from the entry that does not hold"], 0)
 
+    def test_a_write_writes_does_not_list_is_reported(self):
+        """The registers a run writes are its own, not writes()'s: ldr's destination dropped."""
+        import oracles.flow_emulation as F
+        real = F.writes
+        ctx = _binary_ctx(LOCATIOND)
+        with mock.patch.object(F, "writes", lambda ins: [] if ins.mnemonic == "ldr" else real(ins)):
+            rep = F.compare(ctx, ctx.function_starts()[::800], runs=2)
+        self.assertGreater(rep.stats["a register written that writes() does not list"], 0)
+
 
 @unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
 class TestCallReadsAgainstEmulation(unittest.TestCase):
@@ -169,6 +194,10 @@ class TestCallReadsAgainstEmulation(unittest.TestCase):
         rep = compare(ctx, ctx.function_starts()[::100 if FULL else 400], runs=4)
         self.assertGreater(rep.stats["registers read"], 1000)
         self.assertEqual(dict(rep.findings), {})
+        # what the check cannot see: every register claimed, and runs cut short
+        self.assertLess(rep.stats["functions call_reads says read every register"],
+                        rep.stats["functions"] // 20)
+        self.assertLess(rep.stats["runs faulted"], rep.stats["functions"] * 4 // 2)
 
     def test_a_planted_error_is_reported(self):
         """call_reads without the first register it lists."""
@@ -208,7 +237,8 @@ class TestObjcMessagesAgainstEmulation(unittest.TestCase):
         self.assertGreater(rep.stats["tags written"], 400)
         self.assertEqual(rep.stats["runs returned"], rep.stats["messages"])
         self.assertEqual(dict(rep.findings), {})
-        self.assertEqual(rep.stats["fields not written in the run"], 0)
+        self.assertEqual(rep.stats["tags from no ivar"], 0)
+        self.assertEqual(dict(rep.unanswered), {})
 
     def test_enums(self):
         rep = self._enums(self.msgs)
@@ -221,6 +251,7 @@ class TestObjcMessagesAgainstEmulation(unittest.TestCase):
         self.assertGreater(rep.stats["fields run"], 400)
         self.assertEqual(rep.stats["runs returned"], rep.stats["fields run"])
         self.assertEqual(dict(rep.findings), {})
+        self.assertEqual(dict(rep.unanswered), {})
 
     def test_planted_errors_are_reported_by_readfrom(self):
         """An int64 called sint64 decodes otherwise, a number shifted is skipped, a message
@@ -235,10 +266,15 @@ class TestObjcMessagesAgainstEmulation(unittest.TestCase):
         body.fields[1].number += 50
         log = next(m for m in msgs if m.class_name == "ALActivityLog")
         log.fields[1].type_class = "ALCLBodyMetrics"
-        rep = compare(self.img.ctx, self.img.st, self.img.cl, [hr, body, log])
+        fp = next(m for m in msgs if m.class_name == "TRANSITPbLocationFingerprint")
+        macs, modes = (next(f for f in fp.fields if f.name == n) for n in ("macs", "modes"))
+        macs.name, modes.name = "modes", "macs"                 # each the other's array
+        rep = compare(self.img.ctx, self.img.st, self.img.cl, [hr, body, log, fp])
         for kind, cls in (("a value the class decodes differently", "ALCLAllDayHeartRate"),
                           ("an emitted field the class skips", "ALCLBodyMetrics"),
-                          ("a message field that allocates another class", "ALActivityLog")):
+                          ("a message field that allocates another class", "ALActivityLog"),
+                          ("a repeated field appended to another ivar's array",
+                           "TRANSITPbLocationFingerprint")):
             self.assertTrue(any(cls in r[1] for r in rep.findings[kind]), kind)
 
     def test_planted_errors_are_reported(self):
@@ -252,13 +288,36 @@ class TestObjcMessagesAgainstEmulation(unittest.TestCase):
         enum = next(e for e in gender.enums if e.values)
         enum.values[0].name = enum.values[0].name + "_X"  # a value named for another string
         del enum.values[1]                               # a value lost
+        odo.fields[7].label = type(odo.fields[7].label).REPEATED    # one double, not repeated
         rep = self._writer(msgs)
         for kind in ("a written tag the message lacks", "a type the writer does not write",
-                     "a name other than its ivar's"):
+                     "a name other than its ivar's", "repeated, written once"):
             self.assertTrue(any("ALCLOdometer" in r[1] for r in rep.findings[kind]), kind)
         rep = self._enums(msgs)
         for kind in ("a value the enum lacks", "a value named for another string"):
             self.assertTrue(any("ALCLBodyMetrics" in r[1] for r in rep.findings[kind]), kind)
+
+    def test_planted_enum_errors_are_reported(self):
+        """The probes follow the class's own compares: the highest value of the motion activity
+        type (90603, past any margin of those emitted) lost; an enum emptied; and a field with an
+        AsString: emitted as an int32."""
+        import copy
+        msgs = copy.deepcopy(self.msgs)
+        enum, owner = next((e, m) for m in msgs for e in m.enums
+                           if any(v.number == 90603 for v in e.values))
+        enum.values = [v for v in enum.values if v.number != 90603]
+        body = next(m for m in msgs if m.class_name == "ALCLBodyMetrics")
+        gender = next(f for f in body.fields if f.name == "gender")
+        next(e for e in body.enums if e.name == gender.type_class[5:]).values = []
+        plain, plain_msg = next((f, m) for m in msgs if m is not owner and m is not body
+                                for f in m.fields if (f.type_class or "").startswith("ENUM:"))
+        plain.type_class, plain.type_name = None, "int32"
+        rep = self._enums(msgs)
+        lacks = [r[1] for r in rep.findings["a value the enum lacks"]]
+        self.assertTrue(any(owner.class_name in r and ": 90603 " in r for r in lacks), lacks)
+        self.assertTrue(any("ALCLBodyMetrics.gender" in r for r in lacks), lacks)
+        self.assertTrue(any(plain_msg.class_name in r[1] for r in
+                            rep.findings["a field with an AsString: not emitted as an enum"]))
 
 
 @unittest.skipUnless(IPHONE8_CACHE and _unicorn(), "iPhone 8 cache or unicorn not available")
@@ -285,28 +344,42 @@ class TestCacheImagesAgainstEmulation(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 cls.images[image] = (img, E.extract_all(img.ctx, img.st, img.cl))
 
-    def _each(self, module):
+    def _each(self, module, check):
         for image, (img, msgs) in self.images.items():
             with self.subTest(image=image):
                 rep = module.compare(img.ctx, img.st, img.cl, msgs)
                 self.assertEqual(dict(rep.findings), {})
-                yield image, rep
+                check(image, rep)
+
+    # the least each image's runs check: tags written, fields read, enum values named
+    FLOORS = {"CoreParsec": (520, 500, 0), "CoreLocationProtobuf": (500, 500, 140),
+              "GeoServices": (10_000, 10_000, 15_000)}
 
     def test_writeto(self):
+        """CoreParsec's oneof cases #33-#45 are written only with the case's ivar set to its
+        field number."""
         from oracles import writer_emulation as W
-        for image, rep in self._each(W):
+
+        def check(image, rep):
             self.assertEqual(rep.stats["runs returned"], rep.stats["messages"])
+            self.assertGreaterEqual(rep.stats["tags written"], self.FLOORS[image][0])
+            self.assertEqual(rep.stats["tags from no ivar"], 0)
             if image == "CoreParsec":
                 self.assertGreaterEqual(rep.stats["nested fields"], 4)     # its maps
+        self._each(W, check)
 
     def test_readfrom(self):
         from oracles import reader_emulation as RD
-        for _image, rep in self._each(RD):
+
+        def check(image, rep):
             self.assertEqual(rep.stats["runs returned"], rep.stats["fields run"])
+            self.assertGreaterEqual(rep.stats["fields run"], self.FLOORS[image][1])
+        self._each(RD, check)
 
     def test_enums(self):
         from oracles import enum_emulation as EN
-        list(self._each(EN))
+        self._each(EN, lambda image, rep: self.assertGreaterEqual(rep.stats["values agree"],
+                                                                  self.FLOORS[image][2]))
 
     def test_flow(self):
         from oracles.flow_emulation import compare
@@ -337,11 +410,30 @@ class TestMethodNamesAgainstSymbols(unittest.TestCase):
                 res = compare(reader, image)
                 self.assertIsNotNone(res, "no .symbols")
                 self.assertGreater(res.agree, 0)
-                self.assertEqual((res.unnamed, res.wrong), (0, 0),
-                                 {k: v[:5] for k, v in res.examples.items()})
+                self.assertEqual((res.unnamed, res.wrong, res.missed, res.ivars_wrong),
+                                 (0, 0, 0, 0), {k: v[:5] for k, v in res.examples.items()})
+                self.assertLess(res.no_symbol, res.methods // 50 + 1, res.examples.get("no_symbol"))
 
     def test_iphone8(self):
         self._check(IPHONE8_CACHE, self.IPHONE8)
+
+    def test_planted_errors_are_reported(self):
+        """A class's method dropped, two of its ivars' names swapped."""
+        from macho import classlist as CL
+        from macho.dyld_cache import DyldCacheReader
+        from oracles.method_names import compare
+        real = CL.build_class_list
+
+        def wrong(ctx, st):
+            cl = real(ctx, st)
+            c = cl.find("PARSessionConfiguration")          # (its ivars have offset variables)
+            del c.methods[0]
+            c.ivars[0].name, c.ivars[1].name = c.ivars[1].name, c.ivars[0].name
+            return cl
+        with mock.patch.object(CL, "build_class_list", wrong):
+            res = compare(DyldCacheReader(IPHONE8_CACHE), "CoreParsec")
+        self.assertEqual(res.missed, 1)
+        self.assertEqual(res.ivars_wrong, 2)
 
     @unittest.skipUnless(IOS27_CACHE, "iOS 27 cache not available")
     def test_ios27(self):
@@ -378,6 +470,9 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
                 res = compare(mirror, image)
                 self.assertGreater(res.stats["messages"], 0)
                 self.assertEqual(res.differences, [])
+                for skipped in ("not compared: no mangled name", "fields with no type recovered",
+                                "not compared: emitted, no type descriptor"):
+                    self.assertEqual(res.stats[skipped], 0, skipped)
                 left = res.stats["messages"] - res.stats["agree"]
                 if left:
                     not_compared[image] = dict(res.stats)

@@ -4,9 +4,12 @@
 Whatever a run does, what Flow says holds on every path must hold on it:
 
 * the CFG: each step from one instruction to the next is an edge of ``flow.cfg`` (a ``br``'s jump
-  table arms included), and every instruction run is in the listing;
+  table arms included), every instruction run is in the listing, a ``br`` whose table is decoded
+  stays in the function, and no run reaches the bytes between the body's end and the next
+  function;
 * reaching definitions: the instruction that last wrote a register an instruction reads is one
-  of :meth:`Flow.defs_before`'s;
+  of :meth:`Flow.defs_before`'s -- the last writes the run's own (each register an instruction
+  changes; one ``writes()`` does not list is itself a finding);
 * constants: each register :meth:`Flow.known_before` knows (with nothing known on entry) holds
   that value -- a stack address relative to the entry ``sp`` -- and each block a run reaches is
   one its propagation reaches.
@@ -21,6 +24,7 @@ import's block); any other address reads random words.  A run ends at the return
 a branch out of the function, a fault, or a step budget.
 
     python -m oracles.flow_emulation BINARY [EVERY_NTH_FUNCTION] [RUNS]"""
+import bisect
 import collections
 import random
 import struct
@@ -52,6 +56,8 @@ CALLER_SAVED = [f"x{i}" for i in range(19)] + [f"v{i}" for i in range(8)] + \
 _X = {f"x{i}": getattr(A, f"UC_ARM64_REG_X{i}") for i in range(29)}
 _X.update(x29=A.UC_ARM64_REG_X29, x30=A.UC_ARM64_REG_X30, sp=A.UC_ARM64_REG_SP)
 _V = {f"v{i}": getattr(A, f"UC_ARM64_REG_Q{i}") for i in range(32)}
+_GPRS = ["x%d" % i for i in range(31)]
+_GPR_IDS = [_X[r] for r in _GPRS]
 MASK64 = (1 << 64) - 1
 
 
@@ -309,6 +315,9 @@ class Emulation:
         body = function_body(self.ctx, va)
         self.flow = listing_flow(self.ctx, list(body))
         self.lo, self.hi = body[0].addr, body[-1].addr + 4
+        starts = self.ctx.function_starts()
+        i = bisect.bisect_right(starts, va)
+        self.next_start = starts[i] if i < len(starts) else self.hi   # (the body may end before it)
 
     # ── one run ──────────────────────────────────────────────────────────────
 
@@ -354,8 +363,17 @@ class Emulation:
             if k is None:
                 if self.lo <= pc < self.hi:
                     rep.find("ran an instruction the body lacks", self.va, hex(pc))
+                elif self.hi <= pc < self.next_start:
+                    rep.find("ran past the end of the body", self.va,
+                             "%#x (the body ends at %#x, the next function starts at %#x)"
+                             % (pc, self.hi, self.next_start))
+                elif prev is not None and flow.cfg.succ.get(flow._block_of[prev]) and \
+                        flow.insns[prev].mnemonic.startswith("br"):
+                    rep.find("a decoded br that jumps elsewhere", self.va,
+                             "%s -> %#x" % (flow.insns[prev], pc), key=prev)
                 else:
-                    rep.stats["runs left the function"] += 1
+                    rep.stats["runs left the function" if pc in self._starts() else
+                              "runs left for an address no function starts at"] += 1
                 return
             self._check(uc, k, prev, last)
             ins = flow.insns[k]
@@ -370,20 +388,33 @@ class Emulation:
                     return
                 pc, prev = ins.addr + 4, None
                 continue
+            before = uc.reg_read_batch(_GPR_IDS)
             try:
                 uc.emu_start(pc, RET_SENTINEL, count=1)
             except UcError as e:
                 if ins.mnemonic in RETURNS:        # to a return address the run overwrote
-                    rep.stats["runs left the function"] += 1
+                    rep.stats["runs returned to an address the run overwrote"] += 1
                 else:
                     rep.stats["runs faulted"] += 1
                     rep.faults[(str(e), ins.mnemonic)] += 1
                     rep.fault_addrs[hex(self.machine.bad >> 44)] += 1
                 return
-            for r in writes(ins):
+            listed = writes(ins)
+            for r, a, b in zip(_GPRS, before, uc.reg_read_batch(_GPR_IDS)):
+                if a != b and r not in listed:     # the run's own writes, not only writes()'s
+                    rep.find("a register written that writes() does not list", self.va,
+                             "%s writes %s" % (ins, r), key=(ins.mnemonic, r))
+                    last[r] = k
+            for r in listed:
                 last[r] = k
             pc, prev = uc.reg_read(A.UC_ARM64_REG_PC), k
         rep.stats["runs over budget"] += 1
+
+    def _starts(self):
+        m = self.machine.__dict__
+        if "_start_set" not in m:
+            m["_start_set"] = set(self.ctx.function_starts())
+        return m["_start_set"]
 
     def _returned(self, uc, k):
         """After the call ``insns[k]`` (a hook for :class:`EntryEmulation`)."""

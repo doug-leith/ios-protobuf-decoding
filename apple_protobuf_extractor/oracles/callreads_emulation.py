@@ -23,11 +23,13 @@ from oracles.flow_emulation import (make_machine, Report, RET_SENTINEL, SP0, ran
                                     _X)
 from proto.arm64_operands import (ARG_FPRS, CALL_ARG_GPRS, CALLER_SAVED, PAIR_STORES, STORE_BYTES,
                                   parse_mem, reads, reg_name, split_ops, writes)
-from proto.callees import RUNTIME_CONTRACTS, SWIFT_CALL_ARGS, _is_swift_name, call_reads
+from proto.callees import (_ALL_REGS, RUNTIME_CONTRACTS, SWIFT_CALL_ARGS, _is_swift_name,
+                           call_reads)
 
 _CALLEE_SAVED = frozenset([f"x{i}" for i in range(19, 29)] + [f"v{i}" for i in range(8, 16)])
 _NOT_VALUES = frozenset(("sp", "x29", "x30", "xzr"))
 _IMPORT_READS = tuple(CALL_ARG_GPRS) + tuple(ARG_FPRS)
+_EVERY = frozenset(_ALL_REGS)
 
 
 class Run:
@@ -106,13 +108,18 @@ def compare(ctx, functions, runs=4, report=None):
     for va in functions:
         claimed = set(call_reads(ctx, va))
         report.stats["functions"] += 1
+        if claimed >= _EVERY:                   # (an undecoded jump table, no CFG): nothing to check
+            report.stats["functions call_reads says read every register"] += 1
+        read = set()
         for seed in range(runs):
             run = Run(machine, va, (va << 8) | seed).go()
             report.stats["runs " + run.ended] += 1
             report.stats["registers read"] += len(run.read)
+            read |= run.read
             for r in sorted(run.read - claimed):
                 report.find("a register read that call_reads does not list", va,
                             "%#x reads %s; call_reads %s" % (va, r, sorted(claimed)), key=r)
+        report.stats["registers listed that no run reads"] += len(claimed - read)
     return report
 
 

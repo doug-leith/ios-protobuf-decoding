@@ -18,8 +18,9 @@ class's own method and to a stand-in answers ``init`` / ``readFrom:`` / ``addObj
 
 What must hold for each field: the class reads it into the ivar the field is named for (a lazy
 class may skip a field in one pass and read it in the other) (what an empty message's run changes too -- the reader kept, marks, locks -- aside); a scalar decodes to the value encoded (a field read as another integer encoding or
-width lands as another value); a message field allocates the class the field's type names; a
-repeated field is appended to, twice (an inline C struct's array: its count 2).
+width lands as another value; a 64-bit field's value has bits past 32), into an ivar of its
+type's width; a message field allocates the class the field's type names; a repeated field is
+appended to twice, in its own ivar's array (an inline C struct's array: its count 2).
 
     python -m oracles.reader_emulation BINARY"""
 import collections
@@ -41,6 +42,11 @@ _VARINT = {"int32", "int64", "uint32", "uint64", "bool", "sint32", "sint64"}
 _FIXED32 = {"fixed32", "sfixed32", "float"}
 _FIXED64 = {"fixed64", "sfixed64", "double"}
 VALUE = 0x55
+VALUE_64 = 0x5A00000055              # a 64-bit field's: read as 32 bits, it is VALUE
+# the bytes a scalar's ivar has, by the field's type
+_WIDTH = dict.fromkeys(("int32", "uint32", "sint32", "fixed32", "sfixed32", "float", "enum"), 4)
+_WIDTH.update(dict.fromkeys(("int64", "uint64", "sint64", "fixed64", "sfixed64", "double"), 8))
+_WIDTH["bool"] = 1
 # class methods that make an instance ([NSMutableArray array] for a repeated field's array)
 _CONSTRUCTORS = ("alloc", "new", "array", "arrayWithCapacity:", "dictionary",
                  "dictionaryWithCapacity:", "set")
@@ -61,6 +67,11 @@ def _zigzag(n):
     return (n << 1) ^ (n >> 63)
 
 
+def _mask(kind):
+    """The bits a ``PBRepeated<kind>Add`` value has."""
+    return (1 << (64 if "64" in kind or kind == "Double" else 32)) - 1
+
+
 def _is_enum(f):
     return (f.type_class or "").startswith("ENUM:")
 
@@ -71,14 +82,14 @@ def encode(f, structs=None):
     its members, which the class reads into the struct in place."""
     t, tag = f.type_name, f.number
     if t in _VARINT or _is_enum(f):
-        v = 1 if t == "bool" else VALUE
+        v = 1 if t == "bool" else VALUE_64 if _WIDTH.get(t) == 8 else VALUE
         raw = _varint(_zigzag(v) if t.startswith("sint") else v)
         return _varint(tag << 3) + raw, v
     if t in _FIXED32:
         raw = struct.pack("<f", 1.5) if t == "float" else struct.pack("<I", VALUE)
         return _varint(tag << 3 | 5) + raw, struct.unpack("<I", raw)[0]
     if t in _FIXED64:
-        raw = struct.pack("<d", 1.5) if t == "double" else struct.pack("<Q", VALUE)
+        raw = struct.pack("<d", 1.5) if t == "double" else struct.pack("<Q", VALUE_64)
         return _varint(tag << 3 | 1) + raw, struct.unpack("<Q", raw)[0]
     body = b"s" if t == "string" else b"\x01\x02" if t == "bytes" else b""
     nested = (structs or {}).get(f.type_class or t)
@@ -359,13 +370,26 @@ def compare(ctx, st, cl, messages=None, report=None, known=None):
                     report.find("a repeated field not appended twice", 0,
                                 "%s: %s %d" % (where, count, got), key=where)
                 continue
-            if ivar not in changed and not (rep_label and (run.repeated or run.appended)):
+            iv = by_name.get(ivar)
+            if rep_label and iv is not None and (run.repeated or run.appended):
+                held = int.from_bytes(run.after[iv.offset:iv.offset + 8], "little")
+                if any(o != iv.offset for o, _k, _v in run.repeated) or \
+                        any(r != held for r, _x in run.appended):
+                    report.find("a repeated field appended to another ivar's array", 0,
+                                "%s: C arrays at %s, arrays %s, the ivar at %#x holds %#x" % (
+                                    where, sorted({o for o, _k, _v in run.repeated}),
+                                    sorted({hex(r) for r, _x in run.appended}), iv.offset, held),
+                                key=where)
+            elif ivar not in changed:
                 report.find("an emitted field the class skips" if run.skipped else
                             "a field read into another ivar (or none)", 0,
                             "%s: changed %s" % (where, sorted(changed)), key=where)
                 continue
-            iv = by_name.get(ivar)
             if want is not None and not rep_label and iv is not None:
+                width = _WIDTH.get("enum" if _is_enum(f) else f.type_name)
+                if width is not None and iv.size != width:
+                    report.find("a field whose ivar has another width", 0,
+                                "%s: %d bytes, the ivar %d" % (where, width, iv.size), key=where)
                 got = int.from_bytes(changed[ivar][:8], "little")
                 if got != want & ((1 << (8 * min(iv.size, 8))) - 1):
                     report.find("a value the class decodes differently", 0,
@@ -376,11 +400,11 @@ def compare(ctx, st, cl, messages=None, report=None, known=None):
                 if n != 2:
                     report.find("a repeated field not appended twice", 0, "%s: %d" % (where, n),
                                 key=where)
-                vals = [v for _o, _k, v in run.repeated]
-                if want is not None and vals and any(v & 0xFFFFFFFF != want & 0xFFFFFFFF
-                                                     for v in vals):
+                if want is not None and any(v & _mask(k) != want & _mask(k)
+                                            for _o, k, v in run.repeated):
                     report.find("a value the class decodes differently", 0,
-                                "%s: encoded %#x, appended %s" % (where, want, [hex(v) for v in vals]),
+                                "%s: encoded %#x, appended %s" % (
+                                    where, want, [hex(v) for _o, _k, v in run.repeated]),
                                 key=where)
             made = [w[1] for w in run.objects.values() if w[0] == "instance"]
             if f.type_class and not _is_enum(f) and not struct_type and f.type_name not in \

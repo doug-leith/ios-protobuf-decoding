@@ -15,13 +15,15 @@ message, tag)`` writes a submessage whole. ``objc_msgSend`` to ``self`` runs the
 ``enumerateKeysAndObjectsUsingBlock:`` (the block run for two entries). Any other call returns 0;
 the ARC calls return their argument (``objc_retain_xN``: xN), a release nothing.
 
-Which ivar a tag's value comes from: a stand-in object is its ivar's (an element, its array's);
-a scalar's is found by a second run with that ivar alone changed -- the tags whose writes change
-depend on it.
+Which ivar a tag's value comes from: a stand-in object is its ivar's (an element, its array's; an
+NSNumber's value names its stand-in; a map entry's key and value, the dictionary's); a scalar's is
+found by a second run with that ivar alone changed -- the tags whose writes change depend on it.
+A field no run writes is sought by more runs (:func:`cover`: a oneof's other cases).
 
 Each tag written must be a field of the emitted message: that number, a type the writer function
-writes (``Int32`` an int32 or an enum, ``String`` a string, a submessage a message, ...), the name
-of the ivar it comes from, and repeated when it is written more than once.
+writes (``Int32`` an int32 or an enum, ``String`` a string, a submessage a message, bare varints a
+varint type, ...), the name of the ivar it comes from, and repeated exactly when it is written
+more than once; and each emitted field must be written by some run.
 
     python -m oracles.writer_emulation BINARY"""
 import collections
@@ -41,6 +43,7 @@ TRAMPOLINE = 0x7b0000000             # code that calls a block for each entry of
 LITERAL = TRAMPOLINE + 0x100
 NO_TAG = 0xFFFFFFFF                  # a writer's field number -1: the value alone (a packed element)
 WRITER = 0x790000000
+NUMBER = 0x5A000                     # an NSNumber's value: this plus its stand-in's index (no scalar's)
 _X = [getattr(A, f"UC_ARM64_REG_X{i}") for i in range(29)]
 _D0 = A.UC_ARM64_REG_D0
 
@@ -55,6 +58,7 @@ _FLOATING = ("Float", "Double")
 _ELEMENT = {"i": "i", "I": "I", "q": "q", "Q": "Q", "f": "f", "d": "d", "c": "b", "B": "B",
             "s": "h", "S": "H", "l": "i", "L": "I"}
 _SCALARS = set().union(*_WRITES.values())
+_VARINTS = {"int32", "int64", "uint32", "uint64", "sint32", "sint64", "bool"}
 
 
 class Write(collections.namedtuple("Write", "tag kind value")):
@@ -63,14 +67,16 @@ class Write(collections.namedtuple("Write", "tag kind value")):
 
 
 class Run:
-    """One ``writeTo:`` run on a stand-in ``self`` of *cls* (its ivars *ivars*; *changed*, one
-    of them, given other bytes).  Repeatable: the same seed, the same memory."""
+    """One ``writeTo:`` run on a stand-in ``self`` of *cls* (its ivars *ivars*; those in
+    *changed* given other bytes; *setting*, ``(ivar, n)``, one integer ivar set to *n*).
+    Repeatable: the same seed, the same memory."""
 
-    def __init__(self, machine, cl, cls, ivars, changed=None, seed=0, budget=200_000,
+    def __init__(self, machine, cl, cls, ivars, changed=(), seed=0, budget=200_000,
                  setting=None):
         self.m, self.cl, self.cls, self.budget = machine, cl, cls, budget
         self.writes, self.marks, self.unanswered = [], [], collections.Counter()
         self.objects = {}                       # stand-in address -> what it stands for
+        self.numbers = {}                       # an NSNumber's answer -> the stand-in asked
         self.enumerated = {}
         uc = self.uc = machine.reset(random.Random(seed))
         _ensure_regions(machine)
@@ -190,8 +196,12 @@ class Run:
         elif sel in ("length", "isEqual:", "isEqualToString:"):
             result = 1
         elif sel and sel.endswith("Value") and sel[0].islower():   # NSNumber: intValue ...
-            result = 2
-            uc.reg_write(_D0, struct.unpack("<Q", struct.pack("<d", 2.0))[0])
+            result = NUMBER + (recv - OBJ_BASE) // OBJ_STRIDE  # its own number: whose it is
+            d = struct.unpack("<Q", struct.pack("<d", result))[0]
+            f = struct.unpack("<I", struct.pack("<f", result))[0]
+            for n in (result, d, f):
+                self.numbers[n] = what
+            uc.reg_write(_D0, f if sel.startswith("float") else d)
         else:
             self.unanswered["-[obj %s]" % sel] += 1
         uc.reg_write(_X[0], result)
@@ -283,12 +293,12 @@ def _all_ivars(cl, cls):
     return out
 
 
-def _values(run_obj, ivars, changed=None):
+def _values(run_obj, ivars, changed=()):
     """Each ivar's bytes: has-bit structs all set, objects stand-ins, repeated C arrays two
-    elements, scalars small numbers; *changed* (an ivar) gets other bytes."""
+    elements, scalars small numbers; those in *changed* get other bytes."""
     vals = []
     for i, iv in enumerate(ivars):
-        enc, size, bump = iv.type_enc, max(iv.size, 1), iv is changed
+        enc, size, bump = iv.type_enc, max(iv.size, 1), any(iv is c for c in changed)
         if enc in _NOT_BUILT:                              # a message built in memory has none
             vals.append((iv, bytes(8)))
         elif enc.startswith("@"):
@@ -315,38 +325,51 @@ def _values(run_obj, ivars, changed=None):
     return vals
 
 
-def observe(machine, cl, cls, seed=0):
-    """``(tags, runs)``: each tag written -> (kinds, count in the base run, ivars it depends on)."""
+def observe(machine, cl, cls, seed=0, changed=(), setting=None, recurse=True):
+    """``(tags, base)``: each tag written -> (kinds, count in the base run, ivars it depends on),
+    every run with *changed* and *setting* (:class:`Run`).  A tag only one ivar's change writes (a
+    oneof's case) gets its ivars from the same differential with that change kept (*recurse*)."""
     ivars = _all_ivars(cl, cls)
 
-    def one(changed=None):
-        return Run(machine, cl, cls, ivars, changed, seed).go()
+    def one(more=()):
+        return Run(machine, cl, cls, ivars, list(changed) + list(more), seed,
+                   setting=setting).go()
 
     base = one()
     tags = {}
     for w in base.writes:
         kinds, n, deps = tags.get(w.tag, (set(), 0, set()))
         kinds.add(w.kind)
-        if w.kind == "message" or (isinstance(w.value, int) and w.value in base.objects):
-            what = base.objects.get(w.value)
+        inner = w.value if w.kind == "nested" else (w,)  # a map entry's: its key and value
+        for x in inner:
+            what = base.objects.get(x.value) or base.numbers.get(x.value)
             if what:
                 deps.add(what[1])
         tags[w.tag] = (kinds, n + 1, deps)
     by_tag = lambda run: collections.Counter((w.tag, w.kind, w.value) for w in run.writes)
     base_writes = by_tag(base)
+    selecting = []                             # (ivar, its run, the tags only that run writes)
     for iv in ivars:
-        if iv.type_enc.startswith("@"):
+        if iv.type_enc.startswith("@") or any(iv is c for c in changed) or \
+                (setting and iv is setting[0]):
             continue                           # an object is its stand-in's (above)
-        run = one(iv)
+        run = one([iv])
+        if run.ended != base.ended:
+            continue                           # cut short: what it did not write tells nothing
         other = by_tag(run)
-        for w in run.writes:                   # a case the change selected (a oneof's): written
-            if w.tag not in tags:
-                tags[w.tag] = ({w.kind}, sum(1 for x in run.writes if x.tag == w.tag), set())
-                base.writes.extend(x for x in run.writes if x.tag == w.tag and x.kind == "nested")
-        changed = {t for (t, _k, _v) in (base_writes - other) + (other - base_writes)}
-        for t in changed:
+        new = {w.tag for w in run.writes if w.tag not in tags}
+        if new:                                # a case the change selected (a oneof's)
+            selecting.append((iv, run, new))
+        for t in {t for (t, _k, _v) in (base_writes - other) + (other - base_writes)}:
             if t in tags:
                 tags[t][2].add(iv.name)
+    for iv, run, new in selecting:             # their ivars: the differential, that case selected
+        more = observe(machine, cl, cls, seed, list(changed) + [iv], setting, False)[0] \
+            if recurse else {}
+        for t in new - set(tags):
+            tags[t] = more.get(t) or ({w.kind for w in run.writes if w.tag == t},
+                                      sum(1 for w in run.writes if w.tag == t), set())
+            base.writes.extend(w for w in run.writes if w.tag == t and w.kind == "nested")
     return tags, base
 
 
@@ -358,21 +381,26 @@ _NOT_BUILT = ('@"PBDataReader"', '@"PBUnknownFields"')
 
 def cover(machine, cl, cls, tags, wanted, seed=0):
     """More runs for the fields *wanted* that no run wrote yet -- a oneof's other cases, a field
-    written for some values only: each integer ivar in turn set to 0..32 (the rest as before),
-    until every one is written.  What a run writes is added to *tags* (without the ivar it
-    comes from: only its number, type and label are checked)."""
+    written for some values only: each integer ivar in turn set to 0..32 and to each wanted field
+    number (a oneof's case is often its field's number), until every one is written.  A setting
+    that writes one is observed (:func:`observe`) with that setting kept, and what it writes is
+    added to *tags* with the ivars it depends on."""
     ivars = _all_ivars(cl, cls)
+    values = sorted(set(range(33)) | set(wanted))
     for iv in ivars:
         if not wanted - set(tags):
             return
         if iv.type_enc not in _INTEGERS:
             continue
-        for v in range(33):
+        for v in values:
+            if v >> (8 * max(iv.size, 1)):
+                continue
             run = Run(machine, cl, cls, ivars, seed=seed, setting=(iv, v)).go()
-            for w in run.writes:
-                if w.tag in wanted and w.tag not in tags:
-                    tags[w.tag] = ({x.kind for x in run.writes if x.tag == w.tag},
-                                   sum(1 for x in run.writes if x.tag == w.tag), set())
+            if not {w.tag for w in run.writes} & (wanted - set(tags)):
+                continue
+            more = observe(machine, cl, cls, seed, setting=(iv, v), recurse=False)[0]
+            for t in (wanted - set(tags)) & set(more):
+                tags[t] = more[t]
             if not wanted - set(tags):
                 return
 
@@ -436,9 +464,12 @@ def compare(ctx, st, cl, messages=None, report=None, known=None):
                 str(f.label) == "repeated"
             if count > 1 and not repeated and not f.map_key_type and "packed" not in kinds:
                 report.find("written twice, not repeated", 0, "%s %s" % (where, f.name), key=where)
+            elif count == 1 and repeated:      # (every array a run builds has two elements)
+                report.find("repeated, written once", 0, "%s %s" % (where, f.name), key=where)
         for num, f in fields.items():
             if num not in tags:
-                report.stats["fields not written in the run"] += 1
+                report.find("an emitted field no run writes", 0, "%s #%s %s" % (
+                    msg.class_name, num, f.name), key="%s #%s" % (msg.class_name, num))
     return report
 
 
@@ -490,9 +521,9 @@ def _type_agrees(f, kinds):
         if k == "message":
             if t in _SCALARS:
                 return False
-        elif k == "packed":                     # any numeric scalar (its writer says which)
-            if t in ("string", "bytes") or (t not in _SCALARS and
-                                            not (f.type_class or "").startswith("ENUM:")):
+        elif k == "packed":                     # elements by type: that writer's; else bare varints
+            if not kinds & set(_WRITES) and t not in _VARINTS and \
+                    not (f.type_class or "").startswith("ENUM:"):
                 return False
         elif k in _WRITES:
             if t in _WRITES[k]:

@@ -293,7 +293,9 @@ def _value_set_arms(flow, kb: int, reg: str, lo: int, hi: int) -> set:
     """The targets of a ``br`` no gate bounds (:func:`_evaluated_arms`): nearest the ``br`` first,
     a register its target is computed from whose every value is known (:func:`_value_set`), each
     value run to the ``br`` -- locationd 0x100dc8a98 indexes its table by ``w22``, set to 0, to 1
-    and by ``cinc w22, w8, ge`` on the paths in."""
+    and by ``cinc w22, w8, ge`` on the paths in.  All or nothing: with no gate to stop it, a
+    value the set over-approximates could index past the table, so every value must reach the
+    ``br`` with a target inside the function, or the table is left undecoded."""
     memo: dict = {}
     seen: set = set()
     work = [(kb, _norm_reg(reg))]
@@ -309,11 +311,9 @@ def _value_set_arms(flow, kb: int, reg: str, lo: int, hi: int) -> set:
                 if not vs or len(vs) < 2:
                     continue                          # a constant: not what selects the arm
                 same = _same_value(flow, d, x)
-                arms = {t for v in vs
-                        if (t := flow.value_at(d, dict.fromkeys(same, v), kb, reg)) is not None
-                        and lo <= t < hi}
-                if arms:
-                    return arms
+                targets = [flow.value_at(d, dict.fromkeys(same, v), kb, reg) for v in vs]
+                if all(t is not None and lo <= t < hi for t in targets):
+                    return set(targets)  # (else a value misses the table: not this register)
             work.extend((d, x) for x in srcs)
     return set()
 

@@ -273,3 +273,26 @@ class TestEntryBlockLoop(unittest.TestCase):
                         'mov x0, x8', 'b @loop', 'out:', 'ret')
         flow = Flow(None, insns)
         self.assertEqual(flow.defs_before(0, 'x0'), frozenset((-1, 3)))
+
+
+class TestFlagsOfFrameAddresses(unittest.TestCase):
+    """The review of #125: ``ands`` on a frame address leaves no flags behind; ``cmn`` / ``adds``
+    of two frame addresses (a sum, which depends on where the stack is) decide nothing."""
+
+    def x8_at_calls(self, *body):
+        insns = listing(*body, 'mov x8, #1', f'bl {CALL}', 'ret', 'other:', 'mov x8, #2',
+                        f'bl {CALL}', 'ret')
+        ks = [k for k, i in enumerate(insns) if i.mnemonic == 'bl']
+        got = Flow(None, insns).propagate({}, ks)
+        return [got.get(k, {}).get('x8') for k in ks]
+
+    def test_ands_of_a_frame_address_leaves_no_flags(self):
+        # cmp sets Z; the ands after it must not leave that Z for b.eq to decide
+        self.assertEqual(self.x8_at_calls('mov x9, #0', 'cmp x9, #0', 'mov x10, sp',
+                                          'ands x11, x10, #0xff', 'b.eq @other'), [1, 2])
+
+    def test_a_sum_of_frame_addresses_decides_nothing(self):
+        for op in ('cmn x9, x10', 'adds x11, x9, x10'):
+            with self.subTest(op=op):
+                self.assertEqual(self.x8_at_calls('add x9, sp, #0x10', 'add x10, sp, #0x20', op,
+                                                  'b.cs @other'), [1, 2])

@@ -303,7 +303,9 @@ def reads(ins: Insn) -> List[str]:
     elif mn.startswith('cas'):
         srcs = ops
     elif (mn in NO_DEST or _is_store(mn) or mn in _READS_DEST
-          or (ops and '[' in ops[0] and not ops[0].startswith('['))):
+          or (ops and '[' in ops[0] and not ops[0].startswith('['))
+          or (mn in ('orr', 'bic') and len(ops) > 1 and ops[0].startswith('v')
+              and ops[1].startswith('#'))):    # ``orr v0.4s, #0xff``: Vd = Vd | imm
         srcs = ops
     elif mem and mn.startswith('ld'):
         srcs = mem

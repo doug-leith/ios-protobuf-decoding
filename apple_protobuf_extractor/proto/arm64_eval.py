@@ -117,14 +117,16 @@ def _add_sub(add: bool, a: Optional[int], b: Optional[int]) -> Optional[int]:
     return a + b if add else a - b
 
 
-def _flag_operands(a: Optional[int], b: Optional[int]) -> Tuple[Optional[int], Optional[int]]:
-    """The operands a compare's flags are computed from: two numbers as they are; two frame
-    addresses as offsets from one sp (their order does not depend on where the stack is);
-    a frame address against a number, unknown."""
+def _flag_operands(a: Optional[int], b: Optional[int], subtract: bool = True
+                   ) -> Tuple[Optional[int], Optional[int]]:
+    """The operands a compare's flags are computed from: two numbers as they are; for a
+    subtraction (``cmp`` / ``subs``), two frame addresses as offsets from one sp (their
+    difference does not depend on where the stack is, their sum does); a frame address against
+    a number, unknown."""
     if a is None or b is None:
         return None, None
     sa, sb = _is_stack(a), _is_stack(b)
-    if sa and sb:
+    if sa and sb and subtract:
         return a - _STACK_TOP + _REPRESENTATIVE_SP, b - _STACK_TOP + _REPRESENTATIVE_SP
     if sa or sb or _is_symbolic(a) or _is_symbolic(b):
         return None, None
@@ -611,7 +613,7 @@ class Flow:
             for fi in frag:
                 self._exec(m, fi)
             v = m.get(reg)
-            return None if v is None or _is_stack(v) else v
+            return None if v is None or _is_symbolic(v) else v
         ins = self.insns[d]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         if mn == 'adrp':
@@ -996,7 +998,8 @@ class Flow:
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         get, put = m.number, m.put                 # a frame address only where it keeps its meaning
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):   # 3: ``cmp w2, #4, lsl #12`` / ``w9, lsl #2``
-            a, b = _flag_operands(m.get(ops[0]), operand2(ops, 1, m.get if len(ops) == 2 else get))
+            a, b = _flag_operands(m.get(ops[0]), operand2(ops, 1, m.get if len(ops) == 2 else get),
+                                  mn == 'cmp')
             m.flags = None if a is None or b is None else \
                 (_nzcv_sub if mn == 'cmp' else _nzcv_add)(a, b, reg_bits(ops[0]))
         elif mn in ('ccmp', 'ccmn') and len(ops) == 4:     # ccmp a, b, #nzcv, cond
@@ -1048,6 +1051,8 @@ class Flow:
                 r = (_STACK_TOP + ((a - _STACK_TOP) & _signed64(b))
                      if mn == 'and' and b is not None and b | 0xF == _MASK64 else None)
                 put(ops[0], r)
+                if mn == 'ands':
+                    m.flags = None
                 return
             r = None if a is None or b is None else \
                 {'and': a & b, 'ands': a & b, 'orr': a | b, 'eor': a ^ b}[mn]
@@ -1073,7 +1078,7 @@ class Flow:
             m.flags = None if a is None or b is None else _nzcv_logic(a & b, reg_bits(ops[0]))
         elif mn in ('subs', 'adds') and len(ops) in (3, 4):
             a, b = m.get(ops[1]), operand2(ops, 2, m.get if len(ops) == 3 else get)
-            fa, fb = _flag_operands(a, b)
+            fa, fb = _flag_operands(a, b, mn == 'subs')
             m.flags = None if fa is None or fb is None else \
                 (_nzcv_sub if mn == 'subs' else _nzcv_add)(fa, fb, reg_bits(ops[0]))
             put(ops[0], _add_sub(mn == 'adds', a, b))
@@ -1268,7 +1273,7 @@ class Flow:
             return _parse_imm(ins.op_str)
         ops = split_ops(ins.op_str)
         v = m.get(ops[0]) if ops else None
-        return None if _is_stack(v) else v
+        return None if _is_symbolic(v) else v
 
     def call_clobbers(self, k: int, target: Optional[int] = None, evaluated: bool = False
                       ) -> Optional[Tuple[str, ...]]:
@@ -1322,7 +1327,7 @@ class Flow:
             for k in ks:
                 ops = split_ops(self.insns[k].op_str)
                 v = self.known_before(k).get(_norm_reg(ops[0])) if ops else None
-                if v is not None and not _is_stack(v):
+                if v is not None and not _is_symbolic(v):
                     self._reg_targets[k] = v
         return self._reg_targets
 

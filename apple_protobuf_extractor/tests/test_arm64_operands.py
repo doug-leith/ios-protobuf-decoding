@@ -140,6 +140,10 @@ class TestReads(unittest.TestCase):
         self.assertEqual(self.r('st1', '{v0.s}[1], [x0]'), ['v0', 'x0'])
         self.assertEqual(self.r('mov', 'v0.s[1], w8'), ['v0', 'x8'])
         self.assertEqual(self.r('mov', 'w8, v0.s[1]'), ['v0'])            # a lane is no address
+        # the vector orr / bic of an immediate: Vd = Vd | imm (capstone omits the read, TODO #127)
+        self.assertEqual(self.r('bic', 'v0.4h, #0x7e'), ['v0'])
+        self.assertEqual(self.r('orr', 'v1.4s, #0x1, lsl #8'), ['v1'])
+        self.assertEqual(self.r('bic', 'v0.16b, v1.16b, v2.16b'), ['v1', 'v2'])
 
     def test_exclusives_and_atomics(self):
         self.assertEqual(self.r('stxr', 'w9, x8, [x0]'), ['x8', 'x0'])
