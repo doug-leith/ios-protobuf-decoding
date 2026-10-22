@@ -224,13 +224,16 @@ class _Machine:
     or minus a number is still one (as a frame address is), and a load from one at a known
     offset is ``field_value(pointer, offset)``.
 
+    *bound(slot)*, when given, is the value an 8-byte load from a slot dyld binds to an import
+    produces (a value naming the import); otherwise such a load is unknown.
+
     *object_escape* narrows what an escaped stack address exposes: a callee (or a store through
     an unknown pointer) is handed a pointer to an object and may write from it upward, never
     below it, so only the slots at or above the LOWEST escaped (*escape_lo*) or handed
     (*handed_lo*) address are cleared.  Off by default: then every slot is cleared."""
 
     def __init__(self, regs: Dict[str, int], fallback=None, opaque=None,
-                 object_escape: bool = False, field_value=None, pointer=None):
+                 object_escape: bool = False, field_value=None, pointer=None, bound=None):
         self.regs: Dict[str, int] = dict(regs)
         self.top: Set[str] = set()
         self.fallback = fallback
@@ -238,6 +241,7 @@ class _Machine:
         self.object_escape = object_escape
         self.field_value = field_value
         self.pointer = pointer
+        self.bound = bound
         self.slots: Dict[int, Tuple[int, int]] = {}
         self.escaped = False
         self.escape_lo: Optional[int] = None
@@ -247,7 +251,7 @@ class _Machine:
 
     def copy(self) -> "_Machine":
         m = _Machine(self.regs, self.fallback, self.opaque, self.object_escape, self.field_value,
-                     self.pointer)
+                     self.pointer, self.bound)
         m.top, m.slots, m.escaped, m.flags = set(self.top), dict(self.slots), self.escaped, self.flags
         m.escape_lo = self.escape_lo
         m.handed, m.handed_lo = self.handed, self.handed_lo
@@ -272,7 +276,7 @@ class _Machine:
         fallback: an absent register is unknown)."""
         m = _Machine({r: v for r, v in self.regs.items() if other.regs.get(r) == v},
                      opaque=self.opaque, object_escape=self.object_escape,
-                     field_value=self.field_value, pointer=self.pointer)
+                     field_value=self.field_value, pointer=self.pointer, bound=self.bound)
         m.slots = {a: s for a, s in self.slots.items() if other.slots.get(a) == s}
         m.escaped = self.escaped or other.escaped
         los = [x for x in (self.escape_lo, other.escape_lo) if x is not None]
@@ -396,16 +400,17 @@ class Objects:
     :class:`_Machine`; *call_result(k, target, x0_before)*, the value of x0 after the call at
     ``insns[k]`` (None: unknown) -- e.g. *x0_before* for a runtime function that returns its
     argument (``objc_retain``), or an opaque token naming that call's result, so it can be
-    followed to later arguments."""
+    followed to later arguments; *bound* as in :class:`_Machine`."""
     opaque: Optional[Callable[[Optional[int]], bool]] = None
     field_value: Optional[Callable[[int, int], Optional[int]]] = None
     call_result: Optional[Callable[[int, Optional[int], Optional[int]], Optional[int]]] = None
     object_escape: bool = False
     pointer: Optional[Callable[[Optional[int]], bool]] = None
+    bound: Optional[Callable[[int], Optional[int]]] = None
 
     def machine(self, regs: Dict[str, int]) -> "_Machine":
         return _Machine(regs, opaque=self.opaque, object_escape=self.object_escape,
-                        field_value=self.field_value, pointer=self.pointer)
+                        field_value=self.field_value, pointer=self.pointer, bound=self.bound)
 
 
 NO_OBJECTS = Objects()
@@ -1228,8 +1233,10 @@ class Flow:
                 return None
             raw = slot[1]
         else:
-            if self.ctx is None or self.ctx.is_variable(addr):
+            if self.ctx is None:
                 return None
+            if self.ctx.is_variable(addr):
+                return m.bound(addr) if m.bound is not None and size == 8 else None
             try:
                 if size == 8:
                     return self.ctx.read_ptr(addr)

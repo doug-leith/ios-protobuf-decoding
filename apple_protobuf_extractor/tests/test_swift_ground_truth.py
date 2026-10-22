@@ -226,11 +226,11 @@ class TestRuntimeNameMap(unittest.TestCase):
         # Google_Protobuf_Type.oneofs is `repeated string` (google/protobuf/type.proto): the
         # `[String]` element (SaySSG) is read, not left a flagged `bytes` filler (#124; the
         # filler and its note for an element that does not resolve: test_swift_type_recovery).
+        # remindd's fields are typed by name (stripped): that note alone, no container's (#130)
         byname = {f.name: f for f in self.msgs["Google_Protobuf_Type"].fields}
         self.assertEqual(byname["oneofs"].proto_type, "repeated string")
-        self.assertIsNone(byname["oneofs"].type_note)
-        self.assertIsNone(byname["name"].type_note)
-        self.assertIsNone(byname["fields"].type_note)           # repeated <msg> ok
+        for name in ("oneofs", "name", "fields"):               # (fields: repeated <msg>)
+            self.assertEqual(byname[name].type_note, SW._BY_NAME_NOTE, name)
 
     def test_qualified_keys_avoid_short_name_collision(self):
         # #68: the field-type map keys by QUALIFIED name, so the three distinct

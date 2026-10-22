@@ -488,7 +488,8 @@ def _remote_mirror():
                      "iOS 27 cache or libswiftRemoteMirror (MACHO_REMOTE_MIRROR) not available")
 class TestSwiftAgainstRemoteMirror(unittest.TestCase):
     """Every emitted Swift message's stored fields and their types, and the types of the fields
-    it emits, against Remote Mirror (TODO #124, #128): all agree; not compared, two one-case oneofs
+    it emits (paired with its property by offset where static: #130), against Remote Mirror (TODO
+    #124, #128): all agree; not compared, two one-case oneofs
     (CipherML's AspireApiPIRShardConfigs, one of TokenGeneration's).  Before #128 the oneofs of
     Apple's own generator (an enum of their own, not a nested OneOf_) went untyped and unread,
     and the fields swift-protobuf names with a ``_p`` were emitted with no type."""
@@ -502,7 +503,7 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
     def test_ios27_images(self):
         from oracles.swift_mirror import CacheMirror, compare
         mirror = CacheMirror(IOS27_CACHE)
-        not_compared, unpaired, compared = {}, {}, {}
+        not_compared, unpaired, compared, renamed, by_offset = {}, {}, {}, [], 0
         for image in self.IMAGES:
             with self.subTest(image=image):
                 res = compare(mirror, image)
@@ -518,12 +519,17 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
                 if res.stats["emitted fields with no one property of their name"]:
                     unpaired[image] = res.stats["emitted fields with no one property of their name"]
                 compared[image] = res.stats["emitted fields compared"]
+                renamed += [(q, n) for q, n, _f, _p in res.renamed]
+                by_offset += res.stats["emitted fields paired by offset"]
         self.assertEqual(not_compared, {"CipherML": 1, "TokenGeneration": 1})
-        # (EnergyKitFoundation's GridCleanlinessStats: its name map's clean / reduce, properties
-        # cleaner / lessClean -- OPEN, TODO #128)
-        self.assertEqual(unpaired, {"EnergyKitFoundation": 2})
+        self.assertEqual(unpaired, {})
+        # paired by the offset decodeMessage writes where it is static (#130): EnergyKitFoundation's
+        # GridCleanlinessStats #2 / #3 (clean / reduce) are the properties cleaner / lessClean
+        self.assertEqual(sorted(renamed), [("InsightRecordPayload.GridCleanlinessStats", 2),
+                                           ("InsightRecordPayload.GridCleanlinessStats", 3)])
+        self.assertGreater(by_offset, 1_000)
         self.assertGreaterEqual(compared["TokenGenerationCore"], 190)       # its oneofs' cases
-        self.assertGreater(sum(compared.values()), 5_800)
+        self.assertGreater(sum(compared.values()), 5_900)
 
     def test_a_planted_error_is_reported(self):
         """TokenGeneration's stopSequences typed back to the old filler (``repeated bytes``)."""

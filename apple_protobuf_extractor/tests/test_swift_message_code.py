@@ -81,6 +81,102 @@ class TestDecodedOnTheIos27Cache(unittest.TestCase):
         self.assertEqual(sorted(got), [1, 2])
 
 
+    def test_traverse_hands_the_same_types(self):
+        """traverse's Visitor calls by number, typed as decodeMessage's are: a message by the
+        metadata it is handed (x2), a map's key and value (x2, x3), a NullValue oneof case in a
+        closure."""
+        import serializers.swift_message_code as MC
+        from macho.load import load_cache_image
+        from serializers.swift_type_recovery import _qualified_name
+
+        def visited(image, type_name):
+            if image not in self.ctxs:
+                self.ctxs[image] = load_cache_image(self.reader,
+                                                    self.reader.find_image_header(image)).ctx
+            ctx = self.ctxs[image]
+            ws = next(ws for td, ws in MC.message_witnesses(ctx).items()
+                      if _qualified_name(ctx, td) == type_name)
+            return {n: [(v.label, v.kind, v.type) for v in vs]
+                    for n, vs in MC.visited_fields(ctx, ws["traverse"]).items()}
+        self.assertEqual(visited("BiomeStreams", "PgQuery_A_Const"),
+                         {1: [("Singular", "Message", "PgQuery_Node")],
+                          2: [("Singular", "Int32", None)]})
+        self.assertEqual(visited("Hands", "HandsKitDataSequencePB")[1],
+                         [("Map", "Map", "map<uint64, HandsKitDataPB>")])
+        self.assertEqual(visited("TokenGenerationCore",
+                                 "Tokengenerationcore_Wireformat_FinishReason")[3],
+                         [("Singular", "Enum", "Google_Protobuf_NullValue")])
+
+
+class TestAOneEntryReadingIsChecked(unittest.TestCase):
+    """A one-entry name-map reading (no cross-check of its own) is kept only if the message's
+    decodeMessage decodes that number and reflection lists a field of that name; where
+    decodeMessage cannot be read, reflection alone decides, reported (#130)."""
+
+    def _run(self, decoded, stored=("value",)):
+        from unittest import mock
+        import serializers.swift_descriptor_extract as S
+        import serializers.swift_message_code as MC
+        import serializers.swift_type_recovery as TR
+        from proto.models import get_diagnostics
+        m = S.SwiftMessage("Mod", "M", fields=[S.SwiftField(1, "value")], shape="runtime-single")
+        ctx = type("Ctx", (), {})()
+        with mock.patch.object(MC, "message_witnesses", lambda ctx: {1: {"decodeMessage": MC.Code(0x1000)}}), \
+                mock.patch.object(TR, "_qualified_name", lambda ctx, td: "M"), \
+                mock.patch.object(MC, "decoded_fields", lambda ctx, code, numbers: decoded), \
+                mock.patch.object(TR, "collect_field_types",
+                                  lambda ctx: ({}, {}, set(), {"M": set(stored)})):
+            S._attach_types(ctx, [m], {})
+        hits = [h for h in get_diagnostics(ctx).heuristics_hit if h[0] == "swift-reflection-confirm"]
+        return [(f.number, f.proto_type) for f in m.fields], len(hits)
+
+    def test_decoded_and_listed(self):
+        import serializers.swift_message_code as MC
+        self.assertEqual(self._run({1: [MC.Decoded("Singular", "Bool")]}), ([(1, "bool")], 0))
+
+    def test_decoded_but_not_listed(self):
+        import serializers.swift_message_code as MC
+        self.assertEqual(self._run({1: [MC.Decoded("Singular", "Bool")]}, stored=("other",)),
+                         ([], 0))
+
+    def test_not_decoded(self):
+        self.assertEqual(self._run({}), ([], 0))
+
+    def test_unreadable_reflection_decides(self):
+        self.assertEqual(self._run(None), ([(1, None)], 1))
+        self.assertEqual(self._run(None, stored=("other",)), ([], 1))
+
+
+class TestOneMessageFailingIsItsOwn(unittest.TestCase):
+    """A message whose decodeMessage reading raises is recorded as its analysis failure; the
+    image's other messages are typed as before."""
+
+    def test_guarded(self):
+        from unittest import mock
+        import serializers.swift_descriptor_extract as S
+        import serializers.swift_message_code as MC
+        import serializers.swift_type_recovery as TR
+        from proto.models import get_diagnostics
+        a = S.SwiftMessage("Mod", "A", fields=[S.SwiftField(1, "x")], shape="static")
+        b = S.SwiftMessage("Mod", "B", fields=[S.SwiftField(1, "y")], shape="static")
+
+        def decoded(ctx, code, numbers):
+            if code.va == 0xA:
+                raise ValueError("bad")
+            return {1: [MC.Decoded("Singular", "Bool")]}
+        ctx = type("Ctx", (), {})()
+        with mock.patch.object(MC, "message_witnesses",
+                               lambda ctx: {0xA: {"decodeMessage": MC.Code(0xA)},
+                                            0xB: {"decodeMessage": MC.Code(0xB)}}), \
+                mock.patch.object(TR, "_qualified_name", lambda ctx, td: "A" if td == 0xA else "B"), \
+                mock.patch.object(MC, "decoded_fields", decoded), \
+                mock.patch.object(TR, "collect_field_types", lambda ctx: ({}, {}, set(), {})):
+            S._attach_types(ctx, [a, b], {})
+        self.assertEqual((a.fields[0].proto_type, b.fields[0].proto_type), (None, "bool"))
+        self.assertEqual(get_diagnostics(ctx).analysis_failures,
+                         [("Mod.A", "swift decodeMessage", "ValueError: bad")])
+
+
 @unittest.skipUnless(ORACLE, "swift-protobuf oracle fixture not available")
 class TestDecodedOnTheOracle(unittest.TestCase):
     """A binary that links SwiftProtobuf in: static witness tables, whose slots are named by
@@ -113,6 +209,8 @@ class TestNameJoinIsTheLastResort(unittest.TestCase):
         joined = [h for h in get_diagnostics(ctx).heuristics_hit if h[0] == "swift-name-join"]
         self.assertGreater(typed, 100)
         self.assertEqual(len(joined), typed)
+        # and each says so in the .proto (#130)
+        self.assertTrue(all(f.type_note for m in msgs for f in m.fields if f.proto_type))
 
 
 if __name__ == "__main__":

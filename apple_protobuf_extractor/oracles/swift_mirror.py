@@ -30,6 +30,7 @@ import sys
 import artifacts
 import serializers.swift_descriptor_extract as SW
 from oracles.cache_memory import SlideInfo
+import serializers.swift_message_code as MC
 import serializers.swift_type_recovery as TR
 from macho.dyld_cache import DyldCacheReader
 from macho.load import load_cache_image
@@ -168,7 +169,8 @@ class CacheMirror:
                                                                   len(mangled))
 
     def fields(self, mangled):
-        """[(field name, type name)] of the type *mangled* names, or None without a layout."""
+        """[(field name, type name, offset)] of the type *mangled* names, or None without a
+        layout."""
         tr = self.typeref(mangled)
         if not tr:
             return None
@@ -177,18 +179,20 @@ class CacheMirror:
             return None
         children = (self.rm.swift_reflection_childOfTypeRef(self.rc, tr, i)
                     for i in range(info.NumFields))
-        return [(ch.Name.decode() if ch.Name else None, self.name(ch.TR)) for ch in children]
+        return [(ch.Name.decode() if ch.Name else None, self.name(ch.TR), ch.Offset)
+                for ch in children]
 
     def class_fields(self, metadata):
-        """[(field name, type name)] of an instance of the class whose metadata is at *metadata*,
-        or None."""
+        """[(field name, type name, offset)] of an instance of the class whose metadata is at
+        *metadata*, or None."""
         self.fake_isa = metadata
         info = self.rm.swift_reflection_infoForInstance(self.rc, FAKE_OBJECT)
         if info.Kind == 0:
             return None
         children = (self.rm.swift_reflection_childOfInstance(self.rc, FAKE_OBJECT, i)
                     for i in range(info.NumFields))
-        return [(ch.Name.decode() if ch.Name else None, self.name(ch.TR)) for ch in children]
+        return [(ch.Name.decode() if ch.Name else None, self.name(ch.TR), ch.Offset)
+                for ch in children]
 
     def layout_kind(self, mangled):
         tr = self.typeref(mangled)
@@ -287,9 +291,10 @@ def _storage_metadata(ctx, types):
             and TR._desc_name(ctx, d) == "_StorageClass"}
 
 
-class Result(collections.namedtuple("Result", "stats differences")):
+class Result(collections.namedtuple("Result", "stats differences renamed")):
     """``stats``: a Counter of messages compared / agreeing / not compared (and why);
-    ``differences``: ``[(message, what, detail)]``."""
+    ``differences``: ``[(message, what, detail)]``; ``renamed``: ``[(message, number, field
+    name, property)]`` -- a field paired by offset with a property not of its name."""
 
 
 def compare(mirror, image):
@@ -309,7 +314,8 @@ def compare(mirror, image):
             descs.append(d)
     storage = _storage_metadata(ctx, descs)
     by_name = {TR._qualified_name(ctx, d): d for d in descs}
-    stats, differences, seen = collections.Counter(), [], set()
+    stats, differences, seen, renamed = collections.Counter(), [], set(), []
+    witnesses = {TR._qualified_name(ctx, td): ws for td, ws in MC.message_witnesses(ctx).items()}
     for desc in descs:
         if TR._desc_kind(ctx, desc) != TR._STRUCT_KIND:
             continue
@@ -326,7 +332,9 @@ def compare(mirror, image):
             stats["not compared: no layout"] += 1
             differences.append((q, "no layout", mn))
             continue
-        theirs = {n.lstrip("_"): t for n, t in rm if n}
+        theirs = {n.lstrip("_"): t for n, t, _o in rm if n}
+        at_self = {o: n.lstrip("_") for n, _t, o in rm if n}       # offset -> property
+        at_storage, storage_at = {}, None
         if "storage" in theirs:                # copy-on-write: the storage class's fields
             st = mirror.class_fields(storage[q]) if q in storage else None
             if st is None:
@@ -334,7 +342,9 @@ def compare(mirror, image):
                 differences.append((q, "no storage class layout", mn))
                 continue
             del theirs["storage"]
-            theirs.update({n.lstrip("_"): t for n, t in st if n})
+            storage_at = next(o for o, n in at_self.items() if n == "storage")
+            theirs.update({n.lstrip("_"): t for n, t, _o in st if n})
+            at_storage = {o: n.lstrip("_") for n, _t, o in st if n}
         one_case = False
         for t in list(theirs.values()):        # a oneof: its property and its cases
             m = re.fullmatch(r"Swift\.Optional<[^.<>]+\.([\w.]+)>", t)
@@ -345,7 +355,7 @@ def compare(mirror, image):
             if mirror.layout_kind(enum) == STRUCT_LAYOUT:   # of its own: Apple's generators)
                 one_case = True
                 break
-            cases = [(n, ct) for n, ct in mirror.fields(enum) or [] if n]
+            cases = [(n, ct) for n, ct, _o in mirror.fields(enum) or [] if n]
             if any(ct for n, ct in cases if n != "UNRECOGNIZED"):   # cases with payloads: a
                 theirs.update(cases)           # oneof (an enum's only payload: UNRECOGNIZED(Int))
         if one_case:
@@ -362,13 +372,23 @@ def compare(mirror, image):
         stats["fields with no type recovered"] += sum(1 for f in untyped if theirs.get(f) != "")
         bad = [(f, ours_t[f], proto_of(theirs[f])) for f in sorted(ours_t)
                if theirs.get(f) and proto_of(theirs[f]) != ours_t[f]]
-        # what is emitted: each field the serializer gives, paired with its property by name
+        # what is emitted: each field the serializer gives, paired with the property its
+        # decodeMessage decodes it into where that offset is static (in self, or in the storage
+        # self holds), else with the property of its name
         props = collections.defaultdict(list)
         for n in theirs:
             props[_same_name(n, prop=True)].append(n)
+        decoded = _decoded(ctx, witnesses.get(q), [f.number for f in emitted[q].fields])
         out = []
         for f in emitted[q].fields:
-            p = props.get(_same_name(f.name), [])
+            named = props.get(_same_name(f.name), [])
+            by_offset = _at_offset(decoded.get(f.number, ()), at_self, at_storage, storage_at)
+            p = [by_offset] if by_offset else named
+            stats["emitted fields paired by offset" if by_offset else
+                  "emitted fields paired by name"] += 1
+            if by_offset and named != [by_offset]:
+                stats["emitted fields named otherwise than their property"] += 1
+                renamed.append((q, f.number, f.name, by_offset))
             if len(p) != 1:
                 stats["emitted fields with no one property of their name"] += 1
                 continue
@@ -388,7 +408,30 @@ def compare(mirror, image):
         if not bad and not out:
             stats["agree"] += 1
     stats["not compared: emitted, no type descriptor"] += len(set(emitted) - seen)
-    return Result(stats, differences)
+    return Result(stats, differences, renamed)
+
+
+def _decoded(ctx, ws, numbers):
+    """The extractor's decodeMessage reading of a message (:mod:`serializers.swift_message_code`),
+    for the offsets it decodes into."""
+    got = MC.decoded_fields(ctx, ws["decodeMessage"], numbers) if ws and "decodeMessage" in ws \
+        else None
+    return got or {}
+
+
+def _at_offset(decodes, at_self, at_storage, storage_at):
+    """The property a field's decode calls write: at a static offset in self, or in the
+    copy-on-write storage self holds (loaded from self at *storage_at*); one, or None."""
+    names = set()
+    for d in decodes:
+        if d.offset is None or d.origin is None:
+            continue
+        if d.origin == ("self",):
+            names.add(at_self.get(d.offset))
+        elif d.origin[:2] == ("load", MC.SELF) and d.origin[2] == storage_at:
+            names.add(at_storage.get(d.offset))
+    names.discard(None)
+    return next(iter(names)) if len(names) == 1 else None
 
 
 def main(argv):

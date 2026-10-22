@@ -77,7 +77,7 @@ from proto.callees import callee_name
 from proto.dispatch import listing_flow
 from proto.function_body import FunctionBody, _branch_target, function_body
 from proto.arm64_operands import CALLS, parse_mem, split_ops, writes
-from proto.models import record_heuristic_hit
+from proto.models import record_analysis_failure, record_heuristic_hit
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
@@ -131,6 +131,12 @@ class SwiftMessage:
 
 # ── symbol table (name → vmaddr), nlist + export trie ─────────────────────────
 
+# the cache symbols swift-protobuf recovery reads: name maps, traverse bodies, and the runtime
+# helper a field's generic metadata is made with (serializers.swift_message_code.metadata_type)
+_CACHE_SYMBOL_MARKERS = (_NAMEMAP_MARKER, "V8traverse",
+                         "swift_instantiateConcreteTypeFromMangledName")
+
+
 def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
     """Map every declared symbol name → its vmaddr.
 
@@ -141,16 +147,19 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
     Cache-native images keep no per-image symbol table in their (shared-LINKEDIT)
     Mach-O; instead the original local symbols — including each type's
     ``…_protobuf_nameMap`` static-init and ``…traverse`` symbols —
-    live in the cache's ``.symbols`` sub-cache, keyed by vmaddr.  We read those directly
-    so swift-protobuf recovery works cache-native, not just from a standalone
-    binary.  Returns ``{}`` when no symbol source is addressable."""
+    live in the cache's ``.symbols`` sub-cache, keyed by vmaddr, and a public type's in the
+    image's export trie.  There only the names swift-protobuf recovery reads are kept
+    (:data:`_CACHE_SYMBOL_MARKERS`).  Returns ``{}`` when no symbol source is addressable."""
     reader = getattr(ctx, "_cache_reader", None)
     if reader is not None and getattr(ctx, "is_cache_backed", False):
         try:
-            return reader.image_symbol_addrs(
-                ctx.image_base, _NAMEMAP_MARKER, "V8traverse")
+            out = dict(reader.image_symbol_addrs(ctx.image_base, *_CACHE_SYMBOL_MARKERS))
+            for name, addr in reader.image_exports(ctx.image_base).items():
+                if any(m in name for m in _CACHE_SYMBOL_MARKERS):
+                    out.setdefault(name, addr)
         except READ_ERRORS:
             return {}
+        return out
 
     out: Dict[str, int] = {}
     for name, addr in ctx.iter_symbols():
@@ -664,8 +673,9 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
       * the field numbers ``traverse`` visits (:func:`_traverse_visits`, a different codegen
         path) are a SUBSET of the recovered set — a contradiction means we read the
         wrong thing; and
-      * not EVERY entry has ``number == len(name)`` — the signature of the
-        ``(length, ptr)`` packed form."""
+      * not EVERY entry of several has ``number == len(name)`` — the signature of the
+        ``(length, ptr)`` packed form.  One entry is checked by :func:`_attach_types` (its
+        message's decodeMessage and reflection) instead."""
     if enum:
         # no traverse for an enum; the (length, ptr) packed-form
         # confusion is a message-field-number artefact.  Case names must all look
@@ -674,7 +684,7 @@ def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
     oracle = set(_traverse_field_numbers(ctx, traverse_va)) if traverse_va is not None else set()
     if oracle and not oracle <= {f.number for f in got}:
         return False
-    if got and all(f.number == len(f.name) for f in got):
+    if len(got) > 1 and all(f.number == len(f.name) for f in got):
         record_heuristic_hit(ctx, "swift name-map number == len(name)",
                              f"{len(got)} entries of the name map read for the traverse at "
                              f"{traverse_va or 0:#x} are rejected as (length, pointer) pairs")
@@ -1050,9 +1060,12 @@ def _norm_property(name: str) -> str:
     return _norm(name[:-2] if name.endswith("_p") else name)
 
 
-# Readings with no cross-check of their own (one builder entry): kept only when Swift reflection
-# agrees the message has that field.
-_REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single"})
+# Readings with no cross-check of their own: one builder entry.
+_ONE_ENTRY_SHAPES = frozenset({"runtime-single", "shared-once"})
+
+
+def _one_entry(m: SwiftMessage) -> bool:
+    return len(m.fields) == 1 and m.shape in _ONE_ENTRY_SHAPES
 
 
 def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
@@ -1068,22 +1081,38 @@ def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
     extracted from the dyld cache)."""
     from serializers import swift_message_code as MC
     from serializers.swift_type_recovery import _qualified_name
-    joined = _attach_field_types(ctx, msgs)
     try:
         witnesses = {_qualified_name(ctx, td): ws for td, ws in MC.message_witnesses(ctx).items()}
     except READ_ERRORS:
         witnesses = {}
+    decodes: Dict[int, Dict[int, list]] = {}
+    for m in msgs:
+        ws = witnesses.get(m.name, {})
+        if m.fields and "decodeMessage" in ws:
+            decodes[id(m)] = _read_code(ctx, m, "swift decodeMessage", MC.decoded_fields, ctx,
+                                        ws["decodeMessage"], [f.number for f in m.fields])
+            if _one_entry(m) and decodes[id(m)] is not None \
+                    and m.fields[0].number not in decodes[id(m)]:
+                # a one-entry reading: the message's decodeMessage must decode that number (and
+                # reflection list that name), or the reading is another type's (#130)
+                m.fields, m.shape = [], "none"
+    joined = _attach_field_types(ctx, msgs, {k for k, v in decodes.items() if v is not None})
     for m in msgs:
         if not m.fields:
             continue
         ws = witnesses.get(m.name, {})
-        decoded = MC.decoded_fields(ctx, ws["decodeMessage"], [f.number for f in m.fields]) \
-            if "decodeMessage" in ws else {}
-        tva = ws["traverse"].va if "traverse" in ws else traversers.get((m.module, m.name))
+        decoded = decodes.get(id(m)) or {}
         visits: Dict[int, str] = {}
-        for num, typ in (_traverse_visits(ctx, tva) if tva is not None else []):
-            if typ is not None:
-                visits.setdefault(num, typ)
+        if "traverse" in ws:
+            visited = _read_code(ctx, m, "swift traverse", MC.visited_fields, ctx, ws["traverse"])
+            for num, vs in (visited or {}).items():
+                types = {t for t in map(_decoded_type, vs) if t}
+                if len(types) == 1:
+                    visits[num] = next(iter(types))
+        elif traversers.get((m.module, m.name)) is not None:
+            for num, typ in _traverse_visits(ctx, traversers[(m.module, m.name)]):
+                if typ is not None:
+                    visits.setdefault(num, typ)
         for f in m.fields:
             types = {t for t in map(_decoded_type, decoded.get(f.number, ())) if t}
             dt = next(iter(types)) if len(types) == 1 else None
@@ -1091,30 +1120,50 @@ def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
             if dt is not None:
                 f.proto_type, f.type_note = dt, None
                 if vt is not None and vt != dt:
-                    from proto.models import record_analysis_failure
                     record_analysis_failure(ctx, m.qualified, "swift field types",
                                             f"#{f.number}: decodeMessage {dt}, traverse {vt}")
             elif vt is not None:
                 f.proto_type, f.type_note = vt, None
             elif (id(m), f.number) in joined:
-                f.proto_type, f.type_note = joined[(id(m), f.number)]
+                f.proto_type, note = joined[(id(m), f.number)]
+                f.type_note = f"{_BY_NAME_NOTE}; {note}" if note else _BY_NAME_NOTE
                 record_heuristic_hit(ctx, "swift-name-join", f"{m.qualified} #{f.number} {f.name}")
 
 
+def _read_code(ctx: BinaryContext, m: SwiftMessage, what: str, fn, *args):
+    """``fn(*args)``, or None when it raises: recorded as *m*'s analysis failure, and the
+    image's other messages read on."""
+    try:
+        return fn(*args)
+    except (NameError, ImportError):
+        raise
+    except Exception as exc:
+        record_analysis_failure(ctx, m.qualified, what, f"{type(exc).__name__}: {exc}")
+        return None
+
+
+# a field typed by the reflection type of the property of its name: an estimate (#130)
+_BY_NAME_NOTE = ("swift-protobuf: type from Swift reflection by field name, not from the code "
+                 "(an integer may be sint / fixed)")
+
+
 def _decoded_type(d) -> Optional[str]:
-    """The proto type a :class:`serializers.swift_message_code.Decoded` call stands for."""
+    """The proto type a :class:`serializers.swift_message_code.Decoded` (or ``Visited``) call
+    stands for."""
     if d.kind == "Map":
         return d.type
     base = d.type if d.kind in ("Message", "Enum", "Group") else _VISIT_SCALARS.get(d.kind)
     if base is None:
         return None
-    return f"repeated {base}" if d.label == "Repeated" else base
+    return f"repeated {base}" if d.label in ("Repeated", "Packed") else base
 
 
-def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]
+def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage], decoded=frozenset()
                         ) -> Dict[Tuple[int, int], Tuple[str, Optional[str]]]:
     """From Swift field metadata (``swift_type_recovery.collect_field_types``: the message
-    struct, its COW ``_StorageClass`` and its oneofs' enums): the reflection checks below, and
+    struct, its COW ``_StorageClass`` and its oneofs' enums): the reflection checks below (a
+    one-entry reading's: reported where it is the only check, its message not in *decoded*,
+    the ``id`` of those whose decodeMessage was read), and
     ``{(id(message), field number): (type, note)}`` -- the type of the property of each field's
     name (normalised), :func:`_attach_types`' last resort."""
     joined: Dict[Tuple[int, int], Tuple[str, Optional[str]]] = {}
@@ -1131,12 +1180,13 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]
                     type(exc).__name__, exc)
         return joined
     for m in msgs:
-        if m.shape in _REFLECTION_CONFIRMED_SHAPES and m.fields:
-            # single-entry readings whose only support is the literal itself: the struct's
-            # reflection must list that field, or the reading is another type's
-            # (e.g. an empty message whose getter reaches a sibling's closure).  Any
-            # stored field record counts, whether or not its type decodes.
+        if _one_entry(m):
+            # the struct's reflection must list that field, or the reading is another type's
+            # (e.g. an empty message whose getter reaches a sibling's closure).  Any stored
+            # field record counts, whether or not its type decodes.
             refl = {_norm_property(k) for k in stored.get(m.name, ())}
+            if id(m) not in decoded:
+                record_heuristic_hit(ctx, "swift-reflection-confirm", m.qualified)
             if _norm(m.fields[0].name) not in refl:
                 m.fields, m.shape = [], "none"
         if not m.fields and m.name in fieldless:

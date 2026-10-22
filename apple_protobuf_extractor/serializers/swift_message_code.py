@@ -39,9 +39,12 @@ from proto.arm64_operands import CALLS, CALLER_SAVED
 from proto.callees import callee_name
 from proto.function_body import function_body
 
-# addresses into the objects a run cannot see into: object k's window, from POINTER_BASE
+# addresses into the objects a run cannot see into: object k's window, from POINTER_BASE, its
+# base in the middle (an offset below it is still k's)
 POINTER_BASE = 1 << 82
 _WINDOW = 1 << 36
+_MAX_OBJECTS = 1 << 20               # [cap:INPUT-SANITY] a run's objects
+# self; the decoder (or visitor) argument, its type and its witness table
 SELF, DECODER, DECODER_TYPE, DECODER_WITNESSES = range(4)
 # the Swift runtime's retains return their argument
 _RETURNS_ARGUMENT = frozenset(("_swift_retain", "_swift_bridgeObjectRetain", "_swift_unknownObjectRetain"))
@@ -60,22 +63,24 @@ _MAX_FIELD_NUMBER = 0x1FFFFFFF
 
 
 def pointer(k: int, off: int = 0) -> int:
-    return POINTER_BASE + k * _WINDOW + off
+    return POINTER_BASE + k * _WINDOW + _WINDOW // 2 + off
 
 
 def is_pointer(v: Optional[int]) -> bool:
-    return v is not None and POINTER_BASE <= v < POINTER_BASE + (1 << 20) * _WINDOW
+    return v is not None and POINTER_BASE <= v < POINTER_BASE + _MAX_OBJECTS * _WINDOW
 
 
 def split(v: int) -> Tuple[int, int]:
     """``(object, offset)`` of a pointer."""
-    return (v - POINTER_BASE) // _WINDOW, (v - POINTER_BASE) % _WINDOW
+    k, off = divmod(v - POINTER_BASE, _WINDOW)
+    return k, off - _WINDOW // 2
 
 
 class _Objects:
     """The objects of one message's runs: self, the decoder, its type and witness table, then
-    each value loaded from one (*origin*: ``("load", object, offset)``) and each call's result
-    (``("call", function, index)``)."""
+    each value loaded from one (*origin*: ``("load", object, offset)``), each call's result
+    (``("call", function, index)``) and each import loaded from the slot dyld binds to it
+    (``("import", slot)``: a standalone binary's)."""
 
     def __init__(self, ctx: BinaryContext):
         self.ctx = ctx
@@ -103,7 +108,19 @@ class _Objects:
                 return 1
             return self._object(("call", function, k, target, x0))
         return Objects(pointer=is_pointer, field_value=field_value, call_result=call_result,
-                       object_escape=True)
+                       object_escape=True, bound=self.imported)
+
+    def imported(self, slot: int) -> Optional[int]:
+        if getattr(self.ctx, "is_cache_backed", False) or not self.ctx.bind_name_for(slot):
+            return None                            # (a dyld cache's slots are bound)
+        return self._object(("import", slot))
+
+    def entry(self, code: "Code") -> Dict[str, int]:
+        """A run's entry registers: the method's arguments (x0-x2, self in x20) as these
+        objects, and what *code*'s forwarders hand it."""
+        return {"x0": pointer(DECODER), "x1": pointer(DECODER_TYPE),
+                "x2": pointer(DECODER_WITNESSES), "x20": pointer(SELF), **dict(code.args),
+                **{r: self.imported(slot) for r, slot in code.imports}}
 
 
 @dataclass
@@ -172,10 +189,12 @@ _DECODE_MESSAGE_RE = re.compile(r"(?:13decodeMessage|06decode[A-Z]\d?)7decoder")
 
 
 class Code(NamedTuple):
-    """A function, and the constants the forwarders on the way to it hand it in x3-x8 (a
-    ``merged`` body's per-type parts: identical-code folding passes them as arguments)."""
+    """A function, and what the forwarders on the way to it hand it in x3-x8 (a ``merged``
+    body's per-type parts: identical-code folding passes them as arguments): constants
+    (*args*), and imports loaded from the slots dyld binds (*imports*: register, slot)."""
     va: int
     args: Tuple[Tuple[str, int], ...] = ()
+    imports: Tuple[Tuple[str, int], ...] = ()
 
 
 def message_witnesses(ctx) -> Dict[int, Dict[str, Code]]:
@@ -243,11 +262,12 @@ def implementation(ctx, witness: int) -> Code:
         nxt = _forwarded_to(ctx, code.va)
         if nxt is None:
             return code
-        code = Code(nxt[0], tuple(sorted({**dict(code.args), **nxt[1]}.items())))
+        code = Code(nxt[0], tuple(sorted({**dict(code.args), **nxt[1]}.items())),
+                    tuple(sorted({**dict(code.imports), **nxt[2]}.items())))
     return code
 
 
-def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int]]]:
+def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int], Dict[str, int]]]:
     from macho.disasm import _parse_imm
     try:
         insns = list(function_body(ctx, va))
@@ -263,9 +283,18 @@ def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int]]]:
     target = _parse_imm(insns[k].op_str)
     if target is None or not _in_image_text(ctx, target):
         return None
-    known = flow.propagate({}, [k]).get(k, {})
-    return target, {r: known[r] for r in ("x3", "x4", "x5", "x6", "x7", "x8")
-                    if r in known and not flow.entry_arg(k, r)}
+    objs = _Objects(ctx)
+    known = flow.propagate({}, [k], objects=objs.objects(va)).get(k, {})
+    args, imports = {}, {}
+    for r in ("x3", "x4", "x5", "x6", "x7", "x8"):
+        v = known.get(r)
+        if v is None or flow.entry_arg(k, r):
+            continue
+        if not is_pointer(v):
+            args[r] = v
+        elif objs.origin[split(v)[0]][0] == "import":
+            imports[r] = objs.origin[split(v)[0]][1]
+    return target, args, imports
 
 
 def _in_image_text(ctx, va: int) -> bool:
@@ -279,21 +308,32 @@ def _in_image_text(ctx, va: int) -> bool:
 # ── decodeMessage ─────────────────────────────────────────────────────────────
 
 def _decoder_slots(ctx) -> Dict[int, str]:
-    """``{witness-table offset: Decoder requirement}``: by the requirements' descriptors
+    """``{witness-table offset: Decoder requirement}`` (:func:`_requirement_slots`)."""
+    return _requirement_slots(ctx, "7DecoderMp", _DECODE_RE)
+
+
+def _visitor_slots(ctx) -> Dict[int, str]:
+    """``{witness-table offset: Visitor requirement}`` (:func:`_requirement_slots`)."""
+    return _requirement_slots(ctx, "7VisitorMp", _VISIT_RE)
+
+
+def _requirement_slots(ctx, suffix: str, pattern) -> Dict[int, str]:
+    """``{witness-table offset: requirement}`` of the swift-protobuf protocol whose descriptor's
+    symbol ends in *suffix*: by the requirements' descriptors
     (:func:`serializers.swift_descriptor_extract._protocol_slots`), else -- an image that links
-    swift-protobuf in, without those symbols -- by what its decoders' witnesses are named."""
+    swift-protobuf in, without those symbols -- by what the image's conformances' witnesses at
+    each slot are named (a name *pattern* matches)."""
     from serializers.swift_descriptor_extract import _protocol_slots
 
     def build():
-        out = dict(_protocol_slots(ctx, "7DecoderMp"))
-        protos = [n for n in _symbols(ctx).values() if n.endswith("7DecoderMp")]
-        for pname in protos:
+        out = dict(_protocol_slots(ctx, suffix))
+        for pname in [n for n in _symbols(ctx).values() if n.endswith(suffix)]:
             for i, names in _slot_names(ctx, pname).items():
-                hit = next((n for n in names if _DECODE_RE.search(n)), None)
+                hit = next((n for n in names if pattern.search(n)), None)
                 if hit:
                     out.setdefault(8 + 8 * i, hit)
         return out
-    return _ctx_cache(ctx, "_swift_decoder_slots", build)
+    return _ctx_cache(ctx, "_swift_requirement_slots_" + suffix, build)
 
 
 def _static_tables(ctx) -> List[Tuple[str, int]]:
@@ -366,17 +406,20 @@ def _impl_symbols(ctx) -> Dict[int, List[str]]:
 
 
 def _call_name(ctx, objs: _Objects, target: Optional[int], via: Optional[int],
-               thunks: bool = False) -> str:
+               thunks: bool = False, slots=_decoder_slots) -> str:
     """The symbol a call reaches: its target's (with *thunks*, an outlined thunk's tail
-    callee's), or -- through a ``blr`` -- the Decoder requirement at the slot of the decoder's
-    witness table its target was loaded from."""
+    callee's), or -- through a ``blr`` -- the requirement at the slot of the argument's witness
+    table (the decoder's, or with *slots* = :func:`_visitor_slots` the visitor's) its target was
+    loaded from."""
     from serializers.swift_descriptor_extract import _symbol_at
     if target is not None:
         return _symbol_at(ctx, (_tail_called(ctx, target) if thunks else None) or target)
     if is_pointer(via):
         origin = objs.origin.get(split(via)[0], ())
         if origin[:2] == ("load", DECODER_WITNESSES):
-            return _decoder_slots(ctx).get(origin[2], "")
+            return slots(ctx).get(origin[2], "")
+        if origin[:1] == ("import",):
+            return ctx.bind_name_for(origin[1]) or ""
     return ""
 
 
@@ -446,25 +489,24 @@ def _decodes(ctx, objs: _Objects, calls, depth: int, seen) -> List[Decoded]:
     return out
 
 
-def decoded_fields(ctx, decode, numbers) -> Dict[int, List[Decoded]]:
+def decoded_fields(ctx, decode, numbers) -> Optional[Dict[int, List[Decoded]]]:
     """``{N: [Decoded]}`` for each field number in *numbers* a ``decodeMessage`` (a
-    :class:`Code`, or its address) decodes (see the module docstring); {} when no
+    :class:`Code`, or its address) decodes (see the module docstring); None when no
     ``nextFieldNumber`` call is found -- in it, or in a function it calls (a copy-on-write
-    message's loop, in the closure it hands its storage)."""
+    message's loop, in the closure it hands its storage) -- so what it decodes is not known."""
     code = decode if isinstance(decode, Code) else Code(decode)
     objs = _Objects(ctx)
-    entry = {"x0": pointer(DECODER), "x1": pointer(DECODER_TYPE),
-             "x2": pointer(DECODER_WITNESSES), "x20": pointer(SELF), **dict(code.args)}
+    entry = objs.entry(code)
     numbers = sorted(n for n in set(numbers) if 1 <= n <= _MAX_FIELD_NUMBER)
     return _fields(ctx, objs, code.va, entry, numbers, 1)
 
 
 def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth: int
-            ) -> Dict[int, List[Decoded]]:
+            ) -> Optional[Dict[int, List[Decoded]]]:
     from macho.disasm import _parse_imm
     flow = _flow(ctx, va)
     if flow is None:
-        return {}
+        return None
     model = objs.objects(va)
     calls = [k for k, ins in enumerate(flow.insns) if ins.mnemonic in CALLS]
     slots: Dict[int, Dict[int, Tuple[int, int]]] = {}
@@ -488,12 +530,12 @@ def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth:
     if not nexts:
         # the loop is in a function this one calls, handed what it holds
         if depth >= _MAX_DEPTH:
-            return {}
+            return None
         for target, st in inner:
             got = _fields(ctx, objs, target, dict(st), numbers, depth + 1)
-            if got:
+            if got is not None:
                 return got
-        return {}
+        return None
     # an iteration ends where a nextFieldNumber call is: the loop's head, or (a rotated loop:
     # one call ahead of it, one at its end) the next one
     stop = frozenset(flow._block_of[k] for k in nexts)
@@ -506,10 +548,11 @@ def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth:
             return flow.run_from(k + 1, regs, stop, objects=model, slots=slots.get(k, {}),
                                  rejoin=rejoin)
         unknown = run((max(numbers) if numbers else 0) + 1)
-        common = {_key(d) for d in _decodes(ctx, objs, unknown.calls, depth, frozenset())}
+        # the arms' closures have their own budget, however deep the loop was found
+        common = {_key(d) for d in _decodes(ctx, objs, unknown.calls, 1, frozenset())}
         for n in numbers:
             r = run(n, frozenset(unknown.blocks))
-            for d in _decodes(ctx, objs, r.calls, depth, frozenset()):
+            for d in _decodes(ctx, objs, r.calls, 1, frozenset()):
                 if _key(d) not in common and _key(d) not in {_key(x) for x in out.get(n, ())}:
                     out.setdefault(n, []).append(d)
     return out
@@ -601,3 +644,73 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         return TR._qualified_name(ctx, desc) if TR._desc_kind(ctx, desc) in (17, 18) else None
     except READ_ERRORS:
         return None
+
+
+# ── traverse ──────────────────────────────────────────────────────────────────
+
+_VISIT_RE = re.compile(r"[PV]\d+visit(Singular|Repeated|Packed)?(\w*?)Field")
+
+
+@dataclass
+class Visited:
+    """One ``Visitor`` call of a traverse: label (Singular / Repeated / Packed / Map), kind, and
+    the type it is handed (a message's or an enum's metadata after the number; a map's key and
+    value type)."""
+    label: str
+    kind: str
+    type: Optional[str] = None
+
+
+def _number_register(label: str, kind: str) -> str:
+    """Where a Visitor method takes its field number: after a value of two words (String, Data)
+    or none in a general register (Float, Double: v0), else after one."""
+    if label == "Singular" and kind in ("Float", "Double"):
+        return "x0"
+    if label == "Singular" and kind in ("String", "Bytes"):
+        return "x2"
+    return "x1"
+
+
+def visited_fields(ctx, traverse) -> Dict[int, List[Visited]]:
+    """``{N: [Visited]}``: the Visitor calls a ``traverse(visitor:)`` (a :class:`Code` or its
+    address) makes, by the field number it hands each -- run with self (x20), the visitor (x0),
+    its type (x1) and witness table (x2) as :func:`decoded_fields` runs decodeMessage, and the
+    functions it calls (a oneof's cases, the generated closures) run with what they are
+    handed."""
+    code = traverse if isinstance(traverse, Code) else Code(traverse)
+    objs = _Objects(ctx)
+    entry = objs.entry(code)
+    out: Dict[int, List[Visited]] = {}
+    _visits(ctx, objs, code.va, entry, 1, frozenset(), out)
+    return out
+
+
+def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
+    flow = _flow(ctx, va)
+    if flow is None:
+        return
+    region = flow.run_from(0, dict(entry), objects=objs.objects(va))
+    for c in region.calls:
+        m = _VISIT_RE.search(_call_name(ctx, objs, c.target, c.via, slots=_visitor_slots))
+        if m:
+            label, kind = (m.group(1) or "Map"), (m.group(2) or "Map")
+            if kind == "Extension" or kind.startswith("Unknown"):
+                continue
+            n = c.args.get(_number_register(label, kind))
+            if n is None or is_pointer(n) or not 1 <= n <= _MAX_FIELD_NUMBER:
+                continue
+            v = Visited(label, kind)
+            if kind in _GENERIC_KINDS:
+                v.type = metadata_type(ctx, objs, c.args.get("x2"))
+            elif kind == "Map":
+                key = metadata_type(ctx, objs, c.args.get("x2"))
+                val = metadata_type(ctx, objs, c.args.get("x3"))
+                if key and val:
+                    v.type = "map<%s, %s>" % (_MAP_MARKERS.get(key, key), _MAP_MARKERS.get(val, val))
+            if (v.label, v.kind, v.type) not in {(x.label, x.kind, x.type) for x in out.get(n, ())}:
+                out.setdefault(n, []).append(v)
+            continue
+        if c.target is None or depth >= _MAX_DEPTH or not _in_image_text(ctx, c.target) \
+                or c.target in seen:
+            continue
+        _visits(ctx, objs, c.target, c.args, depth + 1, seen | {c.target}, out)

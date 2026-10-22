@@ -299,6 +299,9 @@ class _NamedListingCtx(NoImage):
         def image_symbol_addrs(self, base, *subs):
             return {}
 
+        def image_exports(self, base):
+            return {}
+
     def __init__(self, lines, names, base=0x1000):
         from tests._listing import layout
         self.order, self.fake = layout((base, lines))
@@ -374,6 +377,10 @@ class TestNameMapBuilderValidation(unittest.TestCase):
         with self.assertLogs('proto.models', 'WARNING') as logs:
             self.assertFalse(S._namemap_builder_validated(NoImage(), got, None))
         self.assertIn('number == len(name) hit', logs.output[0])
+
+    def test_one_entry_is_not_judged_by_its_length(self):
+        # `string name = 4`: one entry says nothing of the form; decodeMessage checks it
+        self.assertTrue(S._namemap_builder_validated(None, [S.SwiftField(4, "name")], None))
 
     def test_genuine_numbers_accepted(self):
         # numbers differ from name lengths, no oracle to contradict -> accept
@@ -1392,9 +1399,12 @@ class TestLiveCacheNative(unittest.TestCase):
         # used to filter it out, so the cache-mode readings ran without that cross-check
         syms = S.symbol_addrs(self.ctx)
         bodies = [n for n in syms if "V8traverse" in n and n.endswith(S._FUNCTION_BODY_SUFFIXES)]
-        self.assertTrue(bodies)
-        # CopresenceCore's are all identical-body merges (``…FTm``); closures (``…XEfU_``) are not
-        self.assertTrue(all(n.endswith("FTm") for n in bodies))
+        local = self.reader.image_symbol_addrs(self.ctx.image_base, "V8traverse")
+        # CopresenceCore's local ones are all identical-body merges (``…FTm``; closures,
+        # ``…XEfU_``, are not bodies); a public type's own body is an export (``…F``)
+        self.assertTrue(all(n.endswith("FTm") for n in bodies if n in local))
+        self.assertIn("_$s14CopresenceCore11CP_KeyValueV8traverse7visitoryxz_tK21InternalSwift"
+                      "Protobuf7VisitorRzlF", bodies)
 
     def test_cp_keyvalue(self):
         self.assertEqual(
