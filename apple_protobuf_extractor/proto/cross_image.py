@@ -60,6 +60,8 @@ class CrossImageResult:
     unresolved: Dict[str, str] = field(default_factory=dict)
     # image path -> error, for a defining image whose extraction raised
     image_errors: Dict[str, str] = field(default_factory=dict)
+    # image path -> that image's run's diagnostics (merged into the run's by the caller)
+    diagnostics: Dict[str, object] = field(default_factory=dict)
 
 
 def extract_cache_image(reader, mach_va: int, prefixes=None) -> Tuple[List[ProtoMessage], object]:
@@ -175,6 +177,8 @@ def resolve_cross_image(
                 return None
             by_image[va] = {m.class_name: m for m in msgs}
             failed_in[va] = dict(get_diagnostics(ctx).failed_classes) if ctx is not None else {}
+            if ctx is not None:
+                result.diagnostics[path] = get_diagnostics(ctx)
         return by_image[va]
 
     def add(owner_va: int, msg: ProtoMessage, via: str) -> None:

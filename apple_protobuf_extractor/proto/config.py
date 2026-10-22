@@ -28,10 +28,16 @@ def _class_to_proto_name(
          'CLPLocation'      → 'Location'
          'APPLFoo'          → 'Foo'  (with prefixes=('APPL',))
     """
-    for prefix in (prefixes if prefixes is not None else DEFAULT_PREFIXES):
-        if class_name.startswith(prefix):
-            return class_name[len(prefix):]
-    return class_name
+    prefix = matching_prefix(class_name, prefixes if prefixes is not None else DEFAULT_PREFIXES)
+    return class_name[len(prefix):] if prefix else class_name
+
+
+def matching_prefix(class_name: str, prefixes) -> Optional[str]:
+    """The first of *prefixes* that *class_name* starts with at a word boundary -- an
+    upper-case letter follows (``CLMonitor`` is not ``CLM`` + ``onitor``; ``GEO3DModel`` stays
+    whole: a message name begins with a letter) -- else None."""
+    return next((p for p in prefixes if p and class_name.startswith(p) and
+                 len(class_name) > len(p) and class_name[len(p)].isupper()), None)
 
 
 def _dbg_enum(record: Dict[str, Any], *, writer=None) -> None:

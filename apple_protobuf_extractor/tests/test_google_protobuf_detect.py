@@ -65,6 +65,27 @@ class TestGoogleProtobufDetectOffline(unittest.TestCase):
         self.assertEqual(subs, [])
         self.assertEqual(set(bases), set())
 
+    def test_a_base_of_another_image_is_followed(self):
+        """Cache mode: the local class's superclass is in another image, its superclass the
+        runtime base -- the walk reads the other image's class (its superclass at +8)."""
+        OTHER, GPB = 0x8000, 0x7000
+        msg = _cls(0x2000, "MyMessage", OTHER)
+
+        class _Ctx(_NoReadCtx):
+            def read_ptr(self, va):
+                if va == OTHER + 8:
+                    return GPB
+                raise ValueError("unmapped")
+        names = {OTHER: "SharedBase", GPB: "FooGPBMessage"}
+        orig = FD._resolve_class_name_at
+        FD._resolve_class_name_at = lambda ctx, va: names.get(va)
+        try:
+            subs, bases = FD.google_protobuf_classes(_Ctx(), ClassList([msg]))
+        finally:
+            FD._resolve_class_name_at = orig
+        self.assertEqual(subs, ["MyMessage"])
+        self.assertEqual(set(bases), {"FooGPBMessage"})
+
 
 try:
     import live_artifacts as _VL

@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from macho.memory import BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass
 from proto.models import record_failed_pass
 from proto.protoclass_set import _resolve_class_name_at
@@ -63,7 +63,13 @@ def google_protobuf_classes(
             if nm.endswith(_GPB_RUNTIME_SUFFIX):
                 subs.append(c.name); bases.add(nm); break
             nxt = by_va.get(cur)
-            cur = nxt.superclass_vmaddr if nxt is not None else None
+            if nxt is not None:
+                cur = nxt.superclass_vmaddr
+                continue
+            try:
+                cur = ctx.read_ptr(cur + 8)                # a class of another image
+            except READ_ERRORS:
+                break
     return subs, frozenset(bases)
 
 

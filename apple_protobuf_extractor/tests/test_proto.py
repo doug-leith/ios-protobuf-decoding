@@ -549,7 +549,13 @@ class TestClassToProtoName(unittest.TestCase):
         self.assertEqual(_class_to_proto_name('SomeUnknownClass'), 'SomeUnknownClass')
 
     def test_just_prefix_edge_case(self):
-        self.assertEqual(_class_to_proto_name('GEO'), '')
+        # nothing follows the prefix: no word to start, the name stays whole (#134)
+        self.assertEqual(_class_to_proto_name('GEO'), 'GEO')
+
+    def test_a_prefix_strips_at_a_word_boundary(self):
+        self.assertEqual(_class_to_proto_name('CLMonitorEvent'), 'CLMonitorEvent')
+        self.assertEqual(_class_to_proto_name('CLMMotion'), 'Motion')
+        self.assertEqual(_class_to_proto_name('GEO3DModel'), 'GEO3DModel')  # (a name's first: a letter)
 
 
 class TestConfigurePrefixes(unittest.TestCase):
@@ -589,7 +595,7 @@ class TestConfigurePrefixes(unittest.TestCase):
         self.assertEqual(_class_to_proto_name("GEOFoo", ()), "GEOFoo")
 
     def test_just_prefix_edge_case(self):
-        self.assertEqual(_class_to_proto_name("APPL", ("APPL",)), "")
+        self.assertEqual(_class_to_proto_name("APPL", ("APPL",)), "APPL")
 
     def test_case_sensitive(self):
         # Lowercase "appl" is a different string — not stripped.

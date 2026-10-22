@@ -364,6 +364,14 @@ class ExtractionDiagnostics:
         undecided and flagged)."""
         return len(self.failed_classes) + len(self.foreign_errors) + len(self.failed_passes)
 
+    def merge(self, other: "ExtractionDiagnostics", where: str) -> None:
+        """Add *other*'s entries (another image's run, *where* its path), each first field
+        prefixed with *where*."""
+        for name in ("failed_classes", "foreign_errors", "unevaluated_switches",
+                     "failed_passes", "analysis_failures", "heuristics_hit"):
+            getattr(self, name).extend((f"{where}: {e[0]}",) + tuple(e[1:])
+                                       for e in getattr(other, name))
+
 
 def get_diagnostics(ctx) -> ExtractionDiagnostics:
     """The :class:`ExtractionDiagnostics` of the current run on *ctx* (created lazily)."""

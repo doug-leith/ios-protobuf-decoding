@@ -44,6 +44,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
+from proto.config import matching_prefix
 from proto.defaults import DEFAULT_PREFIXES
 
 from proto.models import (
@@ -132,10 +133,10 @@ def package_for_class(class_name: str, prefixes: Sequence[str] = ()) -> str:
     """
     Return the proto package name for an ObjC class name.
 
-    A known prefix -- :data:`~proto.defaults.DEFAULT_PREFIXES`, then the run's own
+    A known prefix -- :data:`~proto.defaults.DEFAULT_PREFIXES` and the run's own
     *prefixes* (``--prefix``) -- maps to its lowercase form (e.g. ``GEO`` → ``"geo"``),
-    the first that matches winning.  If none matches, auto-derives the package from the
-    ObjC class-name prefix: the leading all-caps run before the first
+    the first that matches at a word boundary winning (:func:`proto.config.matching_prefix`).
+    If none matches, auto-derives the package from the ObjC class-name prefix: the leading all-caps run before the first
     CamelCase word, lowercased (e.g. ``"APPLFoo"`` → ``"appl"``) — every
     standard ObjC class name has one, so no catch-all fallback is needed.
 
@@ -148,9 +149,9 @@ def package_for_class(class_name: str, prefixes: Sequence[str] = ()) -> str:
     :func:`proto.enums._enum_name_from_pairs`).  Full rationale:
     notes/PACKAGE_NAMES.md.
     """
-    for prefix in (*DEFAULT_PREFIXES, *prefixes):
-        if class_name.startswith(prefix):
-            return prefix.lower()
+    prefix = matching_prefix(class_name, (*DEFAULT_PREFIXES, *prefixes))
+    if prefix:
+        return prefix.lower()
     # Auto-derive from the class name itself.
     m = _OBJC_PREFIX_RE.match(class_name)
     if m:

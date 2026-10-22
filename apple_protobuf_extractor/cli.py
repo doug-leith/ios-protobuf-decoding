@@ -690,19 +690,26 @@ def _merge_foreign_messages(ctx, image_bytes, messages):
     return messages + foreign
 
 
-def _add_cross_image_messages(cache, mach_va, messages, prefixes):
+def _add_cross_image_messages(cache, mach_va, messages, prefixes, ctx):
     """Cache-native: append the messages other images define that *messages* reference as
     field types (transitively), each tagged with its defining image — see
-    :mod:`proto.cross_image`.  Reports on stderr what was added and what stays unresolved."""
+    :mod:`proto.cross_image`.  Reports on stderr what was added and what stays unresolved;
+    the other images' diagnostics (and an image that failed) join *ctx*'s."""
     from collections import Counter
     from proto.cross_image import resolve_cross_image
+    from proto.models import get_diagnostics
     t = _step("resolving message classes defined in other images")
     res = resolve_cross_image(cache, mach_va, messages, prefixes=prefixes)
     _done(t)
     for image, n in sorted(Counter(m.defined_in for m in res.added).items()):
         print(f"  + {n} message(s) defined in {image}", file=sys.stderr)
+    diag = get_diagnostics(ctx)
+    for image, other in sorted(res.diagnostics.items()):
+        diag.merge(other, image)
     for image, err in sorted(res.image_errors.items()):
         print(f"  warning: could not extract {image}: {err}", file=sys.stderr)
+        diag.failed_passes.append((f"cross-image extraction of {image}", err,
+                                   "the messages it defines are not added"))
     for cname, why in sorted(res.unresolved.items()):
         print(f"  unresolved {cname}: {why}", file=sys.stderr)
     return messages + res.added
@@ -821,7 +828,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     messages = _apply_prefix_filter(messages, args.prefixes)
     if cache_native and messages and not args.no_cross_image:
         try:
-            messages = _add_cross_image_messages(reader, mach_va, messages, _prefixes)
+            messages = _add_cross_image_messages(reader, mach_va, messages, _prefixes, ctx)
         finally:
             reader.close()
 

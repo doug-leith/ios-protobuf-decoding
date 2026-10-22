@@ -60,6 +60,35 @@ class TestDiagnosticsObject(unittest.TestCase):
         self.assertEqual(d.n_errors, 2)
 
 
+    def test_another_images_entries_are_merged_under_its_name(self):
+        d, other = ExtractionDiagnostics(), ExtractionDiagnostics()
+        other.failed_passes.append(('pass', 'ValueError: x', 'skipped'))
+        other.analysis_failures.append(('C', 'readFrom: dispatch', 'why'))
+        d.merge(other, 'Foo.framework/Foo')
+        self.assertEqual(d.failed_passes, [('Foo.framework/Foo: pass', 'ValueError: x', 'skipped')])
+        self.assertEqual(d.analysis_failures, [('Foo.framework/Foo: C', 'readFrom: dispatch', 'why')])
+        self.assertEqual(d.n_errors, 1)
+
+
+@unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
+class TestTheChecksBeforeExtractionAreKept(unittest.TestCase):
+    """extract_all resets its caches first: what the checks it runs first record (here a
+    failed pass in the foreign-protobuf notice) reaches the run's diagnostics (TODO #134)."""
+
+    def test_kept(self):
+        import proto.extractor as E
+        from proto.models import record_failed_pass
+        ctx, st, cl = _load()
+
+        def failing(ctx_, cl_):
+            record_failed_pass(ctx_, 'foreign-protobuf detection', ValueError('x'), 'no notice')
+        with mock.patch.object(E, '_warn_if_foreign_protobuf', failing), \
+                self.assertLogs('proto.models', 'WARNING'):
+            extract_all(ctx, st, cl)
+        self.assertEqual([p[0] for p in get_diagnostics(ctx).failed_passes],
+                         ['foreign-protobuf detection'])
+
+
 @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
 class TestFailedClassesAreReported(unittest.TestCase):
 

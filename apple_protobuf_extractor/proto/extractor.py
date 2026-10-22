@@ -1189,13 +1189,13 @@ def extract_all(
     standalone executable); a standalone shared library logs a warning instead
     and continues with degraded output.  See :func:`_check_selectors_resolved`.
     """
-    _check_selectors_resolved(ctx, cl)
-    _warn_if_foreign_protobuf(ctx, cl)
-
     # Reset every per-extraction memoisation cache (each one registers itself when it is
     # created: macho.memory._ctx_cache / _ctx_store), so a BinaryContext reused across two
-    # extractions cannot serve stale results.
+    # extractions cannot serve stale results -- first, so what the checks below record (the
+    # diagnostics are such a cache) reaches the run's summary.
     reset_ctx_caches(ctx)
+    _check_selectors_resolved(ctx, cl)
+    _warn_if_foreign_protobuf(ctx, cl)
 
     # Resolve the proto-class set ONCE, up front (memoised on ctx, so the per-class
     # calls below reuse it), then render the structural-detection verdict for the
