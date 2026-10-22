@@ -1,0 +1,96 @@
+"""proto/arm64_eval.py: the faults the 2026-10-22 review found (TODO #131), each on a listing
+whose right answer is plain."""
+import unittest
+from unittest import mock
+
+from macho.disasm import Insn
+import proto.arm64_eval as E
+from proto.arm64_eval import Flow, Objects, _Abort
+
+B = 0x1000
+
+
+def I(a, m, o=''):
+    return Insn(a, m, o, 4, b'\0' * 4)
+
+
+POINTER = 1 << 82
+
+
+def is_pointer(v):
+    return v is not None and POINTER <= v < POINTER + (1 << 56)
+
+
+def pointer(k, off=0):
+    return POINTER + k * (1 << 36) + off
+
+
+class TestFlowReview(unittest.TestCase):
+
+    def test_a_jump_table_arm_starts_a_block(self):
+        """Arm B falls in from arm A: entered at B, x8 is 7 or 5 -- not known."""
+        insns = [I(B, 'mov', 'w8, #7'), I(B + 4, 'br', 'x9'), I(B + 8, 'mov', 'w8, #5'),
+                 I(B + 12, 'add', 'w0, w8, #0'), I(B + 16, 'ret')]
+        f = Flow(None, insns, jump_table_arms={B + 8, B + 12})
+        self.assertIsNone(f.const_before(3, 'x8'))
+
+    def test_a_trap_ends_a_block(self):
+        insns = [I(B, 'cmp', 'w8, #3'), I(B + 4, 'b.hs', '#0x100c'), I(B + 8, 'ret'),
+                 I(B + 12, 'brk', '#0x1'), I(B + 16, 'mov', 'w0, #1'), I(B + 20, 'ret')]
+        self.assertEqual(Flow(None, insns).cfg.succ[B + 12], [])
+
+    def test_evaluate_stops_at_an_authenticated_branch_and_a_trap(self):
+        with mock.patch.object(E, "read_cfstring_text", lambda ctx, va: f"S{va:#x}"):
+            braa = [I(B, 'ldr', 'w8, [x0]'), I(B + 4, 'braaz', 'x16'), I(B + 8, 'mov', 'x1, #0x10'),
+                    I(B + 12, 'ret')]
+            with self.assertRaises(_Abort):
+                Flow(None, braa).evaluate(0, 'x8', 1)
+            brk = [I(B, 'ldr', 'w8, [x0]'), I(B + 4, 'brk', '#0x1'), I(B + 8, 'mov', 'x1, #0x10'),
+                   I(B + 12, 'ret')]
+            self.assertEqual(Flow(None, brk).evaluate(0, 'x8', 1), {})
+
+    def test_a_negative_value_has_its_load_width(self):
+        """ldrsw x8 = -5: cmn x8, #5 is equal (masked to 32 bits it was not)."""
+        with mock.patch.object(E, "read_cfstring_text", lambda ctx, va: f"S{va:#x}"):
+            insns = [I(B, 'ldrsw', 'x8, [x0]'), I(B + 4, 'cmn', 'x8, #5'), I(B + 8, 'b.ne', '#0x1010'),
+                     I(B + 12, 'mov', 'x1, #0x20'), I(B + 16, 'ret')]
+            self.assertEqual(Flow(None, insns).evaluate(0, 'x8', -5), {'x1': 'S0x20'})
+
+    def test_a_known_br_target_off_the_cfg_runs_no_arm(self):
+        insns = [I(B, 'adr', 'x9, #0x1010'), I(B + 4, 'br', 'x9'), I(B + 8, 'bl', '#0x9000'),
+                 I(B + 12, 'ret'), I(B + 16, 'bl', '#0xa000'), I(B + 20, 'ret')]
+        reg = Flow(None, insns, br_arms={B + 4: [B + 8]}).run_from(0, {})
+        self.assertEqual(reg.calls, [])
+        self.assertIn((B + 4, B + 16), reg.br_targets)
+
+    def test_a_frame_store_at_an_unknown_index_clears_the_slots(self):
+        insns = [I(B, 'mov', 'w8, #5'), I(B + 4, 'str', 'w8, [sp, #12]'),
+                 I(B + 8, 'str', 'wzr, [sp, x9, lsl #2]'), I(B + 12, 'ldr', 'w0, [sp, #12]'),
+                 I(B + 16, 'ret')]
+        self.assertIsNone(Flow(None, insns).propagate({}, [4])[4].get('x0'))
+
+    def test_a_copy_has_its_register_width(self):
+        insns = [I(B, 'mov', 'x9, #-1'), I(B + 4, 'mov', 'w8, w9'), I(B + 8, 'ret')]
+        self.assertEqual(Flow(None, insns).const_before(2, 'x8'), 0xFFFFFFFF)
+
+    def test_pointers_are_not_numbers(self):
+        """A loaded pointer may be nil (both sides of cbz / tbnz run); two objects' addresses
+        have no difference; a pointer's bits are not masked as a number's."""
+        loads = {}
+        model = Objects(pointer=is_pointer,
+                        field_value=lambda v, d: loads.setdefault((v, d), pointer(10 + len(loads))))
+        insns = [I(B, 'ldr', 'x8, [x20, #0x10]'), I(B + 4, 'cbz', 'x8, #0x1014'),
+                 I(B + 8, 'tbnz', 'x8, #63, #0x1014'), I(B + 12, 'bl', '#0x9000'), I(B + 16, 'ret'),
+                 I(B + 20, 'bl', '#0xa000'), I(B + 24, 'ret')]
+        reg = Flow(None, insns).run_from(0, {'x20': pointer(0)}, objects=model)
+        self.assertEqual(sorted(c.addr for c in reg.calls), [B + 12, B + 20])
+        arith = [I(B, 'sub', 'x0, x20, x21'), I(B + 4, 'and', 'x1, x20, #0xfffffffffffffff'),
+                 I(B + 8, 'ret')]
+        got = Flow(None, arith).propagate({'x20': pointer(0, 8), 'x21': pointer(1)}, [2],
+                                          objects=model)[2]
+        self.assertNotIn('x0', got)
+        self.assertNotIn('x1', got)
+
+
+if __name__ == "__main__":
+    unittest.main()

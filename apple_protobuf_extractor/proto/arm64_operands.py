@@ -223,6 +223,11 @@ def _is_store(mn: str) -> bool:
     ``stlur``, ``st1``, an LSE store alias ``stadd``, an MTE tag store ``stz2g`` ...) except
     an exclusive store's status (:data:`STORE_EXCLUSIVE`)."""
     return mn.startswith('st') and mn not in STORE_EXCLUSIVE
+
+
+def writes_memory(mn: str) -> bool:
+    """*mn* writes memory: a store (an exclusive one included), an LSE atomic, a compare-and-swap."""
+    return mn.startswith('st') or bool(_LSE_LOAD.match(mn)) or mn.startswith('cas')
 # Instructions that read their destination too: they change only some of its bits (movk, the
 # bitfield inserts, a shift-insert), accumulate into it (multiply-add, shift-right-accumulate,
 # the bitwise selects, a table lookup's extension) or authenticate / sign / strip the pointer

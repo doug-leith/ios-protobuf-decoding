@@ -29,7 +29,7 @@ from macho.strings import read_cfstring_text
 from proto.callees import call_reads, call_clobbers as callee_clobbers, outlined_fragment
 from proto.arm64_operands import (
     ARG_GPRS, CALL_ARG_GPRS, CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES,
-    SIGNED_LOADS, STORE_BYTES, TRAPS, split_ops,
+    SIGNED_LOADS, STORE_BYTES, TRAPS, split_ops, writes_memory,
     reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
     parse_mem, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
     operand2,
@@ -102,19 +102,29 @@ def _signed64(v: int) -> int:
 
 
 def _add_sub(add: bool, a: Optional[int], b: Optional[int]) -> Optional[int]:
-    """``a + b`` / ``a - b`` where either may be a frame address: one plus or minus a number
-    (read as signed 64-bit) is a frame address, the difference of two is a number, and a
-    number minus one -- or the sum of two -- is unknown."""
+    """``a + b`` / ``a - b`` where either may be a frame address or a pointer into an object:
+    one plus or minus a number (read as signed 64-bit) is one too, the difference of two frame
+    addresses is a number; a number minus one, two objects' addresses, or the sum of two
+    frame addresses are unknown."""
     if a is None or b is None:
         return None
     sa, sb = _is_stack(a), _is_stack(b)
     if sa and sb:
         return None if add else a - b
-    if sb:
-        return b + _signed64(a) if add and not _is_symbolic(a) else None
-    if sa:
+    syma, symb = _is_symbolic(a), _is_symbolic(b)
+    if syma and symb:
+        return None
+    if symb:
+        return b + _signed64(a) if add else None
+    if syma:
         b = _signed64(b)
     return a + b if add else a - b
+
+
+def _frame_based(m: "_Machine", mem: str) -> bool:
+    """A memory operand whose base register holds a frame address."""
+    pm = parse_mem(mem)
+    return pm is not None and pm.base is not None and _is_stack(m.get(pm.base))
 
 
 def _flag_operands(a: Optional[int], b: Optional[int], subtract: bool = True
@@ -361,9 +371,14 @@ class _Machine:
         self.flags = None
         self._clobber_slots(self.handed, self.handed_lo)
 
-    def store(self, addr: Optional[int], size: int, v: Optional[int]) -> None:
+    def store(self, addr: Optional[int], size: int, v: Optional[int],
+              in_frame: bool = False) -> None:
+        """A store of *v* at *addr*; *in_frame*: its base is a frame address (an unknown index
+        or an unmodelled form leaves *addr* None: any slot may be written)."""
         if not _is_stack(addr):
-            if addr is None:
+            if addr is None and in_frame:
+                self.slots.clear()
+            elif addr is None:
                 self._clobber_slots(self.escaped, self.escape_lo)
             elif _is_stack(v):
                 self._hand(v)                   # stored where a callee may find it
@@ -502,7 +517,7 @@ class Flow:
         if br_arms is not None:
             self.cfg = build_blocks_with_br_arms(insns, br_arms)
         else:
-            self.cfg = build_blocks(insns, ())
+            self.cfg = build_blocks(insns, tuple(jump_table_arms))   # an arm enters at itself
             inject_arm_edges(self.cfg, tuple(jump_table_arms))
         self._block_of: Dict[int, int] = {}          # insn index -> block leader address
         self._first_in_block: Dict[int, int] = {}    # block leader -> index of its first insn
@@ -640,7 +655,8 @@ class Flow:
                 v = _parse_imm(ops[1])
                 return None if v is None else v & reg_mask(ops[0])
             r = _norm_reg(ops[1])
-            return self.const_before(d, r) if r else None
+            v = self.const_before(d, r) if r else None
+            return None if v is None else v & reg_mask(ops[0])
         if mn == 'movn' and len(ops) >= 2:
             v = _parse_imm(ops[1])
             sh = _parse_imm(ops[2]) if len(ops) > 2 else 0
@@ -860,7 +876,10 @@ class Flow:
         ``__TEXT,__cstring`` (standalone binaries' name tables).  Which register carries the
         NAME is decided by the caller: the one whose text varies with the value.  *where*, when
         given, receives the index of the call / return the run stopped at."""
-        m = _Machine({dest: value & 0xFFFFFFFF if value < 0 else value},
+        # a negative value as the register holds it: the root load's width (ldrsw x8: 64 bits)
+        width = split_ops(self.insns[root].op_str)[0] if root >= 0 and self.insns[root].op_str \
+            else 'x0'
+        m = _Machine({dest: value & reg_mask(width)},
                      fallback=lambda r: self.const_before(root, r))
         if root < 0:
             m.put('sp', _STACK_TOP)               # from the entry the frame is the function's
@@ -897,8 +916,10 @@ class Flow:
                         where.append(k)
                     return self._string_args(m.get, direct)   # a tail call out of the function
                 nxt = jump(target)
-            elif mn == 'br' and len(ops) == 1:
-                nxt = jump(m.get(ops[0]))
+            elif mn in INDIRECT_BRANCHES and ops:
+                nxt = jump(m.get(ops[0]))          # (an authenticated one: its register's target)
+            elif mn in TRAPS:
+                return {}                          # the path ends: no string reaches a call
             elif is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
                 taken, target = self._branch(m, ins)
                 if taken is None:
@@ -981,7 +1002,7 @@ class Flow:
             elif mn in CALLS and (clobbers := self.call_clobbers(
                     k, self._call_target(m, ins), evaluated=True)) is not None:
                 m.call((), clobbers)
-            elif mn in CALLS or mn in INDIRECT_BRANCHES or mn in RETURNS:
+            elif mn in CALLS or mn in INDIRECT_BRANCHES or mn in RETURNS or mn in TRAPS:
                 return None
             else:
                 self._exec(m, ins)
@@ -997,12 +1018,16 @@ class Flow:
             return (None if m.flags is None else _eval_cond(mn[2:], m.flags)), target
         if mn in ('cbz', 'cbnz') and len(ops) == 2:
             v = m.get(ops[0])
+            if v is not None and _is_symbolic(v) and not _is_stack(v):
+                v = None                            # a pointer into an object may be nil
             return (None if v is None else (v == 0) == (mn == 'cbz')), _parse_imm(ops[1])
         if mn in ('tbz', 'tbnz') and len(ops) == 3:
             v = m.get(ops[0])
             bit = _parse_imm(ops[1]) or 0
             if _is_stack(v):                        # only the alignment bits are the frame's
                 v = v - _STACK_TOP if bit < 4 else None
+            elif v is not None and _is_symbolic(v):
+                v = None                            # (a pointer's bits are its encoding's)
             return (None if v is None else (((v >> bit) & 1) == 0) == (mn == 'tbz')), _parse_imm(ops[2])
         return None, None
 
@@ -1068,6 +1093,8 @@ class Flow:
                 if mn == 'ands':
                     m.flags = None
                 return
+            if _is_symbolic(a):                    # a pointer's bits are not a number's
+                a = None
             r = None if a is None or b is None else \
                 {'and': a & b, 'ands': a & b, 'orr': a | b, 'eor': a ^ b}[mn]
             put(ops[0], r)
@@ -1113,15 +1140,20 @@ class Flow:
             put(ops[1], self._read(m, None if addr is None else addr + size, size, mn == 'ldpsw'))
         elif mn in STORE_BYTES and len(ops) in (2, 3):
             v = m.copy_of(ops[0])                   # a spill is a copy (opaque values survive)
+            in_frame = _frame_based(m, ops[1])
             addr = self._access(m, ops[1], ops[2] if len(ops) == 3 else None)
-            m.store(addr, STORE_BYTES[mn] or reg_bytes(ops[0]), v)
+            m.store(addr, STORE_BYTES[mn] or reg_bytes(ops[0]), v, in_frame)
         elif mn == 'stp' and len(ops) in (3, 4):
             v0, v1 = m.copy_of(ops[0]), m.copy_of(ops[1])
+            in_frame = _frame_based(m, ops[2])
             addr = self._access(m, ops[2], ops[3] if len(ops) == 4 else None)
             size = reg_bytes(ops[0])
-            m.store(addr, size, v0)
-            m.store(None if addr is None else addr + size, size, v1)
+            m.store(addr, size, v0, in_frame)
+            m.store(None if addr is None else addr + size, size, v1, in_frame)
         else:
+            if writes_memory(mn):                   # an unmodelled store (stnp, st1, stlr, an
+                mem = next((o for o in ops if o.startswith('[')), None)   # LSE atomic ...)
+                m.store(None, 16, None, mem is not None and _frame_based(m, mem))
             for r in writes(ins):
                 put(r, None)
             if mn in _FLAG_SETTERS:                 # an unmodelled flag-setter, or form of one
@@ -1392,8 +1424,10 @@ class Flow:
         last = self.cfg.blocks[blk][-1]
         if last.mnemonic == 'br':
             v = m.get(split_ops(last.op_str)[0]) if last.op_str else None
-            b = self.cfg.addr_to_block.get(v) if v is not None else None
-            return [b] if b in succ else list(succ)
+            if v is None or _is_symbolic(v):
+                return list(succ)
+            b = self.cfg.addr_to_block.get(v)      # a known target the CFG lacks: no edge here
+            return [b] if b in succ else []        # (run_from reports it in br_targets)
         taken, target = self._branch(m, last)
         if taken is None:
             return list(succ)

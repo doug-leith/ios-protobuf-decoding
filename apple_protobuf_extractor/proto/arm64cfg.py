@@ -6,9 +6,12 @@ dominators, and operand helpers.  They carry no writeTo: or readFrom: meaning an
 on decoded ``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
 """
 
-from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS as TERMINALS
+from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS
 from proto.arm64_operands import split_ops, parse_mem
-from proto.arm64_operands import CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES
+from proto.arm64_operands import CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES, TRAPS
+
+# a block that ends here has no successor: a return, or a trap (brk / udf / hlt)
+TERMINALS = _STOP_MNEMONICS | TRAPS
 
 
 def _is_cond(mn: str) -> bool:
