@@ -1,7 +1,6 @@
 """proto/config — pure extraction-settings helpers.
 
-Carved from proto.extractor (#11 split, step 5a): the ObjC class-prefix stripper and
-the enum-fallback debug sink.  Both knobs are threaded as **explicit parameters** from
+The ObjC class-prefix stripper and the enum-fallback debug sink.  Both knobs are threaded as **explicit parameters** from
 the public entry points (``extract_all(prefixes=…, enum_debug_writer=…)`` →
 ``extract_proto_message`` → ``_collect_enum_definitions``); there is no module-level
 mutable state.  When a caller omits a value, the prefix stripper falls back to the

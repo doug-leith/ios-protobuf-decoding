@@ -437,17 +437,9 @@ def _parse_methods(
     if entsize == 0:
         return []
 
-    # A real ObjC class never comes remotely close to _MAX_METHODS methods —
-    # the cap exists purely as a corrupt-input backstop (mirrors the
-    # [cap:INPUT-SANITY] pattern elsewhere in this codebase).  A raw count that
-    # already exceeds it before clamping is not a large-but-real class; it is
-    # the signature of a misdecoded ``baseMethods`` pointer (observed on an
-    # arm64e cache: a cache-build-time category-attachment slot that
-    # BinaryContext/DyldCacheReader's pointer decoder doesn't yet understand,
-    # landing on unrelated memory that happens to be mapped).  Parsing
-    # _MAX_METHODS entries from that memory would silently manufacture ~10000
-    # garbage ObjcMethod records (mostly unnamed) that could pollute
-    # get_method() lookups elsewhere; returning no methods is honest and safe.
+    # A real class has far fewer than _MAX_METHODS methods ([cap:INPUT-SANITY]): a count past
+    # it is a misdecoded ``baseMethods`` pointer landing on unrelated mapped memory, whose
+    # entries would be thousands of garbage methods -- the class gets none, warned.
     if count >= _MAX_METHODS:
         log.warning("method list at %#x claims %d methods (more than %d): taken as a misdecoded "
                     "pointer, the class gets no methods", list_va, count, _MAX_METHODS)

@@ -672,7 +672,7 @@ def _decode_message_numbers_oracle(ctx, va):
             reg, k = m.group(1), int(m.group(2), 0)
             if reg in sub_lo and any(n.mnemonic == "br" for n in insns[i:i + 8]):
                 nums.update(range(sub_lo[reg], sub_lo[reg] + k + 1))
-            elif reg in ("x0", "w0", "x16", "w16") and 1 <= k <= S._MAX_FIELD_NUMBER:
+            elif reg in ("x0", "w0", "x16", "w16") and 1 <= k <= S.MAX_FIELD_NUMBER:
                 nums.add(k)
     return nums
 

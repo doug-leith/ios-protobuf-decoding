@@ -77,14 +77,13 @@ from proto.callees import callee_name
 from proto.dispatch import listing_flow
 from proto.function_body import FunctionBody, _branch_target, function_body
 from proto.arm64_operands import CALLS, parse_mem, split_ops, writes
-from proto.models import record_analysis_failure, record_heuristic_hit
+from proto.models import MAX_FIELD_NUMBER, record_analysis_failure, record_heuristic_hit
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
 
 log = logging.getLogger(__name__)
 
-_MAX_FIELD_NUMBER = 0x1FFFFFFF        # proto field numbers are 29-bit
 # [cap:INPUT-SANITY] the largest (Int, _NameDescription) element stride tried while deriving a
 # static name-map array's stride (the description is a few words in every swift-protobuf version;
 # 0x38 in the oracle fixtures' SwiftProtobuf: _NameDescription is 41 bytes, 8-aligned).
@@ -304,7 +303,7 @@ def _static_entry(ctx: BinaryContext, blob_va: int, off: int,
     if enum:
         if not -(1 << 31) <= num < (1 << 31):
             return None
-    elif not 1 <= num <= _MAX_FIELD_NUMBER:
+    elif not 1 <= num <= MAX_FIELD_NUMBER:
         return None
     nm = _cstr(ctx, _name_ptr(ctx, blob_va + off + 8))
     if not nm or ln != len(nm) or (enum and not _IDENT_RE.match(nm)):
@@ -515,7 +514,7 @@ def _table_entries(ctx: BinaryContext, insns, enum: bool, entry: Optional[Dict[s
             v = v - (1 << s.bits) if v >> (s.bits - 1) else v
             if -(1 << 31) <= v < (1 << 31):
                 numbers[a] = v
-        elif 1 <= v <= _MAX_FIELD_NUMBER:
+        elif 1 <= v <= MAX_FIELD_NUMBER:
             numbers[a] = v
     pairs = []
     for (atoms, off), s in at.items():
@@ -825,14 +824,14 @@ def _traverse_visits(ctx: BinaryContext, traverse_va: int) -> List[Tuple[int, Op
             dst, _, src = ins.op_str.partition(",")
             dst = dst.strip()
             v = _parse_imm(src)
-            if v is not None and dst.startswith("w") and 1 <= v <= _MAX_FIELD_NUMBER:
+            if v is not None and dst.startswith("w") and 1 <= v <= MAX_FIELD_NUMBER:
                 pend[dst] = v
         elif m in CALLS:
             visit = _visit_method(ctx, flow, k)
             if visit is not None:
                 reg = _visit_number_register(*visit)
                 v = at_call.get(k, {}).get(reg) if reg else None
-                if v is not None and 1 <= v <= _MAX_FIELD_NUMBER:
+                if v is not None and 1 <= v <= MAX_FIELD_NUMBER:
                     scalar = _VISIT_SCALARS.get(visit[1])
                     typ = None if scalar is None else \
                         scalar if visit[0] == "Singular" else f"repeated {scalar}"

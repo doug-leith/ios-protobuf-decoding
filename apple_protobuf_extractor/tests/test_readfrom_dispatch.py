@@ -368,7 +368,7 @@ class TestReadFromDispatchLive(unittest.TestCase):
         # Number is whatever the confirmation pass decided — the lever did not
         # override it with the dispatch index.
         imn = {m.name for m in cls.methods if m.name}
-        fivars = [iv for iv in cls.ivars if _is_real_field_ivar(iv, imn)]
+        fivars = [iv for iv in cls.ivars if _is_real_field_ivar(iv)]
         conf = _confirm_field_numbers(self.ctx, cls, fivars, imn).confirmed_numbers
         self.assertEqual(fld.number, conf['_externalActionDetails'])
 

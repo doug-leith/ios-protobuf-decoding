@@ -79,7 +79,7 @@ def _enum_ctx(code, *, strings=None, slots=None, ptrs=None, tables=None, base=0x
 def _harvest(ctx, base, ivars):
     from proto.enums import _harvest_dictrep
     return _harvest_dictrep(
-        ctx, _FakeCls(base, [_FakeIvar(n, o) for n, o in ivars]), None)[0]
+        ctx, _FakeCls(base, [_FakeIvar(n, o) for n, o in ivars]))[0]
 
 
 # CFString / table addresses used by the synthetic code below
@@ -296,7 +296,7 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
                 for c in self.CHAIN]
         ctx, _ = _enum_ctx(code, strings=self.NAMES, slots={0x5040: 24})
         enums, incomplete, unevaluated = _harvest_dictrep(
-            ctx, _FakeCls(0x1000, [_FakeIvar('_kind', 24)]), None)
+            ctx, _FakeCls(0x1000, [_FakeIvar('_kind', 24)]))
         self.assertEqual(sorted(enums), [24])
         self.assertEqual(list(incomplete), [24])
         self.assertEqual(unevaluated, {})
@@ -463,7 +463,7 @@ class TestInlinedDictRepEnumsLive(unittest.TestCase):
         from proto.protocore import _proto_name
         c = self.by_name[class_name]
         if class_name not in self._harvest_cache:
-            self._harvest_cache[class_name] = _harvest_dictrep(self.ctx, c, self.st)[0]
+            self._harvest_cache[class_name] = _harvest_dictrep(self.ctx, c)[0]
         off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}[field]
         return self._harvest_cache[class_name].get(off, [])
 

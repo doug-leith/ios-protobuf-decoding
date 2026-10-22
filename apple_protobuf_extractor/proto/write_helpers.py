@@ -51,26 +51,12 @@ def _identify_string_write_helpers(
     ctx: BinaryContext,
     cl: 'ClassList',
 ) -> Set[int]:
-    """
-    Binary-wide pre-pass: return the set of write-helper VMAs used for
-    ``@"NSString"`` / ``@"NSMutableString"`` ivars.
-
-    Apple's proto runtime uses **different** write-helper functions for string
-    fields vs. message fields.  By finding the helper address for at least one
-    known-string ivar (a singular ``@"NSString"`` typed field in any proto
-    class), we obtain the string-helper address.  All proto classes in the same
-    binary share the same set of write helpers, so one example suffices.
-
-    The result is consumed by :func:`proto.extractor.extract_proto_message` to
-    reclassify ``repeated NSArray`` fields that resolved to ``"bytes"`` but whose
-    ``writeTo:`` write-helper matches the string helper → ``"string"``.
-
-    This is the primary fix for fields such as ``GEOPDComponent.versionDomains``
-    (no ``+versionDomainType`` metaclass method exists) and
-    ``GEOPDPlaceResponse.displayLanguages`` / ``spokenLanguages`` (the
-    ``+xyzType`` method returns NSString, an external class not in the
-    binary-local classlist).
-    """
+    """The write helpers (their real targets) the image's ``@"NSString"`` /
+    ``@"NSMutableString"`` ivars are written with -- the runtime writes a string field with
+    another helper than a message field, and every proto class of an image shares them, so one
+    string ivar suffices.  A repeated NSArray field whose ``writeTo:`` helper is one of them is
+    ``repeated string`` (:func:`proto.repeated._resolve_repeated_field_type`), where no
+    metaclass ``+xyzType`` names its element (``GEOPDComponent.versionDomains``)."""
     # The writeTo: bindings need the binary-wide pre-pass on ctx; ensure it exists so a
     # standalone caller (one that builds this set before extract_all has run)
     # gets real helpers instead of an empty set.
@@ -221,35 +207,22 @@ def _family_from_import(ctx: BinaryContext, va: int) -> Optional[str]:
 
 
 def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:
-    """Classify a ``writeTo:`` field-write helper by the proto *wire-type family* it
-    encodes: ``"sint32"``, ``"sint64"``, ``"fixed32"``, ``"fixed64"``, ``"int32"`` /
-    ``"uint32"`` (a plain varint of a 32-bit value, by how it is widened), ``"plain"`` (a
-    varint read as such, or a
-    non-int writer: no refinement), or ``"unknown"`` (no helper, or one whose encoding
-    neither its code nor its import name shows: the field is flagged).
+    """Classify a ``writeTo:`` field-write helper by the proto *wire-type family* it encodes:
+    ``"sint32"``, ``"sint64"``, ``"fixed32"``, ``"fixed64"``, ``"int32"`` / ``"uint32"`` (a plain
+    varint of a 32-bit value, by how it is widened), ``"plain"`` (a varint read as such, or a
+    non-int writer: no refinement), or ``"unknown"`` (no helper, or one whose encoding neither
+    its code nor its import name shows: the field is flagged).  An ivar's ``@encode`` records
+    only its width, so int32 / uint32 / sint32 / [s]fixed32 look alike there; the helper selects
+    the wire form.
 
-    Why this exists (TODO #38/#44): ivar ``@encode`` only records storage width, so
-    ``int32``/``uint32``/``sint32``/``[s]fixed32`` all collapse to the canonical
-    ``int32`` default (:func:`proto.protocore._type_from_enc`).  The **helper** a
-    field's ``writeTo:`` calls selects the actual wire form, and the writeTo CFG
-    bindings already capture it per ivar (``WriteBindings.helpers``) — so this is a cheap
-    post-pass, mirroring the string-helper reclassification
-    (:func:`_find_string_write_helper`).
-
-    Mechanism -- by evaluation, no hardcoded VA and no instruction idiom: follow the stub
-    to the real helper (:func:`proto.callees.real_target`: GeoServices' ``0x18dbda*``
-    helpers are ``adrp x16 ; add x16 ; br x16`` stubs into ProtocolBuffer.framework, and the
-    iOS 27 / macOS 27 caches add a per-callsite arm64e stub island) and run it with probe
-    arguments (:func:`_family_by_evaluation`): the tag it computes gives the wire type, the
-    zigzag of the value a sint, the widening of a 32-bit value int32 / uint32 (confirmed: PB
-    ``0x1a47b2dd0`` = sint32, ``0x1a47b2ee4`` = sint64, ``0x1a47ae8cc`` int32, ``0x1a47af658``
-    uint32).  fixed32 / fixed64 are shared with float / double, but those ivars decode to
-    float / double and never reach this int-only caller, so they always mean an integer
-    field -- sfixed vs. fixed is then picked from the ivar sign, as int32 vs. uint32.
-
-    In standalone ``--binary`` mode the helper is an import stub into ProtocolBuffer.framework,
-    whose code is not in the binary; the stub's bound name names the writer
-    (:func:`_family_from_import`).  Memoised on ``ctx``."""
+    By evaluation: the stub followed to the real helper (:func:`proto.callees.real_target`) and
+    run with probe arguments (:func:`_family_by_evaluation`): the tag it computes gives the wire
+    type, the zigzag of the value a sint, the widening of a 32-bit value int32 / uint32.
+    fixed32 / fixed64 are shared with float / double, whose ivars never reach this int-only
+    caller, so they mean an integer field -- sfixed vs. fixed picked from the ivar sign.  In
+    ``--binary`` mode the helper is an import stub into ProtocolBuffer.framework, its code not in
+    the binary: the stub's bound name names the writer (:func:`_family_from_import`).  Memoised
+    on ``ctx``."""
     if not helper_va:
         return "unknown"
     cache = _ctx_cache(ctx, "_writeto_helper_family", dict)

@@ -1,6 +1,6 @@
 """proto/protoclass_set — the set of proto message class names of one image.
 
-Carved from proto.extractor.  A class is a proto message if its superclass chain reaches a
+A class is a proto message if its superclass chain reaches a
 PBCodable root by NAME (anchor 1, structural), or -- retired, hard-failing heuristics -- by
 the VA-cluster closure / the per-class score (see proto.protoclass_heuristic).  Also stamps
 the inheritance and "claimed only by a heuristic" sets on ``ctx`` for the emitter.

@@ -19,15 +19,13 @@ Pipeline:
         - resolves to a bind import (external)  -> the import symbol name, demangled
           (``_$ss5Int32VMn`` -> Int32, ``_$s10Foundation4DataVMn`` -> Data, …)
 
-The Swift type maps 1:1 to the proto BASE type.  The varint/zigzag/fixed encoding
-nuance (int32 vs sint32 vs sfixed32, all ``Int32`` in Swift) is NOT distinguished
-here — that needs the decodeMessage/traverse witness slot and is a follow-up; the
-base type (and therefore the wire-type category) is correct.  (Swift's residual
-type/number estimates are catalogued in LIMITATIONS.md (10); the integer-subtype
-collapse specifically is 10b / to-do #63b — DEFERRED, unexercised by the data.)
+The Swift type maps 1:1 to the proto BASE type: the encoding (int32 / sint32 / sfixed32, all
+``Int32`` in Swift) is not here.  A field's type comes from the message's own code
+(:mod:`serializers.swift_message_code`, TODO #129); these are the last resort, a field joined
+to the property of its NAME, reported (``swift-name-join``; LIMITATIONS.md (10)).
 
-Returns ``{type_name: {field_name: proto_type}}`` so a caller can join by field
-NAME against the nameMap (number↔name).  Binary mode only.
+Returns ``{type_name: {field_name: proto_type}}`` so a caller can join by field NAME against
+the nameMap (number↔name).
 """
 from __future__ import annotations
 
@@ -450,9 +448,6 @@ def decode_mangled(ctx, va):
     for code, proto in _DIRECT.items():
         if txt == code or txt == code + "Sg":
             return proto, ""
-    # bare String optional etc.
-    if txt in ("SSSg",):
-        return "string", ""
     return None, ""
 
 

@@ -1,29 +1,7 @@
-"""
-macho/cache_classlist.py
-========================
-Proof-of-concept: read ObjC class names directly from the dyld shared cache
-without going through an ipsw-extracted binary.
-
-Core validation question
-------------------------
-Can we walk the ObjC pointer chain
-
-    __objc_classlist entry → class_t → class_ro_t → name cstring
-
-using only ``DyldCacheReader.read_u64`` / ``read_cstring``?
-
-Key finding (June 2026, arm64 GeoServices cache)
--------------------------------------------------
-For caches with ``builtFromChainedFixups = 0`` (the common non-chained iOS
-format), all DATA-section pointers are stored as absolute cache vmaddrs in the
-range 0x180000000–0x22ace8000 — well under the 36-bit (0xFFFFFFFFF) threshold
-where ``BinaryContext._decode_packed_ptr`` would strip metadata bits.  They
-therefore round-trip through ``read_u64`` without transformation.
-
-The only decode step required is masking the three least-significant tag bits
-on ``class_t.data`` (offset 32), which the ObjC runtime uses for
-isSwift/fastAlloc/realised flags.  The resulting address is the ``class_ro_t``
-pointer.
+"""macho/cache_classlist.py -- ObjC class names read straight from a dyld shared cache, with no
+extracted binary: ``__objc_classlist`` entry -> ``class_t`` -> ``class_ro_t`` -> name, each
+pointer decoded by :meth:`DyldCacheReader.decode_ptr` (the cache's slide info) and
+``class_t.data``'s low three tag bits (isSwift / fastAlloc / realised) masked off.
 
 Struct offsets (arm64 ObjC ABI, verified against Hopper-loaded GeoServices)
 -----------------------------------------------------------------------------
@@ -43,16 +21,6 @@ class_ro_t:
   [24]  name         u64 → const char*  ← class name in __TEXT/__objc_classname
   [32]  baseMethods  u64 → method_list_t*
   ...
-
-Ground-truth addresses (Hopper-verified, June 2026)
-----------------------------------------------------
-  _OBJC_CLASS_$_GEOPDPlaceRequest   class_t  0x1e1de3be8  (in __DATA_DIRTY)
-  __OBJC_CLASS_RO_$_GEOPDPlaceRequest class_ro_t 0x1d6050c28  (in __DATA_CONST)
-  "GEOPDPlaceRequest"                name str 0x18d97f901  (in __TEXT/__objc_classname)
-
-  _OBJC_CLASS_$_GEOPDPlaceResponse  class_t  0x1e1de3d28
-  __OBJC_CLASS_RO_$_GEOPDPlaceResponse class_ro_t 0x1d6050cb8
-  "GEOPDPlaceResponse"               name str 0x18d97f94c
 """
 
 from __future__ import annotations
@@ -66,11 +34,7 @@ from macho.objc_abi import CLASS_T_DATA, CLASS_T_SUPERCLASS, CLASS_RO_NAME, FAST
 # ── Pointer decoding ──────────────────────────────────────────────────────────
 
 def _decode_cache_ptr(reader: DyldCacheReader, raw: int) -> int:
-    """Decode a raw DATA-section pointer from the cache to a valid vmaddr.
-
-    Thin wrapper around :meth:`DyldCacheReader.decode_ptr`.  Kept for
-    backward compatibility with callers that import this function directly.
-    """
+    """A raw DATA-section pointer of the cache as a vmaddr (:meth:`DyldCacheReader.decode_ptr`)."""
     return reader.decode_ptr(raw)
 
 

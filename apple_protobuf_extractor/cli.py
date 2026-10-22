@@ -40,11 +40,9 @@ it picks a safe canonical default.  Specifically:
      tie-breaker is the ivar's signed/unsigned @encode, and Apple often uses a signed
      ivar even for uint32.  The tool emits a canonical default (signed int32 / int64,
      or uint where the ivar is explicitly unsigned); if you know a field is really
-     uint32, adjust it by hand — the wire type is already correct.  (NOTE: sint32/sint64
-     (zigzag) and the fixed32/fixed64/sfixed* family use DISTINCT wire encodings and
-     distinct serializer helpers, so they ARE distinguishable in principle from the
-     code — the tool does not yet emit them and currently shows them as int32 (a
-     to-do).  bool, float, double, string, bytes, messages and enums are unaffected.)
+     uint32, adjust it by hand — the wire type is already correct.  (sint32/sint64
+     (zigzag) and fixed32/fixed64/sfixed* have their own encodings and write helpers:
+     those are read off the code and emitted.)
 
   2. ESTIMATES ARE ALWAYS MARKED.  When a field NUMBER or TYPE is inferred by a
      heuristic rather than read directly from the class's writeTo:/readFrom: code, the
@@ -116,8 +114,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Framework (or dylib) name to extract directly from the dyld "
-            "shared cache.  Requires --cache.  Matched as a case-sensitive "
-            "substring against the image paths embedded in the cache "
+            "shared cache.  Requires --cache.  Matched against the image paths "
+            "in the cache: the full path, else the framework of that name "
+            "(.../NAME.framework/NAME), else a unique substring "
             "(e.g. 'GeoServices', 'Foundation', 'libobjc.A.dylib').  "
             "No binary file is needed."
         ),

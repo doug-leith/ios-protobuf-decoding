@@ -38,8 +38,7 @@ _ARTIFACTS = [
 
 
 def _field_ivars(cls):
-    names = {m.name for m in cls.methods if m.name}
-    return [iv for iv in cls.ivars if _is_real_field_ivar(iv, names)]
+    return [iv for iv in cls.ivars if _is_real_field_ivar(iv)]
 
 
 def _bindings(ctx, cl):

@@ -121,7 +121,7 @@ def _gather_type_compatible_methods(
             max_v = _xasstring_gate_span(ctx, m.imp)
             entry["field_count"] = max_v
             if 1 <= max_v <= 512:
-                pairs_sample, _, _ = _extract_enum_values(ctx, m.imp, None)
+                pairs_sample, _, _ = _extract_enum_values(ctx, m.imp)
                 entry["pairs_count"]   = len(pairs_sample)
                 entry["sample_values"] = [v for _, v in pairs_sample[:6]]
                 if pairs_sample:
@@ -146,8 +146,8 @@ def _emit_mode_a_debug(ctx: BinaryContext, cls: ObjcClass, st: StringTable,
     """Mode-A enum-fallback diagnostic: a scalar int ivar got no ENUM: tag, but its
     ``xAsString:``/``StringAsX:`` selector DOES exist in ``__objc_methname`` — positive
     evidence the field should be an enum but wasn't detected for this class. Emits only
-    when that selector exists (keeps the debug file to actionable misses). Carved from
-    :func:`proto.extractor.extract_proto_message`; only runs under ``--debug-enums``."""
+    when that selector exists (keeps the debug file to actionable misses); only runs under
+    ``--debug-enums``."""
     pname_a = _proto_name(ivar.name)
     cap_a   = pname_a[0].upper() + pname_a[1:] if pname_a else ""
     xas_a   = f"{pname_a}AsString:"
@@ -224,7 +224,7 @@ def _emit_mode_c_debug(ctx: BinaryContext, cls: ObjcClass, fld: ProtoField,
             fc = _xasstring_gate_span(ctx, mc.imp)
             if fc < 2:
                 continue
-            _cand_pairs, _cand_conf, _cand_trunc = _extract_enum_values(ctx, mc.imp, st)
+            _cand_pairs, _cand_conf, _cand_trunc = _extract_enum_values(ctx, mc.imp)
             _cand_derived = (_enum_name_from_pairs(_cand_pairs, "\x00")
                              if _cand_pairs else "\x00")
             candidates_info.append({

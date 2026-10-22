@@ -856,7 +856,7 @@ def extract_proto_message(
     # to-do #35 (full fix = the readFrom CFG/dominator resolver, #42).
     field_ivars: List[ObjcIvar] = [
         iv for iv in cls.ivars
-        if _is_real_field_ivar(iv, instance_method_names)
+        if _is_real_field_ivar(iv)
     ]
     if not field_ivars:
         log.debug("No field ivars found for %s", cls.name)
@@ -904,7 +904,7 @@ def extract_proto_message(
         if not pname:
             continue
 
-        label   = _field_label(ivar, instance_method_names)
+        label   = _field_label(ivar)
         type_name, type_class = _type_from_enc(
             ivar.type_enc, ivar.name, instance_method_names
         )
@@ -1249,8 +1249,6 @@ def extract_all(
             # are never raised by binary-data processing, only by broken code.
             # (ProtoClassDetectionError cannot reach here: the whole-image verdict is
             # rendered by the pre-pass above, before this loop starts.)
-            raise
-        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             # One bad class must not abort the whole run, but a failure here is

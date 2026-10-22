@@ -483,12 +483,11 @@ class CallSite:
 class Region:
     """What :meth:`Flow.run_from` reached: blocks in first-visit order, the calls, the known
     target of every ``br`` met (a caller can add the ones that are not yet CFG edges and run
-    again), and the ``br`` instructions whose target was not known."""
+    again)."""
     order: List[int] = field(default_factory=list)
     blocks: Set[int] = field(default_factory=set)
     calls: List[CallSite] = field(default_factory=list)
     br_targets: Set[Tuple[int, int]] = field(default_factory=set)     # (br address, target)
-    unresolved_br: List[int] = field(default_factory=list)
 
 
 class RegMap(dict):
@@ -1550,9 +1549,7 @@ class Flow:
             last = cfg.blocks[blk][-1]
             if record and last.mnemonic == 'br':
                 v = self._call_target(st, last)
-                if v is None:
-                    region.unresolved_br.append(last.addr)
-                else:
+                if v is not None:
                     region.br_targets.add((last.addr, v))
 
         # The partial first block runs once; its successors seed the fixpoint.

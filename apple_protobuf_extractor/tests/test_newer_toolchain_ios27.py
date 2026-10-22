@@ -227,7 +227,7 @@ class TestIos27Live(unittest.TestCase):
         from proto.enums import _extract_enum_values
         m = next(c for c in self.cl if c.name == "GEOLogMsgEventNetwork" and not c.is_meta)
         imp = m.get_method("networkServiceAsString:").imp
-        pairs, _confirmed, _trunc = _extract_enum_values(self.ctx, imp, self.st)
+        pairs, _confirmed, _trunc = _extract_enum_values(self.ctx, imp)
         self.assertEqual([v for v, _ in pairs], [v for v in range(29) if v != 15])
 
     def test_component_type_is_the_enum_not_int32(self):

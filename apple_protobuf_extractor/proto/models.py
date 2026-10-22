@@ -129,6 +129,9 @@ class FieldLabel(str, Enum):
     REQUIRED = "required"
 
 
+#: The largest protobuf field number (29 bits).
+MAX_FIELD_NUMBER = (1 << 29) - 1
+
 # Scalar types that protobuf can encode packed (and an enum): the only ones a
 # ``repeated_field_encoding`` feature may be set on.
 PACKABLE_SCALARS = frozenset((

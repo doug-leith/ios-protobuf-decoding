@@ -97,7 +97,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         from proto.enums import _harvest_dictrep
         ctx = self._build_ctx()
         cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
-        result = _harvest_dictrep(ctx, cls, None)[0]
+        result = _harvest_dictrep(ctx, cls)[0]
         self.assertEqual(result, {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')],
         })
@@ -108,7 +108,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         from proto.enums import _harvest_dictrep
         ctx = self._build_ctx()
         cls = _FakeCls(self.BASE, [_FakeIvar('_otherField', 999)])
-        self.assertEqual(_harvest_dictrep(ctx, cls, None)[0], {})
+        self.assertEqual(_harvest_dictrep(ctx, cls)[0], {})
 
     def _ctx_without(self, drop_prefixes, strings):
         code = [c for c in self.CODE if not c.startswith(drop_prefixes)]
@@ -126,7 +126,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         ctx = self._ctx_without(('adrp x2,', 'add x2, x2,'),
                                 {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'})
         cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
-        self.assertEqual(_harvest_dictrep(ctx, cls, None)[0], {
+        self.assertEqual(_harvest_dictrep(ctx, cls)[0], {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')]})
 
     def test_a_single_name_with_nothing_to_vary_against_is_not_an_enum(self):
@@ -142,7 +142,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
         ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO'}
         cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
-        self.assertNotIn(self.IVAR_OFFSET, _harvest_dictrep(ctx, cls, None)[0])
+        self.assertNotIn(self.IVAR_OFFSET, _harvest_dictrep(ctx, cls)[0])
 
     def test_values_without_a_name_may_simply_skip_the_dictionary_call(self):
         # Older compilers emit no "(unknown: %i)": a value with no name jumps over the call.
@@ -155,7 +155,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
         ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'}
         cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
-        self.assertEqual(_harvest_dictrep(ctx, cls, None)[0], {
+        self.assertEqual(_harvest_dictrep(ctx, cls)[0], {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')]})
 
 
@@ -215,7 +215,7 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
 
     def test_each_out_of_line_chain_goes_to_its_own_field(self):
         from proto.enums import _harvest_dictrep
-        result = _harvest_dictrep(self._ctx(), self._cls(), None)[0]
+        result = _harvest_dictrep(self._ctx(), self._cls())[0]
         self.assertEqual(result, {
             self.OFF_STATUS: [(1, 'TEST_STATUS_FAILED'),
                               (5, 'TEST_STATUS_INVALID'),
@@ -225,7 +225,7 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
 
     def test_plain_int_field_in_the_same_function_is_not_an_enum(self):
         from proto.enums import _harvest_dictrep
-        result = _harvest_dictrep(self._ctx(), self._cls(), None)[0]
+        result = _harvest_dictrep(self._ctx(), self._cls())[0]
         self.assertNotIn(self.OFF_COUNT, result)
         self.assertNotIn(self.OFF_FLAGS, result)
 
@@ -294,7 +294,7 @@ class TestDictRepEnumsLive(unittest.TestCase):
         comp = next((c for c in clist
                      if c.name == 'GEOPDComponent' and not c.is_meta), None)
         cls.comp = comp
-        cls.harvest = _harvest_dictrep(ctx, comp, st)[0] if comp else {}
+        cls.harvest = _harvest_dictrep(ctx, comp)[0] if comp else {}
         cls._off = {_proto_name(iv.name): iv.offset
                     for iv in comp.ivars if iv.name} if comp else {}
 
@@ -401,7 +401,7 @@ class TestDictRepEnumsLive(unittest.TestCase):
         if target is None:
             self.skipTest('GEOPDSearchQueryIntentMetadata not in this cache')
         self.ctx._dictrep_truncated_classes = None
-        _harvest_dictrep(self.ctx, target, self.st)[0]
+        _harvest_dictrep(self.ctx, target)[0]
         self.assertNotIn('GEOPDSearchQueryIntentMetadata',
                          self.ctx._dictrep_truncated_classes or set())
 
@@ -417,7 +417,7 @@ class TestDictRepEnumsLive(unittest.TestCase):
                     if iv.name and _proto_name(iv.name) == field_name), None)
         if off is None:
             return None
-        return dict(_harvest_dictrep(self.ctx, cls, self.st)[0].get(off, []))
+        return dict(_harvest_dictrep(self.ctx, cls)[0].get(off, []))
 
     def test_pointer_table_1based_enums_biased(self):
         """TODO #54: the 3 Hopper-confirmed 1-based dictRep-only enums (pointer-table
@@ -552,7 +552,7 @@ class TestHalfwordJumpTableEnumLive(unittest.TestCase):
         imp = next((m.imp for c in clist if c.name == 'GEOTileSet' and not c.is_meta
                     for m in c.methods if m.name == 'styleAsString:'), None)
         cls.imp = imp
-        cls.pairs = (_extract_enum_values(ctx, imp, st)[0] if imp else None)
+        cls.pairs = (_extract_enum_values(ctx, imp)[0] if imp else None)
         cls.d = dict(cls.pairs) if cls.pairs else {}
 
     @classmethod
@@ -633,7 +633,7 @@ class TestChainedSegmentEnumLive(unittest.TestCase):
         imp = next((m.imp for c in clist if c.name == 'GEOLogMsgState'
                     and not c.is_meta
                     for m in c.methods if m.name == 'stateTypeAsString:'), None)
-        cls.d = dict(_extract_enum_values(ctx, imp, st)[0]) if imp else None
+        cls.d = dict(_extract_enum_values(ctx, imp)[0]) if imp else None
 
     @classmethod
     def tearDownClass(cls):
@@ -705,10 +705,10 @@ class TestUnattributedSegmentWarnsLive(unittest.TestCase):
         i_telem = _imp('GEOTelemetricEntity', 'eventKeyAsString:')
         cls.ok = bool(i_log and i_tile and i_telem)
         if cls.ok:
-            log_pairs, _, cls.log_trunc = _extract_enum_values(ctx, i_log, st)
+            log_pairs, _, cls.log_trunc = _extract_enum_values(ctx, i_log)
             cls.log_vals = {v for v, _ in log_pairs}
-            cls.tile_trunc = _extract_enum_values(ctx, i_tile, st)[2]
-            telem_pairs, _, cls.telem_trunc = _extract_enum_values(ctx, i_telem, st)
+            cls.tile_trunc = _extract_enum_values(ctx, i_tile)[2]
+            telem_pairs, _, cls.telem_trunc = _extract_enum_values(ctx, i_telem)
             cls.telem_vals = {v for v, _ in telem_pairs}
 
     @classmethod
@@ -798,7 +798,7 @@ class TestLongMethodNotFalselyTruncatedLive(unittest.TestCase):
                         ('GEORPFeedbackFieldOption', 'keyAsString:')):
             imp = _imp(cn, sel)
             if imp:
-                pairs, _conf, trunc = _extract_enum_values(ctx, imp, st)
+                pairs, _conf, trunc = _extract_enum_values(ctx, imp)
                 cls.res[cn] = (len(pairs), trunc)
 
     @classmethod
@@ -867,7 +867,7 @@ class TestBiasedDictRepEnumsLive(unittest.TestCase):
             if c is None:
                 continue
             off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}.get(field)
-            cls.res[cn] = dict(_harvest_dictrep(ctx, c, st)[0].get(off, []))
+            cls.res[cn] = dict(_harvest_dictrep(ctx, c)[0].get(off, []))
 
     @classmethod
     def tearDownClass(cls):
@@ -1006,7 +1006,7 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
         if c is None:
             return
         off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}
-        enums, incomplete, _ = _harvest_dictrep(ctx, c, st)
+        enums, incomplete, _ = _harvest_dictrep(ctx, c)
         cls.res = ({k: dict(enums.get(off.get(k), [])) for k in ('uiAction', 'uiTarget')},
                    incomplete)
 
@@ -1066,7 +1066,7 @@ class TestNoArgDictRepLive(unittest.TestCase):
             c = next((c for c in clist if c.name == cn and not c.is_meta), None)
             if c is None or c.get_method('_dictionaryRepresentation:') is not None:
                 continue
-            enums = _harvest_dictrep(ctx, c, st)[0]
+            enums = _harvest_dictrep(ctx, c)[0]
             off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}.get(field)
             cls.res[cn] = (dict(enums.get(off, [])),
                            cn in (getattr(ctx, '_dictrep_truncated_classes', None) or set()))

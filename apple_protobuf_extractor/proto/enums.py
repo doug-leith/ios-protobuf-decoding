@@ -1,7 +1,6 @@
 """proto/enums — enum-value harvesting + enum-name derivation.
 
-Carved from proto.extractor (#11 split, step 5b, final): enum-value recovery and
-enum-name derivation.  The number->name maps are recovered by evaluating the code that
+The number->name maps are recovered by evaluating the code that
 produces the names (:mod:`proto.dictrep_flow`) for both sources: the ``xAsString:`` method
 (:func:`_extract_xasstring`) and the converter inlined into ``_dictionaryRepresentation:``
 (:func:`_harvest_dictrep`).  Imports macho.* + protocore + dispatch + config (never
@@ -217,8 +216,7 @@ def _dictrep_body(ctx: BinaryContext, imp: int) -> FunctionBody:
 
 
 def _harvest_dictrep(
-    ctx: BinaryContext, cls: ObjcClass, st: Optional[StringTable],
-    wanted: Optional[Set[int]] = None,
+    ctx: BinaryContext, cls: ObjcClass, wanted: Optional[Set[int]] = None,
 ) -> Tuple[Dict[int, List[Tuple[int, str]]], Dict[int, str], Dict[int, str]]:
     """``(enums, incomplete, unevaluated)``, each keyed by ivar offset.
 
@@ -429,7 +427,6 @@ def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
 def _extract_enum_values(
     ctx: BinaryContext,
     imp: int,
-    st: Optional[StringTable] = None,
 ) -> Tuple[List[Tuple[int, str]], bool, bool]:
     """``(pairs, confirmed, truncated)`` of the ``xAsString:`` method at *imp*
     (:func:`_extract_xasstring` without the reason)."""
@@ -686,7 +683,7 @@ def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFie
     untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
                        if _is_untyped_int(f) and f.name in ivar_off_by_pname}
     dr_enums, dr_incomplete, dr_unevaluated = _harvest_dictrep(
-        ctx, cls, st, wanted=untyped_offsets)
+        ctx, cls, wanted=untyped_offsets)
     if dr_enums:
         cls_prefix = _class_to_proto_name(cls.name, prefixes)
         for fld in fields:

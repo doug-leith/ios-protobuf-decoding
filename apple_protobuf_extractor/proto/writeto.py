@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from macho.memory import BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ObjcClass, ObjcIvar
-from proto.models import record_analysis_failure
+from proto.models import MAX_FIELD_NUMBER, record_analysis_failure
 from proto.arm64_operands import CALLS
 
 
@@ -53,7 +53,6 @@ def field_number_at(flow, k: int) -> Optional[int]:
 
 # protobuf wire-format field-number range (spec): 1 .. 2^29-1.  Principled
 # validity test on the `mov w2,#N` immediate (the wire spec, not a tuned cap).
-_MAX_PROTO_FIELD_NUMBER = (1 << 29) - 1
 
 # The field# a ProtocolBuffer write helper takes to mean "write the bare value, NO
 # tag": every PB element writer opens with ``cmn w<field>,#1 ; b.eq <skip-tag>``.
@@ -65,7 +64,7 @@ _NO_TAG_FIELD_NUMBER = -1
 
 
 def _is_field_number(n) -> bool:
-    return n is not None and 1 <= n <= _MAX_PROTO_FIELD_NUMBER
+    return n is not None and 1 <= n <= MAX_FIELD_NUMBER
 
 
 @dataclass(frozen=True)

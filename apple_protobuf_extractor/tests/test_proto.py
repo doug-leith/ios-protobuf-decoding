@@ -254,8 +254,7 @@ class TestInternalIvarExclusion(unittest.TestCase):
     def _check(self, ivar_name: str, type_enc: str, methods=None) -> bool:
         from proto.protocore import _is_real_field_ivar
         iv = _ivar(ivar_name, type_enc)
-        mnames = set(methods) if methods else set()
-        return _is_real_field_ivar(iv, mnames)
+        return _is_real_field_ivar(iv)
 
     def test_reader_excluded(self):
         """_reader (PBDataReader) must always be excluded."""
@@ -301,26 +300,24 @@ class TestIsRealFieldIvar(unittest.TestCase):
     def test_simple_string_ivar_is_real(self):
         iv = _ivar('make', '@"NSString"')
         # not a bookkeeping/flags ivar → real field (shape, not name)
-        self.assertTrue(_is_real_field_ivar(iv, self._mnames(['make', 'setMake:'])))
+        self.assertTrue(_is_real_field_ivar(iv))
 
     def test_scalar_ivar_is_real(self):
         iv = _ivar('latitude', 'd')
-        self.assertTrue(_is_real_field_ivar(iv, self._mnames(['setLatitude:'])))
+        self.assertTrue(_is_real_field_ivar(iv))
 
     def test_ivar_with_no_getter_no_setter_is_filtered(self):
         # A has-bits bitfield: rejected by name (_is_has_bits_name)
         iv = _ivar('_hasBits_', 'c')
-        self.assertFalse(_is_real_field_ivar(iv, self._mnames(
-            ['make', 'setMake:', 'hasMake']
-        )))
+        self.assertFalse(_is_real_field_ivar(iv))
 
     def test_empty_ivar_name_is_filtered(self):
         iv = _ivar('', 'i')
-        self.assertFalse(_is_real_field_ivar(iv, self._mnames(['foo'])))
+        self.assertFalse(_is_real_field_ivar(iv))
 
     def test_leading_underscore_stripped_for_matching(self):
         iv = _ivar('_make', '@"NSString"')
-        self.assertTrue(_is_real_field_ivar(iv, self._mnames(['make', 'setMake:'])))
+        self.assertTrue(_is_real_field_ivar(iv))
 
     # TODO #60: admission is STORAGE-SHAPE only — selector-independent.
     def test_getterless_non_flags_ivar_is_admitted(self):
@@ -336,13 +333,13 @@ class TestIsRealFieldIvar(unittest.TestCase):
         # FLAGS-shaped ivar WITH a matching getter and confirms shape still
         # wins (that combination is the one old vs. new code disagree on).
         iv = _ivar('_score', 'i')
-        self.assertTrue(_is_real_field_ivar(iv, self._mnames([])))
+        self.assertTrue(_is_real_field_ivar(iv))
 
     def test_flags_struct_ivar_rejected_even_with_getter(self):
         # The has-bits struct is rejected by SHAPE even if a same-name getter
         # exists — the name no longer rescues it (NAME-rescues-flags == 0).
         iv = _ivar('_flags', '{?="has_a"b1"has_b"b1}')
-        self.assertFalse(_is_real_field_ivar(iv, self._mnames(['flags', 'setFlags:'])))
+        self.assertFalse(_is_real_field_ivar(iv))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -449,19 +446,19 @@ class TestFieldLabel(unittest.TestCase):
 
     def test_nsarray_ivar_is_repeated(self):
         iv = _ivar('locations', '@"NSArray"')
-        self.assertEqual(_field_label(iv, set()), FieldLabel.REPEATED)
+        self.assertEqual(_field_label(iv), FieldLabel.REPEATED)
 
     def test_optional_scalar_field(self):
         iv = _ivar('make', '@"NSString"')
-        self.assertEqual(_field_label(iv, set()), FieldLabel.OPTIONAL)
+        self.assertEqual(_field_label(iv), FieldLabel.OPTIONAL)
 
     def test_nsmutablearray_ivar_is_repeated(self):
         iv = _ivar('items', '@"NSMutableArray"')
-        self.assertEqual(_field_label(iv, set()), FieldLabel.REPEATED)
+        self.assertEqual(_field_label(iv), FieldLabel.REPEATED)
 
     def test_default_is_optional(self):
         iv = _ivar('latitude', 'd')
-        self.assertEqual(_field_label(iv, set()), FieldLabel.OPTIONAL)
+        self.assertEqual(_field_label(iv), FieldLabel.OPTIONAL)
 
     # TODO #60: the label is STORAGE-SHAPE only — selector names are ignored.
     def test_inline_c_struct_pointer_is_repeated(self):
@@ -474,7 +471,7 @@ class TestFieldLabel(unittest.TestCase):
                     '^{GEOCoarseLocationPoint=ii}',
                     '^{GEOPDTimeRange=II{?=b1b1}}'):
             iv = _ivar('_regions', enc)
-            self.assertEqual(_field_label(iv, set()), FieldLabel.REPEATED, enc)
+            self.assertEqual(_field_label(iv), FieldLabel.REPEATED, enc)
 
     def test_label_ignores_selector_names(self):
         """add<X>:/<x>Count/has<X> no longer influence the label — shape decides.
@@ -482,10 +479,10 @@ class TestFieldLabel(unittest.TestCase):
         NSArray carrying a has<X> selector stays REPEATED."""
         scalar = _ivar('estimates', 'i')
         self.assertEqual(
-            _field_label(scalar, {'addEstimate:', 'estimatesCount'}),
+            _field_label(scalar),
             FieldLabel.OPTIONAL)
         arr = _ivar('tags', '@"NSMutableArray"')
-        self.assertEqual(_field_label(arr, {'hasTags', 'setHasTags:'}),
+        self.assertEqual(_field_label(arr),
                          FieldLabel.REPEATED)
 
     def test_value_struct_is_not_repeated(self):
@@ -502,7 +499,7 @@ class TestFieldLabel(unittest.TestCase):
         -- test_inline_c_struct_pointer_is_repeated covers the commit's other
         real fix (^{struct} -> REPEATED with NO selectors at all)."""
         iv = _ivar('_size', '{CGSize=dd}')
-        self.assertEqual(_field_label(iv, set()), FieldLabel.OPTIONAL)
+        self.assertEqual(_field_label(iv), FieldLabel.OPTIONAL)
 
     def test_packed_list_encoding_is_repeated_without_selectors(self):
         """Apple's packed C-array struct {?="list"^<elem>"count"Q"size"Q} is a
@@ -513,7 +510,7 @@ class TestFieldLabel(unittest.TestCase):
                     '{?="list"^d"count"Q"size"Q}',     # double
                     '{?="list"^B"count"Q"size"Q}'):    # bool
             iv = _ivar('_prbOnFloorEstimates', enc)
-            self.assertEqual(_field_label(iv, set()), FieldLabel.REPEATED, enc)
+            self.assertEqual(_field_label(iv), FieldLabel.REPEATED, enc)
 
     def test_is_packed_list_enc(self):
         from proto.protocore import _is_packed_list_enc

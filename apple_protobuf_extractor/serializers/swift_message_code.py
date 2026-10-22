@@ -38,6 +38,7 @@ from proto.arm64_eval import Flow, Objects, Sym
 from proto.arm64_operands import CALLS, CALLER_SAVED
 from proto.callees import callee_name
 from proto.function_body import function_body
+from proto.models import MAX_FIELD_NUMBER
 
 # self; the decoder (or visitor) argument, its type and its witness table
 SELF, DECODER, DECODER_TYPE, DECODER_WITNESSES = range(4)
@@ -54,7 +55,6 @@ _UNIQUELY_REFERENCED = frozenset(("_swift_isUniquelyReferenced_nonNull_native",
 _DECODE_RE = re.compile(r"[PV]\d+(?:decode(Singular|Repeated)(\w+?)Field5value|"
                         r"(decodeMapField)9fieldType5value|(nextFieldNumber)S)")
 _MAX_DEPTH = 3                       # [cap:INPUT-SANITY] arm -> closure -> helper
-_MAX_FIELD_NUMBER = 0x1FFFFFFF
 
 
 def pointer(k: int, off: int = 0) -> Sym:
@@ -170,7 +170,7 @@ def _named(ctx, va: int, indirect: bool) -> Optional[str]:
     address (bound: the import's name)."""
     if indirect:
         raw = ctx.read_ptr(va)
-        name = ctx.import_name_for_bind(raw) if hasattr(ctx, "import_name_for_bind") else None
+        name = ctx.import_name_for_bind(raw)
         if name:
             return name
         va = raw
@@ -489,7 +489,7 @@ def decoded_fields(ctx, decode, numbers) -> Optional[Dict[int, List[Decoded]]]:
     code = decode if isinstance(decode, Code) else Code(decode)
     objs = _Objects(ctx)
     entry = objs.entry(code)
-    numbers = sorted(n for n in set(numbers) if 1 <= n <= _MAX_FIELD_NUMBER)
+    numbers = sorted(n for n in set(numbers) if 1 <= n <= MAX_FIELD_NUMBER)
     return _fields(ctx, objs, code.va, entry, numbers, 1)
 
 
@@ -690,7 +690,7 @@ def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
             if kind == "Extension" or kind.startswith("Unknown"):
                 continue
             n = c.args.get(_number_register(label, kind))
-            if n is None or isinstance(n, Sym) or not 1 <= n <= _MAX_FIELD_NUMBER:
+            if n is None or isinstance(n, Sym) or not 1 <= n <= MAX_FIELD_NUMBER:
                 continue
             v = Visited(label, kind)
             if kind in _GENERIC_KINDS:

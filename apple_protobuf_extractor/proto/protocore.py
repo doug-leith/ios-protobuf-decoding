@@ -1,11 +1,8 @@
 """proto/protocore — the shared proto-class / ivar / type-encoding kernel.
 
-Carved from ``proto.extractor`` (#11 monolith split, step 2): the small predicate +
-encoding helpers that the dispatch / repeated / enum concerns all depend on. Kept in
-its own module so those concerns can be carved next WITHOUT importing
-``proto.extractor`` (which would be a cycle). Imports only ``proto.models`` +
-``macho.classlist`` + stdlib — never ``proto.extractor``. extractor re-imports the
-whole surface so existing call sites and tests are unchanged.
+The small predicate + encoding helpers the dispatch / repeated / enum modules all depend
+on.  Imports only ``proto.models`` + ``macho.classlist`` + stdlib -- never
+``proto.extractor`` (a cycle); extractor re-imports the surface.
 
 NOTE the RETIRED proto-class DETECTORS (``_is_proto_class`` and the VA-cluster
 closure) moved out to ``proto.protoclass_heuristic`` — they are no longer part of
@@ -29,7 +26,7 @@ from macho.classlist import ObjcIvar
 #: are mutually exclusive / there is nothing to merge.  They still serialise via
 #: ``readFrom:``/``writeTo:`` and score well on the broader set, so gating on
 #: ``mergeFrom:`` silently dropped them (→ referencing repeated fields fell back
-#: to ``repeated bytes``).  ``mergeFrom:`` remains a scored bonus below.
+#: to ``repeated bytes``).
 _REQUIRED_INSTANCE_METHODS: frozenset = frozenset({
     "readFrom:", "writeTo:",
 })
@@ -98,7 +95,7 @@ def _is_has_bits_name(ivar_name: str) -> bool:
     return ivar_name.replace("_", "").lower() in _HAS_BITS_NAMES
 
 
-def _is_real_field_ivar(ivar: ObjcIvar, method_names: Set[str]) -> bool:
+def _is_real_field_ivar(ivar: ObjcIvar) -> bool:
     """
     Return True if this ivar is a real proto field (not a has-bits bitfield
     or internal bookkeeping ivar).
@@ -119,8 +116,7 @@ def _is_real_field_ivar(ivar: ObjcIvar, method_names: Set[str]) -> bool:
     every supported artifact there is zero ivar a getter admits but the shape
     would reject (``NAME-rescues-flags == 0`` on GeoServices + CLP), so the name
     term never changed the outcome.  Dropping it is byte-identical and removes the
-    last name-shape dependence from admission.  ``method_names`` is retained in the
-    signature for call-site stability (now unused).
+    last name-shape dependence from admission.
     """
     if ivar.name in _INTERNAL_PB_IVARS or _is_has_bits_name(ivar.name):
         return False
@@ -252,7 +248,6 @@ def _is_packed_list_enc(enc: Optional[str]) -> bool:
 
 def _field_label(
     ivar: ObjcIvar,
-    method_names: Set[str],
 ) -> FieldLabel:
     """Determine the proto label for a field from the ivar's STORAGE SHAPE.
 
@@ -279,7 +274,6 @@ def _field_label(
     the same fields) and BUGGY for ``^{struct}`` (it mislabelled ~40 GeoServices
     inline-C-struct repeated fields as ``optional`` because they lack ``add…:``
     accessors).  The shape rules above are the principled replacement.
-    ``method_names`` is retained for call-site stability (now unused).
     """
     enc = ivar.type_enc
     if _is_packed_list_enc(enc):

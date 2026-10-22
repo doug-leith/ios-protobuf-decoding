@@ -183,8 +183,7 @@ def _bound_ivars(ctx, cl, cls):
     import proto.writeto as W
     from proto.protocore import _is_real_field_ivar
     from proto.write_helpers import _ensure_writeto_prepass
-    names = {m.name for m in cls.methods if m.name}
-    fivars = [iv for iv in cls.ivars if _is_real_field_ivar(iv, names)]
+    fivars = [iv for iv in cls.ivars if _is_real_field_ivar(iv)]
     _ensure_writeto_prepass(ctx, cl)
     return set(W._extract_writeto_field_numbers(ctx, cls, fivars).numbers)
 

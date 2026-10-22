@@ -1,6 +1,6 @@
 """proto/foreign_detect — detect protobuf messages from runtimes other than PBCodable.
 
-Carved from proto.extractor.  Detection only: Google protobuf-objc (``GPBMessage``
+Detection only: Google protobuf-objc (``GPBMessage``
 subclasses), swift-protobuf (conformance symbols), C++ ``google::protobuf`` (symbol census)
 and protobuf-c (static descriptor tables).  Decoding the ones that can be decoded lives in
 proto.foreign, which imports this module.  ``_warn_if_foreign_protobuf`` emits the ONE
@@ -229,7 +229,8 @@ def cpp_protobuf_namespaces(ctx: BinaryContext) -> "Dict[str, int]":
 
 
 def cpp_protobuf_symbol_count(ctx: BinaryContext) -> int:
-    """Total google::protobuf C++ symbols (top-level + vendored).  Binary mode only."""
+    """Total google::protobuf C++ symbols (top-level + vendored), in either mode
+    (:func:`_cpp_protobuf_symbol_names`)."""
     return sum(cpp_protobuf_namespaces(ctx).values())
 
 
@@ -259,8 +260,9 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
     numbers) are emitted as additional, serializer-tagged ``.proto`` files (see
     :mod:`proto.foreign`).  Google's ObjC ``GPBMessage`` and the protobuf-c C runtime
     are detected but not decodable.  This distinguishes the two so the user knows
-    what was emitted vs merely flagged.  Swift/C++ detection is binary-mode only;
-    protobuf-c detection works in both modes."""
+    what was emitted vs merely flagged.  The swift-protobuf conformance-symbol scan is
+    binary-mode only (:func:`swift_protobuf_messages`); the C++ and protobuf-c detection work in
+    both modes."""
     decoded: List[str] = []      # runtimes whose descriptors we emit
     detected: List[str] = []     # present but not decodable
 

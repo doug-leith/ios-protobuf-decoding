@@ -1,8 +1,8 @@
 """swift_namemap_bytecode.py — decoder for the packed-bytecode ``_NameMap`` used by
 newer swift-protobuf / InternalSwiftProtobuf toolchains (iOS 27 and later).
 
-Wired into :func:`swift_descriptor_extract._extract_namemap` as shape E (a fallback
-reached only when no other shape recovered fields).  Strictly self-validating:
+Read by :func:`swift_descriptor_extract._extract_namemap`: the literal a getter passes (shape
+E) and the one a shared once-init builder stub passes (shape D).  Strictly self-validating:
 :func:`decode_namemap_bytecode` returns ``None`` unless the literal has the header,
 only known opcodes, NUL-terminated names and is consumed exactly, so a non-bytecode
 literal (e.g. the bare-name literal of a single-field message) can never be misread
@@ -48,6 +48,7 @@ from macho.disasm import _parse_imm
 from macho.memory import READ_ERRORS
 from proto.arm64_eval import Flow
 from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, split_ops
+from proto.models import MAX_FIELD_NUMBER
 
 _SAME_NEXT, _SAME_DELTA = 1, 2
 _STD_NEXT, _STD_DELTA = 3, 4
@@ -55,7 +56,6 @@ _UNIQUE_NEXT, _UNIQUE_DELTA = 5, 6
 _GROUP_NEXT, _GROUP_DELTA = 7, 8
 _ALIAS_NEXT, _ALIAS_DELTA = 9, 10
 _RESERVED_NAME, _RESERVED_NUMBERS = 11, 12
-_MAX_FIELD_NUMBER = 0x1FFFFFFF
 
 
 def _varint(buf: bytes, i: int) -> Tuple[int, int]:
@@ -135,7 +135,7 @@ def decode_namemap_bytecode(raw: bytes, enum: bool = False) -> Optional[List[Tup
                     alias, i = _cstr(raw, i)
                     names.append(alias)
             lo = -(1 << 31) if enum else 1
-            hi = (1 << 31) - 1 if enum else _MAX_FIELD_NUMBER
+            hi = (1 << 31) - 1 if enum else MAX_FIELD_NUMBER
             if not lo <= num <= hi or not all(names):
                 return None
             prev = num

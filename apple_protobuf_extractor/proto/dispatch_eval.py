@@ -59,11 +59,10 @@ from proto.function_body import function_body
 from proto.eval_tokens import (SELF, READER, field_offset, ret_value,
                                object_model)
 from proto import dispatch as D
-from proto.models import record_analysis_failure, record_heuristic_hit
+from proto.models import MAX_FIELD_NUMBER, record_analysis_failure, record_heuristic_hit
 
 log = logging.getLogger(__name__)
 
-_MAX_FIELD = 1 << 29                            # protobuf field numbers are 1 .. 2^29 - 1
 # [cap:INPUT-SANITY — verified 2026-10-18] how many calls deep from -readFrom: a dispatch core
 # is looked for, and how many rounds of evaluated jump-table arms extend a core (a round that
 # finds none ends the loop; the last round leaves a note).  Raising both 4 -> 16 changed no
@@ -101,7 +100,6 @@ class FieldDispatch:
     handler: Optional[int] = None              # first handler-only block reached
     element_core: Optional[str] = None         # class of the ReadAllFrom core handed the reader
     element_classes: Tuple[str, ...] = ()      # proto classes whose class_t is an argument
-    adder: Optional[int] = None                # call handed (SELF, element object)
     adder_ivar: Optional[str] = None
     calls: List[Tuple[int, Optional[int]]] = field(default_factory=list)   # (call addr, target)
 
@@ -323,11 +321,11 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                     out.notes.append(note)
                 continue
             stop = frozenset(b for b in flow.cfg.order if b in idom and dominates(idom, b, lsr_blk))
-            scan = flow.candidates(k, dest, (1, _MAX_FIELD))
+            scan = flow.candidates(k, dest, (1, MAX_FIELD_NUMBER + 1))
             cands = scan.values
             for lo, hi in scan.intervals:
                 if hi - lo <= _MAX_GATE_SPAN:      # one imm12 gate's reach
-                    cands.update(v for v in range(max(lo, 1), hi + 1) if v < _MAX_FIELD)
+                    cands.update(v for v in range(max(lo, 1), hi + 1) if v <= MAX_FIELD_NUMBER)
             if not cands:
                 continue
             default_n = max(cands) + 1
@@ -420,7 +418,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                     if off is not None:
                         # [self->_array addObject:element]: the array IS the ivar
                         if off in array_offsets:
-                            fd.adder, fd.adder_ivar = c.target, off_to_ivar.get(off)
+                            fd.adder_ivar = off_to_ivar.get(off)
                             break
                         continue
                     if recv != SELF:
@@ -431,15 +429,13 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                     if len(lit) == 1:
                         # a generic helper handed (self, offset, element): the array ivar
                         # at that byte offset (f25's PBAppendMessageAtOffset)
-                        fd.adder, fd.adder_ivar = c.target, off_to_ivar.get(lit[0])
+                        fd.adder_ivar = off_to_ivar.get(lit[0])
                         break
                     sel = _selector_of(ctx, c)
                     tgt = sel_to_imp.get(sel, c.target) if sel is not None else c.target
                     off = _adder_array_ivar(ctx, tgt, array_offsets) if tgt else None
-                    if fd.adder is None:
-                        fd.adder = c.target
                     if off is not None:
-                        fd.adder, fd.adder_ivar = c.target, off_to_ivar.get(off)
+                        fd.adder_ivar = off_to_ivar.get(off)
                         break
             out.fields[n] = fd
 

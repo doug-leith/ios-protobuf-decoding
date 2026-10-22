@@ -1,9 +1,8 @@
 """proto/repeated — repeated-field element-type resolution.
 
-Carved from ``proto.extractor`` (#11 monolith split, step 4): resolve the element type of a
-repeated field from the class's readFrom: dispatch -- decoded by evaluation in
-:mod:`proto.dispatch_eval` (element class per field number, and per ivar through the
-accessor its handler appends with) -- or from the metaclass ``+xyzType`` method / writeTo:
+The element type of a repeated field from the class's readFrom: dispatch -- decoded by
+evaluation in :mod:`proto.dispatch_eval` (element class per field number, and per ivar through
+the accessor its handler appends with) -- or from the metaclass ``+xyzType`` method / writeTo:
 helper.  Imports macho.* + arm64cfg + protocore (never proto.extractor) -> cycle-free;
 extractor re-imports the surface.
 """
