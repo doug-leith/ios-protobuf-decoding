@@ -31,7 +31,7 @@ import random
 import struct
 import sys
 
-from unicorn import UcError, UC_HOOK_CODE
+from unicorn import UcError
 from unicorn import arm64_const as A
 
 from oracles.flow_emulation import RET_SENTINEL, make_machine

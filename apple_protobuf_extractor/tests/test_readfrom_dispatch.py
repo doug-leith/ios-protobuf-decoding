@@ -26,8 +26,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _find_cache_main():
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(os.path.dirname(_here))
     cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
     for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
         for name in ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64'):
@@ -97,7 +95,6 @@ class TestReadFromDispatchLive(unittest.TestCase):
     def test_end_to_end_values_field_is_message_not_bytes(self):
         from proto.extractor import extract_proto_message
         from proto.write_helpers import _identify_string_write_helpers
-        from proto.models import FieldLabel
         comp = self.cl.find('GEOPDComponent')
         helpers = frozenset(_identify_string_write_helpers(self.ctx, self.cl))
         msg = extract_proto_message(self.ctx, self.st, self.cl, comp,

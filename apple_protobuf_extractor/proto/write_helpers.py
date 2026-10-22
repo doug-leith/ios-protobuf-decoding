@@ -24,11 +24,10 @@ evaluator, :mod:`proto.function_body`), never on ``proto.extractor`` -- no impor
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, Set
+from typing import Dict, FrozenSet, List, Optional, Set
 
 from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcIvar
-from macho.disasm    import disasm
 
 from proto.writeto   import _extract_writeto_field_numbers
 from proto.writer_flow import WriterFlow

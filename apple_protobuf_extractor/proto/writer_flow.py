@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
-from macho.disasm import disasm, _parse_imm, _norm_reg
+from macho.disasm import _parse_imm, _norm_reg
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_store
 from proto.arm64_eval import Flow, Objects, _STACK_TOP, _is_stack
 from proto.dispatch import (_jump_table_arm_addrs, build_function_index, decoded_flow,

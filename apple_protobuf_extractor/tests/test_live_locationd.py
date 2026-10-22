@@ -32,8 +32,6 @@ def _find_binary() -> str:
     from_env = os.environ.get('MACHO_TEST_LOCATIOND', '').strip()
     if from_env:
         return from_env
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(os.path.dirname(_here))
     return artifacts.locationd_path()
 
 

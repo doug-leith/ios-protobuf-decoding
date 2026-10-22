@@ -159,7 +159,7 @@ class TestCppCli(unittest.TestCase):
                 _ld(12, b"proto2") +
                 _ld(4, _ld(1, b"Main") +
                     _ld(2, _ld(1, b"d") + _vf(3, 1) + _vf(4, 1) + _vf(5, 11) +
-                        _ld(6, f".p.Dep".encode()))))
+                        _ld(6, b".p.Dep"))))
         p = os.path.join(tmpdir, "fake.bin")
         with open(p, "wb") as fh:
             fh.write(b"\xca\xfe" + dep + b"\x00\x00" + main + b"\x00\x00trailing")
@@ -195,7 +195,7 @@ class TestCppCli(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_main_stdout(self, capsys=None):
-        import tempfile, os, io, contextlib
+        import tempfile, io, contextlib
         with tempfile.TemporaryDirectory() as d:
             binp = self._file_with_blob(d)
             buf = io.StringIO()

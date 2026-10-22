@@ -22,8 +22,7 @@ import proto.write_helpers as WH
 from tests._fakes import NoImage
 from macho.classlist import ObjcIvar
 from proto import emitter
-from proto.models import (ExtractionDiagnostics, FieldLabel, ProtoField, ProtoMessage,
-                          get_diagnostics, record_analysis_failure, record_failed_pass)
+from proto.models import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics, record_analysis_failure, record_failed_pass)
 
 
 class _Ctx(NoImage):

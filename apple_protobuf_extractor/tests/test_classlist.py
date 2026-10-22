@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 import struct
-import pytest
 
 from macho.memory import BinaryContext
 from macho.strings import StringTable, build_string_table
-from macho.classlist import (
-    ObjcClass, ObjcMethod, ObjcIvar,
-    ClassList, build_class_list, _parse_class,
-)
-from tests.conftest import (
-    _pack_header, _pack_segment64, _pack_section64,
-    ptr64, build_objc_binary, build_text_binary,
-)
+from macho.classlist import ObjcClass, ObjcMethod, ClassList, build_class_list, _parse_class
+from tests.conftest import _pack_header, _pack_segment64, _pack_section64, ptr64, build_text_binary
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -702,7 +695,7 @@ class TestMethodListRobustness:
     def test_bad_name_ptr_sets_name_none_does_not_truncate(self):
         """A method with an unmapped name pointer must be parsed with name=None
         and must NOT truncate subsequent methods in the same list."""
-        from macho.classlist import _parse_traditional_method, ObjcMethod
+        from macho.classlist import _parse_traditional_method
         from macho.strings import StringTable
 
         UNMAPPED_VA = 0xDEAD0000   # guaranteed outside any segment

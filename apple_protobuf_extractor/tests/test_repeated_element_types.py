@@ -22,14 +22,14 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import artifacts
 from macho.disasm import Insn
-from macho.classlist import ObjcClass, ObjcIvar, ObjcMethod
+from macho.classlist import ObjcIvar
 from tests._fakes import NoImage
 
 

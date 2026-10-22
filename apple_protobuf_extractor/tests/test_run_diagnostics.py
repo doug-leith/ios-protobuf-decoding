@@ -8,7 +8,6 @@ C++ duplicate-message resolution and the native-decoder notice.  Everything runs
 compiled synthetic fixtures or on tiny hand-built inputs (no dyld cache needed).
 """
 import io
-import logging
 import os
 import struct
 import sys

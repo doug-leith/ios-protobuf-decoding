@@ -20,7 +20,6 @@ one-case oneof -- a one-case enum is laid out as its payload, and Remote Mirror 
 payload's fields, not the case.
 
     python -m oracles.swift_mirror CACHE IMAGE..."""
-import bisect
 import collections
 import ctypes as C
 import re

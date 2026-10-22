@@ -19,7 +19,7 @@ import unittest
 import artifacts
 from macho.dyld_cache import DyldCacheReader
 from macho.memory import BinaryContext
-from macho.classlist import build_class_list, _resolve_relative_selector_base
+from macho.classlist import build_class_list
 from macho.strings import build_string_table
 
 _CACHE = artifacts.cache_file()

@@ -17,7 +17,6 @@ import sys
 import os
 import unittest
 from typing import Dict, List, Optional, Any
-from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -215,8 +214,7 @@ class TestExtractProtoMessageKwargs(unittest.TestCase):
         cls = self._cls_with_ivar('GEOBaz')
         records: List[dict] = []
         # Must not raise
-        msg = self._fn(ctx, st, cl, cls, enum_debug_writer=records.append)
-        # Result may be None or a ProtoMessage; either is fine
+        self._fn(ctx, st, cl, cls, enum_debug_writer=records.append)   # (None or a message)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

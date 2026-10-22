@@ -561,7 +561,6 @@ class TestFatSlice(unittest.TestCase):
         # slices: list of (cputype, cpusubtype, payload)
         n = len(slices)
         header = struct.pack(">II", 0xCAFEBABE, n)
-        body = b""
         offs = []
         cur = 8 + n * 20
         descs = b""

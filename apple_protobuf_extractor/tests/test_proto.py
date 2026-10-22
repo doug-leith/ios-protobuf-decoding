@@ -10,13 +10,8 @@ Run with: python3 -m pytest proto/test_proto.py  OR  python3 proto/test_proto.py
 
 from __future__ import annotations
 
-import os
-import artifacts
-import struct
-import sys
 import unittest
 from unittest.mock import patch
-from dataclasses import dataclass, field
 from typing import List, Optional, Set
 
 # ── path setup ────────────────────────────────────────────────────────────────
@@ -28,8 +23,8 @@ from proto.protocore import _field_label, _is_real_field_ivar, _type_from_enc
 from tests._fakes import NoImage
 from proto.protoclass_heuristic import _is_proto_class
 from proto.config import _class_to_proto_name
-from proto.extractor import extract_all, extract_proto_message, is_proto_class
-from proto.models import FieldLabel, ProtoField, ProtoMessage
+from proto.extractor import extract_proto_message, is_proto_class
+from proto.models import FieldLabel, ProtoMessage
 from macho.classlist import ObjcClass, ObjcIvar, ObjcMethod
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -181,8 +176,6 @@ class TestIsProtoClass(unittest.TestCase):
 
 class TestIsProtoFlagsIvar(unittest.TestCase):
     """Direct unit tests for _is_proto_flags_ivar covering all flavours."""
-
-    from proto.protocore import _is_proto_flags_ivar as _f
 
     def _f(self, name, type_enc):
         from proto.protocore import _is_proto_flags_ivar
@@ -978,7 +971,7 @@ class TestRepeatedStringReclassification(unittest.TestCase):
         themselves are arbitrary, but the keys must match the confirmed fields.
         """
         from proto.writeto import _extract_writeto_field_numbers
-        from macho.classlist import ObjcClass, ObjcIvar, ObjcMethod
+        from macho.classlist import ObjcClass, ObjcIvar
         # A class where get_method("writeTo:") returns None — no binary needed,
         # _extract_writeto_field_numbers returns {} gracefully.
         cls = ObjcClass(

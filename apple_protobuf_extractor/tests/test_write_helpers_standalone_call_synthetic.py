@@ -50,8 +50,8 @@ class TestWriteHelpersStandaloneCall(unittest.TestCase):
     def _fresh_ctx(self):
         if not os.path.exists(_BINARY):
             self.skipTest(
-                f"binary not built — run tests/synthetic_fixtures/build_fixtures.sh "
-                f"f3_write_helper_family")
+                "binary not built — run tests/synthetic_fixtures/build_fixtures.sh "
+                "f3_write_helper_family")
         with open(_BINARY, "rb") as fh:
             data = load_macho_slice(fh.read())
         ctx = BinaryContext(data)

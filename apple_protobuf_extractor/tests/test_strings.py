@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import struct
 import pytest
 
 from macho.memory import BinaryContext
-from macho.strings import StringTable, StringEntry, build_string_table
-from tests.conftest import (
-    _pack_header, _pack_segment64, _pack_section64,
-    CPU_ARM64, MH_EXECUTE,
-)
+from macho.strings import build_string_table
+from tests.conftest import _pack_header, _pack_segment64, _pack_section64
 
 
 def _build_cstring_binary(strings: list, sectname: str = '__cstring',
@@ -195,7 +191,6 @@ class TestSectionSizeGuard:
     def test_oversized_section_skipped(self):
         """A section claiming vmsize > _MAX_SECTION_SIZE must be silently skipped."""
         from macho.strings import _MAX_SECTION_SIZE
-        import struct as st
 
         # Build a section header claiming an enormous vmsize but only 6 bytes data
         small_payload = b'hello\x00'

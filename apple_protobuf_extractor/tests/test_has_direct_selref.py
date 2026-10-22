@@ -200,7 +200,6 @@ def _find_binary() -> str:
     from_env = os.environ.get('MACHO_TEST_BINARY', '').strip()
     if from_env:
         return from_env
-    _here = os.path.dirname(os.path.abspath(__file__))
     return artifacts.geoservices_path()
 
 
@@ -246,7 +245,6 @@ class TestDirectSelectorReadFromTheBaseOnly(unittest.TestCase):
     va + nameOffset is no selector address, and a string there is a fragment of another."""
 
     def test_no_fallback_read_once_the_base_is_known(self):
-        import struct
         from macho.classlist import _parse_relative_method
         from tests._fakes import NoImage
 

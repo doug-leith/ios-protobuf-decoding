@@ -1,5 +1,5 @@
 """Targeted regression tests for the three classlist/dyld_cache fixes."""
-import sys, struct, unittest
+import struct, unittest
 
 from macho.classlist import _is_valid_selector
 
@@ -158,7 +158,7 @@ class TestDyldCacheReadU64(unittest.TestCase):
 
     def _make_reader(self, vmaddr: int, payload: bytes):
         """Return a DyldCacheReader whose single mapping covers vmaddr..vmaddr+len(payload)."""
-        import io, tempfile, os
+        import tempfile, os
         from macho.dyld_cache import DyldCacheReader, _MAPPING_STRIDE
 
         # Build a minimal cache file:

@@ -15,8 +15,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from macho.memory import BinaryContext
-from macho.strings import StringTable
-from macho.classlist import ClassList, ObjcClass, ObjcIvar, ObjcMethod
+from macho.classlist import ObjcClass, ObjcIvar
 from tests.conftest import build_text_binary, RET_BYTES
 
 

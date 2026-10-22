@@ -20,7 +20,7 @@ import unittest
 import struct
 import tempfile
 
-from macho.classlist import ObjcClass, ObjcMethod, ObjcIvar
+from macho.classlist import ObjcClass, ObjcMethod
 from macho.local_symbols import (
     ImageLocalSymbols,
     apply_to_classes,
@@ -200,8 +200,6 @@ class TestLoadImageSymbolAddrsOffline(unittest.TestCase):
 # ─── Live tests against the real GeoServices cache ─────────────────────────────
 
 def _find_cache_main():
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(os.path.dirname(_here))
     _names = ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64')
     cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
     for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:

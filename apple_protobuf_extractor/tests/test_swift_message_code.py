@@ -36,7 +36,6 @@ class TestDecodedOnTheIos27Cache(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         from macho.dyld_cache import DyldCacheReader
-        from macho.load import load_cache_image
         cls.reader = DyldCacheReader(IOS27)
         cls.ctxs = {}
 

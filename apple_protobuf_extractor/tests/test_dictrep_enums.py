@@ -26,7 +26,6 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from tests.conftest import WordCtx as _WordCtx
 from tests._a64asm import assemble, FlowCtx
 from macho.disasm import disasm
 
@@ -251,8 +250,6 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _find_cache_main():
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(os.path.dirname(_here))
     cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
     for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
         for name in ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64'):

@@ -27,9 +27,9 @@ from unittest.mock import patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from macho.memory import BinaryContext
-from macho.strings import StringTable, build_string_table
+from macho.strings import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, ObjcMethod
-from proto.models import FieldLabel, ProtoField, ProtoEnum
+from proto.models import FieldLabel, ProtoField
 from tests.conftest import build_text_binary, RET_BYTES
 
 
@@ -362,6 +362,7 @@ class TestCollectEnumDefinitions(unittest.TestCase):
         # (it's gated on type_name in ("int32","uint32"))
         self.assertEqual(fld.type_name, 'string',
                          "Non-scalar field must not be re-tagged as enum")
+        mock_mn.assert_not_called()
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────

@@ -11,10 +11,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from macho.memory import BinaryContext
 from proto.arm64cfg import build_blocks, inject_arm_edges
 from proto.dispatch import _jump_table_arm_addrs
-from tests.conftest import build_text_binary, encode_bl, RET_BYTES
 
 
 class TestJumpTableArmAddrsRangeGuardRedundant(unittest.TestCase):

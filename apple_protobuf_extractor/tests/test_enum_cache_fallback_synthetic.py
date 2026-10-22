@@ -43,8 +43,8 @@ class TestEnumMethnameFallback(unittest.TestCase):
     def setUpClass(cls):
         if not os.path.exists(_BINARY):
             raise unittest.SkipTest(
-                f"binary not built — run tests/synthetic_fixtures/build_fixtures.sh "
-                f"f11_enum_pointer_table")
+                "binary not built — run tests/synthetic_fixtures/build_fixtures.sh "
+                "f11_enum_pointer_table")
         with open(_BINARY, "rb") as fh:
             data = load_macho_slice(fh.read())
         cls.ctx = BinaryContext(data)

@@ -16,7 +16,7 @@ import logging
 from typing import Dict, List, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
-from macho.classlist import ObjcClass
+from macho.classlist import ClassList, ObjcClass
 from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
@@ -429,7 +429,7 @@ def listing_flow(ctx: BinaryContext, insns: List["Insn"]):
     return decoded_flow(ctx, insns)
 
 
-def build_function_index(ctx: BinaryContext, cl: 'ClassList') -> None:
+def build_function_index(ctx: BinaryContext, cl: ClassList) -> None:
     """Record on *ctx* every method IMP of the image (``_function_entries``) and every ivar's
     offset-variable address (``_ivar_offset_slots``).  The readFrom: evaluator
     (:mod:`proto.dispatch_eval`) uses the IMPs, with the ReadAllFrom cores, as function
@@ -471,7 +471,7 @@ def function_entries(ctx: BinaryContext) -> FunctionEntries:
 
 def _build_readfrom_core_index(
     ctx: BinaryContext,
-    cl: 'ClassList',
+    cl: ClassList,
 ) -> Dict[int, str]:
     """
     Binary-wide pre-pass: map every proto class's ReadAllFrom C-core address to

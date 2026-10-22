@@ -82,7 +82,6 @@ class TestCpuProperties:
 
     def test_is_arm64e_subtype(self):
         # Build a binary with cpu_subtype = 0x80000002 (arm64e)
-        import tests.conftest as cf
         code   = NOP_BYTES
         binary = build_text_binary(code, vmaddr=TEXT_VA)
         # Patch cpusubtype at offset 8
@@ -270,9 +269,6 @@ class TestIterPtrs:
 class TestZerofillSections:
     def _bss_binary(self):
         """Binary with a zerofill (BSS) section — S_ZEROFILL = flags & 0xFF == 1."""
-        HDR     = 32
-        LC_SZ   = 72 + 80
-        DATA_OFF = HDR + LC_SZ    # BSS section has no file content
         VA      = 0x1000
         BSS_SZ  = 4096
 
@@ -451,7 +447,6 @@ def _build_from_cache_fixture(base: int = 0x100000000):
     name_va  = base + 0x1000
     ro_va    = base + 0x2000
     cls_va   = base + 0x3000
-    list_va  = base + 0x4000
 
     content[0x1000 : 0x1000 + 11] = b'CacheClass\x00'
     _struct.pack_into('<Q', content, 0x2000 + 24, name_va)
@@ -804,7 +799,7 @@ class TestDecodeChainPtrUnknownFormat:
         assert decoded != raw
 
 
-class TestImageBase:
+class TestImageBaseIsTheHeaderSegment:
     """The image's base is the segment holding its header: a dylib's __TEXT at vmaddr 0 (it
     was skipped for the next segment), an executable's after __PAGEZERO (#133)."""
 

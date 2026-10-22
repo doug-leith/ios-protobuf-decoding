@@ -35,7 +35,7 @@ from unicorn import (Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_H
                      UC_HOOK_MEM_WRITE)
 from unicorn import arm64_const as A
 
-from proto.arm64_eval import Flow, _ENTRY, _STACK_TOP, _is_stack, _is_symbolic
+from proto.arm64_eval import _ENTRY, _STACK_TOP, _is_stack, _is_symbolic
 from proto.arm64_operands import CALLS, RETURNS, reads, writes
 from proto.callees import RETURNS_ARGUMENT, callee_name, call_clobbers
 from proto.dispatch import listing_flow

@@ -84,8 +84,6 @@ class TestFieldCountGateRemoval(unittest.TestCase):
         """
         from unittest.mock import patch
         from proto.extractor import extract_proto_message, _FieldNumberResult
-        from macho.strings import StringTable
-        from macho.classlist import ClassList
 
         from tests._fakes import NoImage
 

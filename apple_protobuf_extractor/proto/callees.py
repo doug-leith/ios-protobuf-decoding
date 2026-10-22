@@ -22,7 +22,6 @@ struct decoders and the readFrom: evaluator use it).
 """
 from __future__ import annotations
 
-import bisect
 from typing import Dict, NamedTuple, Optional, Tuple
 
 from macho.disasm import disasm, _norm_reg, _parse_imm

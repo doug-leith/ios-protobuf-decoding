@@ -488,10 +488,7 @@ def build_objc_binary(
     if len(classnames_bytes) % 8:
         classnames_bytes += b'\x00' * (8 - len(classnames_bytes) % 8)
 
-    classnames_size = len(classnames_bytes)
-
     # Build class structs
-    n_classes       = len(class_specs)
     struct_block    = b''
     class_vmaddrs   = []
 

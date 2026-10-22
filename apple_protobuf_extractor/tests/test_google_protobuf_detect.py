@@ -8,7 +8,6 @@ plain classes are not flagged).
 Live: transparencyd (Key Transparency) has GPBMessage subclasses and extract_all emits
 the informative warning; GeoServices (PBCodable) has none (no false positive).
 """
-import logging
 import unittest
 
 from macho.classlist import ObjcClass, ClassList

@@ -22,7 +22,7 @@ from tests._listing import text_listing
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, '..'))
 
-from proto.arm64_eval import Flow, Objects, _STACK_TOP
+from proto.arm64_eval import Flow, Objects
 from proto import dispatch_eval as E
 from proto import eval_tokens as T
 

@@ -38,6 +38,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -198,7 +199,7 @@ class TestDecodeCachePtr(unittest.TestCase):
         """Tagged address outside mapping, but clean address is inside → clean returned."""
         # Put the mapping at BASE+0x100 with size exactly 0x10 so
         # BASE+0x100 is in range but BASE+0x107 is not.
-        import struct, tempfile, os
+        import tempfile, os
         inner_base = self.BASE + 0x100
         inner_content = b'\x00' * 0x8   # only 8 bytes, vmend = inner_base+8
         data = _pack_cache(inner_base, inner_content)
@@ -412,9 +413,7 @@ class TestIterClassNames(unittest.TestCase):
 
 # ─── Live test helpers ────────────────────────────────────────────────────────
 
-def _find_cache_main() -> 'Optional[str]':
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(os.path.dirname(_here))
+def _find_cache_main() -> Optional[str]:
     _names = ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64')
     cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
     for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
@@ -1106,7 +1105,7 @@ class TestCacheNativePipelineLive(unittest.TestCase):
                 # _is_proto_class passes — try extraction
                 exc_info = None
                 try:
-                    msg = extract_proto_message(
+                    extract_proto_message(
                         self.ctx, st, self.cl, cls_obj
                     )
                 except Exception as e:

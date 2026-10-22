@@ -34,6 +34,7 @@ import struct
 import sys
 import tempfile
 import unittest
+from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -46,7 +47,7 @@ from macho.memory     import BinaryContext
 from macho.strings    import StringTable
 from macho.classlist  import _parse_relative_method, build_class_list
 
-from tests.conftest import build_binary, ptr64
+from tests.conftest import build_binary
 
 
 # ─── Synthetic cache builder ──────────────────────────────────────────────────
@@ -787,8 +788,6 @@ def _find_cache_main() -> 'Optional[str]':
 
     Returns the path string if found, None otherwise.
     """
-    _here = os.path.dirname(os.path.abspath(__file__))
-    _root = os.path.dirname(os.path.dirname(_here))
     _names = ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64')
 
     cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()

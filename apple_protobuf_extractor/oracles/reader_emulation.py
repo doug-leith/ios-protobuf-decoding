@@ -27,12 +27,11 @@ import collections
 import struct
 import sys
 
-from unicorn import UcError, UC_HOOK_CODE
+from unicorn import UcError
 from unicorn import arm64_const as A
 
 from oracles.flow_emulation import BIND_BASE, BIND_STRIDE, RET_SENTINEL, Report, make_machine
-from oracles.writer_emulation import (OBJ_BASE, OBJ_SIZE, OBJ_STRIDE, SELF, _D0, _X,
-                                      _all_ivars, _ensure_regions, _field_name, _method)
+from oracles.writer_emulation import (OBJ_BASE, OBJ_SIZE, OBJ_STRIDE, SELF, _D0, _X, _all_ivars, _ensure_regions, _method)
 from proto.callees import RETURNS_ARGUMENT
 
 READER = 0x790000000

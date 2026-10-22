@@ -92,11 +92,8 @@ class TestOperandsAgainstCapstone(unittest.TestCase):
 
 
 def _unicorn():
-    try:
-        import unicorn  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    import importlib.util
+    return importlib.util.find_spec("unicorn") is not None
 
 
 _STRUCTURE = ("ran an instruction the body lacks", "an edge the CFG lacks",
