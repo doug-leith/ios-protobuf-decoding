@@ -21,13 +21,10 @@ EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER = 0x10
 def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
     """``(symbol name, flags, image offset or None)`` for every terminal node of the trie in
     *data* (offset 0 = root), depth-first; a re-export has no offset of its own (None).
-    Malformed nodes are skipped rather than raising, so a damaged trie yields the symbols it
-    can still name."""
+    A node that cannot be read whole -- its terminal's flags and offset inside the size it
+    declares, inside *data* -- names nothing, and an edge that cannot be read ends its node's
+    children: a damaged trie yields only symbols it states in full."""
     end = len(data)
-
-    def uleb(p: int) -> Tuple[int, int]:
-        return read_uleb(data, p, end)
-
     stack = [(0, "")]
     seen = set()
     while stack:                    # each node is visited once (seen) and lies inside data
@@ -35,11 +32,21 @@ def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
         if node >= end or node in seen:
             continue
         seen.add(node)
-        term_size, p = uleb(node)
-        if term_size:
-            flags, q = uleb(p)
-            offset = None if flags & EXPORT_SYMBOL_FLAGS_REEXPORT else uleb(q)[0]
-            yield prefix, flags, offset
+        try:
+            term_size, p = read_uleb(data, node, end)
+            terminal = None
+            if term_size:
+                t_end = p + term_size
+                if t_end > end:
+                    continue
+                flags, q = read_uleb(data, p, t_end)
+                offset = (None if flags & EXPORT_SYMBOL_FLAGS_REEXPORT
+                          else read_uleb(data, q, t_end)[0])
+                terminal = (prefix, flags, offset)
+        except ValueError:
+            continue
+        if terminal is not None:
+            yield terminal
         p += term_size
         if p >= end:
             continue
@@ -50,7 +57,10 @@ def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
             if z < 0:
                 break
             edge = data[p:z].decode("utf-8", errors="replace")
-            child, p = uleb(z + 1)
+            try:
+                child, p = read_uleb(data, z + 1, end)
+            except ValueError:
+                break
             stack.append((child, prefix + edge))
 
 

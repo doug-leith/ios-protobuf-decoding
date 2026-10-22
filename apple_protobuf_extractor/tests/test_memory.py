@@ -285,6 +285,20 @@ class TestZerofillSections:
         sect = ctx.section('__DATA', '__bss')
         assert not sect.has_file_content
 
+    def test_the_zerofill_types_are_loader_h_s(self):
+        """S_ZEROFILL (0x1), S_GB_ZEROFILL (0xc) and S_THREAD_LOCAL_ZEROFILL (0x12) have no
+        file content; S_MOD_INIT_FUNC_POINTERS (0x9) has, as a plain section (0x0) has (#141)."""
+        import tests.conftest as cf
+        for stype, content in ((0x0, True), (0x1, False), (0x9, True), (0xc, False),
+                               (0x12, False)):
+            sect = cf._pack_section64('__s', '__DATA', 0x1000, 16, 0x40,
+                                      flags=0x80000000 | stype)
+            seg  = cf._pack_segment64('__DATA', vmaddr=0x1000, vmsize=16, fileoff=0x40,
+                                       filesize=16, sections=[sect])
+            hdr  = cf._pack_header(ncmds=1, sizeofcmds=len(seg))
+            s = BinaryContext(hdr + seg + bytes(0x40)).section('__DATA', '__s')
+            assert (s.has_file_content, s.file_off) == (content, 0x40 if content else 0), stype
+
     def test_read_bytes_zerofill_raises(self):
         ctx = self._bss_binary()
         with pytest.raises(ValueError):
@@ -754,10 +768,45 @@ class TestReadUleb:
         assert read_uleb(b"\x80\x01\x05", 0) == (128, 2)
         assert read_uleb(b"\x80\x01\x05", 2) == (5, 3)
 
-    def test_an_encoding_open_at_the_end_stops_there(self):
+    def test_an_encoding_open_at_the_end_is_an_error(self):
+        # Its bits so far are no value (#141): a truncated table read them as one.
         from macho.leb import read_uleb
-        assert read_uleb(b"\xff\xff", 0) == (0x3FFF, 2)
-        assert read_uleb(b"\x81\x01\x05", 0, end=1) == (1, 1)
+        with pytest.raises(ValueError):
+            read_uleb(b"\xff\xff", 0)
+        with pytest.raises(ValueError):
+            read_uleb(b"\x81\x01\x05", 0, end=1)
+        assert read_uleb(b"\x81\x01\x05", 0, end=2) == (0x81, 2)
+
+    def test_wider_than_64_bits_is_an_error(self):
+        from macho.leb import read_uleb
+        assert read_uleb(b"\xff" * 9 + b"\x01", 0) == ((1 << 64) - 1, 10)
+        with pytest.raises(ValueError):
+            read_uleb(b"\xff" * 10 + b"\x01", 0)
+
+
+class TestExportTrieDamage:
+    """A damaged trie names only symbols it states in full (#141): a terminal is read inside
+    the size it declares, inside the data."""
+
+    def test_an_offset_outside_its_terminal_names_nothing(self):
+        from macho.export_trie import iter_export_trie
+        # root: term_size=1 [flags=0], the offset would be the child count byte; 0 children
+        assert list(iter_export_trie(b"\x01\x00\x05\x00")) == []
+        assert list(iter_export_trie(b"\x02\x00\x05\x00")) == [("", 0, 5)]
+
+    def test_a_terminal_past_the_end_names_nothing(self):
+        from macho.export_trie import iter_export_trie
+        good = _export_trie_bytes()
+        assert list(iter_export_trie(good)) == [("_A", 0, 0x20), ("_AB", 0, 0x10)]
+        # _AB's terminal cut short: its offset ULEB left open, then its flags missing
+        cut = good[:15] + b"\x90"
+        assert list(iter_export_trie(cut)) == [("_A", 0, 0x20)]
+        assert list(iter_export_trie(good[:14])) == [("_A", 0, 0x20)]
+
+    def test_an_open_edge_ends_its_node_s_children(self):
+        from macho.export_trie import iter_export_trie
+        # root: 2 children, '_A' -> node at 0x80 | 0x80.. (open at the end)
+        assert list(iter_export_trie(b"\x00\x02_A\x00\x80")) == []
 
 
 class TestFunctionStarts:
@@ -766,6 +815,19 @@ class TestFunctionStarts:
         from macho.memory import decode_function_starts
         assert decode_function_starts(_uleb(0x10) + _uleb(0x208) + b"\x00" + _uleb(4), 0x1000) \
             == [0x1010, 0x1218]
+
+    def test_a_delta_open_at_the_end_is_unread_input(self):
+        from macho.memory import decode_function_starts, unread_input
+        from types import SimpleNamespace as NS
+        with pytest.raises(ValueError):
+            decode_function_starts(_uleb(0x10) + b"\x88", 0x1000)
+        blob = b"\x00" * 8 + _uleb(0x10) + b"\x88"
+        c = _bare_ctx(blob)
+        c._segments = [NS(name="__TEXT", vmaddr=0x1000)]
+        c._cache_reader = None
+        c._function_starts_lc, c._function_starts = (8, len(blob) - 8), None
+        assert c.function_starts() == []
+        assert [e[:2] for e in unread_input(c)] == [("function starts", "0x8")]
 
     def test_without_the_command_there_are_none(self):
         c = _bare_ctx(b"\x00" * 64)

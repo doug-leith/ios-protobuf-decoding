@@ -54,7 +54,8 @@ PROGRAM_ERRORS = (NameError, ImportError, TypeError, AttributeError)
 
 def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
     """The function entries an ``LC_FUNCTION_STARTS`` table lists: ULEB128 deltas, the first
-    from the ``__TEXT`` segment's start, ending at a zero delta (sorted by construction)."""
+    from the ``__TEXT`` segment's start, ending at a zero delta (sorted by construction).  A
+    delta still open at the end of *blob* raises ValueError (:func:`macho.leb.read_uleb`)."""
     starts, addr, p = [], text_vmaddr, 0
     while p < len(blob):
         delta, p = read_uleb(blob, p)
@@ -63,6 +64,10 @@ def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
         addr += delta
         starts.append(addr)
     return starts
+
+# The section types with no file content (loader.h): S_ZEROFILL, S_GB_ZEROFILL,
+# S_THREAD_LOCAL_ZEROFILL
+ZEROFILL_TYPES = frozenset((0x1, 0xc, 0x12))
 
 # Chained fixup pointer formats
 _DYLD_PTR_ARM64E    = 1
@@ -119,7 +124,7 @@ class Section:
     @property
     def has_file_content(self) -> bool:
         """False for BSS / zerofill sections."""
-        return (self.flags & 0xFF) not in (1, 9, 12)
+        return (self.flags & 0xFF) not in ZEROFILL_TYPES
 
 
 @dataclass
@@ -170,8 +175,8 @@ def _decode_chain_ptr(raw: int, fmt: int, image_base: int) -> int:
             # Authenticated rebase: 32-bit target relative to image base
             return (raw & 0xFFFFFFFF) + image_base
         else:
-            # Plain rebase: strip PAC high bits
-            return raw & 0x0000_007F_FFFF_FFFF
+            # Plain rebase: the 43-bit vmaddr (target:43 high8:8 ...), high8 dropped as above
+            return raw & 0x7FF_FFFF_FFFF
     elif fmt in (_DYLD_PTR_64, _DYLD_PTR_64_OFFSET):
         bind = (raw >> 63) & 1
         if bind:
@@ -851,9 +856,13 @@ class BinaryContext:
             else:
                 text = next((s for s in self._segments if s.name == '__TEXT'), None)
                 off, size = self._function_starts_lc or (0, 0)
-                self._function_starts = (decode_function_starts(self._data[off:off + size],
-                                                                text.vmaddr)
-                                         if text is not None and size else [])
+                try:
+                    self._function_starts = (decode_function_starts(self._data[off:off + size],
+                                                                    text.vmaddr)
+                                             if text is not None and size else [])
+                except READ_ERRORS as exc:
+                    record_unread(self, "function starts", f"{off:#x}", exc)
+                    self._function_starts = []
         return self._function_starts
 
     def find_cstring_in_section(
@@ -942,7 +951,7 @@ class BinaryContext:
             )
             sname  = sname_b.rstrip(b'\x00').decode('ascii', errors='replace')
             sgname = sgname_b.rstrip(b'\x00').decode('ascii', errors='replace')
-            has_content = (s_flags & 0xFF) not in (1, 9, 12)
+            has_content = (s_flags & 0xFF) not in ZEROFILL_TYPES
             sect = Section(
                 name=sname, segname=sgname,
                 vmaddr=addr, vmsize=sz,

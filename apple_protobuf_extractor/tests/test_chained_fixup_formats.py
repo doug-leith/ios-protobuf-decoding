@@ -51,11 +51,17 @@ class TestArm64eUserlandFormatDecode(unittest.TestCase):
                 _decode_chain_ptr(_rebase(0x4058), fmt, _BASE), _BASE + 0x4058)
 
     def test_plain_rebase_uses_the_full_43_bit_target(self):
-        # Bits above the classic arm64e format's 39-bit mask must survive.
-        target = 0x7_FFFF_FFFF_F   # 43 bits set
+        # Every format's plain rebase target is 43 bits (fixup-chains.h); the
+        # classic format's is a vmaddr, the userland formats' an offset (#141).
+        target = 0x7FF_FFFF_FFFF   # 43 bits set
+        for fmt in (_DYLD_PTR_ARM64E, _DYLD_PTR_ARM64E_USERLAND,
+                    _DYLD_PTR_ARM64E_USERLAND24):
+            self.assertEqual(
+                _decode_chain_ptr(_rebase(target, high8=0xAB, nxt=0x7FF), fmt, 0),
+                target)
         self.assertEqual(
-            _decode_chain_ptr(_rebase(target), _DYLD_PTR_ARM64E_USERLAND24, 0),
-            target)
+            _decode_chain_ptr(_rebase(0x4_0000_4058), _DYLD_PTR_ARM64E, _BASE),
+            0x4_0000_4058)
 
     def test_plain_rebase_drops_high8_and_chain_metadata(self):
         raw = _rebase(0x4058, high8=0xAB, nxt=0x123)
