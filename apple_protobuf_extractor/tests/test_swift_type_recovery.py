@@ -69,6 +69,8 @@ class TestDemangleOffline(unittest.TestCase):
         # stops at the first non-scalar token (symbolic ref / Data / nested)
         self.assertEqual(TR._runlength_types("SS\x01rest"), ["string"])
         self.assertEqual(TR._runlength_types("Xnope"), [])
+        # an S that is no scalar substitution: Sa, a nested [String]
+        self.assertEqual(TR._runlength_types("SSSaySSGG"), ["string"])
 
     def test_word_substitution(self):
         # Swift's leading-'0' identifier form back-references previously seen
@@ -81,6 +83,8 @@ class TestDemangleOffline(unittest.TestCase):
         self.assertEqual(
             TR.demangle_idents("13SwiftProtobuf07Google_B9_Duration"),
             ["SwiftProtobuf", "Google_Protobuf_Duration"])
+        # a two-letter word is stored as well (Swift stores every word of two or more)
+        self.assertEqual(TR.demangle_idents("5Go_Is0A4_Foo"), ["Go_Is", "Go_Foo"])
         # plain identifiers (no substitution) are unaffected
         self.assertEqual(TR.demangle_idents("7remindd12EmptyRequest"),
                          ["remindd", "EmptyRequest"])
@@ -254,10 +258,13 @@ class TestLiveDeviceTypes(unittest.TestCase):
 
     def test_repeated_message_and_full_wkt_name(self):
         # Google_Protobuf_Field.options is `repeated Google_Protobuf_Option` — a
-        # repeated message whose WKT element name is recovered in FULL (not
-        # truncated to 'Google_' by un-decoded word-substitution mangling).
+        # repeated message whose WKT element name is recovered in FULL.  remindd
+        # links SwiftProtobuf in: the element is a local descriptor, read by its name.
         self.assertEqual(self.t["Google_Protobuf_Field"]["options"],
                          "repeated Google_Protobuf_Option")
+        # an external type's bind is word-substituted (...C0A6Counts, A = 'Reminder'
+        # from ReminderKitInternal): its name in full, not 'Counts'
+        self.assertEqual(self.t["Cache"]["reminderCounts"], "ReminderCounts")
 
 
 @unittest.skipUnless(_remindd(), "remindd binary not available")
@@ -268,6 +275,9 @@ class TestEndToEndTypesBound(unittest.TestCase):
         mr = {f.name: f for f in msgs["MigrateRequest"].fields}
         self.assertEqual(mr["archivePath"].proto_type, "string")
         self.assertEqual(mr["options"].proto_type, "uint32")
+        # snake_case in the name map, camelCase in the Swift metadata (userInitiated)
+        self.assertEqual(mr["user_initiated"].proto_type, "bool")
+        self.assertEqual(mr["simulated_error"].proto_type, "int32")
         fld = {f.name: f for f in msgs["Google_Protobuf_Field"].fields}
         self.assertEqual(fld["options"].proto_type, "repeated Google_Protobuf_Option")
 
@@ -350,7 +360,8 @@ class TestGenericArgumentTokens(unittest.TestCase):
 
     def test_no_proto_form_stays_a_flagged_guess(self):
         self.assertEqual(self.d(b"SaySaySSGG"), ("bytes", "repeated?"))   # [[String]]
-        self.assertEqual(self.d(b"SDySSSaySSGG")[1], "map?")              # [String: [String]]
+        # [String: [String]]: the [String] value has no proto form, the bytes filler
+        self.assertEqual(self.d(b"SDySSSaySSGG"), ("map<string, bytes>", "map?"))
 
 
 
@@ -397,6 +408,8 @@ class TestOneofEnumOfItsOwn(unittest.TestCase):
         args = meta.types["AspirePirPirPreprocessDbArgs"]
         self.assertEqual(args["algorithm"], "AspirePirPirAlgorithm")
         self.assertNotIn("UNRECOGNIZED", args)
+        # nor among its stored fields: they are its properties, no enum case among them
+        self.assertEqual(meta.stored["AspirePirPirPreprocessDbArgs"], set(args))
 
 
 if __name__ == "__main__":

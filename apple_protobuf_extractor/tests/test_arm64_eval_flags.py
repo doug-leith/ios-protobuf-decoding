@@ -43,9 +43,13 @@ class TestConditionalCompare(unittest.TestCase):
 
     def test_second_compare_taken(self):
         self.assertEqual(x3_at_call(5, *self.CODE), 2)
+        code = branch_on('cmp w2, #3', 'ccmp w2, #5, #0, ne')
+        self.assertEqual(x3_at_call(5, *code), 2)                # 5 == 5, though #0 is ne
 
     def test_literal_flags_when_condition_fails(self):
         self.assertEqual(x3_at_call(3, *self.CODE), 2)           # #4 = Z set -> eq
+        code = branch_on('cmp w2, #3', 'ccmp w2, #5, #0, ne')
+        self.assertEqual(x3_at_call(3, *code), 1)                # #0 -> ne, though the cmp was eq
 
     def test_neither(self):
         self.assertEqual(x3_at_call(7, *self.CODE), 1)
@@ -69,6 +73,7 @@ class TestLogicalFlags(unittest.TestCase):
         code = branch_on('ands w8, w2, #0xf0', cond='eq')
         self.assertEqual(x3_at_call(0x0F, *code), 2)
         self.assertEqual(x3_at_call(0x10, *code), 1)
+        self.assertEqual(x3_at_call(0x1F, 'ands w3, w2, #0xf0'), 0x10)
 
     def test_shifted_tst(self):
         code = branch_on('mov w9, #1', 'tst w2, w9, lsl #4', cond='ne')   # bit 4 set?
@@ -79,11 +84,13 @@ class TestLogicalFlags(unittest.TestCase):
 class TestAddFlags(unittest.TestCase):
     def test_cmn_zero_carry(self):
         # cmn w2, #0 computes V + 0: C = 0 for every V, so b.hs is never taken
-        self.assertEqual(x3_at_call(5, *branch_on('cmn w2, #0', cond='hs')), 1)
+        for v in (5, 0xFFFFFFFF):
+            self.assertEqual(x3_at_call(v, *branch_on('cmn w2, #0', cond='hs')), 1)
 
     def test_adds_carry(self):
         code = branch_on('adds w8, w2, #1', cond='hs')            # carry out of V + 1
         self.assertEqual(x3_at_call(0xFFFFFFFF, *code), 2)
+        self.assertEqual(x3_at_call(0xFFFFFFFE, *code), 1)
         self.assertEqual(x3_at_call(4, *code), 1)
 
     def test_mi_is_the_result_sign(self):
@@ -105,7 +112,15 @@ class TestUnmodelledFlagSetters(unittest.TestCase):
         self.assertEqual(x3_at_call(1, *code), 1)
 
     def test_unmodelled_operand_form(self):
-        # a 4-operand subs (register, extended) the evaluator does not model clears the flags
+        # negs w8, w2 is subs w8, wzr, w2 under its alias, which the evaluator does not model
+        self.assertIsNone(x3_at_call(3, *branch_on('cmp w2, #3', 'negs w8, w2')))
+
+    def test_extended_register_subs(self):
+        # modelled: the second operand is extended (uxtb #1 of 0x103 is 6)
+        code = branch_on('mov w9, #0x103', 'subs w8, w2, w9, uxtb #1')
+        self.assertEqual(x3_at_call(6, *code), 2)
+        self.assertEqual(x3_at_call(0x103, *code), 1)
+        # an unknown operand: unknown flags, not the earlier cmp's
         self.assertIsNone(x3_at_call(3, *branch_on('cmp w2, #3', 'subs w8, w2, w9, uxtb #1')))
 
 
@@ -118,6 +133,8 @@ class TestSecondOperand(unittest.TestCase):
 
     def test_lsr_asr(self):
         self.assertEqual(self.x3('mov x9, #0', 'mov x10, #0x40', 'add x3, x9, x10, lsr #4'), 4)
+        self.assertEqual(self.x3('mov x9, #0', 'mov x10, #-16', 'add x3, x9, x10, lsr #4'),
+                         0x0FFFFFFFFFFFFFFF)
         self.assertEqual(self.x3('mov x9, #0', 'mov x10, #-16', 'add x3, x9, x10, asr #2'),
                          (-4) & 0xFFFFFFFFFFFFFFFF)
 

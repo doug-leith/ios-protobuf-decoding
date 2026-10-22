@@ -26,25 +26,49 @@ def _uleb(n):
             return bytes(out)
 
 
+def _trie_bytes(nodes):
+    """Trie bytes of *nodes* (``(terminal bytes, [(edge label, child index), ...])``, node 0
+    the root), laid out in order."""
+    offs = [0] * len(nodes)
+    while True:      # the child offsets are only known once the nodes before them are laid out
+        body = [_uleb(len(t)) + t + bytes([len(ch)]) +
+                b"".join(lab + b"\x00" + _uleb(offs[i]) for lab, i in ch) for t, ch in nodes]
+        new = [sum(map(len, body[:i])) for i in range(len(nodes))]
+        if new == offs:
+            return b"".join(body)
+        offs = new
+
+
 class TestExportTrie(unittest.TestCase):
     def _trie(self):
-        # root -> "_a" (export at image offset 0x1234) and "_b" (a re-export: no address)
-        a_node = _uleb(3) + _uleb(0) + _uleb(0x1234) + b"\x00"
-        b_term = _uleb(0x08) + _uleb(1) + b"_c\x00"
-        b_node = _uleb(len(b_term)) + b_term + b"\x00"
-        # offsets of the child nodes are only known once the root is laid out
-        for guess in range(8, 64):
-            root = _uleb(0) + b"\x02" + b"_a\x00" + _uleb(guess) + b"_b\x00" + \
-                _uleb(guess + len(a_node))
-            if len(root) == guess:
-                return root + a_node + b_node
-        raise AssertionError("layout")
+        # root -"_"-> {"a": export at image offset 0x1234,
+        #              "b": a weak re-export (no address) -"x"-> "_bx", export at 0x5678}
+        return _trie_bytes([
+            (b"", [(b"_", 1)]),
+            (b"", [(b"a", 2), (b"b", 3)]),
+            (_uleb(0) + _uleb(0x1234), []),
+            (_uleb(0x08 | 0x04) + _uleb(1) + b"_c\x00", [(b"x", 4)]),
+            (_uleb(0) + _uleb(0x5678), [])])
 
     def test_names_offsets_and_skips_reexports(self):
-        self.assertEqual(decode_export_trie(self._trie()), {"_a": (0, 0x1234)})
+        # names are the edges along the path; a re-export's children follow its terminal
+        self.assertEqual(decode_export_trie(self._trie()),
+                         {"_a": (0, 0x1234), "_bx": (0, 0x5678)})
 
     def test_truncated_trie_does_not_raise(self):
-        self.assertIsInstance(decode_export_trie(self._trie()[:5]), dict)
+        # cut anywhere, the trie yields only symbols it states in full
+        trie = self._trie()
+        whole = set(decode_export_trie(trie).items())
+        for n in range(len(trie)):
+            with self.subTest(n=n):
+                self.assertLessEqual(set(decode_export_trie(trie[:n]).items()), whole)
+
+    def test_a_terminal_is_read_inside_its_declared_size(self):
+        # "_a"'s 2-byte terminal ends inside its offset ULEB (0xb4 of 0xb4 0x24): no symbol
+        trie = _trie_bytes([(b"", [(b"_a", 1), (b"_b", 2)]),
+                            (_uleb(0) + _uleb(0x1234)[:1], []),
+                            (_uleb(0) + _uleb(0x5678), [])])
+        self.assertEqual(decode_export_trie(trie), {"_b": (0, 0x5678)})
 
 
 class TestZeroEdge(unittest.TestCase):
@@ -110,13 +134,14 @@ class TestOutlinedFragments(unittest.TestCase):
     (:meth:`proto.arm64_eval.Flow.fragment`): the value it loads into x1 is still there at
     the write, where an AAPCS64 call would have taken x1."""
 
-    def _site(self, frag_lines):
+    def _site(self, frag_lines, before=(), after=()):
+        # *before* / *after*: the function's own instructions either side of the bl
         from unittest import mock
         import proto.writer_flow as WF
         from tests._listing import insns, layout
         frag = tuple(insns(frag_lines, 0x2000))
         _order, fd = layout((0x1000, [
-            ('mov', 'x19, x2'), ('bl', '#0x2000'),          # the fragment loads x1
+            ('mov', 'x19, x2'), *before, ('bl', '#0x2000'), *after,
             ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
         wf = WF.WriterFlow(NoImage(segments=[]), [])
         wf.off_to_ivar = {8: '_a'}
@@ -126,16 +151,29 @@ class TestOutlinedFragments(unittest.TestCase):
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
                 mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
             res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
-        return res.sites[0x1010]
+        return res.sites[0x1010 + 4 * (len(before) + len(after))]
 
     def test_the_value_it_loads_reaches_the_write(self):
         site = self._site([('ldr', 'x1, [x0, #8]')])                     # self->_a
         self.assertEqual((site.number, set(site.value_origins)), (1, {('I', '_a')}))
 
     def test_its_frame_stores_are_the_functions(self):
-        site = self._site([('ldr', 'x8, [x0, #8]'), ('str', 'x8, [sp, #-0x10]'),
-                           ('ldur', 'x1, [sp, #-0x10]')])
-        self.assertEqual(set(site.value_origins), {('I', '_a')})
+        load_a = ('ldr', 'x8, [x0, #8]')                                   # self->_a
+        cases = {
+            "stored and reloaded in the fragment": dict(frag_lines=[
+                load_a, ('str', 'x8, [sp, #-0x10]'), ('ldur', 'x1, [sp, #-0x10]')]),
+            # through an address the fragment computes; the slot outlives the fragment
+            "stored in the fragment, reloaded after it": dict(frag_lines=[
+                load_a, ('sub', 'x9, sp, #0x10'), ('str', 'x8, [x9]')],
+                after=[('ldur', 'x1, [sp, #-0x10]')]),
+            # the fragment's sp is the function's
+            "stored before the fragment, reloaded in it": dict(frag_lines=[
+                ('ldur', 'x1, [sp, #-0x10]')],
+                before=[load_a, ('stur', 'x8, [sp, #-0x10]')]),
+        }
+        for name, kw in cases.items():
+            with self.subTest(name):
+                self.assertEqual(set(self._site(**kw).value_origins), {('I', '_a')})
 
 class TestBoundsReachedAreReported(unittest.TestCase):
     """A summary cut at _MAX_SUMMARY_DEPTH is an unknown part of self: the run says so."""
@@ -338,11 +376,25 @@ class TestReviewFixes(unittest.TestCase):
         self.assertFalse(res.complete)
 
     def test_a_value_through_a_frame_array_reaches_the_write(self):
-        res = self._run((0x1000, [
-            ('mov', 'x19, x2'), ('ldr', 'x8, [x0, #8]'), ('add', 'x9, sp, #0x20'),
-            ('str', 'x8, [x9, x10, lsl #3]'), ('ldr', 'x1, [x9, x11, lsl #3]'),
-            ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
-        self.assertIn(('I', '_a'), set(res.sites[0x101c].value_origins))
+        # x9 = the array; an indexed load is any element of it, an indexed store adds to it
+        cases = {
+            "indexed store, indexed load": [
+                ('str', 'x8, [x9, x10, lsl #3]'), ('ldr', 'x1, [x9, x11, lsl #3]')],
+            "store to element 1, indexed load": [
+                ('str', 'x8, [x9, #8]'), ('ldr', 'x1, [x9, x11, lsl #3]')],
+            "indexed store, load of element 1": [
+                ('str', 'x8, [x9, x10, lsl #3]'), ('ldr', 'x1, [x9, #8]')],
+            "a second indexed store keeps the first": [
+                ('str', 'x8, [x9, x10, lsl #3]'), ('str', 'x12, [x9, x11, lsl #3]'),
+                ('ldr', 'x1, [x9, #8]')],
+        }
+        for name, body in cases.items():
+            lines = [('mov', 'x19, x2'), ('ldr', 'x8, [x0, #8]'), ('add', 'x9, sp, #0x20'),
+                     *body, ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]
+            with self.subTest(name):
+                res = self._run((0x1000, lines))
+                self.assertEqual(set(res.sites[0x1000 + 4 * (len(lines) - 2)].value_origins),
+                                 {('I', '_a')})
 
     def test_a_method_of_self_returns_what_it_is_handed(self):
         """[self f:self->_a] returning its argument: the value written is _a's."""
@@ -351,4 +403,4 @@ class TestReviewFixes(unittest.TestCase):
                       ('mov', 'x1, x0'), ('mov', 'x0, x19'), ('mov', 'w2, #1'),
                       ('bl', '#0x9000'), ('ret', '')]),
             (0x3000, [('mov', 'x0, x2'), ('ret', '')]), own=(0x3000,))
-        self.assertIn(('I', '_a'), set(res.sites[0x1018].value_origins))
+        self.assertEqual(set(res.sites[0x1018].value_origins), {('I', '_a')})

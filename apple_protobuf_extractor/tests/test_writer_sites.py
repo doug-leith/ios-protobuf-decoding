@@ -41,9 +41,10 @@ class TestBindingsAreTheAuthoredNumbers(unittest.TestCase):
                       and iv.name not in _INTERNAL_PB_IVARS]
             want = {f["name"]: f["number"]
                     for f in expected.get(message_of.get(cls.name), {}).get("fields", ())}
-            for ivar, n in W._extract_writeto_field_numbers(ctx, cls, fivars).numbers.items():
-                self.assertEqual(want.get(_proto_name(ivar)), n, f"{cls.name}.{ivar}")
-                checked += 1
+            got = W._extract_writeto_field_numbers(ctx, cls, fivars).numbers
+            # every authored field bound, to its number, and nothing else
+            self.assertEqual({_proto_name(ivar): n for ivar, n in got.items()}, want, cls.name)
+            checked += len(got)
         return checked
 
     def test_every_fixture(self):

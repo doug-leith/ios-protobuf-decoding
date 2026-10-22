@@ -99,7 +99,9 @@ class TestStackSlots(unittest.TestCase):
         k = at_mark(insns)
         from proto.callees import ABI_ARGS, RUNTIME_CONTRACTS
         for reads, want in ((RUNTIME_CONTRACTS["_objc_retain_x19"][0], PLAIN), (ABI_ARGS, None)):
-            with mock.patch.object(AE, 'call_reads', lambda ctx, va, r=reads: r):
+            # the contract of the call's own target; an unknown target reads x0-x8
+            with mock.patch.object(AE, 'call_reads',
+                                   lambda ctx, va, r=reads: r if va == 0x9000 else ABI_ARGS):
                 self.assertEqual(Flow(NoImage(), insns).propagate({}, [k])[k].get('x3'), want)
 
     def test_a_stack_address_handed_once_exposes_the_frame_to_every_later_call(self):
@@ -181,10 +183,6 @@ class TestFlagRuns(unittest.TestCase):
         self.assertEqual(Flow(None, insns).flag_arguments(), ())
 
 
-if __name__ == '__main__':
-    unittest.main()
-
-
 class TestSymbolicValues(unittest.TestCase):
     """A frame address is not a number: it lives above the 64-bit value space, keeps its meaning
     only through copies, adding or subtracting a number, the difference of two and 16-byte
@@ -205,7 +203,7 @@ class TestSymbolicValues(unittest.TestCase):
     def test_a_frame_address_plus_a_number(self):
         self.assertEqual(self.known('add x8, sp, #0x40'), _STACK_TOP + 0x40)
         self.assertEqual(self.known('mov x9, #-0x10', 'add x8, sp, x9'), _STACK_TOP - 0x10)
-        self.assertEqual(self.known('sub x8, sp, #0x40', 'and x8, x8, #-0x10'), _STACK_TOP - 0x40)
+        self.assertEqual(self.known('sub x8, sp, #0x48', 'and x8, x8, #-0x10'), _STACK_TOP - 0x50)
         self.assertEqual(self.known('add x9, sp, #0x40', 'add x10, sp, #8', 'sub x8, x9, x10'), 0x38)
 
     def test_what_depends_on_where_the_stack_is_is_unknown(self):
@@ -222,7 +220,8 @@ class TestSymbolicValues(unittest.TestCase):
 
     def test_flags_of_a_frame_address(self):
         """Two frame addresses compare by their offsets; against a number, unknown."""
-        decided = listing('add x9, sp, #0x10', 'add x10, sp, #0x20', 'cmp x9, x10',
+        # one below the entry sp, one above
+        decided = listing('sub x9, sp, #0x10', 'add x10, sp, #0x20', 'cmp x9, x10',
                           'b.lo @lo', 'mov x8, #1', f'bl {CALL}', 'ret', 'lo:', 'mov x8, #2',
                           f'bl {CALL}', 'ret')
         ks = [k for k, i in enumerate(decided) if i.mnemonic == 'bl']
@@ -296,3 +295,7 @@ class TestFlagsOfFrameAddresses(unittest.TestCase):
             with self.subTest(op=op):
                 self.assertEqual(self.x8_at_calls('add x9, sp, #0x10', 'add x10, sp, #0x20', op,
                                                   'b.cs @other'), [1, 2])
+
+
+if __name__ == '__main__':
+    unittest.main()

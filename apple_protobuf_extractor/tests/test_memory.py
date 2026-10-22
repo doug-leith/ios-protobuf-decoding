@@ -23,6 +23,30 @@ def ctx(code: bytes, vmaddr: int = TEXT_VA) -> BinaryContext:
     return BinaryContext(build_text_binary(code, vmaddr=vmaddr))
 
 
+# Two segments whose file bytes are adjacent, the first holding two sections: a section that
+# is not its segment's start or whole, and a read or a string that runs on past its segment
+# into the next one's bytes, rather than to the end of the file.
+TWO_TEXT, TWO_CSTR, TWO_DATA = 0x1000, 0x1010, 0x2000
+TWO_FILEOFF = 32 + (72 + 2 * 80) + (72 + 80)
+TWO_CODE = NOP_BYTES * 4
+TWO_CSTR_BYTES = b"abcdefghijklmnop"            # no terminator inside __TEXT
+TWO_DATA_BYTES = b"\x00" * 8 + b"\xaa" * 8
+
+
+def two_segments() -> BinaryContext:
+    import tests.conftest as cf
+    text = cf._pack_segment64('__TEXT', vmaddr=TWO_TEXT, vmsize=0x20, fileoff=TWO_FILEOFF,
+                              filesize=0x20, sections=[
+        cf._pack_section64('__text', '__TEXT', TWO_TEXT, 0x10, TWO_FILEOFF),
+        cf._pack_section64('__cstring', '__TEXT', TWO_CSTR, 0x10, TWO_FILEOFF + 0x10)])
+    data = cf._pack_segment64('__DATA', vmaddr=TWO_DATA, vmsize=0x10,
+                              fileoff=TWO_FILEOFF + 0x20, filesize=0x10, sections=[
+        cf._pack_section64('__data', '__DATA', TWO_DATA, 0x10, TWO_FILEOFF + 0x20)])
+    hdr = cf._pack_header(ncmds=2, sizeofcmds=len(text) + len(data))
+    assert len(hdr + text + data) == TWO_FILEOFF
+    return BinaryContext(hdr + text + data + TWO_CODE + TWO_CSTR_BYTES + TWO_DATA_BYTES)
+
+
 # ─── Header validation ────────────────────────────────────────────────────────
 
 class TestHeaderValidation:
@@ -37,31 +61,45 @@ class TestHeaderValidation:
         data = struct.pack('<I', MH_MAGIC_64) + b'\x00' * 16   # 20 bytes < 32
         with pytest.raises(ValueError, match="too short"):
             BinaryContext(data)
+        with pytest.raises(ValueError, match="too short"):     # one byte under the header
+            BinaryContext(struct.pack('<I', MH_MAGIC_64) + b'\x00' * 27)
 
     def test_bad_magic(self):
-        data = struct.pack('<IIIIIIII', 0xDEADBEEF, 0,0,0,0,0,0,0) + b'\x00' * 200
-        with pytest.raises(ValueError):
-            BinaryContext(data)
+        # An arm64 CPU type, so only the magic is wrong (a 32-bit Mach-O's among them)
+        for magic in (0xDEADBEEF, 0xFEEDFACE):
+            data = struct.pack('<IIIIIIII', magic, CPU_TYPE_ARM64, 0, 2, 0, 0, 0, 0) \
+                + b'\x00' * 200
+            with pytest.raises(ValueError, match="Not a 64-bit LE Mach-O"):
+                BinaryContext(data)
 
     def test_fat_magic_rejected(self):
         data = struct.pack('<IIIIIIII', FAT_MAGIC, 0,0,0,0,0,0,0) + b'\x00' * 200
         with pytest.raises(ValueError, match="[Ff]at"):
             BinaryContext(data)
+        # a fat file's own first bytes (fat.h: FAT_MAGIC 0xcafebabe, stored big-endian)
+        with pytest.raises(ValueError, match="[Ff]at"):
+            BinaryContext(b'\xca\xfe\xba\xbe' + b'\x00' * 228)
 
     def test_be_magic_rejected(self):
         data = struct.pack('<IIIIIIII', MH_CIGAM_64, 0,0,0,0,0,0,0) + b'\x00' * 200
         with pytest.raises(ValueError, match="[Bb]ig"):
             BinaryContext(data)
+        # a big-endian 64-bit header's own first bytes (MH_MAGIC_64 0xfeedfacf, big-endian)
+        with pytest.raises(ValueError, match="[Bb]ig"):
+            BinaryContext(b'\xfe\xed\xfa\xcf' + b'\x00' * 228)
 
     def test_truncated_load_commands(self):
-        # ncmds=1, sizeofcmds=1000, but binary only has 100 bytes after header
+        # ncmds=1, sizeofcmds=1000, but binary only has 100 bytes after header; the command
+        # there is well formed, so only the truncation can reject it
+        import tests.conftest as cf
+        seg = cf._pack_segment64('__TEXT', vmaddr=0x1000, vmsize=0, fileoff=0, filesize=0)
         data = struct.pack('<IIIIIIII',
             MH_MAGIC_64, CPU_TYPE_ARM64, 0, 2,
             1,    # ncmds
             1000, # sizeofcmds
             0, 0
-        ) + b'\x00' * 100
-        with pytest.raises(ValueError):
+        ) + seg + b'\x00' * (100 - len(seg))
+        with pytest.raises(ValueError, match="truncated: need 1032 bytes"):
             BinaryContext(data)
 
     def test_valid_arm64_binary(self):
@@ -88,6 +126,11 @@ class TestCpuProperties:
         patched = binary[:8] + struct.pack('<I', 0x80000002) + binary[12:]
         c = BinaryContext(patched)
         assert c.is_arm64e
+        # arm64e is the subtype's low byte, with or without the capability bits above it
+        for subtype, arm64e in ((0x00000002, True), (0x81000002, True), (0x80000000, False),
+                                (0x80000001, False)):
+            patched = binary[:8] + struct.pack('<I', subtype) + binary[12:]
+            assert BinaryContext(patched).is_arm64e is arm64e, hex(subtype)
 
     def test_image_base(self):
         c = ctx(NOP_BYTES, vmaddr=0x1000)
@@ -131,22 +174,30 @@ class TestSectionAccess:
     def test_has_section_false(self):
         c = ctx(NOP_BYTES)
         assert not c.has_section('__DATA', '__data')
+        # A section is named by its segment and its own name together
+        c = two_segments()
+        assert not c.has_section('__DATA', '__text')
+        assert not c.has_section('__TEXT', '__data')
 
     def test_section_vmaddr(self):
         c = ctx(NOP_BYTES, vmaddr=TEXT_VA)
         sect = c.section('__TEXT', '__text')
         assert sect.vmaddr == TEXT_VA
+        assert two_segments().section('__TEXT', '__cstring').vmaddr == TWO_CSTR
 
     def test_section_size(self):
         code = NOP_BYTES * 5
         c    = ctx(code)
         sect = c.section('__TEXT', '__text')
         assert sect.size == len(code)
+        assert two_segments().section('__TEXT', '__text').size == 0x10     # (segment: 0x20)
 
     def test_section_missing_raises(self):
         c = ctx(NOP_BYTES)
         with pytest.raises(KeyError):
             c.section('__DATA', '__data')
+        with pytest.raises(KeyError):                  # (the name in another segment)
+            two_segments().section('__DATA', '__text')
 
     def test_section_has_file_content(self):
         c    = ctx(NOP_BYTES)
@@ -169,19 +220,25 @@ class TestReadBytes:
 
     def test_unmapped_raises(self):
         c = ctx(NOP_BYTES)
-        with pytest.raises(ValueError):
-            c.read_bytes(0xDEAD0000, 4)
+        for va in (0xDEAD0000, 0, TEXT_VA - 4, TEXT_VA + 4):     # above, below, just outside
+            with pytest.raises(ValueError):
+                c.read_bytes(va, 4)
 
     def test_overrun_raises(self):
         c = ctx(NOP_BYTES)   # only 4 bytes of code
         with pytest.raises(ValueError):
             c.read_bytes(TEXT_VA, 8)   # ask for 8 bytes
+        # The segment's end, not the file's: __DATA's bytes follow __TEXT's
+        c = two_segments()
+        assert c.read_bytes(TWO_CSTR, 0x10) == TWO_CSTR_BYTES
+        with pytest.raises(ValueError, match="overruns segment"):
+            c.read_bytes(TWO_CSTR, 0x14)
 
     def test_zero_length_no_error(self):
         c = ctx(NOP_BYTES * 4)
         # Reading 0 bytes at a valid address is pathological but must not crash
-        off = c.vmaddr_to_offset(TEXT_VA, 1)   # just validate offset works
-        assert off >= 0
+        assert c.read_bytes(TEXT_VA + 4, 0) == b''
+        assert c.vmaddr_to_offset(TEXT_VA + 4, 1) == 32 + 72 + 80 + 4      # the file offset
 
 
 # ─── Primitive readers ────────────────────────────────────────────────────────
@@ -198,6 +255,9 @@ class TestPrimitiveReaders:
         code = struct.pack('<Q', val)
         c    = ctx(code)
         assert c.read_u64(TEXT_VA) == val
+        # Unsigned: bit 63 (a bind or authentication bit) is part of the value
+        assert ctx(struct.pack('<Q', 0x8010000000000001)).read_u64(TEXT_VA) \
+            == 0x8010000000000001
 
     def test_read_s32_negative(self):
         code = struct.pack('<i', -42)
@@ -208,6 +268,8 @@ class TestPrimitiveReaders:
         code = struct.pack('<q', -1)
         c    = ctx(code)
         assert c.read_s64(TEXT_VA) == -1
+        # All eight bytes, in order (-1 reads as -1 at any signed width and either order)
+        assert ctx(struct.pack('<q', -0x123456789)).read_s64(TEXT_VA) == -0x123456789
 
 
 # ─── read_cstring ─────────────────────────────────────────────────────────────
@@ -228,6 +290,10 @@ class TestReadCstring:
         c    = ctx(code)
         with pytest.raises(ValueError):
             c.read_cstring(TEXT_VA, max_len=4)
+        c = ctx(b'abcdefgh\x00')       # a null past max_len
+        with pytest.raises(ValueError):
+            c.read_cstring(TEXT_VA, max_len=4)
+        assert c.read_cstring(TEXT_VA, max_len=9) == 'abcdefgh'
 
 
 # ─── find_cstring_in_section ─────────────────────────────────────────────────
@@ -238,11 +304,15 @@ class TestFindCstring:
         c    = ctx(code)
         va   = c.find_cstring_in_section('__TEXT', '__text', 'two')
         assert va == TEXT_VA + 4    # 'two' starts at offset 4
+        # a whole C string, not a prefix of an earlier one
+        c = ctx(b'twofold\x00two\x00')
+        assert c.find_cstring_in_section('__TEXT', '__text', 'two') == TEXT_VA + 8
 
     def test_missing_string_returns_none(self):
         code = b'hello\x00'
         c    = ctx(code)
         assert c.find_cstring_in_section('__TEXT', '__text', 'world') is None
+        assert c.find_cstring_in_section('__TEXT', '__text', 'hell') is None   # (a prefix)
 
     def test_missing_section_returns_none(self):
         c = ctx(NOP_BYTES)
@@ -253,15 +323,16 @@ class TestFindCstring:
 
 class TestIterPtrs:
     def test_three_pointers(self):
-        code = ptr64(0xAAA) + ptr64(0xBBB) + ptr64(0xCCC)
+        # (above 2**32: all 8 bytes of each slot)
+        code = ptr64(0x1_0000_0AAA) + ptr64(0x1_0000_0BBB) + ptr64(0x1_0000_0CCC)
         c    = ctx(code)
         vals = list(c.iter_ptrs(TEXT_VA, 3))
-        assert vals == [0xAAA, 0xBBB, 0xCCC]
+        assert vals == [0x1_0000_0AAA, 0x1_0000_0BBB, 0x1_0000_0CCC]
 
     def test_single_pointer(self):
-        code = ptr64(0x12345678)
+        code = ptr64(0x1_2345_6780)
         c    = ctx(code)
-        assert list(c.iter_ptrs(TEXT_VA, 1)) == [0x12345678]
+        assert list(c.iter_ptrs(TEXT_VA, 1)) == [0x1_2345_6780]
 
 
 # ─── Zerofill / BSS sections ─────────────────────────────────────────────────
@@ -339,9 +410,11 @@ class TestImageBase:
         assert ctx.image_base == 0x100004000
 
     def test_image_base_cached(self):
-        """Calling image_base twice should return the same value."""
+        """image_base is found once, when the load commands are read, not on each access."""
         ctx = self._binary_with_pagezero()
-        assert ctx.image_base == ctx.image_base
+        ctx._segments = []                  # (a recomputed base would be 0 now)
+        assert ctx.image_base == 0x100004000
+        assert ctx.image_base == 0x100004000
 
 
 # ─── Bad load command ────────────────────────────────────────────────────────
@@ -380,6 +453,8 @@ class TestReadCstringBoundary:
         assert ctx.read_cstring(TEXT_VA, None) == name.decode()
         with pytest.raises(ValueError):
             ctx.read_cstring(TEXT_VA)
+        with pytest.raises(ValueError):     # the segment's end, not the file's
+            two_segments().read_cstring(TWO_CSTR, None)
 
     def test_no_null_within_segment_raises(self):
         """If there's no null within the segment, read_cstring must raise."""
@@ -387,6 +462,9 @@ class TestReadCstringBoundary:
         ctx  = BinaryContext(build_text_binary(code, vmaddr=TEXT_VA))
         with pytest.raises(ValueError):
             ctx.read_cstring(TEXT_VA, max_len=10)
+        # ... even when the next segment's bytes, right after it in the file, hold one
+        with pytest.raises(ValueError):
+            two_segments().read_cstring(TWO_CSTR, max_len=40)
 
 
 # ─── Section cmdsize validation ──────────────────────────────────────────────
@@ -434,6 +512,7 @@ def _build_from_cache_fixture(base: int = 0x100000000):
     Build a synthetic single-mapping cache and return
     ``(cache_path_str, base, content_bytes)``.
 
+    The mapping starts 0x1000 below *base* (the cache's base is not the image's).
     Content layout (all offsets relative to *base*):
       +0x0000  mach-o header + one LC_SEGMENT_64 (__TEXT, 0x5000 bytes)
       +0x1000  class name cstring  "CacheClass\\0"
@@ -446,9 +525,9 @@ def _build_from_cache_fixture(base: int = 0x100000000):
     # mach-o header + minimal LC_SEGMENT_64
     lc_size = 72
     _struct.pack_into('<I', content,  0, 0xFEEDFACF)
-    _struct.pack_into('<I', content,  4, 12)
+    _struct.pack_into('<I', content,  4, CPU_TYPE_ARM64)
     _struct.pack_into('<I', content,  8, 0)
-    _struct.pack_into('<I', content, 12, 8)
+    _struct.pack_into('<I', content, 12, 6)          # MH_DYLIB
     _struct.pack_into('<I', content, 16, 1)
     _struct.pack_into('<I', content, 20, lc_size)
     _struct.pack_into('<I', content, 32, 0x19)
@@ -466,19 +545,25 @@ def _build_from_cache_fixture(base: int = 0x100000000):
     _struct.pack_into('<Q', content, 0x2000 + 24, name_va)
     _struct.pack_into('<Q', content, 0x3000 + 32, ro_va)
     _struct.pack_into('<Q', content, 0x4000, cls_va)
+    # Two encoded pointers (DyldCacheReader.decode_ptr): an arm64e authenticated rebase,
+    # its low 32 bits the offset from the cache base, and a plain-arm64 cache's, its low
+    # 36 bits the address under metadata bits
+    _struct.pack_into('<Q', content, 0x4800, (1 << 63) | (0x1000 + 0x2000))
+    _struct.pack_into('<Q', content, 0x4808, (0x5 << 48) | name_va)
 
     # Pack into a minimal cache file
+    mapped   = bytes(0x1000) + content
     MAP_OFF  = 0x200
     cont_off = (MAP_OFF + 32 + 0xfff) & ~0xfff
-    total    = cont_off + len(content)
+    total    = cont_off + len(mapped)
     buf      = bytearray(total)
     buf[0:16] = _CACHE_MAGIC
     _struct.pack_into('<I', buf, 0x10, MAP_OFF)
     _struct.pack_into('<I', buf, 0x14, 1)
-    _struct.pack_into('<QQQ', buf, MAP_OFF, base, len(content), cont_off)
+    _struct.pack_into('<QQQ', buf, MAP_OFF, base - 0x1000, len(mapped), cont_off)
     _struct.pack_into('<I',   buf, MAP_OFF + 24, 5)
     _struct.pack_into('<I',   buf, MAP_OFF + 28, 5)
-    buf[cont_off : cont_off + len(content)] = content
+    buf[cont_off : cont_off + len(mapped)] = mapped
 
     tmpdir   = _tempfile.mkdtemp()
     path     = _os.path.join(tmpdir, 'dyld_shared_cache_arm64')
@@ -533,17 +618,22 @@ class TestBinaryContextFromCache:
 
     def test_has_section_absent(self):
         assert not self._ctx.has_section('__EXTRA_OBJC', '__objc_selrefs')
+        assert not self._ctx.has_section('__TEXT', '__objc_classlist')   # (__DATA_CONST's)
 
     def test_section_vmaddr_and_size(self):
         sec = self._ctx.section('__DATA_CONST', '__objc_classlist')
         assert sec.vmaddr == self._base + 0x4000
         assert sec.vmsize == 8
+        sec = self._ctx.section('__TEXT', '__objc_classname')            # (not its segment's)
+        assert (sec.vmaddr, sec.vmsize) == (self._base + 0x1000, 0x100)
 
     # ── read primitives ───────────────────────────────────────────────────────
 
     def test_read_u64(self):
         # class_t.data at offset 32 → class_ro_t VA
         assert self._ctx.read_u64(self._base + 0x3000 + 32) == self._base + 0x2000
+        # the word as stored, not decoded
+        assert self._ctx.read_u64(self._base + 0x4800) == (1 << 63) | 0x3000
 
     def test_read_u32_magic(self):
         assert self._ctx.read_u32(self._base) == 0xFEEDFACF
@@ -552,17 +642,23 @@ class TestBinaryContextFromCache:
         assert self._ctx.read_cstring(self._base + 0x1000) == 'CacheClass'
 
     def test_read_bytes(self):
-        raw = self._ctx.read_bytes(self._base, 4)
-        assert _struct.unpack_from('<I', raw)[0] == 0xFEEDFACF
+        assert self._ctx.read_bytes(self._base, 4) == _struct.pack('<I', 0xFEEDFACF)
+        assert self._ctx.read_bytes(self._base + 0x1000, 11) == b'CacheClass\x00'
 
     def test_read_ptr_decodes(self):
         # class_ro_t VA is in the mapping → returned unchanged
         assert self._ctx.read_ptr(self._base + 0x3000 + 32) == self._base + 0x2000
+        # encoded pointers -> their targets
+        assert self._ctx.read_ptr(self._base + 0x4800) == self._base + 0x2000
+        assert self._ctx.read_ptr(self._base + 0x4808) == self._base + 0x1000
 
     def test_iter_ptrs_classlist(self):
         ptrs = list(self._ctx.iter_ptrs(self._base + 0x4000, 1))
         assert len(ptrs) == 1
         assert ptrs[0] == self._base + 0x3000
+        # consecutive 8-byte slots, each decoded
+        assert list(self._ctx.iter_ptrs(self._base + 0x4800, 2)) \
+            == [self._base + 0x2000, self._base + 0x1000]
 
     def test_read_unmapped_raises(self):
         with pytest.raises(ValueError):
@@ -607,10 +703,13 @@ class TestImportNameForBind:
         c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
         # A real mapped vmaddr is far below 2**62 → never mistaken for a bind.
         assert c.import_name_for_bind(0x101c6ae70) is None
+        # (its low bits an ordinal the table has, bit 32 set)
+        assert c.import_name_for_bind(0x100000001) is None
 
     def test_ordinal_out_of_range_returns_none(self):
         c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
         assert c.import_name_for_bind(0x8010000000000099) is None
+        assert c.import_name_for_bind(0x8010000000000002) is None    # (one past the end)
 
     def test_empty_imports_returns_none(self):
         c = self._ctx_with_imports([])
@@ -631,7 +730,11 @@ class TestImportNameForBind:
         from macho.memory import _DYLD_PTR_64, _DYLD_PTR_ARM64E
         c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
         c._chain_formats = {_DYLD_PTR_64, _DYLD_PTR_ARM64E}
+        # a bind in each format alone
         assert c.import_name_for_bind(0x8010000000000001) is None
+        assert c.import_name_for_bind(0xC000000000000001) is None
+        c._chain_formats = {_DYLD_PTR_64, _DYLD_PTR_ARM64E, 6}
+        assert c.import_name_for_bind(0xC000000000000001) is None
 
 
 def _uleb(n: int) -> bytes:
@@ -707,8 +810,9 @@ class TestIterSymbolNames:
         assert list(c.iter_symbol_names()) == ["sym"]
 
     def test_out_of_range_offsets_are_safe(self):
-        # symoff past EOF and export-trie base past EOF -> no crash, no names
-        c = _bare_ctx(b"abcd", symtab=(999, 5, 0, 4), export_trie=(999, 10))
+        # symoff past EOF and export-trie base past EOF -> no crash, no names (a string
+        # table in range, so the symoff bound is what stops the nlist read)
+        c = _bare_ctx(b"\x00abc", symtab=(999, 5, 1, 3), export_trie=(999, 10))
         assert list(c.iter_symbol_names()) == []
 
     def test_nlist_out_of_range_symoff_is_safe_in_isolation(self):
@@ -830,8 +934,9 @@ class TestFunctionStarts:
         assert [e[:2] for e in unread_input(c)] == [("function starts", "0x8")]
 
     def test_without_the_command_there_are_none(self):
-        c = _bare_ctx(b"\x00" * 64)
-        c._segments, c._cache_reader = [], None
+        from types import SimpleNamespace as NS
+        c = _bare_ctx(_uleb(0x10) + _uleb(0x20) + b"\x00" + b"\x01" * 16)
+        c._segments, c._cache_reader = [NS(name="__TEXT", vmaddr=0x1000)], None
         c._function_starts_lc = c._function_starts = None
         assert c.function_starts() == []
 

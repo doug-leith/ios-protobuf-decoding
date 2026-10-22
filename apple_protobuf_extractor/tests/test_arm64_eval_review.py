@@ -32,8 +32,9 @@ class TestFlowReview(unittest.TestCase):
         self.assertIsNone(f.const_before(3, 'x8'))
 
     def test_a_trap_ends_a_block(self):
+        # what follows the brk ends in a branch: only the trap can leave its block no successor
         insns = [I(B, 'cmp', 'w8, #3'), I(B + 4, 'b.hs', '#0x100c'), I(B + 8, 'ret'),
-                 I(B + 12, 'brk', '#0x1'), I(B + 16, 'mov', 'w0, #1'), I(B + 20, 'ret')]
+                 I(B + 12, 'brk', '#0x1'), I(B + 16, 'mov', 'w0, #1'), I(B + 20, 'b', '#0x1008')]
         self.assertEqual(Flow(None, insns).cfg.succ[B + 12], [])
 
     def test_evaluate_stops_at_an_authenticated_branch_and_a_trap(self):
@@ -76,11 +77,13 @@ class TestFlowReview(unittest.TestCase):
         loads = {}
         model = Objects(pointer=is_pointer,
                         field_value=lambda v, d: loads.setdefault((v, d), pointer(10 + len(loads))))
+        # the cbz and the tbnz each branch to a call of their own
         insns = [I(B, 'ldr', 'x8, [x20, #0x10]'), I(B + 4, 'cbz', 'x8, #0x1014'),
-                 I(B + 8, 'tbnz', 'x8, #63, #0x1014'), I(B + 12, 'bl', '#0x9000'), I(B + 16, 'ret'),
-                 I(B + 20, 'bl', '#0xa000'), I(B + 24, 'ret')]
+                 I(B + 8, 'tbnz', 'x8, #63, #0x101c'), I(B + 12, 'bl', '#0x9000'), I(B + 16, 'ret'),
+                 I(B + 20, 'bl', '#0xa000'), I(B + 24, 'ret'), I(B + 28, 'bl', '#0xb000'),
+                 I(B + 32, 'ret')]
         reg = Flow(None, insns).run_from(0, {'x20': pointer(0)}, objects=model)
-        self.assertEqual(sorted(c.addr for c in reg.calls), [B + 12, B + 20])
+        self.assertEqual(sorted(c.addr for c in reg.calls), [B + 12, B + 20, B + 28])
         arith = [I(B, 'sub', 'x0, x20, x21'), I(B + 4, 'and', 'x1, x20, #0xfffffffffffffff'),
                  I(B + 8, 'ret')]
         got = Flow(None, arith).propagate({'x20': pointer(0, 8), 'x21': pointer(1)}, [2],
@@ -97,9 +100,11 @@ class TestSymbolicValues(unittest.TestCase):
 
     def test_defined(self):
         f = E.frame(-0x20)
-        self.assertEqual((f + 0x10, f - 0x10, E.frame(8) - f, f < E.frame(0)),
-                         (E.frame(-0x10), E.frame(-0x30), 0x28, True))
-        self.assertEqual(pointer(3, 8) + 8, pointer(3, 16))
+        self.assertEqual((f + 0x10, 0x10 + f, f - 0x10, E.frame(8) - f, f < E.frame(0)),
+                         (E.frame(-0x10), E.frame(-0x10), E.frame(-0x30), 0x28, True))
+        self.assertEqual((f < f, f <= f, E.frame(0) <= f), (False, True, False))
+        self.assertEqual((pointer(3, 8) + 8, 8 + pointer(3, 8), pointer(3, 16) - 8),
+                         (pointer(3, 16), pointer(3, 16), pointer(3, 8)))
 
     def test_anything_else_raises(self):
         tok = Sym("token", "self")

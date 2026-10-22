@@ -7,6 +7,7 @@ estimated-field count, the CLI exit status, rejection of input that cannot be de
 C++ duplicate-message resolution and the native-decoder notice.  Everything runs on the
 compiled synthetic fixtures or on tiny hand-built inputs (no dyld cache needed).
 """
+import contextlib
 import io
 import os
 import struct
@@ -29,6 +30,7 @@ from tests.test_synthetic_fixtures import _FIXTURES_DIR, load_macho_slice
 
 _FIXTURE = os.path.join(_FIXTURES_DIR, 'f1_writeto_fieldnum', 'testmsg')
 _HAVE_FIXTURE = os.path.exists(_FIXTURE)
+_FIXTURE_MANY = os.path.join(_FIXTURES_DIR, 'f10_geo_log_message', 'testlm')    # eight classes
 
 
 def _load(path=_FIXTURE):
@@ -37,6 +39,22 @@ def _load(path=_FIXTURE):
     ctx = BinaryContext(data)
     st = build_string_table(ctx)
     return ctx, st, build_class_list(ctx, st)
+
+
+@contextlib.contextmanager
+def _first_class_failing():
+    """extract_proto_message raises for the first class; yields the list of its name."""
+    import proto.extractor as E
+    real = E.extract_proto_message
+    seen = []
+
+    def flaky(ctx_, st_, cl_, cls, **kw):
+        if not seen:
+            seen.append(cls.name)
+            raise RuntimeError('boom')
+        return real(ctx_, st_, cl_, cls, **kw)
+    with mock.patch.object(E, 'extract_proto_message', flaky):
+        yield seen
 
 
 class TestDiagnosticsObject(unittest.TestCase):
@@ -48,15 +66,21 @@ class TestDiagnosticsObject(unittest.TestCase):
         d = get_diagnostics(ctx)
         self.assertIsInstance(d, ExtractionDiagnostics)
         self.assertIs(get_diagnostics(ctx), d)
+        self.assertIsNot(get_diagnostics(Ctx()), d)          # another ctx: its own
         self.assertEqual(d.n_errors, 0)
 
     def test_only_dropped_output_counts_as_an_error(self):
         d = ExtractionDiagnostics()
         d.unevaluated_switches.append(('C', 'f', 'why'))
+        d.analysis_failures.append(('C', 'readFrom: dispatch', 'why'))
+        d.heuristics_hit.append(('_CAP', 'at 1'))
         self.assertEqual(d.n_errors, 0)            # an undecided field is flagged, not an error
-        d.failed_classes.append(('C', 'boom'))
-        d.foreign_errors.append(('swift', 'boom'))
-        self.assertEqual(d.n_errors, 2)
+        for n, (name, entry) in enumerate((('failed_classes', ('C', 'boom')),
+                                           ('foreign_errors', ('swift', 'boom')),
+                                           ('failed_passes', ('pass', 'boom', 'skipped')),
+                                           ('unread', ('class', '0x10', 'boom'))), 1):
+            getattr(d, name).append(entry)
+            self.assertEqual(d.n_errors, n, name)
 
 
     def test_another_images_entries_are_merged_under_its_name(self):
@@ -130,6 +154,13 @@ class TestFailedClassesAreReported(unittest.TestCase):
             emitter.print_summary(messages, files, diagnostics=get_diagnostics(ctx), file=out)
         self.assertIn('classes FAILED (missing)', out.getvalue())
         self.assertIn(victim, err.getvalue())
+        # the CLI's status of the same run (a dylib: no enum escalation)
+        args = cli._build_parser().parse_args(['--binary', _FIXTURE, '--dry-run'])
+        with mock.patch.object(sys, 'stderr', io.StringIO()), \
+                mock.patch.object(sys, 'stdout', io.StringIO()):
+            status = cli._build_and_write_output(messages, args, 'testmsg', ctx,
+                                                 emitter.InputKind.DYLIB)
+        self.assertEqual(status, cli.EXIT_INCOMPLETE)
 
 
 @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
@@ -145,27 +176,21 @@ class TestCliEndToEnd(unittest.TestCase):
             self.assertTrue(files)
             text = open(os.path.join(out, files[0])).read()
             self.assertIn('confirmed field numbers', text.split('\n\n')[0])
-            if shutil.which('protoc'):
-                r = subprocess.run(['protoc', f'--proto_path={out}', '--descriptor_set_out=/dev/null',
-                                    files[0]], capture_output=True, text=True)
-                self.assertEqual(r.returncode, 0, r.stderr)
+            if not shutil.which('protoc'):
+                self.skipTest('protoc not on PATH: its acceptance not checked')
+            r = subprocess.run(['protoc', f'--proto_path={out}', '--descriptor_set_out=/dev/null',
+                                files[0]], capture_output=True, text=True)
+            self.assertEqual(r.returncode, 0, r.stderr)
 
+    @unittest.skipUnless(os.path.exists(_FIXTURE_MANY), 'synthetic fixture binary not built')
     def test_run_that_dropped_a_class_exits_non_zero(self):
-        import proto.extractor as E
-        real = E.extract_proto_message
-        seen = []
-
-        def flaky(ctx_, st_, cl_, cls, **kw):
-            if not seen:
-                seen.append(cls.name)
-                raise RuntimeError('boom')
-            return real(ctx_, st_, cl_, cls, **kw)
-
-        with mock.patch.object(E, 'extract_proto_message', flaky), \
-                mock.patch.object(sys, 'stderr', io.StringIO()), \
-                mock.patch.object(sys, 'stdout', io.StringIO()):
-            rc = cli.main(['--binary', _FIXTURE, '--dry-run'])
-        self.assertEqual(rc, cli.EXIT_INCOMPLETE)
+        # the other classes written; and the one class of f1 dropped, nothing written
+        for fixture in (_FIXTURE_MANY, _FIXTURE):
+            with self.subTest(fixture=os.path.basename(fixture)), _first_class_failing(), \
+                    mock.patch.object(sys, 'stderr', io.StringIO()), \
+                    mock.patch.object(sys, 'stdout', io.StringIO()):
+                rc = cli.main(['--binary', fixture, '--dry-run'])
+                self.assertEqual(rc, cli.EXIT_INCOMPLETE)
 
 
 class TestUnreadInputIsAnError(unittest.TestCase):
@@ -178,13 +203,17 @@ class TestUnreadInputIsAnError(unittest.TestCase):
         class Ctx:
             pass
         ctx = Ctx()
-        with self.assertLogs('macho.memory', 'WARNING'):
+        diag = get_diagnostics(ctx)                 # fetched first: the context's own list
+        with self.assertLogs('macho.memory', 'WARNING') as logs:
             record_unread(ctx, 'ivar list', '0x10', ValueError('unmapped'))
-        record_unread(ctx, 'ivar list', '0x10', ValueError('unmapped'))
-        diag = get_diagnostics(ctx)
-        self.assertEqual(diag.unread, [('ivar list', '0x10', 'ValueError: unmapped')])
-        self.assertEqual(diag.n_errors, 1)
-        self.assertEqual(diag.as_dict()['unread'], [['ivar list', '0x10', 'ValueError: unmapped']])
+            record_unread(ctx, 'ivar list', '0x20', ValueError('unmapped'))    # another place
+        self.assertEqual(len(logs.output), 1)       # warned once per kind
+        record_unread(ctx, 'ivar list', '0x10', ValueError('unmapped'))        # the same place
+        self.assertEqual(diag.unread, [('ivar list', '0x10', 'ValueError: unmapped'),
+                                       ('ivar list', '0x20', 'ValueError: unmapped')])
+        self.assertEqual(diag.n_errors, 2)
+        self.assertEqual(diag.as_dict()['unread'], [['ivar list', '0x10', 'ValueError: unmapped'],
+                                                    ['ivar list', '0x20', 'ValueError: unmapped']])
 
     @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
     def test_an_unreadable_class_reaches_the_run(self):
@@ -226,15 +255,18 @@ class TestUnreadInputIsAnError(unittest.TestCase):
     @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
     def test_the_cli_writes_its_diagnostics(self):
         import json
-        with tempfile.TemporaryDirectory() as out, \
+        with tempfile.TemporaryDirectory() as out, _first_class_failing() as failed, \
                 mock.patch.object(sys, 'stderr', io.StringIO()), \
                 mock.patch.object(sys, 'stdout', io.StringIO()):
             rc = cli.main(['--binary', _FIXTURE, '--dry-run',
                            '--diagnostics-json', os.path.join(out, 'd.json')])
             got = json.load(open(os.path.join(out, 'd.json')))
-        self.assertEqual(rc, 0)
-        self.assertEqual(sorted(got), sorted(ExtractionDiagnostics().as_dict()))
-        self.assertTrue(all(v == [] for v in got.values()), got)
+        self.assertEqual(rc, cli.EXIT_INCOMPLETE)
+        # this run's entries, every list by name
+        self.assertEqual(got, {'failed_classes': [[failed[0], 'RuntimeError: boom']],
+                               'foreign_errors': [], 'unevaluated_switches': [],
+                               'failed_passes': [], 'analysis_failures': [],
+                               'heuristics_hit': [], 'unread': []})
 
 
 class TestInputThatCannotBeDecodedIsRejected(unittest.TestCase):
@@ -254,8 +286,11 @@ class TestInputThatCannotBeDecodedIsRejected(unittest.TestCase):
     def test_truncated_file_is_an_error(self):
         with open(_FIXTURE, 'rb') as fh:
             data = load_macho_slice(fh.read())
-        with self.assertRaisesRegex(ValueError, 'truncated'):
-            BinaryContext(data[:len(data) // 2])
+        # whole segments past the end; one byte short (inside the last segment); inside the
+        # load commands
+        for cut in (len(data) // 2, len(data) - 1, 40):
+            with self.subTest(cut=cut), self.assertRaisesRegex(ValueError, 'truncated'):
+                BinaryContext(data[:cut])
 
 
 class TestSummaryAndHeaderDoNotHideEstimates(unittest.TestCase):
@@ -284,12 +319,13 @@ class TestSummaryAndHeaderDoNotHideEstimates(unittest.TestCase):
     def test_incomplete_enums_are_counted_in_header_and_summary(self):
         e = ProtoEnum('E', [ProtoEnumValue('E_A', 1)], values_truncated=True,
                       incomplete_reason='value 3: loop at 0x10')
-        msgs = [self._msg(1, 0, enums=[e])]
+        whole = ProtoEnum('F', [ProtoEnumValue('F_A', 1)])            # not counted
+        msgs = [self._msg(1, 0, enums=[e, whole])]
         files = emitter.build_proto_files(msgs)
-        self.assertIn('1 enum(s) may have missing values', files[0].emit())
+        self.assertIn('// Note: 1 enum(s) may have missing values', files[0].emit())
         out = io.StringIO()
         emitter.print_summary(msgs, files, file=out)
-        self.assertIn('enums possibly incomplete', out.getvalue())
+        self.assertRegex(out.getvalue(), r'enums possibly incomplete +1 ')
 
     def test_enum_with_a_reason_shows_the_reason(self):
         e = ProtoEnum('E', [ProtoEnumValue('E_A', 1)], values_truncated=True,
@@ -310,12 +346,19 @@ class TestEnumValueNameDisclosure(unittest.TestCase):
     def test_duplicate_binary_names_are_suffixed_and_say_so(self):
         from proto.enums import _enum_values_from_pairs
         vals = _enum_values_from_pairs('ArtworkUse', [
-            (0, 'ARTWORK_USE_UNKNOWN'), (1, 'ARTWORK_USE_LIST'), (2, 'ARTWORK_USE_UNKNOWN')])
+            (0, 'ARTWORK_USE_UNKNOWN'), (1, 'ARTWORK_USE_LIST'), (2, 'ARTWORK_USE_UNKNOWN'),
+            (8, 'ARTWORK_USE_UNKNOWN')])
         by = {v.number: v for v in vals}
         self.assertEqual(by[0].name, 'ARTWORK_USE_UNKNOWN')
         self.assertIsNone(by[0].comment)
         self.assertEqual(by[2].name, 'ARTWORK_USE_UNKNOWN_2')
+        self.assertEqual(by[8].name, 'ARTWORK_USE_UNKNOWN_8')      # by number, not position
         self.assertIn('identically', by[2].comment)
+        self.assertIn('identically', by[8].comment)
+        # unprefixed in the binary: the duplicate is found by its normalised name
+        bare = _enum_values_from_pairs('ArtworkUse', [(0, 'UNKNOWN'), (1, 'LIST'), (2, 'UNKNOWN')])
+        self.assertEqual([v.name for v in bare],
+                         ['ARTWORK_USE_UNKNOWN', 'ARTWORK_USE_LIST', 'ARTWORK_USE_UNKNOWN_2'])
 
 
 @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')

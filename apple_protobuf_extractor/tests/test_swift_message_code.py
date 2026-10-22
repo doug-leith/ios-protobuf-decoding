@@ -74,10 +74,14 @@ class TestDecodedOnTheIos27Cache(unittest.TestCase):
 
     def test_a_merged_body_with_its_parts_as_arguments(self):
         """TokenGenerationCore's AudioContent: identical-code folding made its decodeMessage a
-        forwarder to a merged body, handed the field closures in x3 / x4."""
+        forwarder to a merged body, handed the field closures in x3 / x4: each number decodes
+        its own part (the bytes in self, the enum by its metadata)."""
         got = self._decoded("TokenGenerationCore", "Tokengenerationcore_Wireformat_AudioContent",
                             [1, 2])
-        self.assertEqual(sorted(got), [1, 2])
+        self.assertEqual({n: [(d.label, d.kind, d.type, d.origin, d.offset) for d in ds]
+                          for n, ds in got.items()},
+                         {1: [("Singular", "Bytes", None, ("self",), 0)],
+                          2: [("Singular", "Enum", "Promptkit_Wireformat_AudioFormat", None, None)]})
 
 
     def test_traverse_hands_the_same_types(self):

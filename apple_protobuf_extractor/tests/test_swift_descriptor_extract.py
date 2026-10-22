@@ -177,15 +177,12 @@ class TestStaticBlobScan(unittest.TestCase):
         self.assertEqual([(f.number, f.name) for f in got], [(3, "gamma")])
 
     def test_zero_count_returns_none(self):
-        # NOTE: with count=0, `len(out) < count` (0 < 0) is False from the very
-        # first loop check regardless of buffer size or content -- no fixture
-        # variation can make this literal zero-count case discriminate the
-        # `0 < count < 4096` bound on its own (a structural, not incidental,
-        # guarantee). See test_huge_count_with_reachable_entry_returns_none
-        # below, which targets the SAME check from the other, discriminable
-        # direction (a plausible-looking but over-cap count).
-        buf = struct.pack("<QQQQ", 0, 0, 0, 0)
-        self.assertIsNone(S._parse_static_blob(_FakeCtx(buf), 0))
+        # a header counting 0 elements, followed by bytes that would parse as an element:
+        # an empty array, not a one-field table
+        buf, blob = _build_static_blob([(1, "alpha")], 0x28)
+        raw = bytearray(buf)
+        struct.pack_into("<QQ", raw, blob + 0x10, 0, 0)          # count, capacity
+        self.assertIsNone(S._parse_static_blob(_FakeCtx(bytes(raw)), blob))
 
     def test_count_beyond_the_elements_returns_none(self):
         # a well-formed first element, but the header counts 4097: every element must parse,
@@ -197,13 +194,14 @@ class TestStaticBlobScan(unittest.TestCase):
         entry = struct.pack("<QQQ", 1, name_va, len(name))
         buf = header + entry + name.encode() + b"\x00"
         self.assertIsNone(S._parse_static_blob(_FakeCtx(buf), 0))
+        # two elements (so a stride is found) and a header counting 3: the third must parse too
+        buf, blob = _build_static_blob([(1, "alpha"), (2, "beta")], 0x28)
+        raw = bytearray(buf)
+        struct.pack_into("<QQ", raw, blob + 0x10, 3, 3)
+        self.assertIsNone(S._parse_static_blob(_FakeCtx(bytes(raw)), blob))
 
     def test_unreadable_returns_none(self):
-        # This exercises the OUTER try/except around the initial header read
-        # (buffer too short even for the 0x20-byte header) -- a different code
-        # path from the `0 < count < 4096` bound above, not a weaker version of
-        # it. Genuinely effective for what it covers; see the two tests above
-        # for the count-bound-specific coverage.
+        # the header itself is unreadable (the buffer is shorter than its 0x20 bytes)
         self.assertIsNone(S._parse_static_blob(_FakeCtx(b"\x00" * 8), 0))
 
 
@@ -357,12 +355,19 @@ class TestTraverseVisits(unittest.TestCase):
     def test_unnamed_witness_call_keeps_the_highest_w_immediate(self):
         _ctx, got = _traverse([("mov", "w2, #5"), ("mov", "x3, x22"), ("blr", "x8")], {})
         self.assertEqual(got, [(5, None)])
+        # three w immediates: the highest register (w10) wins, not the lowest (w2), the last
+        # set or the largest value (w9), nor 'w9' by string order
+        _ctx, got = _traverse([("mov", "w2, #3"), ("mov", "w10, #5"), ("mov", "w9, #7"),
+                               ("mov", "x3, x22"), ("blr", "x8")], {})
+        self.assertEqual(got, [(5, None)])
 
     def test_other_calls_contribute_nothing_and_order_is_kept(self):
-        _ctx, got = _traverse([("bl", "#0x2000"), ("mov", "w1, #1"), ("bl", "#0x3000"),
-                               ("mov", "w1, #2"), ("bl", "#0x3000")],
+        # a non-Visitor call with no w immediate pending adds nothing, though x1 holds a
+        # constant (only a Visitor method's number register is read)
+        _ctx, got = _traverse([("mov", "x1, #9"), ("bl", "#0x2000"), ("mov", "w1, #1"),
+                               ("bl", "#0x3000"), ("mov", "w1, #2"), ("bl", "#0x3000")],
                               {0x2000: _OTHER, 0x3000: _visit("Singular", "Bool")})
-        self.assertEqual([n for n, _t in got], [1, 2])
+        self.assertEqual(got, [(1, "bool"), (2, "bool")])
 
 
 class TestNameMapBuilderValidation(unittest.TestCase):
@@ -385,6 +390,9 @@ class TestNameMapBuilderValidation(unittest.TestCase):
     def test_genuine_numbers_accepted(self):
         # numbers differ from name lengths, no oracle to contradict -> accept
         got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURL")]
+        self.assertTrue(S._namemap_builder_validated(None, got, None))
+        # one entry whose number happens to equal its name's length: not every entry -> accept
+        got.append(S.SwiftField(4, "code"))
         self.assertTrue(S._namemap_builder_validated(None, got, None))
 
     def _validated(self, numbers, got):
@@ -579,6 +587,12 @@ class TestFatSlice(unittest.TestCase):
         a64e = b"ARM64E_SLICE____"
         fat = self._fat([(0x0100000C, 0, a64), (0x0100000C, 2, a64e)])
         self.assertEqual(S.load_macho_slice(fat), a64e)
+        # in either order, and with the CPU_SUBTYPE_PTRAUTH_ABI bit a real arm64e slice
+        # carries (0x80000002); arm64 v8 (subtype 1) is not arm64e
+        for slices in ([(0x0100000C, 0x80000002, a64e), (0x0100000C, 0, a64)],
+                       [(0x0100000C, 0, a64), (0x0100000C, 0x80000002, a64e)],
+                       [(0x0100000C, 1, a64), (0x0100000C, 2, a64e)]):
+            self.assertEqual(S.load_macho_slice(self._fat(slices)), a64e, slices)
 
     def test_thin_passthrough(self):
         thin = b"\xcf\xfa\xed\xfe" + b"\x00" * 60
@@ -726,6 +740,7 @@ class TestLiveRemindd(unittest.TestCase):
 
     def test_numbers_confirmed(self):
         m = self.msgs["StartMigrationRequest.Credential"]
+        self.assertEqual(sorted(f.number for f in m.fields), [1, 2, 3, 4, 5])
         self.assertTrue(all(f.number_confirmed for f in m.fields))
 
 
@@ -764,6 +779,7 @@ class TestLiveDPSubmission(unittest.TestCase):
             [(1, "collection_id"), (2, "algorithm"), (3, "algorithm_parameters"),
              (4, "fs_encrypted_share"), (5, "ds_encrypted_share"), (6, "fs_public_key"),
              (7, "ds_public_key"), (8, "version_hash"), (9, "report")])
+        self.assertEqual(self.msgs["DediscoDonation"].shape, "shared-once")
 
     def test_single_field_message(self):
         self.assertEqual(_fieldset(self.msgs["CollectionID"]), {(1, "collection_id")})
@@ -772,6 +788,7 @@ class TestLiveDPSubmission(unittest.TestCase):
         self.assertEqual(
             _fieldset(self.msgs["DediscoDonation.AlgorithmParameters"]),
             {(1, "dimension"), (2, "epsilon"), (3, "other_params")})
+        self.assertEqual(self.msgs["DediscoDonation.AlgorithmParameters"].shape, "shared-once")
 
     def test_empty_message(self):
         self.assertEqual(self.msgs["Empty"].fields, [])
@@ -805,17 +822,18 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
     def test_establish_request(self):
         self.assertEqual(_fieldset(self.msgs["EstablishRequest"]),
                          {(1, "peer"), (2, "bottle"), (3, "view_keys"), (4, "tlk_shares")})
+        self.assertEqual(self.msgs["EstablishRequest"].shape, "shared-once")
 
     def test_fetch_changes_request(self):
         self.assertEqual(_fieldset(self.msgs["FetchChangesRequest"]), {(1, "change_token")})
 
     def test_update_trust_request_matches_published_cuttlefish(self):
         # rustpush cloudkit.proto CuttlefishUpdateTrustRequest: restorePoint=1,
-        # peerId=2, stableInfo=3, dynamicInfo=4, tlkshares=5, viewKeys=6.
+        # peerId=2, stableInfo=3, dynamicInfo=4, tlkshares=5, viewKeys=6.  Names 2, 5 and 6
+        # are the published ones; this version names 1, 3 and 4 otherwise.
         got = {f.number: f.name for f in self.msgs["UpdateTrustRequest"].fields}
-        self.assertEqual(sorted(got), [1, 2, 3, 4, 5, 6])
-        self.assertEqual(got[2], "peer_id")
-        self.assertEqual(got[5], "tlk_shares")
+        self.assertEqual(got, {1: "change_token", 2: "peer_id", 3: "stable_info_and_sig",
+                               4: "dynamic_info_and_sig", 5: "tlk_shares", 6: "view_keys"})
 
     def test_nested_word_substituted_type_not_lost(self):
         # EscrowInformation.Metadata.ClientMetadata's symbol uses `06ClientF0`; it
@@ -912,8 +930,9 @@ class TestLiveSeymourCoreClosureViaAdrpAdd(unittest.TestCase):
             {(1, "editorialCollection"), (2, "tileDescriptors")})
 
     def test_most_messages_recovered(self):
-        with_fields = sum(1 for m in self.msgs.values() if m.fields)
-        self.assertGreaterEqual(with_fields, 200)
+        # every one of the image's 229, each with its fields
+        self.assertEqual(len(self.msgs), 229)
+        self.assertEqual(sum(1 for m in self.msgs.values() if m.fields), 229)
 
 
 def _ios27_cache_file():
@@ -962,7 +981,7 @@ class TestLiveIos27PackedBytecode(unittest.TestCase):
     def test_inline_getter_form(self):
         # reached via `bl _NameMap.init(bytecode:)` inside the getter, no tail call
         m = self.msgs["WorkoutKit"]["Apple_Workout_WorkoutConfiguration"]
-        self.assertTrue(m.fields)
+        self.assertEqual(_fieldset(m), {(1, "activity"), (2, "location"), (3, "swimmingLocation")})
         self.assertEqual(m.shape, "bytecode")
 
     def test_bytecode_names_match_reflection_names(self):
@@ -1039,11 +1058,29 @@ class _EnumOracleBase:
         holder = {f.name: f for f in out["Eo_Holder"].fields}
         self.assertEqual(holder["top"].type_name, "Eo_Top")
         self.assertEqual(holder["inner"].type_name, "Eo_Holder_Inner")   # nested enum
+        self.assertEqual(holder["nz"].type_name, "Eo_NonZero")           # no zero value
+        self.assertEqual(holder["single"].type_name, "Eo_Single")        # one case
         self.assertEqual(out["Eo_Multi"].fields[4].type_name, "Eo_Top")
         names = {e.name: e for m in out.values() for e in m.enums}
         self.assertIn("Eo_Holder_Inner", {e.name for e in out["Eo_Holder"].enums})  # on its owner
         top = {v.name: v.number for v in names["Eo_Top"].values}
         self.assertEqual(top, {"T_NEG": -5, "T_ZERO": 0, "T_ONE": 1, "T_BIG": 100000})
+        # every enum of the proto is defined with its values (the aliased one where recovered)
+        self.assertEqual({n: {v.name: v.number for v in e.values}
+                          for n, e in names.items() if n != "Eo_Aliased"},
+                         {n.replace(".", "_"): {nm: v for v, nm in cases}
+                          for n, cases in _ORACLE_ENUMS.items()})
+        self.assertEqual("Eo_Aliased" in names, bool(self.ALIASED))
+        # with Eo_Multi the package's first message (the carrier of its top-level enums), the
+        # nested enum is still on its owner
+        recovered = S.swift_messages(self.ctx)
+        orig = S.swift_messages
+        S.swift_messages = lambda ctx: sorted(recovered, key=lambda m: m.name != "Eo_Multi")
+        try:
+            moved = {m.name: m for m in F.swift_messages(self.ctx) if m.package == "eo"}
+        finally:
+            S.swift_messages = orig
+        self.assertEqual({e.name for e in moved["Eo_Holder"].enums}, {"Eo_Holder_Inner"})
 
 
 @unittest.skipUnless(_enum_oracle("eo_bytecode"), "enum oracle (bytecode) not available")
@@ -1087,6 +1124,7 @@ class TestLiveTrustedPeersHelperEnums(unittest.TestCase):
     def test_values_start_at_zero_and_are_contiguous(self):
         self.assertEqual(len(self.enums), 7)
         for name, e in self.enums.items():
+            self.assertGreaterEqual(len(e.fields), 2, name)      # read, not empty
             self.assertEqual([f.number for f in e.fields], list(range(len(e.fields))), name)
 
     def test_cases_belong_to_their_own_enum(self):
@@ -1095,6 +1133,7 @@ class TestLiveTrustedPeersHelperEnums(unittest.TestCase):
                              ("ViewKeyClass", "VIEW_KEY_CLASS_"), ("SOSViability", "SOS_"),
                              ("RecordStatus", "RECORD_STATUS_"), ("FilteringRequest", "FILTERING_REQUEST_"),
                              ("SupportAppDeviceStatus", "SUPPORT_APP_DEVICE_STATUS_")):
+            self.assertTrue(self.enums[name].fields, name)
             self.assertTrue(all(f.name.startswith(prefix) for f in self.enums[name].fields), name)
 
     def test_reset_reason_exact(self):
@@ -1138,12 +1177,31 @@ class TestTailCallArgs(unittest.TestCase):
         self.assertEqual(S._tail_call_args(_listing(
             [("adrp", "x1, #0x1000"), ("add", "x1, x1, #8"), ("mov", "w3, #24"),
              ("b", "#0x100")])), {"x1": 0x1008, "x3": 24})
+        # every argument register up to x7 (PegasusAPI's single-entry stub passes a length in
+        # w4), none past it
+        self.assertEqual(S._tail_call_args(_listing(
+            [("adrp", "x1, #0x1000"), ("add", "x1, x1, #8"), ("adrp", "x3, #0x2000"),
+             ("add", "x3, x3, #0x10"), ("mov", "w2, #2"), ("mov", "w4, #19"), ("mov", "w7, #1"),
+             ("mov", "x8, #5"), ("b", "#0x100")])),
+            {"x1": 0x1008, "x2": 2, "x3": 0x2010, "x4": 19, "x7": 1})
 
     def test_real_function_is_not_a_stub(self):
         self.assertIsNone(S._tail_call_args(_listing(
             [("pacibsp", ""), ("stp", "x29, x30, [sp, #-0x10]!"), ("bl", "#0x100")])))
         self.assertIsNone(S._tail_call_args(_listing(
             [("adrp", "x0, #0x1000"), ("ldr", "x8, [x0]"), ("cmn", "x8, #1"), ("b.ne", "#0x40")])))
+        # ending in a tail `b`, but with a frame and a call before it
+        self.assertIsNone(S._tail_call_args(_listing(
+            [("pacibsp", ""), ("stp", "x29, x30, [sp, #-0x10]!"), ("bl", "#0x100"),
+             ("ldp", "x29, x30, [sp], #0x10"), ("b", "#0x200")])))
+        # ending in a tail `b` after one load
+        self.assertIsNone(S._tail_call_args(_listing(
+            [("adrp", "x0, #0x1000"), ("ldr", "x8, [x0]"), ("b", "#0x100")])))
+        # register setup ending in a call (`bl`), or in a `b` back into the listing
+        self.assertIsNone(S._tail_call_args(_listing(
+            [("adrp", "x0, #0x1000"), ("add", "x0, x0, #8"), ("bl", "#0x100")])))
+        self.assertIsNone(S._tail_call_args(_listing(
+            [("mov", "w0, #1"), ("nop", ""), ("b", "#0x1004")])))
 
     def test_no_branch_is_not_a_stub(self):
         self.assertIsNone(S._tail_call_args(_listing([("adrp", "x0, #0x1000"),
@@ -1249,7 +1307,8 @@ class TestFieldlessMarker(unittest.TestCase):
 class TestLiveDecoderCrossCheck(unittest.TestCase):
     """Layer-regression guard: across every available swift-protobuf binary, the
     field numbers ``decodeMessage`` switches on must NEVER include a number the
-    nameMap lacks (independent codegen path).  Zero contradictions tool-wide."""
+    nameMap lacks (independent codegen path), an empty reading included.  Zero
+    contradictions tool-wide."""
     def _binaries(self):
         for p in (_remindd_path(), _data_path(*_NPTO), _trustedpeershelper_path(),
                   _seymourcore_path()):
@@ -1271,8 +1330,7 @@ class TestLiveDecoderCrossCheck(unittest.TestCase):
                     if t and t[2] == "V":
                         decoders.setdefault(t[:2], va)
             for m in S.swift_messages(ctx):
-                if not m.fields:
-                    continue
+                # an empty reading too: a genuinely empty message's decoder switches on nothing
                 dva = decoders.get((m.module, m.name))
                 if dva is None:
                     continue
@@ -1392,6 +1450,14 @@ class TestLiveCacheNative(unittest.TestCase):
         self.assertFalse(getattr(self.ctx, "_data", b""))
         syms = S.symbol_addrs(self.ctx)
         self.assertTrue(any(S._NAMEMAP_MARKER in n for n in syms))
+        # every nameMap symbol of the .symbols sub-cache, at its address -- CP_KeyValue's static
+        # init among them, which the export trie does not have
+        local = {n: a for n, a in self.reader.image_symbol_addrs(
+            self.ctx.image_base, S._NAMEMAP_MARKER).items() if S._NAMEMAP_MARKER in n}
+        kv = "_$s14CopresenceCore11CP_KeyValueV17_protobuf_nameMap_WZ"
+        self.assertNotIn(kv, self.reader.image_exports(self.ctx.image_base))
+        self.assertIn(kv, local)
+        self.assertEqual({n: syms.get(n) for n in local}, local)
 
     def test_traverse_symbols_reach_the_cross_check(self):
         # the .symbols sub-cache carries each message's traverse(visitor:); symbol_addrs
@@ -1402,8 +1468,30 @@ class TestLiveCacheNative(unittest.TestCase):
         # CopresenceCore's local ones are all identical-body merges (``…FTm``; closures,
         # ``…XEfU_``, are not bodies); a public type's own body is an export (``…F``)
         self.assertTrue(all(n.endswith("FTm") for n in bodies if n in local))
-        self.assertIn("_$s14CopresenceCore11CP_KeyValueV8traverse7visitoryxz_tK21InternalSwift"
-                      "Protobuf7VisitorRzlF", bodies)
+        kv_traverse = ("_$s14CopresenceCore11CP_KeyValueV8traverse7visitoryxz_tK21InternalSwift"
+                       "Protobuf7VisitorRzlF")
+        self.assertIn(kv_traverse, bodies)
+        # the sub-cache's own bodies are there too
+        local_bodies = {n for n in local if "V8traverse" in n
+                        and n.endswith(S._FUNCTION_BODY_SUFFIXES)}
+        self.assertTrue(local_bodies)
+        self.assertLessEqual(local_bodies, set(bodies))
+        # and each message's reading is handed its traverse for the cross-check
+        handed = {}
+        orig = S._extract_namemap
+
+        def record(ctx, init_va, traverse_va=None, enum=False):
+            handed[init_va] = traverse_va
+            return orig(ctx, init_va, traverse_va, enum)
+        S._extract_namemap = record
+        try:
+            S.swift_messages(self.ctx)
+        finally:
+            S._extract_namemap = orig
+        self.assertEqual(len(handed), len(self.msgs))
+        self.assertTrue(all(handed.values()))
+        self.assertEqual(handed[syms["_$s14CopresenceCore11CP_KeyValueV17_protobuf_nameMap_WZ"]],
+                         syms[kv_traverse])
 
     def test_cp_keyvalue(self):
         self.assertEqual(
@@ -1582,6 +1670,9 @@ class TestPropertyNameJoin(unittest.TestCase):
         self.assertEqual(_norm("user_id"), _norm_property("userID"))
         self.assertEqual(_norm("foo_p"), _norm_property("fooP"))
         self.assertNotEqual(_norm("foo_p"), _norm_property("foo"))
+        # only the `_p` suffix goes, not a trailing p or underscore
+        self.assertEqual(_norm("group"), _norm_property("group"))
+        self.assertEqual(_norm("timestamp"), _norm_property("timestamp"))
 
 
 if __name__ == "__main__":

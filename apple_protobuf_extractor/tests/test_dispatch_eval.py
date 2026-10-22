@@ -113,18 +113,25 @@ class TestObjectEscape(unittest.TestCase):
                                    object_escape=object_escape))
         return calls_by_target(r)[0x9100].args.get('x1')
 
+    def args_after_a_spill_at(self, off):
+        # x8 = 5 stored at sp+off, a call handed sp+0x60, the slot reloaded into x1
+        insns, _ = listing('sub sp, sp, #0x80', 'mov x8, #5', f'str x8, [sp, #{off:#x}]',
+                           'add x1, sp, #0x60', f'bl {CALL}', f'ldr x1, [sp, #{off:#x}]',
+                           f'bl {CALL2}', 'ret')
+        r = Flow(None, insns).run_from(0, {}, objects=Objects(object_escape=True))
+        return calls_by_target(r)[0x9100].args
+
     def test_a_slot_below_the_escaped_address_survives(self):
         self.assertEqual(self.x1_at_adder(True), T.ret_value(1))
+        self.assertEqual(self.args_after_a_spill_at(0x58).get('x1'), 5)   # ends at sp+0x60
 
     def test_the_default_rule_clears_every_slot(self):
         self.assertIsNone(self.x1_at_adder(False))
 
     def test_a_slot_at_or_above_the_escaped_address_is_cleared(self):
-        insns, _ = listing('sub sp, sp, #0x80', 'mov x8, #5', 'str x8, [sp, #0x68]',
-                           'add x1, sp, #0x60', f'bl {CALL}', 'ldr x1, [sp, #0x68]',
-                           f'bl {CALL2}', 'ret')
-        r = Flow(None, insns).run_from(0, {}, objects=Objects(object_escape=True))
-        self.assertNotIn('x1', calls_by_target(r)[0x9100].args)
+        for off in (0x60, 0x68):
+            with self.subTest(off=hex(off)):
+                self.assertNotIn('x1', self.args_after_a_spill_at(off))
 
 
 class TestPerBrArms(unittest.TestCase):
@@ -176,6 +183,9 @@ class TestTailTargetsAndRejoin(unittest.TestCase):
         common = frozenset({f.cfg.addr_to_block[0x1000], lab['common']})
         r = f.run_from(0, {'x0': 0}, rejoin=common)
         self.assertEqual(set(calls_by_target(r)), {0x9100})
+        # x0 unknown: entry -> common never leaves the set, so it runs on
+        r = f.run_from(0, {}, rejoin=common)
+        self.assertEqual(set(calls_by_target(r)), {0x9000, 0x9100})
 
 
 class TestCandidateIntervals(unittest.TestCase):
@@ -236,6 +246,10 @@ _FIXTURES_DIR = os.path.join(_HERE, 'synthetic_fixtures')
 _ARGLESS_ADDER = frozenset(('f17_repeated_adder_ivar_lever', 'f20_dispatch_wrapper_core_picker'))
 _SCALARS = frozenset('double float int32 int64 uint32 uint64 sint32 sint64 fixed32 fixed64 '
                      'sfixed32 sfixed64 bool string bytes'.split())
+# Singular message fields whose fixture core hands the case to PBHandleUnknownField (fixture.m):
+# no handler builds the element (its type is the ivar's @encode), so nothing binds them.
+_UNDISPATCHED = {('f8_geo_companion_drive_step', 'CompanionDriveStep'): {13, 15, 16, 17},
+                 ('f10_geo_log_message', 'LogMsgEvent'): {2, 101, 102, 106, 117}}
 
 
 def _fixtures():
@@ -255,6 +269,14 @@ def _load(binary_path):
     return ctx, cl, _build_readfrom_core_index(ctx, cl)
 
 
+def _class_named(by_name, msg):
+    """The class of expected.py's message *msg*: its name, or the name with the class prefix
+    extraction strips (proto.defaults.DEFAULT_PREFIXES: f6-f10 key GEOLogMessage as LogMessage)."""
+    from proto.defaults import DEFAULT_PREFIXES
+    return next((by_name[n] for n in (msg, *(p + msg for p in DEFAULT_PREFIXES)) if n in by_name),
+                None)
+
+
 def _expected(fixture_dir):
     path = os.path.join(_FIXTURES_DIR, fixture_dir, 'expected.py')
     spec = importlib.util.spec_from_file_location(f'_de_expected_{fixture_dir}', path)
@@ -265,7 +287,8 @@ def _expected(fixture_dir):
 
 class TestSyntheticFixtures(unittest.TestCase):
     """For every message-typed field of every fixture message: the evaluator binds its number
-    to its element class; a repeated one also binds its ivar.  No other number is bound."""
+    to its element class; a repeated one also binds its ivar (``_<field name>``).  No other
+    number or ivar is bound, and every reader of every fixture is compared."""
 
     def test_every_fixture(self):
         sys.path.insert(0, _HERE)
@@ -277,23 +300,29 @@ class TestSyntheticFixtures(unittest.TestCase):
             ctx, cl, core_index = _load(path)
             expected = _expected(fixture_dir)
             by_name = {c.name: c for c in cl if not c.is_meta}
-            known = set(expected)
+            classes = {msg: _class_named(by_name, msg) for msg in expected}
+            known = {c.name for c in classes.values() if c is not None}
+            compared = set()
             for msg, spec in expected.items():
-                cls = by_name.get(msg)
+                cls = classes[msg]
                 if cls is None or cls.get_method('readFrom:') is None:
                     continue
-                want = {f['number']: f for f in spec['fields']
-                        if f['type_name'] not in _SCALARS and f['type_name'] in known}
+                skip = _UNDISPATCHED.get((fixture_dir, msg), set())
+                want = {f['number']: f for f in spec['fields'] if f['number'] not in skip
+                        and f['type_name'] not in _SCALARS and f['type_name'] in known}
                 got = E.evaluate_class(ctx, cls, core_index)
                 with self.subTest(fixture=f'{fixture_dir}/{binary}', message=msg):
                     self.assertEqual(got.elements(),
                                      {n: f['type_name'] for n, f in want.items()},
                                      f'notes: {got.notes}')
-                    for n, f in want.items():
-                        if f['label'] == 'repeated' and fixture_dir not in _ARGLESS_ADDER:
-                            ivar = next((iv for iv, (_c, num) in got.ivars().items() if num == n), None)
-                            self.assertIsNotNone(ivar, f'field {n}: no adder->ivar binding')
+                    self.assertEqual(got.ivars(), {} if fixture_dir in _ARGLESS_ADDER else {
+                        '_' + f['name']: (f['type_name'], n)
+                        for n, f in want.items() if f['label'] == 'repeated'})
+                compared.add(cls.name)
                 checked += 1
+            with self.subTest(fixture=f'{fixture_dir}/{binary}'):
+                self.assertEqual(compared, {n for n, c in by_name.items()
+                                            if c.get_method('readFrom:') is not None})
         self.assertGreater(checked, 20)
 
 
@@ -415,8 +444,14 @@ class TestIPhone8(_Live):
         self.assertEqual(self.ev('GEOPDTileList').ivars(), {'_tiles': ('GEOTileCoordinate', 1)})
 
     def test_a_thin_wrapper_core_is_indexed(self):
+        # -[GEOPDComponentValue readFrom:] is `mov x1, x2 ; mov w2, #0 ; b <core>`
+        from macho.disasm import disasm, _parse_imm
         from proto.dispatch import _find_readfrom_c_func
-        core = _find_readfrom_c_func(self.ctx, self.by_name['GEOPDComponentValue'])
+        cls = self.by_name['GEOPDComponentValue']
+        wrapper = disasm(self.ctx, cls.get_method('readFrom:').imp, 3, stop_at_ret=False)
+        self.assertEqual([i.mnemonic for i in wrapper], ['mov', 'mov', 'b'])
+        core = _parse_imm(wrapper[2].op_str)
+        self.assertEqual(_find_readfrom_c_func(self.ctx, cls), core)
         self.assertEqual(self.core_index.get(core), 'GEOPDComponentValue')
 
     def test_a_preamble_lsr_that_dispatches_nothing_does_not_hide_the_real_one(self):
@@ -481,9 +516,11 @@ class TestEvaluateClassMemo(unittest.TestCase):
 
     def test_other_index_is_not_memoised(self):
         ctx = self._Ctx()
-        E.evaluate_class(ctx, self._Cls, {0x2000: 'GEOY'})
+        other = {0x2000: 'GEOY'}
+        E.evaluate_class(ctx, self._Cls, other)
         E.evaluate_class(ctx, self._Cls, {0x3000: 'GEOZ'})
-        self.assertEqual(self.calls, [1, 1])
+        E.evaluate_class(ctx, self._Cls, other)          # the same index again: afresh too
+        self.assertEqual(self.calls, [1, 1, 1])
 
 
 if __name__ == '__main__':
