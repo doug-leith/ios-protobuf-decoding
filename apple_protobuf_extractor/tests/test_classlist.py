@@ -793,3 +793,34 @@ class TestParseClassDualTagBits:
             "carries both a high chain-fixup bit and a low ObjC tag bit"
         )
         assert cls.name == 'TagBitClass'
+
+
+class TestAnIvarOffsetTheRuntimeSets:
+    """A Swift class's ivar offset variable lives in zero-fill program data (``__common``):
+    the runtime sets it, the file holds no bytes there.  The ivar is kept with no offset
+    (None), not read as unreadable -- which had cut every such list short (the sweep of
+    2026-10-22: 23 lists in 7 images, TODO #138)."""
+
+    def test_kept_with_no_offset(self):
+        import struct as _s
+        from macho.classlist import _parse_ivars
+        from macho.memory import unread_input
+        VAR, NAME, TYPE = 0x9000, 0x5000, 0x5010
+
+        class Ctx:
+            def read_u32(self, va):
+                return _s.unpack_from("<I", self.list, va - 0x4000)[0]
+
+            def read_ptr(self, va):
+                return _s.unpack_from("<Q", self.list, va - 0x4000)[0]
+
+            def read_cstring(self, va, max_len=4096):
+                return {NAME: "count", TYPE: "q"}[va]
+
+            def is_variable(self, va):
+                return va == VAR
+        ctx = Ctx()
+        ctx.list = _s.pack("<II", 32, 1) + _s.pack("<QQQII", VAR, NAME, TYPE, 3, 8)
+        ivars = _parse_ivars(ctx, 0x4000, StringTable())
+        assert [(i.name, i.offset, i.offset_slot) for i in ivars] == [("count", None, VAR)]
+        assert unread_input(ctx) == []

@@ -257,7 +257,7 @@ def _harvest_dictrep(
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.  This replaces the
     # earlier look-back-window passes (jump table / pointer table / compare chain).
     flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
-    enums = flow.enum_maps({iv.offset for iv in cls.ivars}, wanted)
+    enums = flow.enum_maps({iv.offset for iv in cls.ivars if iv.offset is not None}, wanted)
     return enums, flow.incomplete, flow.unevaluated
 
 
@@ -681,7 +681,8 @@ def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFie
     dictrep_incomplete: Dict[str, str] = {}
     if not any(_is_untyped_int(f) for f in fields):
         return dictrep_pairs, dictrep_incomplete
-    ivar_off_by_pname = {_proto_name(iv.name): iv.offset for iv in cls.ivars if iv.name}
+    ivar_off_by_pname = {_proto_name(iv.name): iv.offset for iv in cls.ivars
+                         if iv.name and iv.offset is not None}
     untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
                        if _is_untyped_int(f) and f.name in ivar_off_by_pname}
     dr_enums, dr_incomplete, dr_unevaluated = _harvest_dictrep(

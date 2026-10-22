@@ -39,7 +39,9 @@ class ObjcMethod:
 class ObjcIvar:
     name:     str
     type_enc: str
-    offset:   int   # byte offset within instance
+    # byte offset within instance; None when the runtime sets it (its offset variable is
+    # program data: a Swift class's, in __common / __bss)
+    offset:   Optional[int]
     size:     int
     # Address of the ivar's OFFSET VARIABLE (ivar_t.offset — what compiled code
     # loads with `adrp; ldrsw` to reach the ivar).  Identifies the ivar by

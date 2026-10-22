@@ -257,7 +257,7 @@ def _confirm_field_numbers(
     map_ivars = [iv for iv in field_ivars if iv.type_enc in MAP_IVAR_ENCS]
     if map_ivars:
         offset_to_name = {iv.offset: iv.name for iv in field_ivars
-                          if iv.offset != 0 and iv.name}
+                          if iv.offset and iv.name}
         map_writers = find_map_writers(ctx, cls, map_ivars, wt_writes,
                                        offset_to_name, confirmed_numbers)
         for _name, _w in map_writers.items():

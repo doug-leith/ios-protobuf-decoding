@@ -633,7 +633,10 @@ def _parse_ivars(
             type_ptr   = ctx.read_ptr(entry_va + 16)
             size       = ctx.read_u32(entry_va + 28)
 
-            actual_off = ctx.read_u32(offset_ptr) if offset_ptr else 0
+            if offset_ptr and ctx.is_variable(offset_ptr):
+                actual_off = None                # (set by the runtime: a Swift class's ivar)
+            else:
+                actual_off = ctx.read_u32(offset_ptr) if offset_ptr else 0
             name       = strings.get(name_ptr) or ctx.read_cstring(name_ptr)
             type_enc   = ''
             if type_ptr:
