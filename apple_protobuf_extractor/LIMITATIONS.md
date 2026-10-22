@@ -437,8 +437,13 @@ detect-only summary).
 ## 10. swift-protobuf makes a few type/number estimates  — to-do #63b
 
 Unlike C++ (an exact descriptor decode), swift-protobuf carries **no single
-descriptor**: the schema is split across the `_protobuf_nameMap` (number↔name) and
-the `__swift5_fieldmd` reflection metadata (name↔type), joined by NAME. Field
+descriptor**: numbers and names are in the `_protobuf_nameMap`, types in the message's
+own code. Since #129 each field's type is read by its NUMBER from the message's
+`decodeMessage` -- the Decoder method called for that number (`decodeSingularSFixed64Field`)
+and the type it is handed (a message's, an enum's, a map's key and value) -- checked against
+the Visitor method its `traverse` calls, both found from the type's `Message` conformance
+(`serializers/swift_message_code.py`). The `__swift5_fieldmd` reflection metadata, joined
+by NAME, types only a field neither does (reported, `swift-name-join`: see (b)). Field
 **numbers and names are read literally** (closure/blob immediates + cstrings) and
 are exact — **except** the cases below. Well-known types built at runtime
 (`Google_Protobuf_*`), copy-on-write `_StorageClass` fields and proto `oneof` members
@@ -449,17 +454,20 @@ template like any other name map; the separate reader that guessed `= 1` is gone
 is rendered `// number estimated` only when a runtime builder's listing hit the runaway
 guard, so its table may be incomplete.
 
-**(b) Integer subtype can be collapsed to the base type (NOT flagged).** `int32`,
-`sint32`, `sfixed32` and `fixed32` are all `Int32` in Swift (likewise the `uint*`/`*64`
-analogues), so the reflection type alone gives only the base. Since #98 the encoding is
-read off the Visitor method `traverse` calls for the field (`visitSingularSInt32Field`,
-`visitSingularFixed64Field`, …), named by its dispatch thunk or by its slot in the visitor
-witness table (AONSense `rssi_db` is `sint32`, nptocompaniond `SyncAsset.date` is
-`sfixed64`). Where the call cannot be named, the base type (`int32`/`uint32`/`int64`/`uint64`)
-stays, which is **wire-incorrect** for a genuine `sint*` (zigzag) or `fixed*`/`sfixed*` (wire
-type 1/5) field. That happens in a framework extracted from the dyld cache, whose calls branch
-into cache islands that no extracted file holds (read it from the cache instead), and in a
-binary whose swift-protobuf method descriptors are stripped (remindd).
+**(b) Where the code's calls cannot be named, the type is the reflection's (reported).**
+`int32`, `sint32`, `sfixed32` and `fixed32` are all `Int32` in Swift (likewise the
+`uint*`/`*64` analogues), so the reflection type gives only the base; and it is joined to the
+field by name, which misses a renamed property (EnergyKitFoundation's
+`GridCleanlinessStats`: `clean` / `reduce`, properties `cleaner` / `lessClean`). Since #129
+the type comes from `decodeMessage` (the Decoder method names the encoding) with `traverse`
+as the check: 5,987 of the 5,987 fields of the 18 iOS 27 images checked against Remote
+Mirror, and every image of the dyld caches, typed so; 23 of them `fixed64` / `sint32` where
+the reflection said `uint64` / `int32` (CopresenceCore's participant IDs). Only an image whose
+swift-protobuf calls carry no names falls back to the reflection type -- every such field a
+`swift-name-join` hit in the run summary, and **wire-incorrect** for a genuine `sint*` or
+`fixed*` field: a framework extracted from the dyld cache (its GOT slots hold cache pointers;
+read it from the cache instead) and a binary that links swift-protobuf in, stripped (remindd:
+its decoder and visitor witnesses have no symbols).
 
 **(c) Undecoded container element (flagged).** When an Array element or a map
 key/value doesn't decode, the field shows a `bytes` filler with an inline
@@ -511,8 +519,9 @@ framework extracted from the dyld cache, a field whose type lives outside the im
 
 **Source sites.** `swift_type_recovery.py` (`_SWIFT_SCALAR`/`_DIRECT`,
 `decode_mangled`); `swift_namemap_bytecode.py` (the iOS 27 packed name map);
-`swift_descriptor_extract.py` (`_attach_field_types`,
-`_attach_visit_types`); `proto/foreign.py` (`_swift_field`). The integer-subtype
+`swift_descriptor_extract.py` (`_attach_types`, `_attach_field_types`);
+`swift_message_code.py` (`message_witnesses`, `decoded_fields`); `proto/foreign.py`
+(`_swift_field`). The integer-subtype
 limit is documented in the module docstring.
 
 

@@ -372,9 +372,11 @@ def compare(mirror, image):
             if len(p) != 1:
                 stats["emitted fields with no one property of their name"] += 1
                 continue
+            if not theirs[p[0]]:                 # a case with no payload: no layout type (a
+                stats["emitted fields with no payload"] += 1   # NullValue field's, #129)
+                continue
             if f.proto_type is None:
-                stats["emitted fields with no type" if theirs[p[0]] else
-                      "emitted fields with no payload"] += 1
+                stats["emitted fields with no type"] += 1
                 continue
             stats["emitted fields compared"] += 1
             if _as_swift(f.proto_type) != _as_swift(proto_of(theirs[p[0]])):

@@ -41,10 +41,12 @@ generated dictionary-literal source several ways across iOS versions / toolchain
   terminators and full consumption, else it declines).  A single-field message's
   bare-name literal (no header) is declined and read through its template, as B.
 
-TYPES come from Swift reflection (:mod:`serializers.swift_type_recovery`), joined by name.
-``traverse`` adds the integer encoding (``sint32``, ``fixed64`` …) and types the scalars
-reflection leaves untyped: each of its Visitor calls is named by its dispatch thunk or its
-visitor witness-table slot (:func:`_traverse_visits`).
+TYPES come from the message's own code, by field number (:func:`_attach_types`,
+:mod:`serializers.swift_message_code`): the Decoder method its ``decodeMessage`` calls for the
+number and the type it hands it, checked against the Visitor method ``traverse`` calls
+(:func:`_traverse_visits`), both found from the type's ``Message`` conformance.  Swift
+reflection (:mod:`serializers.swift_type_recovery`), joined by name, types only what neither
+does -- an image whose swift-protobuf calls carry no names.
 
 Works in BOTH modes: from a standalone binary the per-type ``_protobuf_nameMap``
 static-init symbols come from ``LC_SYMTAB`` / the dyld export trie; cache-native
@@ -716,11 +718,11 @@ def _visitor_symbols(ctx: BinaryContext) -> Dict[str, int]:
     return out
 
 
-def _build_visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
+def _build_protocol_slots(ctx: BinaryContext, suffix: str) -> Dict[int, str]:
     out: Dict[int, str] = {}
     syms = _visitor_symbols(ctx)
     for name, desc in syms.items():
-        if not name.endswith("7VisitorMp"):
+        if not name.endswith(suffix):
             continue
         # protocol descriptor: flags, parent, name, NumRequirementsInSignature,
         # NumRequirements, associated type names; then the signature's requirements (12
@@ -734,16 +736,22 @@ def _build_visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
     return out
 
 
-def _visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
-    """``{witness-table offset: method descriptor symbol}`` of the swift-protobuf ``Visitor``
-    protocol, read off its descriptor (``…7VisitorMp``) and its methods' descriptors
-    (``…VisitorP…Tq``); empty when the image cannot see them.  Memoised on *ctx*."""
+def _protocol_slots(ctx: BinaryContext, suffix: str) -> Dict[int, str]:
+    """``{witness-table offset: method descriptor symbol}`` of the swift-protobuf protocol whose
+    descriptor's symbol ends in *suffix* (``7VisitorMp``, ``7DecoderMp``), read off the
+    descriptor and its methods' descriptors (``…P…Tq``); empty when the image cannot see them.
+    Memoised on *ctx*."""
     def build():
         try:
-            return _build_visitor_slots(ctx)
+            return _build_protocol_slots(ctx, suffix)
         except READ_ERRORS:
             return {}
-    return _ctx_cache(ctx, "_swift_visitor_slots", build)
+    return _ctx_cache(ctx, "_swift_protocol_slots_" + suffix, build)
+
+
+def _visitor_slots(ctx: BinaryContext) -> Dict[int, str]:
+    """The ``Visitor`` protocol's :func:`_protocol_slots`."""
+    return _protocol_slots(ctx, "7VisitorMp")
 
 
 def _visit_method(ctx: BinaryContext, flow: Flow, k: int) -> Optional[Tuple[str, str]]:
@@ -1023,11 +1031,7 @@ def _recover_types(ctx: BinaryContext, want_enum: bool) -> List[SwiftMessage]:
         out.append(SwiftMessage(module=module, name=tname, fields=fields,
                                 is_enum=want_enum, shape=shape))
     if not want_enum:
-        _attach_field_types(ctx, out)
-        for m in out:
-            tva = traversers.get((m.module, m.name))
-            if m.fields and tva is not None:
-                _attach_visit_types(m, _traverse_visits(ctx, tva))
+        _attach_types(ctx, out, traversers)
     out.sort(key=lambda m: m.qualified)
     return out
 
@@ -1051,12 +1055,69 @@ def _norm_property(name: str) -> str:
 _REFLECTION_CONFIRMED_SHAPES = frozenset({"runtime-single"})
 
 
-def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
-    """Recover field TYPES from Swift field metadata and bind them onto the
-    name+number fields by normalised field name (best-effort; leaves proto_type
-    None where metadata is absent).  ``swift_type_recovery.collect_field_types``
-    supplies types from the message struct, its COW ``_StorageClass``, and its
-    ``OneOf_*`` enums (#60), so oneof/storage-backed fields are now covered too."""
+def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
+                  traversers: Dict[Tuple[str, str], int]) -> None:
+    """Each field's type from the message's own code, by field number
+    (:mod:`serializers.swift_message_code`, TODO #129): what its ``decodeMessage`` hands the
+    Decoder for that number -- the method (the scalar and its encoding) and the type it is handed
+    (a message's, an enum's, a map's key and value) -- checked against the Visitor method its
+    ``traverse`` writes it with; where decodeMessage's calls cannot be named, traverse's scalar.
+    Only a field neither types takes the reflection type of the property of its name
+    (:func:`_attach_field_types`), reported (``swift-name-join``): an image whose
+    swift-protobuf calls carry no names (a stripped binary that links it in, a framework
+    extracted from the dyld cache)."""
+    from serializers import swift_message_code as MC
+    from serializers.swift_type_recovery import _qualified_name
+    joined = _attach_field_types(ctx, msgs)
+    try:
+        witnesses = {_qualified_name(ctx, td): ws for td, ws in MC.message_witnesses(ctx).items()}
+    except READ_ERRORS:
+        witnesses = {}
+    for m in msgs:
+        if not m.fields:
+            continue
+        ws = witnesses.get(m.name, {})
+        decoded = MC.decoded_fields(ctx, ws["decodeMessage"], [f.number for f in m.fields]) \
+            if "decodeMessage" in ws else {}
+        tva = ws["traverse"].va if "traverse" in ws else traversers.get((m.module, m.name))
+        visits: Dict[int, str] = {}
+        for num, typ in (_traverse_visits(ctx, tva) if tva is not None else []):
+            if typ is not None:
+                visits.setdefault(num, typ)
+        for f in m.fields:
+            types = {t for t in map(_decoded_type, decoded.get(f.number, ())) if t}
+            dt = next(iter(types)) if len(types) == 1 else None
+            vt = visits.get(f.number)
+            if dt is not None:
+                f.proto_type, f.type_note = dt, None
+                if vt is not None and vt != dt:
+                    from proto.models import record_analysis_failure
+                    record_analysis_failure(ctx, m.qualified, "swift field types",
+                                            f"#{f.number}: decodeMessage {dt}, traverse {vt}")
+            elif vt is not None:
+                f.proto_type, f.type_note = vt, None
+            elif (id(m), f.number) in joined:
+                f.proto_type, f.type_note = joined[(id(m), f.number)]
+                record_heuristic_hit(ctx, "swift-name-join", f"{m.qualified} #{f.number} {f.name}")
+
+
+def _decoded_type(d) -> Optional[str]:
+    """The proto type a :class:`serializers.swift_message_code.Decoded` call stands for."""
+    if d.kind == "Map":
+        return d.type
+    base = d.type if d.kind in ("Message", "Enum", "Group") else _VISIT_SCALARS.get(d.kind)
+    if base is None:
+        return None
+    return f"repeated {base}" if d.label == "Repeated" else base
+
+
+def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]
+                        ) -> Dict[Tuple[int, int], Tuple[str, Optional[str]]]:
+    """From Swift field metadata (``swift_type_recovery.collect_field_types``: the message
+    struct, its COW ``_StorageClass`` and its oneofs' enums): the reflection checks below, and
+    ``{(id(message), field number): (type, note)}`` -- the type of the property of each field's
+    name (normalised), :func:`_attach_types`' last resort."""
+    joined: Dict[Tuple[int, int], Tuple[str, Optional[str]]] = {}
     try:
         from serializers import swift_type_recovery
         by_type, incomplete, fieldless, stored = swift_type_recovery.collect_field_types(ctx)
@@ -1068,7 +1129,7 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
             ("swift-protobuf", f"field types: {type(exc).__name__}: {exc}"))
         log.warning("swift-protobuf field-type recovery FAILED (%s: %s); field types missing",
                     type(exc).__name__, exc)
-        return
+        return joined
     for m in msgs:
         if m.shape in _REFLECTION_CONFIRMED_SHAPES and m.fields:
             # single-entry readings whose only support is the literal itself: the struct's
@@ -1081,7 +1142,7 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
         if not m.fields and m.name in fieldless:
             m.fieldless = True
     if not by_type:
-        return
+        return joined
     # the type map is keyed by the type's QUALIFIED name (Outer.Inner); look up by
     # the message's full name first.  Fall back to a short-name match ONLY when it
     # is UNAMBIGUOUS — several messages can share a nested short name (e.g.
@@ -1103,29 +1164,10 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage]) -> None:
             key = _norm(f.name)
             t = norm.get(key)
             if t:
-                f.proto_type = t
-                if key in norm_inc:
-                    f.type_note = ("swift-protobuf: container element/value type "
-                                   "not recovered (shown as bytes)")
-
-
-def _attach_visit_types(m: SwiftMessage, visits: List[Tuple[int, Optional[str]]]) -> None:
-    """Types from the Visitor method each field is written with (:func:`_traverse_visits`):
-    the integer encoding Swift reflection cannot tell (an ``Int32`` written zigzag is ``sint32``,
-    a ``UInt64`` written fixed is ``fixed64``), and the scalar type of a field reflection did not
-    type at all or only guessed (a ``bytes`` filler with its ``type_note``: the guess is replaced
-    and the note cleared)."""
-    typed = {}
-    for num, typ in visits:
-        if typ is not None:
-            typed.setdefault(num, typ)
-    for f in m.fields:
-        typ = typed.get(f.number)
-        if typ is None:
-            continue
-        if f.proto_type is None or f.type_note or typ.split()[-1] in _VISIT_ENCODINGS:
-            f.proto_type = typ
-            f.type_note = None
+                joined[(id(m), f.number)] = (t, "swift-protobuf: container element/value type "
+                                             "not recovered (shown as bytes)"
+                                             if key in norm_inc else None)
+    return joined
 
 
 # ── fat-binary slice helper ───────────────────────────────────────────────────

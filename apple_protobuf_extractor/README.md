@@ -101,8 +101,9 @@ the output package name), `--no-cross-image` (see below), `--verbose`, `--versio
     - Google's C++ `libprotobuf` (the full runtime): an exact decode of the
       `FileDescriptorProto` descriptors the binary embeds, with no estimates. See
       [C++ `libprotobuf` extraction](#c-libprotobuf-extraction).
-    - `swift-protobuf`: names and numbers are read from each message's name map and
-      types from Swift reflection metadata. See [swift-protobuf extraction](#swift-protobuf-extraction).
+    - `swift-protobuf`: names and numbers are read from each message's name map, and
+      each field's type by its number from the message's own `decodeMessage`. See
+      [swift-protobuf extraction](#swift-protobuf-extraction).
 - **Three more runtimes are detected but not decoded.** Google's Objective-C runtime
   (`GPBMessage` / `protobuf-objc`, for example Apple's **Key Transparency** classes in
   `transparencyd`), C++ `libprotobuf-lite`, which strips its descriptors so no names
@@ -199,14 +200,17 @@ detected and reported by the foreign-protobuf warning instead.
 
 ## swift-protobuf extraction
 
-A `swift-protobuf` message has no single descriptor. Its schema is split across two
-tables in the binary, which the tool joins by field name:
+A `swift-protobuf` message has no single descriptor. Its schema is read from:
 
 - the `_protobuf_nameMap` that `protoc-gen-swift` emits, which maps each field number
   to its name; and
-- the Swift reflection metadata (`__swift5_fieldmd`), which gives each stored
-  property's type (`Int32`, `String`, `Array`, `Optional`, `Dictionary`, or another
-  message or enum).
+- the message's own `decodeMessage`, which switches on the field number and hands each
+  field to a Decoder method (`decodeSingularInt32Field`, `decodeRepeatedMessageField`, ...)
+  with its type; `traverse` is read the same way as a check
+  (`serializers/swift_message_code.py`). Where no call can be named (a stripped binary that
+  links swift-protobuf in, a framework extracted from the cache) the type comes from the
+  Swift reflection metadata (`__swift5_fieldmd`) of the property of the field's name, and is
+  reported so.
 
 Names and numbers are read literally from the binary, including the several ways
 compilers lower the name map across iOS versions and optimisation levels: a table built
@@ -222,9 +226,9 @@ storage fields are recovered. For example, `remindd` gives its own messages in
 ```
 
 The accepted gaps ([LIMITATIONS.md](LIMITATIONS.md), section 10): integer encodings
-(`sint*`, `fixed*`, `sfixed*`) are read off the Visitor methods that `traverse` calls,
-and where that call cannot be named the field stays `int32` / `uint32` / `int64` /
-`uint64` (not flagged, and wire-incorrect for a genuine `sint*` or `fixed*` field); and
+(`sint*`, `fixed*`, `sfixed*`) come from the Decoder method a field is handed to, and
+where no call can be named the reflection type stays `int32` / `uint32` / `int64` /
+`uint64` (reported, and wire-incorrect for a genuine `sint*` or `fixed*` field); and
 a container element that does not decode is shown as `bytes` with a note. Enums are extracted and referenced by name (an enum whose cases cannot be
 recovered falls back to `int32` with a note). Types defined outside the image (another module, the well-known
 types) are emitted as `bytes` with an `unresolved:` note, so the output compiles under

@@ -209,19 +209,25 @@ class _Machine:
     *field_value(object, offset)*, when given, is the value a 64-bit load from an opaque object
     at a known offset produces (e.g. a token for ``self->ivar``); otherwise such a load is unknown.
 
+    *pointer*, when given, marks values that are addresses into an object the analysis cannot
+    see into (a Swift ``&self.field``, where self is a struct): unlike an opaque value, one plus
+    or minus a number is still one (as a frame address is), and a load from one at a known
+    offset is ``field_value(pointer, offset)``.
+
     *object_escape* narrows what an escaped stack address exposes: a callee (or a store through
     an unknown pointer) is handed a pointer to an object and may write from it upward, never
     below it, so only the slots at or above the LOWEST escaped (*escape_lo*) or handed
     (*handed_lo*) address are cleared.  Off by default: then every slot is cleared."""
 
     def __init__(self, regs: Dict[str, int], fallback=None, opaque=None,
-                 object_escape: bool = False, field_value=None):
+                 object_escape: bool = False, field_value=None, pointer=None):
         self.regs: Dict[str, int] = dict(regs)
         self.top: Set[str] = set()
         self.fallback = fallback
         self.opaque = opaque
         self.object_escape = object_escape
         self.field_value = field_value
+        self.pointer = pointer
         self.slots: Dict[int, Tuple[int, int]] = {}
         self.escaped = False
         self.escape_lo: Optional[int] = None
@@ -230,7 +236,8 @@ class _Machine:
         self.flags: Optional[Nzcv] = None
 
     def copy(self) -> "_Machine":
-        m = _Machine(self.regs, self.fallback, self.opaque, self.object_escape, self.field_value)
+        m = _Machine(self.regs, self.fallback, self.opaque, self.object_escape, self.field_value,
+                     self.pointer)
         m.top, m.slots, m.escaped, m.flags = set(self.top), dict(self.slots), self.escaped, self.flags
         m.escape_lo = self.escape_lo
         m.handed, m.handed_lo = self.handed, self.handed_lo
@@ -255,7 +262,7 @@ class _Machine:
         fallback: an absent register is unknown)."""
         m = _Machine({r: v for r, v in self.regs.items() if other.regs.get(r) == v},
                      opaque=self.opaque, object_escape=self.object_escape,
-                     field_value=self.field_value)
+                     field_value=self.field_value, pointer=self.pointer)
         m.slots = {a: s for a, s in self.slots.items() if other.slots.get(a) == s}
         m.escaped = self.escaped or other.escaped
         los = [x for x in (self.escape_lo, other.escape_lo) if x is not None]
@@ -314,7 +321,8 @@ class _Machine:
             self.top.add(r)
             return
         if _is_symbolic(v):
-            symbol = _is_stack(v) or (self.opaque is not None and self.opaque(v))
+            symbol = _is_stack(v) or (self.opaque is not None and self.opaque(v)) or \
+                (self.pointer is not None and self.pointer(v))
             if not symbol or not _wide(tok):        # stack-derived arithmetic, or half of one
                 self.regs.pop(r, None)
                 self.top.add(r)
@@ -369,7 +377,7 @@ class _Machine:
 @dataclass(frozen=True)
 class Objects:
     """How a run (:meth:`Flow.run_from`, :meth:`Flow.propagate`) treats the objects it cannot
-    see into -- all optional: *opaque*, *field_value* and *object_escape* as in
+    see into -- all optional: *opaque*, *field_value*, *pointer* and *object_escape* as in
     :class:`_Machine`; *call_result(k, target, x0_before)*, the value of x0 after the call at
     ``insns[k]`` (None: unknown) -- e.g. *x0_before* for a runtime function that returns its
     argument (``objc_retain``), or an opaque token naming that call's result, so it can be
@@ -378,25 +386,31 @@ class Objects:
     field_value: Optional[Callable[[int, int], Optional[int]]] = None
     call_result: Optional[Callable[[int, Optional[int], Optional[int]], Optional[int]]] = None
     object_escape: bool = False
+    pointer: Optional[Callable[[Optional[int]], bool]] = None
 
     def machine(self, regs: Dict[str, int]) -> "_Machine":
         return _Machine(regs, opaque=self.opaque, object_escape=self.object_escape,
-                        field_value=self.field_value)
+                        field_value=self.field_value, pointer=self.pointer)
 
 
 NO_OBJECTS = Objects()
+_ALL_GPRS = tuple(f"x{n}" for n in range(29))
 
 
 @dataclass
 class CallSite:
     """One call met by :meth:`Flow.run_from`: its instruction index and address, its target
     (None for a ``blr`` through an unknown register), the argument registers known at it, and
-    whether it is a tail call (``b`` out of the function)."""
+    whether it is a tail call (``b`` out of the function).  In a run with *pointer* objects
+    (:class:`Objects`: Swift) *args* holds every register known at it (self, the error and the
+    async context are x20-x22, and an outlined thunk reads the caller's callee-saved ones) and
+    *via* is the value a ``blr`` goes through, a token included."""
     k: int
     addr: int
     target: Optional[int]
     args: Dict[str, int]
     tail: bool = False
+    via: Optional[int] = None
 
 
 @dataclass
@@ -1124,7 +1138,8 @@ class Flow:
         base, index, disp, ext, shift, idx_w = pm
         r = _norm_reg(base) if base else None
         obj = m.regs.get(r) if r else None
-        if obj is None or m.opaque is None or not m.opaque(obj):
+        if obj is None or not ((m.opaque is not None and m.opaque(obj)) or
+                               (m.pointer is not None and m.pointer(obj))):
             return None
         off = disp
         if index:
@@ -1415,9 +1430,14 @@ class Flow:
         if start_blk is None:
             return region
 
+        regs_recorded = _ALL_GPRS if objects.pointer is not None else ARG_GPRS
+
         def record_call(st: _Machine, k: int, target: Optional[int], tail: bool) -> None:
-            args = {r: v for r in ARG_GPRS if (v := st.copy_of(r)) is not None}
-            region.calls.append(CallSite(k, self.insns[k].addr, target, args, tail))
+            args = {r: v for r in regs_recorded if (v := st.copy_of(r)) is not None}
+            ins = self.insns[k]
+            via = st.get(split_ops(ins.op_str)[0]) if objects.pointer is not None and \
+                ins.mnemonic not in ('bl', 'b') and ins.op_str else None
+            region.calls.append(CallSite(k, ins.addr, target, args, tail, via))
 
         def step(st: _Machine, k: int, record: bool) -> None:
             ins = self.insns[k]

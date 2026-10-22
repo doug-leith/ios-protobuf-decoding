@@ -1189,19 +1189,6 @@ class TestListing(unittest.TestCase):
 
 
 
-class TestVisitTypeReplacesAGuess(unittest.TestCase):
-    """The Visitor method a field is written with names its scalar type; it replaces a guessed
-    filler (`repeated bytes` with a type note) as well as an untyped field (swift session, #122)."""
-
-    def test_a_guess_is_replaced_and_its_note_cleared(self):
-        f = S.SwiftField(1, "scores", proto_type="repeated bytes", type_note="type not recovered")
-        g = S.SwiftField(2, "name", proto_type="string")
-        m = S.SwiftMessage("M", "Msg", fields=[f, g])
-        S._attach_visit_types(m, [(1, "repeated float"), (2, "bytes")])
-        self.assertEqual((f.proto_type, f.type_note), ("repeated float", None))
-        self.assertEqual(g.proto_type, "string")              # a decoded type is kept
-
-
 def _pegasus_path():
     try:
         import artifacts
@@ -1424,18 +1411,20 @@ class TestLiveCacheNative(unittest.TestCase):
              (6, "sentEpochMillis")])
 
     def test_types_recovered_cache_native(self):
-        # field TYPES (from __swift5_fieldmd) also resolve cache-native.
+        # field TYPES also resolve cache-native -- from the message's decodeMessage, by number
+        # (#129): sentEpochMillis is decoded with decodeSingularFixed64Field and visited with
+        # visitSingularFixed64Field (reflection alone says UInt64, which was taken for uint64)
         rec = {f.name: f.proto_type for f in self.msgs["CP_Record"].fields}
         self.assertEqual(rec["topic"], "string")
-        self.assertEqual(rec["sentEpochMillis"], "uint64")
+        self.assertEqual(rec["sentEpochMillis"], "fixed64")
         self.assertEqual(rec["seqNum"], "CP_SequenceNumber")   # message ref
 
     def test_more_hand_verified_messages(self):
         # Ground truth (SWIFT_PROTO_HAND_VERIFICATION.md): closure numbers +
-        # fieldmd types.
+        # fieldmd types; the integer encodings by decodeMessage and traverse (#129).
         seq = {(f.number, f.name, f.proto_type)
                for f in self.msgs["CP_SequenceNumber"].fields}
-        self.assertEqual(seq, {(1, "publisherParticipantID", "uint64"),
+        self.assertEqual(seq, {(1, "publisherParticipantID", "fixed64"),
                                (2, "seqNum", "uint64")})
         enc = self.msgs["CP_EncryptionID"].fields
         self.assertEqual([(f.number, f.name, f.proto_type) for f in enc],
