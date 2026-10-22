@@ -125,6 +125,19 @@ class Segment:
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+def _bind_ordinal(raw: int, fmt: int) -> Optional[int]:
+    """A chained-fixup value's import ordinal when it is a bind, else None: arm64e formats
+    bind at bit 62 with a 16-bit ordinal (24 in USERLAND24), the ptr64 formats at bit 63 with
+    a 24-bit one (dyld_chained_ptr_64_bind)."""
+    if fmt in _ARM64E_FAMILY:
+        if not (raw >> 62) & 1:
+            return None
+        return raw & (0xFFFFFF if fmt == _DYLD_PTR_ARM64E_USERLAND24 else 0xFFFF)
+    if fmt in (_DYLD_PTR_64, _DYLD_PTR_64_OFFSET):
+        return raw & 0xFFFFFF if (raw >> 63) & 1 else None
+    return None
+
+
 def _decode_chain_ptr(raw: int, fmt: int, image_base: int) -> int:
     """Decode one chained-fixup pointer value → vmaddr."""
     if fmt in (_DYLD_PTR_ARM64E_USERLAND, _DYLD_PTR_ARM64E_USERLAND24):
@@ -263,6 +276,7 @@ class BinaryContext:
         self._fixup_map: Dict[int, int]              = {}   # vmaddr → decoded vmaddr
         self._bind_name_map: Dict[int, str]          = {}   # vmaddr → import symbol name
         self._bind_slots: set                        = set()  # every chained-fixup bind
+        self._chain_formats: set                     = set()  # pointer formats of its segments
         self._chained = False                        # LC_DYLD_CHAINED_FIXUPS present
         self._imports:   List[str]                   = []   # ordinal → import symbol name
         self._image_base: Optional[int]              = None  # cached after load commands
@@ -315,10 +329,7 @@ class BinaryContext:
         self._cpu_subtype = cpusubtype
         self._filetype    = _filetype     # MH_EXECUTE, MH_DYLIB, …
         self._parse_load_commands(ncmds, sizeofcmds)
-        # Cache image_base once all segments are known
-        candidates = [s.vmaddr for s in self._segments
-                      if s.name != '__PAGEZERO' and s.vmaddr > 0]
-        self._image_base = min(candidates) if candidates else 0
+        self._image_base = self._local_image_base()
         for seg in self._segments:
             if seg.filesize and seg.fileoff + seg.filesize > len(data):
                 raise ValueError(
@@ -377,6 +388,7 @@ class BinaryContext:
         self._fixup_map: Dict[int, int]             = {}
         self._bind_name_map: Dict[int, str]         = {}
         self._bind_slots: set                       = set()  # a cache binds nothing at load
+        self._chain_formats: set                    = set()
         self._chained = False
         self._imports:   List[str]                  = []   # unused in cache mode
         self._symtab:    Optional[Tuple[int, int, int, int]] = None  # see binary __init__
@@ -729,29 +741,15 @@ class BinaryContext:
         return self._bind_name_map.get(vmaddr)
 
     def import_name_for_bind(self, raw: int) -> Optional[str]:
-        """Resolve the imported symbol name for an *undecoded* bind pointer value.
-
-        Binary mode only.  When a slot binds to an external symbol (e.g. a
-        PBCodable subclass's superclass pointer to ``PBCodable`` in another
-        dylib), ``read_ptr`` returns the raw chained-fixup value unchanged
-        because a bind is not a rebase and so is absent from ``_fixup_map``.
-        That raw value is not a vmaddr — its low bits are the import *ordinal*,
-        which indexes the imports table parsed from ``LC_DYLD_CHAINED_FIXUPS``.
-
-        This recovers the symbol name (e.g. ``"_OBJC_CLASS_$_PBCodable"``)
-        directly from the ordinal, so it does not depend on the chain walk
-        having visited the slot (the ObjC class superclass slots are not on the
-        walked chains).  Returns None for a value that is not a bind sentinel
-        (a real mapped vmaddr is far below 2**62) or whose ordinal is unknown.
-        """
-        if not self._imports or raw < (1 << 62):
-            return None
-        # DYLD bind formats carry the ordinal in the low bits (16 bits for
-        # arm64e, 24 for the ptr64 formats); 24 is the safe superset and the
-        # higher bitfields (addend/next) sit above it.  Verified across the
-        # iphone8 libexec corpus (258 binaries) to recover _OBJC_CLASS_$_* names.
-        ordinal = raw & 0xFFFFFF
-        if 0 <= ordinal < len(self._imports):
+        """The imported symbol an *undecoded* chained-fixup value binds to (binary mode):
+        ``read_ptr`` returns a bind's raw value unchanged, and its ordinal indexes the imports
+        of ``LC_DYLD_CHAINED_FIXUPS``.  None for a value that is not a bind in the image's
+        pointer format (an arm64e authenticated rebase has bit 63 set too) or whose ordinal
+        is unknown."""
+        if not self._imports or len(self._chain_formats) != 1:
+            return None                     # (several formats: a value alone cannot say)
+        ordinal = _bind_ordinal(raw, next(iter(self._chain_formats)))
+        if ordinal is not None and ordinal < len(self._imports):
             return self._imports[ordinal] or None
         return None
 
@@ -1013,6 +1011,7 @@ class BinaryContext:
 
             if ptr_fmt == 0 or seg_info_abs + 22 > len(blob):
                 continue
+            self._chain_formats.add(ptr_fmt)
             page_count = struct.unpack_from('<H', blob, seg_info_abs + 20)[0]
             # NOTE: pointer_format is read PER SEGMENT (offset 6, above) and the
             # chain walk below uses that local `ptr_fmt` — which is correct, since
@@ -1035,16 +1034,14 @@ class BinaryContext:
                 self._walk_chain(chain_va, ptr_fmt, imports)
 
     def _local_image_base(self) -> int:
-        """Compute image_base from already-parsed segments.
-
-        Used by _parse_chained_fixups_lc / _walk_chain, which run during
-        _parse_load_commands() before self._image_base is assigned in __init__.
-        The result is identical to the final self.image_base value because all
-        LC_SEGMENT_64 commands appear before LC_DYLD_CHAINED_FIXUPS in a
-        well-formed Mach-O binary.
-        """
-        candidates = [s.vmaddr for s in self._segments
-                      if s.name != '__PAGEZERO' and s.vmaddr > 0]
+        """The image's base: the vmaddr of the segment holding its header (file offset 0 --
+        a dylib's __TEXT is at 0, an executable's after __PAGEZERO).  Read from the segments
+        parsed so far: the chained-fixup walk runs inside _parse_load_commands, after the
+        LC_SEGMENT_64 commands."""
+        for s in self._segments:
+            if s.fileoff == 0 and s.filesize > 0:
+                return s.vmaddr
+        candidates = [s.vmaddr for s in self._segments if s.name != '__PAGEZERO']
         return min(candidates) if candidates else 0
 
     def _walk_chain(self, vmaddr: int, fmt: int,
@@ -1057,6 +1054,7 @@ class BinaryContext:
         (e.g. slot → ``"_OBJC_CLASS_$_NSString"``).
         """
         seen: set = set()
+        base = self._local_image_base()
         while vmaddr not in seen:
             seen.add(vmaddr)
             try:
@@ -1066,28 +1064,15 @@ class BinaryContext:
             raw = struct.unpack_from('<Q', self._data, off)[0]
 
             # ── Bind entry: record external symbol name ──────────────────────
-            # For ARM64E format (fmt=1): bind = bit 62, ordinal = bits[15:0].
-            # For ptr64 formats (fmt=2,6): bind = bit 63, ordinal = bits[15:0].
-            is_bind = False
-            ordinal = 0
-            if fmt in _ARM64E_FAMILY:
-                is_bind = bool((raw >> 62) & 1)
-                # USERLAND24's bind/auth-bind ordinal is 24 bits wide (both
-                # variants); every other arm64e format's is 16.
-                ordinal = int(raw & (0xFFFFFF if fmt == _DYLD_PTR_ARM64E_USERLAND24
-                                     else 0xFFFF))
-            elif fmt in (_DYLD_PTR_64, _DYLD_PTR_64_OFFSET):
-                is_bind = bool((raw >> 63) & 1)
-                ordinal = int(raw & 0xFFFF)
-
-            if is_bind:
+            ordinal = _bind_ordinal(raw, fmt)
+            if ordinal is not None:
                 self._bind_slots.add(vmaddr)
                 if imports and 0 <= ordinal < len(imports):
                     sym = imports[ordinal]
                     if sym:
                         self._bind_name_map[vmaddr] = sym
             else:
-                decoded = _decode_chain_ptr(raw, fmt, self._local_image_base())
+                decoded = _decode_chain_ptr(raw, fmt, base)
                 if decoded:
                     self._fixup_map[vmaddr] = decoded
 

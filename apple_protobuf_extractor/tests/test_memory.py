@@ -578,11 +578,13 @@ class TestImportNameForBind:
     carries the import ordinal in its low bits, which indexes the imports table.
     See proto.extractor._resolve_class_name_at / TODO protoclass-PRINCIPLED."""
 
-    def _ctx_with_imports(self, imports):
+    def _ctx_with_imports(self, imports, fmt=None):
+        from macho.memory import _DYLD_PTR_64
         c = BinaryContext.__new__(BinaryContext)
         c._cache_reader = None
         c._imports = imports
         c._bind_name_map = {}
+        c._chain_formats = {_DYLD_PTR_64 if fmt is None else fmt}
         return c
 
     def test_ordinal_resolves_to_symbol(self):
@@ -607,6 +609,19 @@ class TestImportNameForBind:
 
     def test_blank_symbol_returns_none(self):
         c = self._ctx_with_imports(['', ''])
+        assert c.import_name_for_bind(0x8010000000000001) is None
+
+    def test_an_arm64e_authenticated_rebase_is_not_a_bind(self):
+        """arm64e: bit 63 is auth, bit 62 bind -- an auth rebase is a pointer (#133)."""
+        from macho.memory import _DYLD_PTR_ARM64E
+        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'], _DYLD_PTR_ARM64E)
+        assert c.import_name_for_bind(0x8000000000000001) is None
+        assert c.import_name_for_bind(0xC000000000000001) == '_OBJC_CLASS_$_PBCodable'
+
+    def test_several_pointer_formats_say_nothing(self):
+        from macho.memory import _DYLD_PTR_64, _DYLD_PTR_ARM64E
+        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
+        c._chain_formats = {_DYLD_PTR_64, _DYLD_PTR_ARM64E}
         assert c.import_name_for_bind(0x8010000000000001) is None
 
 
@@ -787,3 +802,22 @@ class TestDecodeChainPtrUnknownFormat:
         raw = (0x1234_5678_9ABC_DEF0) & 0x0000_007F_FFFF_FFFF | (0x7F << 40)
         decoded = _decode_chain_ptr(raw, 1, image_base=0x100000000)
         assert decoded != raw
+
+
+class TestImageBase:
+    """The image's base is the segment holding its header: a dylib's __TEXT at vmaddr 0 (it
+    was skipped for the next segment), an executable's after __PAGEZERO (#133)."""
+
+    def _ctx(self, segs):
+        from types import SimpleNamespace as NS
+        c = BinaryContext.__new__(BinaryContext)
+        c._segments = [NS(name=n, vmaddr=v, fileoff=o, filesize=f) for n, v, o, f in segs]
+        return c
+
+    def test_a_dylib(self):
+        c = self._ctx([('__TEXT', 0, 0, 0x4000), ('__DATA', 0x4000, 0x4000, 0x1000)])
+        assert c._local_image_base() == 0
+
+    def test_an_executable(self):
+        c = self._ctx([('__PAGEZERO', 0, 0, 0), ('__TEXT', 0x100000000, 0, 0x4000)])
+        assert c._local_image_base() == 0x100000000

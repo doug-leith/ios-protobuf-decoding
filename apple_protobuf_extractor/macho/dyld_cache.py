@@ -1263,9 +1263,16 @@ class DyldCacheReader:
 
         Returns ``0`` if no strategy resolves to a mapped address (this also
         covers bind entries, which are not pointers into this cache at all).
+
+        A slide-info v5 cache (and only v5) encodes every pointer as the offset from
+        :attr:`cache_base` (3. alone): an offset that is itself a mapped address -- a macOS 27
+        target at or above 0x3_0000_0000 -- is not taken for the address (#133).
         """
         if not raw:
             return 0
+        if self._slide_versions == {_SLIDE_VERSION_5}:
+            candidate = self.cache_base + (raw & self._runtime_offset_mask)
+            return candidate if self.has_vmaddr(candidate) else 0
         if self.has_vmaddr(raw):
             return raw
         if raw > 0xFFFFFFFFF:
