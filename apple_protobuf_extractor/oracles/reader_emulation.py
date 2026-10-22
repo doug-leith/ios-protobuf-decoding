@@ -188,7 +188,9 @@ class Run:
             result = self.obj(("instance", self._class_name(x[0])))
         elif name == "_objc_storeStrong":
             uc.mem_write(x[0], struct.pack("<Q", x[1]))
-        elif name and name.startswith("_objc_setProperty"):
+        elif name == "_objc_setProperty":         # (self, _cmd, offset, value, atomic, copy)
+            uc.mem_write(x[0] + x[2], struct.pack("<Q", x[3]))
+        elif name and name.startswith("_objc_setProperty_"):   # (self, _cmd, value, offset)
             uc.mem_write(x[0] + x[3], struct.pack("<Q", x[2]))
         elif name == "_objc_msgSend":
             self._send(uc, x)

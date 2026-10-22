@@ -172,6 +172,21 @@ class TestFlowAgainstEmulation(unittest.TestCase):
         self.assertGreater(rep.stats["a known value that does not hold"], 0)
         self.assertGreater(from_entry.stats["a value propagated from the entry that does not hold"], 0)
 
+    def test_data_read_as_its_file_contents_is_reported(self):
+        """The regression test_values cites: __data taken as a constant (is_variable false for
+        it) is a known value that does not hold, the runs' __data being random."""
+        from macho.memory import BinaryContext
+        from oracles.flow_emulation import compare
+        ctx = _binary_ctx(LOCATIOND)
+        data = ctx.section("__DATA", "__data")
+        real = BinaryContext.is_variable
+
+        def constant_data(self, va):
+            return False if data.vmaddr <= va < data.vmaddr + data.vmsize else real(self, va)
+        with mock.patch.object(BinaryContext, "is_variable", constant_data):
+            rep = compare(ctx, ctx.function_starts()[::100], runs=2)
+        self.assertGreater(rep.stats["a known value that does not hold"], 0)
+
     def test_a_write_writes_does_not_list_is_reported(self):
         """The registers a run writes are its own, not writes()'s: ldr's destination dropped."""
         import oracles.flow_emulation as F
@@ -367,6 +382,30 @@ class TestCacheImagesAgainstEmulation(unittest.TestCase):
             if image == "CoreParsec":
                 self.assertGreaterEqual(rep.stats["nested fields"], 4)     # its maps
         self._each(W, check)
+
+    def test_a_packed_field_emitted_singular_is_reported(self):
+        import copy
+        from oracles import writer_emulation as W
+        img, msgs = self.images["CoreLocationProtobuf"]
+        machine = W.make_machine(img.ctx)
+        for msg in msgs:
+            f = next((f for f in msg.fields if f.label.value == "repeated" and not f.map_key_type
+                      and f.type_name in ("int32", "uint32", "int64", "uint64", "double", "float")),
+                     None)
+            cls = img.cl.find(msg.class_name)
+            if f is None or cls is None or W._method(img.cl, cls, "writeTo:") is None:
+                continue
+            tags, _run = W.observe(machine, img.cl, cls)
+            if "packed" in tags.get(f.number, ((),))[0]:
+                break
+        else:
+            self.skipTest("no packed field written")
+        planted = copy.deepcopy(msg)
+        g = next(g for g in planted.fields if g.number == f.number)
+        g.label = type(g.label).OPTIONAL
+        rep = W.compare(img.ctx, img.st, img.cl, [planted])
+        self.assertTrue(any(msg.class_name in r[1]
+                            for r in rep.findings["written packed, not repeated"]))
 
     def test_readfrom(self):
         from oracles import reader_emulation as RD

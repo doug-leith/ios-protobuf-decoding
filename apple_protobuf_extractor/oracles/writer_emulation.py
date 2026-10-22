@@ -462,7 +462,9 @@ def compare(ctx, st, cl, messages=None, report=None, known=None):
                 report.stats["tags from no ivar"] += 1
             repeated = f.label.value == "repeated" if hasattr(f.label, "value") else \
                 str(f.label) == "repeated"
-            if count > 1 and not repeated and not f.map_key_type and "packed" not in kinds:
+            if "packed" in kinds and not repeated:
+                report.find("written packed, not repeated", 0, "%s %s" % (where, f.name), key=where)
+            elif count > 1 and not repeated and not f.map_key_type and "packed" not in kinds:
                 report.find("written twice, not repeated", 0, "%s %s" % (where, f.name), key=where)
             elif count == 1 and repeated:      # (every array a run builds has two elements)
                 report.find("repeated, written once", 0, "%s %s" % (where, f.name), key=where)

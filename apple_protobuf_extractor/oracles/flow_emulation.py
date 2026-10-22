@@ -20,7 +20,8 @@ random, the callee-saved ones kept, and the stack from the lowest frame address 
 register hands it up to the entry ``sp`` overwritten; the runtime functions Flow has contracts
 for keep them (the ARC calls return their argument, the stack probe writes x9, x16, x17).  The
 image's own memory is as loaded (chained-fixup rebases applied, each bound slot pointing at its
-import's block); any other address reads random words.  A run ends at the return to its caller,
+import's block), but for its program data (``__data``, ``__bss`` ...: what the program writes,
+which Flow takes as unknown), random in each run; any other address reads random words.  A run ends at the return to its caller,
 a branch out of the function, a fault, or a step budget.
 
     python -m oracles.flow_emulation BINARY [EVERY_NTH_FUNCTION] [RUNS]"""
@@ -40,6 +41,7 @@ from proto.callees import RETURNS_ARGUMENT, callee_name, call_clobbers
 from proto.dispatch import listing_flow
 from proto.function_body import function_body
 from macho.disasm import _parse_imm
+from macho.memory import PROGRAM_DATA_SECTIONS, READ_ERRORS
 
 PAGE = 0x1000
 STACK_BASE, STACK_SIZE = 0x7f0000000000, 0x40000
@@ -137,7 +139,9 @@ class Machine:
         at = (page // PAGE * PAGE) % (len(filler) - PAGE)
         return filler[at:at + PAGE]
 
-    def reset(self, rng):
+    def reset(self, rng, program_data=False):
+        """The image as loaded, the stack, heap and registers random; with *program_data*, the
+        image's program data random too (restored at the next reset)."""
         uc = self.uc
         self.rng = rng
         for page, first in self.on_demand.items():
@@ -148,6 +152,11 @@ class Machine:
                 if lo < hi:
                     uc.mem_write(lo, data[lo - va:hi - va])
         self.dirty = set()
+        if program_data:
+            for sec in self.ctx._sections.values():
+                if sec.name in PROGRAM_DATA_SECTIONS and sec.vmsize:
+                    uc.mem_write(sec.vmaddr, random_words(rng, sec.vmsize) + bytes(sec.vmsize & 7))
+                    self.dirty.update(range(sec.vmaddr & ~(PAGE - 1), sec.vmaddr + sec.vmsize, PAGE))
         uc.mem_write(STACK_BASE, self.fillers[rng.randrange(len(self.fillers))][:STACK_SIZE])
         uc.mem_write(HEAP_BASE, self.fillers[rng.randrange(len(self.fillers))][:HEAP_SIZE])
         if self.bind_size:                      # each import's block: random words after a ret
@@ -350,7 +359,7 @@ class Emulation:
         """One run; *regs* the registers' values on entry (any other: random)."""
         rng = random.Random(seed)
         flow, rep = self.flow, self.report
-        uc = self.machine.reset(rng)
+        uc = self.machine.reset(rng, program_data=True)
         for r, v in (regs or {}).items():
             uc.reg_write(_X[r], v)
         last = {}                                  # register -> index of its last write
@@ -567,8 +576,13 @@ def compare(ctx, functions, runs=4, report=None, entry=False):
     for va in functions:
         try:
             em = (EntryEmulation if entry else Emulation)(machine, va, report)
-        except Exception as e:                   # a body the readers cannot build: not Flow's
-            report.stats["functions not built: %s" % type(e).__name__] += 1
+        except READ_ERRORS as e:                 # a body the readers cannot read: not Flow's
+            report.stats["functions not read: %s" % type(e).__name__] += 1
+            continue
+        except (NameError, ImportError):
+            raise
+        except Exception as e:
+            report.find("a function Flow is not built for", va, "%s: %s" % (type(e).__name__, e))
             continue
         report.stats["functions"] += 1
         for seed in range(runs):
