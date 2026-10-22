@@ -308,3 +308,48 @@ class TestIOS27SharedSelectorStub(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReviewFixes(unittest.TestCase):
+    """The writer-flow faults of the 2026-10-22 review (TODO #132)."""
+
+    def _run(self, *functions, own=(), patch_visits=None):
+        from unittest import mock
+        import proto.writer_flow as WF
+        from tests._listing import layout
+        _order, fd = layout(*functions)
+        wf = WF.WriterFlow(NoImage(segments=[]), [])
+        wf.off_to_ivar = {8: '_a'}
+        wf.own_imps = set(own)
+        patches = [mock.patch('proto.function_body.disasm', fd),
+                   mock.patch.object(WF, 'callee_name', lambda ctx, va: None),
+                   mock.patch.object(WF, 'stub_selector', lambda ctx, va: None)]
+        if patch_visits is not None:
+            patches.append(mock.patch.object(WF, '_MAX_BLOCK_VISITS', patch_visits))
+        for p in patches:
+            p.start()
+        try:
+            return wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
+        finally:
+            for p in patches:
+                p.stop()
+
+    def test_the_visit_cap_leaves_the_class_undecided(self):
+        res = self._run((0x1000, [('mov', 'x19, x2'), ('ret', '')]), patch_visits=0)
+        self.assertFalse(res.complete)
+
+    def test_a_value_through_a_frame_array_reaches_the_write(self):
+        res = self._run((0x1000, [
+            ('mov', 'x19, x2'), ('ldr', 'x8, [x0, #8]'), ('add', 'x9, sp, #0x20'),
+            ('str', 'x8, [x9, x10, lsl #3]'), ('ldr', 'x1, [x9, x11, lsl #3]'),
+            ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
+        self.assertIn(('I', '_a'), set(res.sites[0x101c].value_origins))
+
+    def test_a_method_of_self_returns_what_it_is_handed(self):
+        """[self f:self->_a] returning its argument: the value written is _a's."""
+        res = self._run(
+            (0x1000, [('mov', 'x19, x2'), ('ldr', 'x2, [x0, #8]'), ('bl', '#0x3000'),
+                      ('mov', 'x1, x0'), ('mov', 'x0, x19'), ('mov', 'w2, #1'),
+                      ('bl', '#0x9000'), ('ret', '')]),
+            (0x3000, [('mov', 'x0, x2'), ('ret', '')]), own=(0x3000,))
+        self.assertIn(('I', '_a'), set(res.sites[0x1018].value_origins))

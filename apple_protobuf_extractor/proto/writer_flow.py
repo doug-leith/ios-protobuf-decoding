@@ -59,6 +59,7 @@ log = logging.getLogger(__name__)
 
 E: FrozenSet = frozenset()
 _W, _S, _T = 'W', 'S', 'T'
+_P = 'P'                     # (_P, reg): a self-method summary's argument register on entry
 
 
 # [cap:INPUT-SANITY] runaway backstops (a writeTo: settles in a few sweeps of its blocks).
@@ -381,7 +382,7 @@ class WriterFlow:
                               max_visits=_MAX_BLOCK_VISITS)
         if states is None:
             res.fail("fixpoint did not settle")
-            record_heuristic_hit(self.ctx, "_MAX_BLOCK_VISITS", f"writer flow of {imp:#x}")
+            record_heuristic_hit(self.ctx, "_MAX_BLOCK_VISITS", f"writer flow of {run.lo:#x}")
             return res
         for b, st in states.items():
             self._block(st.copy(), b, res, run)
@@ -418,7 +419,8 @@ class WriterFlow:
                 if out_of_window and not self._is_function(tgt):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
                     return True
-                if self._call(st, tgt, res, run.depth, run.top, ins.addr, vals):
+                if self._call(st, callee if mn in CALLS else tgt, res, run.depth, run.top,
+                              ins.addr, vals):      # (a blr: the target its register holds)
                     return True                      # no-return callee
                 if mn not in CALLS:                  # a tail call
                     res.ret |= st.p('x0') | st.p('v0')
@@ -594,7 +596,10 @@ class WriterFlow:
             elif text_holding(self.ctx, tgt) is not None:
                 imp = tgt                            # a C function of this image handed self
         if imp is not None and imp != top:
-            return self._summary(imp, depth)
+            out = set()                              # its return: the caller's origins for
+            for o in self._summary(imp, depth):     # each argument it is derived from
+                out |= st.p(o[1]) if isinstance(o, tuple) and o[0] == _P else {o}
+            return frozenset(out)
         r = set(argp)
         if _S in r:
             r.discard(_S)
@@ -602,13 +607,16 @@ class WriterFlow:
         return frozenset(r)
 
     def _summary(self, imp: int, depth: int) -> FrozenSet:
-        """Origins of the value a method of self returns (called with x0 = self)."""
+        """Origins of the value a method of self returns, called with x0 = self and each other
+        argument register its own marker (``(_P, reg)``: the caller substitutes its origins)."""
         if imp in self._summary_memo:
             return self._summary_memo[imp]
         self._summary_memo[imp] = frozenset({_T})    # recursion guard
         out = frozenset({_T})
         if depth < _MAX_SUMMARY_DEPTH:
-            res = self._run(imp, {'x0': frozenset({_S})}, depth + 1, imp)
+            entry = {'x0': frozenset({_S}),
+                     **{r: frozenset({(_P, r)}) for r in ARG_GPRS if r != 'x0'}}
+            res = self._run(imp, entry, depth + 1, imp)
             if res is not None and res.complete:
                 out = frozenset(res.ret)
         else:
@@ -708,6 +716,13 @@ class WriterFlow:
             for d, v in zip(outs, vals):
                 st.kill(d, v)
             return
+        if fa is not None:                           # an element of a frame array: any of it
+            v = st.frame_from(fa + disp) | st.p(idx)
+            for d in dsts:
+                st.kill(d)
+            for d in outs:
+                st.kill(d, v)
+            return
         cb = self._const(vals, base) if base else None
         if cb is not None and idx is None:
             esize = 4 if mn == 'ldpsw' else width   # ldpsw: two 32-bit offset variables
@@ -757,6 +772,14 @@ class WriterFlow:
                 v = (st.p(r) | (frozenset({'STK'}) if stk else E)) if r else E
                 st.frame_write(a, w, frozenset(v))
                 a += w
+            return
+        if fa is not None:                           # an element of a frame array, from fa up
+            v = set()
+            for tok in srcs:
+                r = reg_name(tok.strip())
+                if r:
+                    v |= st.p(r) | ({'STK'} if self._frame(vals, r) is not None else set())
+            st.fl[fa + pm[2]] = st.fl.get(fa + pm[2], E) | frozenset(v)
             return
         for tok in srcs:
             r = reg_name(tok.strip())

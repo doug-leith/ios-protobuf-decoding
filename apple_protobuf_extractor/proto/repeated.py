@@ -16,7 +16,7 @@ from macho.memory    import READ_ERRORS, BinaryContext
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
 from macho.disasm    import _parse_imm
 from proto.arm64_operands import RETURNS, mem_regs, split_ops
-from proto.callees   import callee_name, RETURNS_ARGUMENT
+from proto.callees   import callee_name, real_target, RETURNS_ARGUMENT
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
 log = logging.getLogger(__name__)
@@ -380,7 +380,10 @@ def _resolve_repeated_field_type(
     """
     # ABI evidence first: the string write helper is never used for a message
     # element, so it decides the kind before any class-naming path runs.
-    if string_helper is not None and wt_helpers.get(ivar.name) == string_helper:
+    mine = wt_helpers.get(ivar.name)
+    if string_helper is not None and mine is not None and (
+            mine == string_helper or (ctx is not None and
+                                      real_target(ctx, mine) == real_target(ctx, string_helper))):
         log.debug("%s: repeated string via writeTo: helper 0x%x",
                   pname, string_helper)
         return _RepeatedTypeResult(type_name="string", type_class=None,

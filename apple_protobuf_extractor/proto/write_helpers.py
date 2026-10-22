@@ -99,7 +99,7 @@ def _identify_string_write_helpers(
         for iv in str_ivars:
             h = helpers.get(iv.name)
             if h:
-                string_helpers.add(h)
+                string_helpers.add(real_target(ctx, h))
 
         if string_helpers:
             # All classes share the same helpers; stop after first hit.

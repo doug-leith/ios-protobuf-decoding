@@ -253,7 +253,8 @@ RUNTIME_CONTRACTS["____chkstk_darwin"] = (("x9",), None)
 #: as it probes (its caller allocates the frame by an immediate) -- run from the iPhone 8 cache's
 #: libsystem_pthread, :mod:`oracles.call_models` (TODO #128).
 CALL_CLOBBERS: Dict[str, Tuple[str, ...]] = {"____chkstk_darwin": ("x9", "x16", "x17", "x30")}
-for _name in ("_objc_opt_class", "_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
+RUNTIME_CONTRACTS["_objc_opt_class"] = (("x0",), None)
+for _name in ("_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
     RUNTIME_CONTRACTS[_name] = (("x0", "x1"), None)
 
 

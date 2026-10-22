@@ -315,7 +315,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 # slot -- a newer toolchain's engine spills it).  An lsr reached without
                 # self is not our dispatch: e.g. the next function in memory, reached by
                 # falling through a call that never returns (the stack-guard failure).
-                out.notes.append(f"lsr {flow.insns[k].addr:#x}: self not held, skipped")
+                note = f"lsr {flow.insns[k].addr:#x}: self not held, skipped"
+                if note not in out.notes:            # (once, not once per arm round)
+                    out.notes.append(note)
                 continue
             stop = frozenset(b for b in flow.cfg.order if b in idom and dominates(idom, b, lsr_blk))
             scan = flow.candidates(k, dest, (1, _MAX_FIELD))
@@ -501,8 +503,6 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
     if key is not None and key in memo:
         return memo[key]
     out = ClassDispatch(cls.name)
-    if key is not None:
-        memo[key] = out
     if getattr(ctx, "_function_entries", None) is None:
         out.notes.append("function index not built (proto.dispatch.build_function_index): "
                          "function boundaries from the core index and the class's own methods only")
@@ -520,4 +520,6 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
             detail = f"core {core_va:#x}: {type(exc).__name__}: {exc}"
             out.notes.append(detail)
             record_analysis_failure(ctx, cls.name, "readFrom: dispatch", detail)
+    if key is not None:
+        memo[key] = out                              # (only once built whole)
     return out
