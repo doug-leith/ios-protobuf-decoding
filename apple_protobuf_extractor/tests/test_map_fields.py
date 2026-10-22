@@ -30,14 +30,21 @@ from proto.models import FieldLabel, ProtoField, ProtoMessage
 # ── fake instruction memory + context ─────────────────────────────────────────
 
 
+def _held(table, addr):
+    if addr not in table:
+        raise ValueError(f"{addr:#x} not mapped")
+    return table[addr]
+
+
 class FakeCtx(NoImage):
     """Just enough BinaryContext for the helpers under test."""
 
     def __init__(self, u32=None, ptrs=None, cstrs=None):
         self.u32, self.ptrs, self.cstrs = u32 or {}, ptrs or {}, cstrs or {}
 
+    # an address nothing holds raises ValueError, as BinaryContext's reads do
     def read_u32(self, addr):
-        return self.u32[addr]
+        return _held(self.u32, addr)
 
     def bind_name_for(self, addr):                   # no imports bound by name
         return None
@@ -51,10 +58,10 @@ class FakeCtx(NoImage):
         return False
 
     def read_ptr(self, addr):
-        return self.ptrs[addr]
+        return _held(self.ptrs, addr)
 
     def read_cstring(self, addr):
-        return self.cstrs[addr]
+        return _held(self.cstrs, addr)
 
 
 asm = layout

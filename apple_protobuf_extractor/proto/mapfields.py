@@ -46,7 +46,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
 from proto.callees import real_target, stub_selector
@@ -317,7 +317,8 @@ def scan_block_enumerated_maps(
     out: Dict[str, MapEntryWriter] = {}
     try:
         insns = function_listing(ctx, imp, entries)
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "method body", f"writeTo: {imp:#x}", exc)
         return out
     calls = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
              and stub_selector(ctx, _parse_imm(ins.op_str)) == _ENUMERATE_SELECTOR]

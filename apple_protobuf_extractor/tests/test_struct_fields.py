@@ -250,6 +250,12 @@ _WIFI_TIMERANGE_DICTREP_3 = (0x18cb8ce4c, [
 ])
 
 
+def _held(table, va):
+    if va not in table:
+        raise ValueError(f"{va:#x} not mapped")
+    return table[va]
+
+
 class _NoStringsMixin(NoImage):
     """What the data-flow analysis may ask of ANY ctx: no named sections, no raw C strings."""
 
@@ -271,17 +277,18 @@ class _CfCtx(_NoStringsMixin):
     def is_variable(self, vmaddr):        # no program data, no binds
         return False
 
+    # an address nothing holds raises ValueError, as BinaryContext's reads do
     def read_ptr(self, va):
-        return self.TEXT[va - 16][0]
+        return _held(self.TEXT, va - 16)[0]
 
     def read_u64(self, va):
-        return len(self.TEXT[va - 24][1])
+        return len(_held(self.TEXT, va - 24)[1])
 
     def read_bytes(self, va, n):
         for p, b in self.TEXT.values():
             if p == va:
                 return b[:n]
-        raise KeyError(va)                   # like the cache: no mapped bytes there
+        raise ValueError(f"{va:#x} not mapped")
 
 
 def _keys(members):
@@ -698,10 +705,10 @@ class _TextCtx(_NoStringsMixin):
         return 0x100000 + (va - 16)
 
     def read_u64(self, va):
-        return len(self.texts[va - 24])
+        return len(_held(self.texts, va - 24))
 
     def read_bytes(self, va, n):
-        return self.texts[va - 0x100000].encode()[:n]
+        return _held(self.texts, va - 0x100000).encode()[:n]
 
 
 class TestEnumMemberEvidence(_SelectorsPatched):

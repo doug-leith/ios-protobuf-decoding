@@ -49,7 +49,7 @@ import logging
 
 from typing import Dict, Iterator, List, Optional, Set
 
-from .memory import READ_ERRORS, BinaryContext
+from .memory import READ_ERRORS, BinaryContext, record_unread
 from .objc_model import ObjcClass, ObjcIvar, ObjcMethod   # re-exported; see below
 from .strings import StringTable
 from .objc_abi import (CLASS_T_SUPERCLASS, CLASS_T_DATA, CLASS_RO_FLAGS,
@@ -247,8 +247,10 @@ def build_class_list(
     raw_classes: List[ObjcClass] = []
     seen_vas: Set[int] = set()
 
-    for ptr in ctx.iter_ptrs(sect.vmaddr, count):
-        if ptr == 0:
+    for i, ptr in enumerate(ctx.iter_ptrs(sect.vmaddr, count)):
+        if ptr == 0:                     # (a listed class is never null: its slot is unread)
+            record_unread(ctx, "class pointer", f"{sect.vmaddr + 8 * i:#x}",
+                          ValueError("__objc_classlist slot reads as 0"))
             continue
 
         if ptr not in seen_vas:
@@ -274,7 +276,8 @@ def build_class_list(
         # missing from the ClassList.
         try:
             meta_va = ctx.read_ptr(ptr)   # class_t.isa — offset 0
-        except (ValueError, KeyError):
+        except READ_ERRORS as exc:
+            record_unread(ctx, "metaclass pointer", f"{ptr:#x}", exc)
             continue
         if meta_va == 0 or meta_va in seen_vas:
             continue
@@ -310,7 +313,8 @@ def _resolve_preattached_method_lists(ctx: BinaryContext, tagged_va: int) -> Lis
     try:
         entsize = ctx.read_u32(base)
         count   = ctx.read_u32(base + 4)
-    except ValueError:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "pre-attached method lists", f"{base:#x}", exc)
         return []
     if entsize == 0 or count == 0 or count > _MAX_PREATTACHED_ENTRIES:
         return []
@@ -320,7 +324,8 @@ def _resolve_preattached_method_lists(ctx: BinaryContext, tagged_va: int) -> Lis
         entry_va = base + 8 + i * entsize
         try:
             entry_val = ctx.read_s64(entry_va)
-        except ValueError:
+        except READ_ERRORS as exc:
+            record_unread(ctx, "pre-attached method list entry", f"{entry_va:#x}", exc)
             break
         method_list_offset = entry_val >> 16   # arithmetic shift: signed, self-relative
         results.append(entry_va + method_list_offset)
@@ -341,7 +346,8 @@ def _parse_class(
         # ourselves after decoding, unconditionally (matches
         # cache_classlist.read_objc_class_name's defensive strip).
         ro_va = ctx.read_ptr(class_va + CLASS_T_DATA) & FAST_DATA_MASK
-    except ValueError:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "class", f"{class_va:#x}", exc)
         return None
 
     if ro_va == 0:
@@ -358,7 +364,8 @@ def _parse_class(
         name_va    = ctx.read_ptr(ro_va + CLASS_RO_NAME)
         methods_va = ctx.read_ptr(ro_va + CLASS_RO_METHODS)
         ivars_va   = ctx.read_ptr(ro_va + CLASS_RO_IVARS)
-    except ValueError:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "class", f"{class_va:#x}", exc)
         return None
 
     # Resolve name
@@ -366,9 +373,11 @@ def _parse_class(
     if not name:
         try:
             name = ctx.read_cstring(name_va) if name_va else None
-        except (ValueError, UnicodeDecodeError):
-            name = None
+        except READ_ERRORS as exc:
+            record_unread(ctx, "class name", f"{class_va:#x}", exc)
+            return None
     if not name:
+        record_unread(ctx, "class name", f"{class_va:#x}", ValueError("empty or null name"))
         return None
 
     is_meta = bool(ro_flags & RO_META)
@@ -404,7 +413,8 @@ def _parse_methods(
     try:
         entsize_flags = ctx.read_u32(list_va)
         count         = ctx.read_u32(list_va + 4)
-    except ValueError:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "method list", f"{list_va:#x}", exc)
         return []
 
     relative   = bool(entsize_flags & METHOD_FLAG_RELATIVE)
@@ -452,7 +462,9 @@ def _parse_methods(
                 )
             else:
                 m = _parse_traditional_method(ctx, entry_va, strings)
-        except ValueError:
+        except READ_ERRORS as exc:
+            record_unread(ctx, "method list entry", f"{entry_va:#x} ({len(methods)} of {count})",
+                          exc)
             break
         if m is not None:
             methods.append(m)
@@ -599,7 +611,8 @@ def _parse_ivars(
     try:
         entsize = ctx.read_u32(list_va) & 0xFFFF
         count   = ctx.read_u32(list_va + 4)
-    except ValueError:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "ivar list", f"{list_va:#x}", exc)
         return []
 
     entsize = max(entsize, _MIN_IVAR_ENTSIZE)
@@ -636,14 +649,15 @@ def _parse_ivars(
                         # field.  Read generously so the struct is captured whole and
                         # _is_proto_flags_ivar can recognise it.
                         type_enc = ctx.read_cstring(type_ptr, max_len=65536)
-                    except ValueError:
-                        pass
+                    except READ_ERRORS as exc:
+                        record_unread(ctx, "ivar type", f"{entry_va:#x} ({name})", exc)
 
             ivars.append(ObjcIvar(
                 name=name, type_enc=type_enc,
                 offset=actual_off, size=size, offset_slot=offset_ptr,
             ))
-        except ValueError:
+        except READ_ERRORS as exc:
+            record_unread(ctx, "ivar list entry", f"{entry_va:#x} ({len(ivars)} of {count})", exc)
             break
         entry_va += entsize
 

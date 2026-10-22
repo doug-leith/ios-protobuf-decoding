@@ -86,9 +86,13 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                     return False
                 if nm in _PB_ROOT_NAMES:
                     return True
+                local = by_va.get(cur)
+                if local is not None:                      # read with the class list (where
+                    cur = local.superclass_vmaddr          # a failure is recorded)
+                    continue
                 try:
-                    cur = ctx.read_ptr(cur + 8)            # next superclass
-                except READ_ERRORS:
+                    cur = ctx.read_ptr(cur + 8)            # another image's class: in binary
+                except READ_ERRORS:                        # mode, not in this file
                     return False
 
         # Track anchor 1's reach FULLY independently of the heuristic seed (run for

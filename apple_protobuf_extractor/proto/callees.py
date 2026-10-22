@@ -54,7 +54,7 @@ def callee_name(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
                         name = reader.export_name_at(real)
         else:
             name = import_name(ctx, va)
-    except (ValueError, KeyError, IndexError):
+    except READ_ERRORS:
         name = None                                  # unreadable bytes at va: no name
     memo[va] = name
     return name

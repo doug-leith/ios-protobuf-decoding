@@ -70,7 +70,7 @@ from dataclasses import dataclass, field
 from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
 from macho.disasm import _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import callee_name
@@ -157,7 +157,8 @@ def symbol_addrs(ctx: BinaryContext) -> Dict[str, int]:
             for name, addr in reader.image_exports(ctx.image_base).items():
                 if any(m in name for m in _CACHE_SYMBOL_MARKERS):
                     out.setdefault(name, addr)
-        except READ_ERRORS:
+        except (OSError, *READ_ERRORS) as exc:
+            record_unread(ctx, ".symbols local symbols", f"{ctx.image_base:#x}", exc)
             return {}
         return out
 

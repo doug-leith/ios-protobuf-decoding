@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from macho.disasm import Insn, _norm_reg, _parse_imm
+from macho.memory import READ_ERRORS
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder)
 from macho.strings import read_cfstring_text
@@ -710,7 +711,7 @@ class Flow:
             if addr is not None:
                 try:
                     res = self.ctx.read_s32(addr)
-                except (ValueError, KeyError, IndexError):
+                except READ_ERRORS:
                     res = None
         elif mn == 'add' and len(ops) >= 3:              # obj + offset  /  array + index
             cands = {self.ivar_of_reg(d, r) for r in (_norm_reg(ops[1]),
@@ -1241,7 +1242,7 @@ class Flow:
                 if size == 8:
                     return self.ctx.read_ptr(addr)
                 raw = int.from_bytes(self.ctx.read_bytes(addr, size), 'little')
-            except (ValueError, KeyError, IndexError):
+            except READ_ERRORS:
                 return None
         if signed and size < 8 and raw & (1 << (size * 8 - 1)):
             raw -= 1 << (size * 8)
@@ -1602,5 +1603,5 @@ class Flow:
             if not sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
                 return None
             return self.ctx.read_cstring(va, max_len=128)
-        except (ValueError, KeyError, UnicodeDecodeError, AttributeError):
+        except READ_ERRORS:
             return None

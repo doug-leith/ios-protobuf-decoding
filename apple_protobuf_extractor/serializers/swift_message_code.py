@@ -205,10 +205,9 @@ def message_witnesses(ctx) -> Dict[int, Dict[str, Code]]:
 
 
 def _message_witnesses(ctx) -> Dict[int, Dict[str, Code]]:
-    try:
-        sec = ctx.section("__TEXT", "__swift5_proto")
-    except READ_ERRORS:
+    if not ctx.has_section("__TEXT", "__swift5_proto"):
         return {}
+    sec = ctx.section("__TEXT", "__swift5_proto")
     out: Dict[int, Dict[str, Code]] = {}
     for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
         try:
@@ -298,10 +297,9 @@ def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int], Dict[str,
 
 
 def _in_image_text(ctx, va: int) -> bool:
-    try:
-        text = ctx.section("__TEXT", "__text")
-    except READ_ERRORS:
+    if not ctx.has_section("__TEXT", "__text"):
         return False
+    text = ctx.section("__TEXT", "__text")
     return text.vmaddr <= va < text.vmaddr + text.vmsize
 
 
@@ -341,10 +339,9 @@ def _static_tables(ctx) -> List[Tuple[str, int]]:
     witness table (not resilient witnesses)."""
     def build():
         out = []
-        try:
-            sec = ctx.section("__TEXT", "__swift5_proto")
-        except READ_ERRORS:
+        if not ctx.has_section("__TEXT", "__swift5_proto"):
             return out
+        sec = ctx.section("__TEXT", "__swift5_proto")
         for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
             try:
                 cd = _rel(ctx, rec)
@@ -582,10 +579,9 @@ def _accessors(ctx) -> Dict[int, int]:
 
     def build():
         out: Dict[int, int] = {}
-        try:
-            sec = ctx.section("__TEXT", "__swift5_types")
-        except READ_ERRORS:
+        if not ctx.has_section("__TEXT", "__swift5_types"):
             return out
+        sec = ctx.section("__TEXT", "__swift5_types")
         for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
             try:
                 desc = TR._type_record(ctx, rec)

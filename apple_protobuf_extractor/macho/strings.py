@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional
 
-from .memory import BinaryContext
+from .memory import READ_ERRORS, BinaryContext, record_unread
 
 # Only sections that actually store null-terminated C strings on disk.
 # __objc_selrefs (pointer array) and __objc_classrefs are deliberately excluded.
@@ -111,7 +111,8 @@ def build_string_table(ctx: BinaryContext) -> StringTable:
             continue
         try:
             data = ctx.read_bytes(sect.vmaddr, sect.size)
-        except ValueError:
+        except READ_ERRORS as exc:
+            record_unread(ctx, "string section", f"{segname},{sectname}", exc)
             continue
         pos = 0
         while pos < len(data):
@@ -147,11 +148,11 @@ def read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
             if sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
                 try:
                     return ctx.read_cstring(ctx.read_ptr(va + 16), max_len=128)
-                except (ValueError, UnicodeDecodeError, KeyError):
+                except READ_ERRORS:
                     return None
     if has_cfstrings:
         return None                  # a binary with CFStrings: a pointer elsewhere is not one
     try:
         return ctx.read_cstring(va, max_len=128)
-    except (ValueError, UnicodeDecodeError, KeyError):
+    except READ_ERRORS:
         return None

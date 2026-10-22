@@ -35,7 +35,7 @@ import re
 import struct
 from typing import Dict, NamedTuple, Optional, Set
 
-from macho.memory import READ_ERRORS
+from macho.memory import READ_ERRORS, record_unread
 
 # Swift stdlib / Foundation type name -> proto scalar type.
 _SWIFT_SCALAR = {
@@ -327,10 +327,9 @@ def local_enum_names(ctx):
     ``OneOf_*`` oneof wrappers, which are not proto enums).  A message field whose
     type is one of these is a proto enum field (varint on the wire)."""
     out = set()
-    try:
-        sec = ctx.section("__TEXT", "__swift5_types")
-    except READ_ERRORS:
+    if not ctx.has_section("__TEXT", "__swift5_types"):
         return out
+    sec = ctx.section("__TEXT", "__swift5_types")
     for i in range(sec.vmsize // 4):
         try:
             desc = _type_record(ctx, sec.vmaddr + i * 4)
@@ -341,8 +340,8 @@ def local_enum_names(ctx):
                 q = _qualified_name(ctx, desc)
                 if q:
                     out.add(q)
-        except READ_ERRORS:
-            continue
+        except READ_ERRORS as exc:
+            record_unread(ctx, "Swift type record", f"{sec.vmaddr + i * 4:#x}", exc)
     return out
 
 
@@ -601,11 +600,11 @@ def collect_field_types(ctx) -> FieldMetadata:
     proto ``oneof`` (the nested ``OneOf_<name>`` enum), all linked to the owning
     message via the descriptor parent chain (#60) -- or, a oneof enum of its own, by the
     property of its type (#128)."""
-    try:
-        sec = ctx.section("__TEXT", "__swift5_types")
-        fmd = ctx.section("__TEXT", "__swift5_fieldmd")
-    except READ_ERRORS:
+    if not (ctx.has_section("__TEXT", "__swift5_types") and
+            ctx.has_section("__TEXT", "__swift5_fieldmd")):
         return FieldMetadata({}, {}, set(), {})
+    sec = ctx.section("__TEXT", "__swift5_types")
+    fmd = ctx.section("__TEXT", "__swift5_fieldmd")
     fieldmd = (fmd.vmaddr, fmd.vmaddr + fmd.vmsize)
     out: Dict[str, Dict[str, str]] = {}
     stored: Dict[str, Set[str]] = {}
@@ -648,8 +647,8 @@ def collect_field_types(ctx) -> FieldMetadata:
                 incomplete.setdefault(key, set()).update(inc)
             if names:
                 stored.setdefault(key, set()).update(names)
-        except READ_ERRORS:
-            continue
+        except READ_ERRORS as exc:
+            record_unread(ctx, "Swift type record", f"{sec.vmaddr + i * 4:#x}", exc)
     # A oneof whose enum is a type of its own, not a nested OneOf_ (Apple's generators:
     # TokenGenerationCore's ``Tokengenerationcore_Wireformat_ValueEnum``): a message's property of
     # an enum whose cases carry payloads beyond UNRECOGNIZED(Int), a proto enum's only one --

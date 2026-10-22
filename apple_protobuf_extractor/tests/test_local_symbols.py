@@ -193,8 +193,11 @@ class TestLoadImageSymbolAddrsOffline(unittest.TestCase):
         # ask for a different image offset than the one in the file
         self.assertEqual(load_image_symbol_addrs(p, 0, 0x9999), {})
 
-    def test_missing_file_returns_empty(self):
-        self.assertEqual(load_image_symbol_addrs("/no/such/file.symbols", 0, 0x1000), {})
+    def test_a_file_that_cannot_be_opened_raises(self):
+        # (an absent .symbols is no path at all; one that cannot be read is the caller's to
+        # record: TODO #137)
+        with self.assertRaises(OSError):
+            load_image_symbol_addrs("/no/such/file.symbols", 0, 0x1000)
 
 
 # ─── Live tests against the real GeoServices cache ─────────────────────────────

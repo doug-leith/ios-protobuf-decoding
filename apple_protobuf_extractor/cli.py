@@ -222,6 +222,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "classified as an enum."
         ),
     )
+    p.add_argument(
+        "--diagnostics-json",
+        metavar="FILE",
+        default=None,
+        help="Write the run's diagnostics (failed classes and passes, foreign-runtime errors, "
+             "unreadable input, analysis failures, bounds and heuristics hit, enum switches "
+             "not evaluated) as JSON, one list each -- for comparing two runs.",
+    )
     return p
 
 
@@ -832,19 +840,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         finally:
             reader.close()
 
+    from proto.models import get_diagnostics
     if not messages:
         print("warning: no proto messages found", file=sys.stderr)
-        from proto.models import get_diagnostics
         from proto.emitter import print_summary
         diag = get_diagnostics(ctx)
+        status = 0
         if diag.n_errors:
             # nothing was written AND something failed: not a clean "there is no protobuf here"
             print_summary([], [], source_name=source_name, diagnostics=diag)
-            return EXIT_INCOMPLETE
-        return 0
-
-    # ── Build + write proto files ──────────────────────────────────────────────
-    return _build_and_write_output(messages, args, source_name, ctx, input_kind)
+            status = EXIT_INCOMPLETE
+    else:
+        # ── Build + write proto files ──────────────────────────────────────────
+        status = _build_and_write_output(messages, args, source_name, ctx, input_kind)
+    if args.diagnostics_json:
+        import json
+        with open(args.diagnostics_json, "w") as fh:
+            json.dump(get_diagnostics(ctx).as_dict(), fh, indent=1)
+    return status
 
 
 if __name__ == "__main__":

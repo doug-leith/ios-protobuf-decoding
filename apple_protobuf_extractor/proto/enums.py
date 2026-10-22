@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache
+from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
@@ -157,14 +157,15 @@ _ARG_UNTOUCHED = 'untouched'
 def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     """``(call, flow)``: the first call ``-[cls selector]`` makes, evaluated up to that call
     or its first unconditional terminator, whichever comes first, with x0 = self (an opaque
-    token), and the Flow it ran in.  ``None`` when the method is absent, cannot be
-    evaluated, or makes no call there."""
+    token), and the Flow it ran in.  ``None`` when the method is absent, cannot be read
+    (recorded: :func:`macho.memory.record_unread`), or makes no call there."""
     m = cls.get_method(selector)
     if m is None or m.imp == 0:
         return None
     try:
         insns = function_listing(ctx, m.imp, function_entries(ctx))
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "method body", f"-[{cls.name} {selector}] {m.imp:#x}", exc)
         return None
     end = next((k for k, i in enumerate(insns)
                 if i.mnemonic == 'b' or i.mnemonic in TRAPS or i.mnemonic in CALLS
@@ -174,7 +175,8 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     try:
         flow = Flow(ctx, insns[:end + 1])
         region = flow.run_from(0, {'x0': SELF}, objects=OPAQUE)
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "method body", f"-[{cls.name} {selector}] {m.imp:#x}", exc)
         return None
     if not region.calls:
         return None
@@ -232,11 +234,9 @@ def _harvest_dictrep(
         return result, {}, {}
     try:
         insns = _dictrep_body(ctx, imp)
-    except (NameError, ImportError):
-        raise
-    except Exception as exc:
-        log.warning("-[%s _dictionaryRepresentation:] could not be disassembled (%s); "
-                    "enum recovery from it is skipped", cls.name, exc)
+    except READ_ERRORS as exc:
+        record_unread(ctx, "method body", f"-[{cls.name} _dictionaryRepresentation:] {imp:#x}",
+                      exc)
         return result, {}, {}
     if not insns:
         return result, {}, {}

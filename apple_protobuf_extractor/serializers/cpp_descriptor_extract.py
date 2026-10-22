@@ -23,6 +23,8 @@ import re
 from dataclasses import dataclass, field as dc_field
 from typing import Dict, List, Optional, Tuple
 
+from macho.memory import READ_ERRORS, record_unread
+
 
 # ── minimal protobuf wire reader ─────────────────────────────────────────────
 
@@ -329,9 +331,8 @@ def extract_cpp_protos_from_ctx(ctx) -> List[FileProto]:
         s = ctx.section(seg, sec)
         try:
             data = ctx.read_bytes(s.vmaddr, s.vmsize)
-        except (NameError, ImportError):
-            raise
-        except Exception:
+        except READ_ERRORS as exc:
+            record_unread(ctx, "descriptor section", f"{seg},{sec}", exc)
             continue
         for _off, blob in find_descriptor_blobs(data):
             try:

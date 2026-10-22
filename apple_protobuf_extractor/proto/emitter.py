@@ -1320,6 +1320,8 @@ def print_summary(
             print(row("!! foreign runtime errors", len(diagnostics.foreign_errors)), file=file)
         if diagnostics.failed_passes:
             print(row("!! pre-passes FAILED", len(diagnostics.failed_passes)), file=file)
+        if diagnostics.unread:
+            print(row("!! input unreadable (missing)", len(diagnostics.unread)), file=file)
     print(f"├{sep}┤", file=file)
     print(row("Output files", stats["files"]),                            file=file)
     for pf in proto_files:
@@ -1379,6 +1381,13 @@ def print_summary(
                       file=sys.stderr)
         for runtime, err in diagnostics.foreign_errors:
             print(f"\nerror: {runtime}: {err} — its messages may be missing", file=sys.stderr)
+        if diagnostics.unread:
+            print(f"\nerror: {len(diagnostics.unread)} part(s) of the input could not be read; "
+                  f"what they hold is MISSING from the output:", file=sys.stderr)
+            for what, where, err in diagnostics.unread[:10]:
+                print(f"  {what} at {where}: {err}", file=sys.stderr)
+            if len(diagnostics.unread) > 10:
+                print(f"  … and {len(diagnostics.unread) - 10} more", file=sys.stderr)
 
 
 __all__ = [

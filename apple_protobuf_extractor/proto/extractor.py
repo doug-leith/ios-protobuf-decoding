@@ -51,7 +51,8 @@ from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
 from proto.models    import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics,
-                             record_analysis_failure, record_failed_pass, PACKABLE_SCALARS)
+                             record_analysis_failure, record_failed_pass, record_heuristic_hit,
+                             PACKABLE_SCALARS)
 from proto.writeto   import BoundWrite, _extract_writeto_field_numbers, writeto_sent_selectors
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
@@ -843,6 +844,8 @@ def extract_proto_message(
         instance_method_names: Set[str] = raw_method_names
     else:
         instance_method_names = set()  # triggers heuristic path in helpers
+        if any(m.name is None for m in cls.methods):     # (not a subclass with none of its own)
+            record_heuristic_hit(ctx, "no core selector resolved", cls.name)
     metaclass = _find_metaclass(ctx, cls, cl)
 
     # ── Collect real-field ivars ──────────────────────────────────────────────

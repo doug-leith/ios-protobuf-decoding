@@ -14,7 +14,7 @@ from typing import Callable, ContextManager, Dict, Optional
 
 from macho.classlist import ClassList, build_class_list
 from macho.local_symbols import apply_to_classes
-from macho.memory import BinaryContext
+from macho.memory import READ_ERRORS, BinaryContext, record_unread
 from macho.strings import StringTable, build_string_table
 
 
@@ -45,7 +45,11 @@ def load_classes(ctx: BinaryContext, reader=None, mach_va: Optional[int] = None,
     counts = None
     if reader is not None and mach_va is not None:
         with step("recovering method names from .symbols"):
-            syms = reader.image_local_symbols(mach_va)
+            try:
+                syms = reader.image_local_symbols(mach_va)
+            except (OSError, *READ_ERRORS) as exc:
+                record_unread(ctx, ".symbols local symbols", f"{mach_va:#x}", exc)
+                syms = None
             if syms:
                 counts = apply_to_classes(cl, syms)
     return LoadedImage(ctx, st, cl, counts)

@@ -15,7 +15,7 @@ import bisect
 import logging
 from typing import Dict, List, Optional, Tuple
 
-from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
+from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store, record_unread
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
@@ -56,7 +56,8 @@ def _find_readfrom_c_func(
 
     try:
         insns = function_listing(ctx, method.imp, function_entries(ctx))
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "method body", f"-[{cls.name} readFrom:] {method.imp:#x}", exc)
         return None
     end = next((k for k, i in enumerate(insns)
                 if i.mnemonic == 'b' or i.mnemonic in TRAPS or i.mnemonic in INDIRECT_BRANCHES

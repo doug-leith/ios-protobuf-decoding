@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
@@ -331,6 +331,10 @@ class ProtoMessage:
 
 # ── Run diagnostics ───────────────────────────────────────────────────────────
 
+_DIAGNOSTIC_LISTS = ("failed_classes", "foreign_errors", "unevaluated_switches", "failed_passes",
+                     "analysis_failures", "heuristics_hit", "unread")
+
+
 @dataclass
 class ExtractionDiagnostics:
     """Things that went wrong or were left undecided during ONE extraction run and that
@@ -356,27 +360,41 @@ class ExtractionDiagnostics:
     # a bound reached ([cap:] constants) or a heuristic applied where it may be wrong: what it
     # decided may be missing or wrong there -- (name, where)
     heuristics_hit: List[Tuple[str, str]] = field(default_factory=list)
+    # structural input the run expected to read and could not (a class, its method or ivar
+    # list, a section's strings, a symbol table): what it holds is MISSING from the output --
+    # (what, where, error).  The context's own list (macho.memory.record_unread): the class
+    # list and string table are read before a run starts, and kept across runs
+    unread: List[Tuple[str, str, str]] = field(default_factory=list)
     _hits_seen: set = field(default_factory=set, repr=False)    # (name, where), and names
 
     @property
     def n_errors(self) -> int:
         """Failures that drop or degrade output run-wide (as opposed to fields left
         undecided and flagged)."""
-        return len(self.failed_classes) + len(self.foreign_errors) + len(self.failed_passes)
+        return (len(self.failed_classes) + len(self.foreign_errors) + len(self.failed_passes)
+                + len(self.unread))
+
+    def as_dict(self) -> Dict[str, list]:
+        """Every list, as JSON-ready lists (``--diagnostics-json``)."""
+        return {name: [list(e) for e in getattr(self, name)] for name in _DIAGNOSTIC_LISTS}
 
     def merge(self, other: "ExtractionDiagnostics", where: str) -> None:
         """Add *other*'s entries (another image's run, *where* its path), each first field
         prefixed with *where*."""
-        for name in ("failed_classes", "foreign_errors", "unevaluated_switches",
-                     "failed_passes", "analysis_failures", "heuristics_hit"):
+        for name in _DIAGNOSTIC_LISTS:
             getattr(self, name).extend((f"{where}: {e[0]}",) + tuple(e[1:])
                                        for e in getattr(other, name))
 
 
 def get_diagnostics(ctx) -> ExtractionDiagnostics:
     """The :class:`ExtractionDiagnostics` of the current run on *ctx* (created lazily)."""
-    from macho.memory import _ctx_cache
-    return _ctx_cache(ctx, "_diagnostics", ExtractionDiagnostics)
+    from macho.memory import _ctx_cache, unread_input
+
+    def build() -> ExtractionDiagnostics:
+        diag = ExtractionDiagnostics()
+        diag.unread = unread_input(ctx)
+        return diag
+    return _ctx_cache(ctx, "_diagnostics", build)
 
 
 def record_failed_pass(ctx, name: str, exc: Exception, consequence: str) -> None:

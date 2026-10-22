@@ -8,11 +8,14 @@ provides vmaddr-based read primitives.  Chained fixup pointer decoding
 
 from __future__ import annotations
 
+import logging
 import struct
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
 from .leb import read_uleb
+
+log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:            # dyld_cache sits ABOVE this module; a runtime
     from .dyld_cache import DyldCacheReader   # import here would be a cycle
@@ -37,10 +40,10 @@ LC_DYLD_EXPORTS_TRIE   = 0x80000033
 LC_FUNCTION_STARTS     = 0x00000026
 
 #: What reading an image can raise: an address no segment or mapping holds (ValueError, its
-#: UnicodeDecodeError for a non-UTF-8 string), a missing table entry (KeyError), a read past
-#: a buffer (IndexError, struct.error).  A guard on a read catches these, not Exception,
-#: so a logic error still surfaces.
-READ_ERRORS = (ValueError, KeyError, IndexError, struct.error)
+#: UnicodeDecodeError for a non-UTF-8 string), a read past a buffer (struct.error).  A guard
+#: on a read catches these only, so a logic error -- a KeyError, an IndexError -- surfaces;
+#: an absent section is asked with :meth:`BinaryContext.has_section` (TODO #137).
+READ_ERRORS = (ValueError, struct.error)
 
 
 def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
@@ -235,6 +238,29 @@ def _ctx_store(ctx, attr, value):
     except (AttributeError, TypeError):
         pass
     return value
+
+
+def unread_input(ctx) -> List[Tuple[str, str, str]]:
+    """The structural input of *ctx* that could not be read: ``(what, where, error)``, kept for
+    the context's life (:func:`record_unread`)."""
+    try:
+        return ctx.__dict__.setdefault("_unread_input", [])
+    except AttributeError:                       # (a stand-in with no __dict__)
+        return []
+
+
+def record_unread(ctx, what: str, where: str, exc: Exception) -> None:
+    """*what* (a class, its method list ...) at *where* could not be read (*exc*): what it
+    holds is missing from the output.  Warned the first time each kind of *what* is met; every
+    one is in the run summary and counts as an error (``ExtractionDiagnostics.unread``)."""
+    seen = unread_input(ctx)
+    if any(e[:2] == (what, where) for e in seen):
+        return                                   # (read again by another pass)
+    if not any(e[0] == what for e in seen):
+        log.warning("%s unreadable at %s (%s: %s); what it holds is MISSING from the output "
+                    "(every place is listed in the run summary)", what, where,
+                    type(exc).__name__, exc)
+    seen.append((what, where, f"{type(exc).__name__}: {exc}"))
 
 
 def reset_ctx_caches(ctx) -> None:
@@ -443,6 +469,8 @@ class BinaryContext:
             self._sections[(segname, sectname)] = sec
 
         self._segments = list(_segs.values())
+        for path, exc in sorted(reader.subcache_errors().items()):
+            record_unread(self, "sub-cache file", path, exc)    # (its pages read as unmapped)
         return self
 
     # ── Properties ──────────────────────────────────────────────────────────
@@ -808,7 +836,12 @@ class BinaryContext:
         (:meth:`macho.dyld_cache.DyldCacheReader.image_function_starts`).  Read once."""
         if self._function_starts is None:
             if self._cache_reader is not None:
-                self._function_starts = self._cache_reader.image_function_starts(self.image_base)
+                try:
+                    self._function_starts = self._cache_reader.image_function_starts(
+                        self.image_base)
+                except READ_ERRORS as exc:          # (extents then unknown: reads run on)
+                    record_unread(self, "function starts", f"{self.image_base:#x}", exc)
+                    self._function_starts = []
             else:
                 text = next((s for s in self._segments if s.name == '__TEXT'), None)
                 off, size = self._function_starts_lc or (0, 0)

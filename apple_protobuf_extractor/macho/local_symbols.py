@@ -164,15 +164,9 @@ def load_image_symbol_addrs(
     """
     want = [s.encode('utf-8') if isinstance(s, str) else s
             for s in (substrs or [])]
-    try:
-        fh = open(symbols_path, 'rb')
-    except OSError:
-        return {}
-    with fh:
-        try:
-            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
-        except (ValueError, OSError):
-            return {}
+    # (a file that cannot be opened or mapped raises: the caller records it)
+    with open(symbols_path, 'rb') as fh:
+        mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
         try:
             loc = _locate_image_nlist(mm, cache_base, mach_header_va)
             if loc is None:
@@ -226,15 +220,8 @@ def load_image_local_symbols(
     Reads the string table lazily via ``mmap`` so the (often several-hundred-MB)
     region is paged in on demand rather than loaded whole.
     """
-    try:
-        fh = open(symbols_path, 'rb')
-    except OSError:
-        return None
-    with fh:
-        try:
-            mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
-        except (ValueError, OSError):
-            return None
+    with open(symbols_path, 'rb') as fh:      # (raises when it cannot be opened or mapped)
+        mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
         try:
             return _parse(mm, cache_base, mach_header_va)
         finally:

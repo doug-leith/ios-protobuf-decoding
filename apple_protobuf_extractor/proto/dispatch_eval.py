@@ -48,7 +48,7 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.disasm import _norm_reg
-from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store
+from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store, record_unread
 from macho.classlist import class_name_at
 from proto.arm64cfg import dominators, dominates
 from proto.arm64_operands import split_ops
@@ -90,7 +90,7 @@ def _selector_of(ctx, call) -> Optional[str]:
     if x1 is not None and not opaque(x1) and callee_name(ctx, call.target) == '_objc_msgSend':
         try:
             return ctx.read_cstring(x1)
-        except (ValueError, KeyError, IndexError, UnicodeDecodeError):
+        except READ_ERRORS:
             return None
     return None
 
@@ -176,10 +176,13 @@ def _function_insns(ctx, va: int, entries: Optional[List[int]] = None,
     """The instructions of the function at *va* (:func:`proto.function_body.function_body`):
     what its entry reaches inside its extent, which also ends at the next known function entry
     (*entries*: method IMPs, ReadAllFrom cores), following each ``br``'s decoded table and the
-    *arms* found by evaluation.  [] when *va* cannot be read."""
+    *arms* found by evaluation.  [] when *va* cannot be read: recorded when it is in this
+    image's ``__text`` (elsewhere it is not this image's code)."""
     try:
         return function_body(ctx, va, _as_entries(entries), arms)
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        if text_holding(ctx, va) is not None:
+            record_unread(ctx, "function", f"{va:#x}", exc)
         return []
 
 

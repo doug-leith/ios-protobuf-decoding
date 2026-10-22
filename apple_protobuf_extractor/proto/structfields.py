@@ -46,13 +46,13 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from macho.disasm import _parse_imm, _norm_reg
-from macho.memory import READ_ERRORS, _ctx_cache
+from macho.memory import READ_ERRORS, _ctx_cache, record_unread
 
 from proto.arm64cfg import mem_operand
 from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
                                   reg_name, split_ops)
 from proto import arm64_eval, dictrep_flow
-from proto.callees import stub_selector
+from proto.callees import stub_selector, text_holding
 from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, function_entries, listing_flow
@@ -186,11 +186,14 @@ def _branch_target(ins) -> Optional[int]:
 
 def _writer_insns(ctx, entry: int) -> List:
     """The struct serialiser at *entry*: the instructions its entry reaches
-    (:func:`proto.function_body.function_body`), [] when *entry* cannot be read.  A ``b`` out
-    of its extent -- to a write helper, another serialiser, the runtime -- is a tail call."""
+    (:func:`proto.function_body.function_body`), [] when *entry* cannot be read (recorded when
+    it is in this image's ``__text``).  A ``b`` out of its extent -- to a write helper, another
+    serialiser, the runtime -- is a tail call."""
     try:
         return function_body(ctx, entry, function_entries(ctx))
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        if text_holding(ctx, entry) is not None:
+            record_unread(ctx, "function", f"{entry:#x}", exc)
         return []
 
 

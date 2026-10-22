@@ -295,7 +295,7 @@ def _class_from_type_method_imp(
                 return bind_sym
     except (NameError, ImportError):
         raise
-    except (ValueError, KeyError):
+    except READ_ERRORS:
         pass
     return None
 

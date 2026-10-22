@@ -168,6 +168,75 @@ class TestCliEndToEnd(unittest.TestCase):
         self.assertEqual(rc, cli.EXIT_INCOMPLETE)
 
 
+class TestUnreadInputIsAnError(unittest.TestCase):
+    """Structural input that could not be read is recorded with the context (TODO #137): it
+    counts as an error, survives the reset at the start of a run (the class list is read
+    before it), and is listed once per place."""
+
+    def test_recorded_once_and_counted(self):
+        from macho.memory import record_unread
+        class Ctx:
+            pass
+        ctx = Ctx()
+        with self.assertLogs('macho.memory', 'WARNING'):
+            record_unread(ctx, 'ivar list', '0x10', ValueError('unmapped'))
+        record_unread(ctx, 'ivar list', '0x10', ValueError('unmapped'))
+        diag = get_diagnostics(ctx)
+        self.assertEqual(diag.unread, [('ivar list', '0x10', 'ValueError: unmapped')])
+        self.assertEqual(diag.n_errors, 1)
+        self.assertEqual(diag.as_dict()['unread'], [['ivar list', '0x10', 'ValueError: unmapped']])
+
+    @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
+    def test_an_unreadable_class_reaches_the_run(self):
+        """A class_t that cannot be read is no longer just absent: the run that follows (its
+        caches reset first) still sees it, and exits incomplete."""
+        import macho.classlist as C
+        ctx, st, _cl = _load()
+        real = C._parse_class
+        hit = []
+
+        def unreadable_first(ctx_, va, strings):
+            if not hit:
+                hit.append(va)
+                C.record_unread(ctx_, "class", f"{va:#x}", ValueError("unmapped"))
+                return None
+            return real(ctx_, va, strings)
+        with mock.patch.object(C, '_parse_class', unreadable_first), \
+                self.assertLogs('macho.memory', 'WARNING'):
+            cl = build_class_list(ctx, st)
+        extract_all(ctx, st, cl)
+        self.assertEqual([u[0] for u in get_diagnostics(ctx).unread], ['class'])
+        self.assertGreaterEqual(get_diagnostics(ctx).n_errors, 1)
+
+    def test_a_class_t_read_failure_is_recorded(self):
+        import macho.classlist as C
+        class Ctx:
+            def read_ptr(self, va):
+                raise ValueError(f"{va:#x} unmapped")
+        ctx = Ctx()
+        with self.assertLogs('macho.memory', 'WARNING'):
+            self.assertIsNone(C._parse_class(ctx, 0x1000, None))
+        self.assertEqual(get_diagnostics(ctx).unread[0][:2], ('class', '0x1000'))
+
+    def test_a_logic_error_is_not_a_read_error(self):
+        from macho.memory import READ_ERRORS
+        for exc in (KeyError, IndexError, AttributeError):
+            self.assertFalse(issubclass(exc, READ_ERRORS), exc)
+
+    @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
+    def test_the_cli_writes_its_diagnostics(self):
+        import json
+        with tempfile.TemporaryDirectory() as out, \
+                mock.patch.object(sys, 'stderr', io.StringIO()), \
+                mock.patch.object(sys, 'stdout', io.StringIO()):
+            rc = cli.main(['--binary', _FIXTURE, '--dry-run',
+                           '--diagnostics-json', os.path.join(out, 'd.json')])
+            got = json.load(open(os.path.join(out, 'd.json')))
+        self.assertEqual(rc, 0)
+        self.assertEqual(sorted(got), sorted(ExtractionDiagnostics().as_dict()))
+        self.assertTrue(all(v == [] for v in got.values()), got)
+
+
 class TestInputThatCannotBeDecodedIsRejected(unittest.TestCase):
 
     @staticmethod

@@ -333,8 +333,10 @@ class DyldCacheReader:
         self._fhs:      Dict[str, object]   = {}
         # sorted by vmaddr for binary search
         self._mappings: List[_Mapping]      = []
-        # sub-caches that were listed in the header but whose files were absent
+        # sub-caches that were listed in the header but whose files were absent or unreadable,
+        # and why
         self._missing_subcaches: List[str]  = []
+        self._subcache_errors: Dict[str, Exception] = {}
         self._verbose = verbose
         # store main path for find_image_header (imagesText lives there)
         self._main_path: str = main_path
@@ -551,6 +553,7 @@ class DyldCacheReader:
 
             if not os.path.exists(sub_path):
                 missing.append(sub_path)
+                self._subcache_errors[sub_path] = FileNotFoundError("not found")
                 if self._verbose:
                     self._dump_subcache_entry(i, ext, sub_path, '[MISSING]')
                 continue
@@ -562,6 +565,8 @@ class DyldCacheReader:
                 self._check_magic(sub_hdr, sub_path)
                 self._load_mappings(sub_hdr, sub_path)
             except (ValueError, OSError) as exc:
+                missing.append(sub_path)                 # (as good as absent)
+                self._subcache_errors[sub_path] = exc
                 warnings.warn(f"dyld_cache: skipping {sub_path!r}: {exc}")
                 if self._verbose:
                     self._dump_subcache_entry(i, ext, sub_path, f'[ERROR: {exc}]')
@@ -581,7 +586,7 @@ class DyldCacheReader:
             example = missing[0]
             warnings.warn(
                 f"dyld_cache: {n_miss}/{sub_cnt} expected sub-cache file(s) "
-                f"not found — selector names from the unified pool will not be "
+                f"not found or unreadable — selector names from the unified pool will not be "
                 f"resolved.\n"
                 f"  first missing: {example!r}\n"
                 f"  Construct DyldCacheReader(..., verbose=True) for full path "
@@ -878,14 +883,13 @@ class DyldCacheReader:
         return (self.cache_base + rel_offset) & 0xFFFFFFFFFFFFFFFF
 
     def missing_subcache_paths(self) -> List[str]:
-        """Paths that were expected but absent.
-
-        Returns a list of the computed sub-cache file paths (``main_path +
-        extension``) that ``os.path.exists`` returned ``False`` for.  Useful
-        for programmatic diagnostics or for surfacing a targeted error message
-        to the user.
-        """
+        """The sub-cache files the header lists that are absent or could not be read
+        (``main_path + extension``)."""
         return list(self._missing_subcaches)
+
+    def subcache_errors(self) -> Dict[str, Exception]:
+        """Each missing sub-cache file (:meth:`missing_subcache_paths`) and why."""
+        return dict(self._subcache_errors)
 
     def list_images(self) -> List[Tuple[int, str]]:
         """
@@ -1122,9 +1126,12 @@ class DyldCacheReader:
     def image_function_starts(self, mach_header_va: int) -> List[int]:
         """The function entries of the image at *mach_header_va* (``LC_FUNCTION_STARTS``,
         in the shared ``__LINKEDIT`` like the export trie: :meth:`image_exports`), sorted;
-        ``[]`` when the image has none."""
+        ``[]`` when the image has none.  Raises ValueError when it has one that cannot be read."""
         segs, cmds = self._image_linkedit_commands(mach_header_va)
-        data = self._linkedit_read(segs, cmds.get(LC_FUNCTION_STARTS))
+        table = cmds.get(LC_FUNCTION_STARTS)
+        data = self._linkedit_read(segs, table)
+        if data is None and table is not None and table[1] and '__LINKEDIT' in segs:
+            raise ValueError(f"LC_FUNCTION_STARTS of the image at {mach_header_va:#x} unreadable")
         return decode_function_starts(data, segs['__TEXT'][0]) if data and '__TEXT' in segs else []
 
     def _image_linkedit_commands(self, mach_header_va: int):

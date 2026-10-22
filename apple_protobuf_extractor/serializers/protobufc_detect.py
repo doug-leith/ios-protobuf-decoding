@@ -31,6 +31,8 @@ import struct
 from dataclasses import dataclass, field
 from typing import List
 
+from macho.memory import READ_ERRORS, record_unread
+
 log = logging.getLogger(__name__)
 
 MESSAGE_MAGIC = 0x28AAEEF9          # PROTOBUF_C__MESSAGE_DESCRIPTOR_MAGIC
@@ -113,10 +115,8 @@ def protobufc_symbols(ctx) -> List[str]:
     if reader is not None and getattr(ctx, "is_cache_backed", False):
         try:
             names = reader.image_symbol_addrs(ctx.image_base, _SYMBOL_TOKEN).keys()
-        except (NameError, ImportError):
-            raise
-        except Exception as exc:
-            log.debug("protobuf-c symbol scan failed: %s", exc)
+        except (OSError, *READ_ERRORS) as exc:
+            record_unread(ctx, ".symbols local symbols", f"{ctx.image_base:#x}", exc)
             return []
     else:
         names = ctx.iter_symbol_names()
@@ -137,10 +137,8 @@ def find_protobufc_descriptors(ctx) -> ProtobufCDescriptors:
                 continue
             try:
                 data = ctx.read_bytes(sec.vmaddr, sec.vmsize)
-            except (NameError, ImportError):
-                raise
-            except Exception as exc:
-                log.debug("protobuf-c scan: cannot read %s,%s: %s", seg.name, sec.name, exc)
+            except READ_ERRORS as exc:
+                record_unread(ctx, "data section", f"{seg.name},{sec.name}", exc)
                 continue
             for addr in _aligned_hits(data, sec.vmaddr, MESSAGE_MAGIC):
                 name = _read_name(ctx, addr)
