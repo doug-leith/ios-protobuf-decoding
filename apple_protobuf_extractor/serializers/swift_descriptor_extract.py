@@ -70,7 +70,7 @@ from dataclasses import dataclass, field
 from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
 from macho.disasm import _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import callee_name
@@ -482,7 +482,7 @@ def _slots_of(ins, k: int, regs: Dict[str, int], sym) -> List[_Slot]:
     for r in ops[:n]:
         width = 8 if r.startswith("x") else 4
         v = 0 if r in ("xzr", "wzr") else regs.get(_norm_reg(r))
-        out.append(_Slot(k, (atoms, off), None if v is None else v & ((1 << 8 * width) - 1),
+        out.append(_Slot(k, (atoms, off), v & ((1 << 8 * width) - 1) if type(v) is int else None,
                          8 * width))
         off += width
     return out
@@ -1136,7 +1136,7 @@ def _read_code(ctx: BinaryContext, m: SwiftMessage, what: str, fn, *args):
     image's other messages read on."""
     try:
         return fn(*args)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         record_analysis_failure(ctx, m.qualified, what, f"{type(exc).__name__}: {exc}")
@@ -1171,7 +1171,7 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage], decoded=fr
     try:
         from serializers import swift_type_recovery
         by_type, incomplete, fieldless, stored = swift_type_recovery.collect_field_types(ctx)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         from proto.models import get_diagnostics

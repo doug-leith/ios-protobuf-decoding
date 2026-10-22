@@ -5,7 +5,7 @@ from unittest import mock
 
 from macho.disasm import Insn
 import proto.arm64_eval as E
-from proto.arm64_eval import Flow, Objects, _Abort
+from proto.arm64_eval import Flow, Objects, Sym, _Abort
 
 B = 0x1000
 
@@ -14,15 +14,12 @@ def I(a, m, o=''):
     return Insn(a, m, o, 4, b'\0' * 4)
 
 
-POINTER = 1 << 82
-
-
 def is_pointer(v):
-    return v is not None and POINTER <= v < POINTER + (1 << 56)
+    return isinstance(v, Sym) and v.kind == "pointer"
 
 
 def pointer(k, off=0):
-    return POINTER + k * (1 << 36) + off
+    return Sym("pointer", k, off)
 
 
 class TestFlowReview(unittest.TestCase):
@@ -91,6 +88,33 @@ class TestFlowReview(unittest.TestCase):
         self.assertNotIn('x0', got)
         self.assertNotIn('x1', got)
 
+
+
+class TestSymbolicValues(unittest.TestCase):
+    """Frame addresses, pointers and tokens are Sym values, not integers in bands (TODO #139):
+    what keeps their meaning is defined, anything else raises -- or, in the machine, is unknown
+    where it means to be."""
+
+    def test_defined(self):
+        f = E.frame(-0x20)
+        self.assertEqual((f + 0x10, f - 0x10, E.frame(8) - f, f < E.frame(0)),
+                         (E.frame(-0x10), E.frame(-0x30), 0x28, True))
+        self.assertEqual(pointer(3, 8) + 8, pointer(3, 16))
+
+    def test_anything_else_raises(self):
+        tok = Sym("token", "self")
+        for op in (lambda: tok + 1, lambda: E.frame(0) >> 3, lambda: E.frame(0) & 0xF,
+                   lambda: pointer(1) - pointer(1), lambda: 0 < pointer(1)):
+            with self.assertRaises(TypeError):
+                op()
+
+    def test_the_machine_takes_them_as_unknown(self):
+        tok = Sym("token", "self")
+        insns = [I(B, 'add', 'x1, x0, #8'), I(B + 4, 'mov', 'x9, #0x7fffffffffff0000'),
+                 I(B + 8, 'add', 'x2, sp, x9'), I(B + 12, 'ret')]
+        got = Flow(None, insns).propagate({'x0': tok, 'sp': E.frame(0)}, [3])[3]
+        self.assertNotIn('x1', got)          # a token plus a number: no object, no address
+        self.assertNotIn('x2', got)          # a frame address 2^47 bytes off: not one
 
 if __name__ == "__main__":
     unittest.main()

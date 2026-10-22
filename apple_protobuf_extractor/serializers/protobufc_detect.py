@@ -31,7 +31,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import List
 
-from macho.memory import READ_ERRORS, record_unread
+from macho.memory import READ_ERRORS, record_unread, PROGRAM_ERRORS
 
 log = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ class ProtobufCDescriptors:
 def _read_name(ctx, addr: int):
     try:
         name = ctx.read_cstring(ctx.read_ptr(addr + _NAME_OFF), _MAX_NAME)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception:
         return None
@@ -88,7 +88,7 @@ def _valid_count(ctx, addr: int, n_off: int, ptr_off: int) -> bool:
     try:
         n = ctx.read_u32(addr + n_off)
         return n <= _MAX_ENTRIES and (n == 0 or ctx.read_ptr(addr + ptr_off) != 0)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception:
         return False

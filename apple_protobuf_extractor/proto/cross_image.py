@@ -35,6 +35,8 @@ about this image, and the field stays ``bytes``.
 
 from __future__ import annotations
 
+from macho.memory import PROGRAM_ERRORS
+
 import logging
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -168,7 +170,7 @@ def resolve_cross_image(
             path = loc.path_of(va)
             try:
                 msgs, ctx = extract(reader, va)
-            except (NameError, ImportError):
+            except PROGRAM_ERRORS:
                 raise                   # a wiring bug, not something about the image
             except Exception as exc:
                 result.image_errors[path] = f"{type(exc).__name__}: {exc}"

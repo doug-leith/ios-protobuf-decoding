@@ -165,7 +165,8 @@ def call_site_registers(ctx, insns,
         if tail or mn in CALLS:
             ks.append(k)
     regs = (flow or Flow(ctx, list(insns))).propagate({}, at=ks)
-    return [(k, regs[k]) for k in ks if k in regs]
+    # (the constants: a frame address handed a callee is none)
+    return [(k, {r: v for r, v in regs[k].items() if type(v) is int}) for k in ks if k in regs]
 
 
 def bytecode_literal_from_getter(ctx, insns, enum: bool = False,

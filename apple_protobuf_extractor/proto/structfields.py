@@ -62,7 +62,7 @@ from proto.mapfields import _scratch_slot_of
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
 from proto.writeto import BoundWrite, field_number_at
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
-from proto.eval_tokens import SELF, READER, OPAQUE, opaque
+from proto.eval_tokens import SELF, READER, OPAQUE
 from proto.protocore import _SCALAR_ENC
 
 log = logging.getLogger(__name__)
@@ -245,7 +245,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
         got = []
         for number_reg, value_reg in (('x2', 'x1'), ('x1', 'v0')):
             n = c.args.get(number_reg)
-            if n is not None and not opaque(n):
+            if type(n) is int:
                 member = _member_in(flow, insns, k, value_reg, member_at)
                 if member is not None:
                     got.append((member, n))

@@ -41,7 +41,7 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import _parse_imm, _norm_reg
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_store
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_store, PROGRAM_ERRORS
 from proto.arm64_eval import Flow, Objects, _STACK_TOP, _is_stack
 from proto.dispatch import (_jump_table_arm_addrs, build_function_index, decoded_flow,
                             function_entries)
@@ -638,7 +638,7 @@ class WriterFlow:
         """*reg* when it is a constant other than a frame address (a page, an address, an
         immediate)."""
         v = vals.get(reg)
-        return None if v is None or _is_stack(v) else v
+        return v if type(v) is int else None
 
     @classmethod
     def _int32(cls, vals: Dict[str, int], reg: str) -> Optional[int]:
@@ -797,7 +797,7 @@ def writer_reachable_ivars(ctx: BinaryContext, cl: ClassList, cls: ObjcClass
         _ctx_store(ctx, "_writer_flow", wf)
     try:
         return wf.reachable_ivars(cls)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:                         # bad input: undecided, never a drop
         log.debug("writer flow failed for %s: %s", cls.name, exc)

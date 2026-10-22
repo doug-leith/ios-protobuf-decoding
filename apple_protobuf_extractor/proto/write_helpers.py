@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, FrozenSet, List, Optional, Set
 
-from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
+from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcIvar
 
 from proto.writeto   import _extract_writeto_field_numbers
@@ -164,7 +164,7 @@ def _family_by_evaluation(ctx: BinaryContext, target: int) -> str:
     bytes), else ``plain`` (a 64-bit varint, a bool).  ``"unknown"`` when it computes
     neither.  How the compiler spells any of this (``lsl`` /
     ``bfi`` / ``orr``, in which order, through which registers) does not matter."""
-    from proto.arm64_eval import Flow
+    from proto.arm64_eval import Flow, Sym
     body = function_body(ctx, target, function_entries(ctx))
     if not body:
         return "unknown"
@@ -172,7 +172,7 @@ def _family_by_evaluation(ctx: BinaryContext, target: int) -> str:
 
     def computed(entry):
         regs = flow.propagate(entry, range(len(flow.insns)))
-        return {v for r in regs.values() for v in r.values()}
+        return {v for r in regs.values() for v in r.values() if not isinstance(v, Sym)}
 
     seen = computed({'x1': _PROBE_VALUE, 'x2': _PROBE_FIELD})
     low = _PROBE_VALUE & _MASK32
@@ -335,7 +335,7 @@ def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSe
         return cached
     try:
         helpers = frozenset(_identify_string_write_helpers(ctx, cl))
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         record_failed_pass(ctx, "string write helper", exc,

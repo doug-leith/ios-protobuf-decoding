@@ -12,7 +12,7 @@ import logging
 import re
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass
 from proto.models import record_failed_pass
 from proto.protoclass_set import _resolve_class_name_at
@@ -180,7 +180,7 @@ def _cpp_protobuf_symbol_names(ctx: BinaryContext):
         try:
             return list(reader.image_symbol_addrs(
                 ctx.image_base, _CPP_PROTOBUF_TOKEN).keys())
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             # unread symbols: a C++ runtime in this image would go undetected
@@ -283,7 +283,7 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
             if any(n != "google::protobuf" for n in cpp_ns) else "")
         try:
             has_descriptors = bool(cpp_file_protos(ctx))
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             record_failed_pass(ctx, "C++ libprotobuf descriptor scan", exc,
@@ -309,7 +309,7 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
 
     try:
         pbc = protobufc_descriptors(ctx)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         record_failed_pass(ctx, "protobuf-c detection", exc,

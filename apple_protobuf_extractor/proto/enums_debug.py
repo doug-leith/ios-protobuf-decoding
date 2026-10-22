@@ -40,7 +40,7 @@ both, imports this module normally.
 from __future__ import annotations
 from typing import Any, Callable, Dict, List, Set
 
-from macho.memory     import BinaryContext
+from macho.memory     import BinaryContext, PROGRAM_ERRORS
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass, ObjcIvar
 from proto.models     import ProtoField
@@ -131,7 +131,7 @@ def _gather_type_compatible_methods(
             else:
                 entry["pairs_count"]   = 0
                 entry["sample_values"] = []
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             entry["extraction_error"] = str(exc)
@@ -242,7 +242,7 @@ def _emit_mode_c_debug(ctx: BinaryContext, cls: ObjcClass, fld: ProtoField,
                     )
                 ),
             })
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as _ce:
             candidates_info.append({"imp": f"0x{mc.imp:x}", "error": str(_ce)})

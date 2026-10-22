@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, Optional, Tuple
 
-from macho.memory    import READ_ERRORS, BinaryContext
+from macho.memory    import READ_ERRORS, BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
 from macho.disasm    import _parse_imm
 from proto.arm64_operands import RETURNS, mem_regs, split_ops
@@ -293,7 +293,7 @@ def _class_from_type_method_imp(
                 if '_OBJC_CLASS_$_' in bind_sym:
                     return bind_sym.split('_OBJC_CLASS_$_', 1)[1]
                 return bind_sym
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except READ_ERRORS:
         pass

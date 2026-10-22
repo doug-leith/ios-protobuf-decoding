@@ -34,16 +34,11 @@ from dataclasses import dataclass
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
-from proto.arm64_eval import Flow, Objects
+from proto.arm64_eval import Flow, Objects, Sym
 from proto.arm64_operands import CALLS, CALLER_SAVED
 from proto.callees import callee_name
 from proto.function_body import function_body
 
-# addresses into the objects a run cannot see into: object k's window, from POINTER_BASE, its
-# base in the middle (an offset below it is still k's)
-POINTER_BASE = 1 << 82
-_WINDOW = 1 << 36
-_MAX_OBJECTS = 1 << 20               # [cap:INPUT-SANITY] a run's objects
 # self; the decoder (or visitor) argument, its type and its witness table
 SELF, DECODER, DECODER_TYPE, DECODER_WITNESSES = range(4)
 # the Swift runtime's retains return their argument
@@ -62,18 +57,18 @@ _MAX_DEPTH = 3                       # [cap:INPUT-SANITY] arm -> closure -> help
 _MAX_FIELD_NUMBER = 0x1FFFFFFF
 
 
-def pointer(k: int, off: int = 0) -> int:
-    return POINTER_BASE + k * _WINDOW + _WINDOW // 2 + off
+def pointer(k: int, off: int = 0) -> Sym:
+    """An address *off* bytes into object *k* (a run cannot see into it)."""
+    return Sym("pointer", k, off)
 
 
-def is_pointer(v: Optional[int]) -> bool:
-    return v is not None and POINTER_BASE <= v < POINTER_BASE + _MAX_OBJECTS * _WINDOW
+def is_pointer(v) -> bool:
+    return isinstance(v, Sym) and v.kind == "pointer"
 
 
-def split(v: int) -> Tuple[int, int]:
+def split(v: Sym) -> Tuple[int, int]:
     """``(object, offset)`` of a pointer."""
-    k, off = divmod(v - POINTER_BASE, _WINDOW)
-    return k, off - _WINDOW // 2
+    return v.ident, v.off
 
 
 class _Objects:
@@ -289,9 +284,9 @@ def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int], Dict[str,
         v = known.get(r)
         if v is None or flow.entry_arg(k, r):
             continue
-        if not is_pointer(v):
+        if not isinstance(v, Sym):
             args[r] = v
-        elif objs.origin[split(v)[0]][0] == "import":
+        elif is_pointer(v) and objs.origin[split(v)[0]][0] == "import":
             imports[r] = objs.origin[split(v)[0]][1]
     return target, args, imports
 
@@ -517,7 +512,7 @@ def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth:
         target = _parse_imm(ins.op_str) if ins.mnemonic == "bl" else None
         reg = ins.op_str.split(",")[0].strip()
         if target is None:
-            target = st.get(reg) if not is_pointer(st.get(reg)) else None
+            target = st.get(reg) if not isinstance(st.get(reg), Sym) else None
         via = None if target is not None else st.get(reg)
         m = _DECODE_RE.search(_call_name(ctx, objs, target, via, thunks=True))
         if m and m.group(4):
@@ -628,13 +623,15 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         if desc:
             return TR._qualified_name(ctx, desc)
         name = _symbol_at(ctx, target)
-        if name in _INSTANTIATE and x0 is not None and not is_pointer(x0):
+        if name in _INSTANTIATE and x0 is not None and not isinstance(x0, Sym):
             try:
                 ptype, label = TR.decode_mangled(ctx, _rel(ctx, x0))
             except READ_ERRORS:
                 return None
             return ("repeated " + ptype if label == "repeated" else ptype) if ptype else None
         return _type_of_accessor_symbol(name)
+    if isinstance(v, Sym):                       # (a frame address)
+        return None
     try:
         desc = ctx.read_ptr(v + 8)
         return TR._qualified_name(ctx, desc) if TR._desc_kind(ctx, desc) in (17, 18) else None
@@ -693,7 +690,7 @@ def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
             if kind == "Extension" or kind.startswith("Unknown"):
                 continue
             n = c.args.get(_number_register(label, kind))
-            if n is None or is_pointer(n) or not 1 <= n <= _MAX_FIELD_NUMBER:
+            if n is None or isinstance(n, Sym) or not 1 <= n <= _MAX_FIELD_NUMBER:
                 continue
             v = Visited(label, kind)
             if kind in _GENERIC_KINDS:

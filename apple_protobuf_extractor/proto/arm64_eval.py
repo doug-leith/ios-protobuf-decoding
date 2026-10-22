@@ -51,18 +51,62 @@ _STRICT_CONDS = frozenset(('hs', 'cs', 'lo', 'cc', 'ge', 'lt'))
 _MAX_GATE_SPAN = 1 << 12
 
 
-# Symbolic values -- a frame address, an object token (:mod:`proto.eval_tokens`) -- live above the
-# 64-bit value space: no constant can be taken for one, and no 64-bit arithmetic can make one.
-# The machine carries them through what keeps their meaning only (:meth:`_Machine.put`); a
-# result past 2^72 that is not one of them (a frame address plus a 64-bit constant) is unknown.
-_SYMBOLIC = 1 << 72
+@dataclass(frozen=True)
+class Sym:
+    """A value that is not a number: a frame address (*kind* ``"frame"``: the entry sp plus
+    *off*), an address into an object the analysis cannot see into (``"pointer"``: object
+    *ident* plus *off*, :class:`Objects` *pointer*), or an object itself (``"token"``:
+    :mod:`proto.eval_tokens`).  The machine carries one through what keeps its meaning
+    (:meth:`_Machine.put`) and takes any other use of it as unknown.
+
+    Defined on it: a frame address or a pointer plus or minus a number (another one), the
+    difference of two frame addresses (a number: it does not depend on where the stack is),
+    and the order of frame addresses.  Anything else -- its bits, a shift, a token plus a
+    number -- raises TypeError: an operation the machine does not take as unknown is a bug,
+    not a value (TODO #139: these were integers in bands, where such an operation quietly
+    made a plausible number)."""
+    kind: str
+    ident: Any = None
+    off: int = 0
+
+    def __add__(self, n):
+        if type(n) is int and self.kind != "token":
+            return Sym(self.kind, self.ident, self.off + n)
+        return NotImplemented
+
+    __radd__ = __add__
+
+    def __sub__(self, o):
+        if type(o) is int and self.kind != "token":
+            return Sym(self.kind, self.ident, self.off - o)
+        if isinstance(o, Sym) and self.kind == o.kind == "frame":
+            return self.off - o.off
+        return NotImplemented
+
+    def __lt__(self, o):
+        if isinstance(o, Sym) and self.kind == o.kind == "frame":
+            return self.off < o.off
+        return NotImplemented
+
+    def __le__(self, o):
+        if isinstance(o, Sym) and self.kind == o.kind == "frame":
+            return self.off <= o.off
+        return NotImplemented
+
+
+def frame(off: int = 0) -> Sym:
+    """The frame address *off* bytes from the entry sp."""
+    return Sym("frame", None, off)
+
+
 # sp on entry to an evaluated function.  A frame address is the entry sp plus an offset: copies,
 # loads and stores of all 64 bits carry it, adding or subtracting a number moves it, the
 # difference of two is that number, and clearing the low four bits aligns it (the entry sp is
 # 16-byte aligned, AAPCS64).  Any other use of one is unknown: its 32-bit half, a shift, a
-# compare with a number -- what they give depends on where the stack really is.  A frame is far
-# smaller than the 2^32 bytes either side of the entry sp this partition gives the stack.
-_STACK_TOP = 1 << 80
+# compare with a number -- what they give depends on where the stack really is.
+_STACK_TOP = frame(0)
+# A frame is far smaller than the 2^32 bytes either side of the entry sp: a frame address
+# further off (a frame address plus a 64-bit constant) is unknown (_Machine.put).
 _STACK_SPAN = 1 << 32
 _MASK64 = (1 << 64) - 1
 # Where flags comparing two frame addresses are computed: an sp far from wrapping either way.
@@ -84,12 +128,12 @@ _POINTER_AUTH = frozenset((
     "xpaci", "xpacd", "xpaclri"))
 
 
-def _is_stack(v: Optional[int]) -> bool:
-    return v is not None and _STACK_TOP - _STACK_SPAN <= v < _STACK_TOP + _STACK_SPAN
+def _is_stack(v) -> bool:
+    return isinstance(v, Sym) and v.kind == "frame"
 
 
-def _is_symbolic(v: Optional[int]) -> bool:
-    return v is not None and (v >= _SYMBOLIC or v <= -_SYMBOLIC)
+def _is_symbolic(v) -> bool:
+    return isinstance(v, Sym)
 
 
 def _wide(tok: str) -> bool:
@@ -116,9 +160,9 @@ def _add_sub(add: bool, a: Optional[int], b: Optional[int]) -> Optional[int]:
     if syma and symb:
         return None
     if symb:
-        return b + _signed64(a) if add else None
+        return b + _signed64(a) if add and b.kind != "token" else None
     if syma:
-        b = _signed64(b)
+        return None if a.kind == "token" else a + _signed64(b) if add else a - _signed64(b)
     return a + b if add else a - b
 
 
@@ -138,7 +182,7 @@ def _flag_operands(a: Optional[int], b: Optional[int], subtract: bool = True
         return None, None
     sa, sb = _is_stack(a), _is_stack(b)
     if sa and sb and subtract:
-        return a - _STACK_TOP + _REPRESENTATIVE_SP, b - _STACK_TOP + _REPRESENTATIVE_SP
+        return a.off + _REPRESENTATIVE_SP, b.off + _REPRESENTATIVE_SP
     if sa or sb or _is_symbolic(a) or _is_symbolic(b):
         return None, None
     return a, b
@@ -336,7 +380,8 @@ class _Machine:
             self.top.add(r)
             return
         if _is_symbolic(v):
-            symbol = _is_stack(v) or (self.opaque is not None and self.opaque(v)) or \
+            symbol = (_is_stack(v) and -_STACK_SPAN <= v.off < _STACK_SPAN) or \
+                (self.opaque is not None and self.opaque(v)) or \
                 (self.pointer is not None and self.pointer(v))
             if not symbol or not _wide(tok):        # stack-derived arithmetic, or half of one
                 self.regs.pop(r, None)
@@ -1031,7 +1076,7 @@ class Flow:
             v = m.get(ops[0])
             bit = _parse_imm(ops[1]) or 0
             if _is_stack(v):                        # only the alignment bits are the frame's
-                v = v - _STACK_TOP if bit < 4 else None
+                v = v.off if bit < 4 else None
             elif v is not None and _is_symbolic(v):
                 v = None                            # (a pointer's bits are its encoding's)
             return (None if v is None else (((v >> bit) & 1) == 0) == (mn == 'tbz')), _parse_imm(ops[2])
@@ -1093,7 +1138,7 @@ class Flow:
             b = _parse_imm(ops[2]) if ops[2].startswith('#') else operand2(ops, 2, get)
             if _is_stack(a):                       # aligning a frame address (and sp, x9, #-16)
                 b = None if b is None else b & _MASK64
-                r = (_STACK_TOP + ((a - _STACK_TOP) & _signed64(b))
+                r = (frame(a.off & _signed64(b))
                      if mn == 'and' and b is not None and b | 0xF == _MASK64 else None)
                 put(ops[0], r)
                 if mn == 'ands':
@@ -1199,6 +1244,8 @@ class Flow:
             return None
         base, index, disp, ext, shift, idx_w = pm
         b = m.get(base) if base else None
+        if isinstance(b, Sym) and b.kind == "token":
+            b = None                            # (an object's own address is not known)
         addr = b
         if addr is not None and index:
             iv = m.number(index)

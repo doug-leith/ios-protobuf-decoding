@@ -48,15 +48,15 @@ from dataclasses import dataclass, field
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.disasm import _norm_reg
-from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store, record_unread
+from macho.memory import READ_ERRORS, _ctx_cache, _ctx_store, record_unread, PROGRAM_ERRORS
 from macho.classlist import class_name_at
 from proto.arm64cfg import dominators, dominates
 from proto.arm64_operands import split_ops
-from proto.arm64_eval import Flow, _MAX_GATE_SPAN
+from proto.arm64_eval import Flow, _MAX_GATE_SPAN, Sym
 from proto.repeated import _adder_array_ivar
 from proto.callees import callee_name, stub_selector, text_holding
 from proto.function_body import function_body
-from proto.eval_tokens import (SELF, READER, FIELD_BASE, opaque, ret_value,
+from proto.eval_tokens import (SELF, READER, field_offset, ret_value,
                                object_model)
 from proto import dispatch as D
 from proto.models import record_analysis_failure, record_heuristic_hit
@@ -87,7 +87,7 @@ def _selector_of(ctx, call) -> Optional[str]:
     if sel is not None:
         return sel
     x1 = call.args.get('x1')
-    if x1 is not None and not opaque(x1) and callee_name(ctx, call.target) == '_objc_msgSend':
+    if type(x1) is int and callee_name(ctx, call.target) == '_objc_msgSend':
         try:
             return ctx.read_cstring(x1)
         except READ_ERRORS:
@@ -154,7 +154,7 @@ def _class_name_at(ctx, va: Optional[int]) -> Optional[str]:
     """Name of the ObjC class whose ``class_t`` is at *va* (an argument value: None for an
     opaque token or an unknown value).  Callers accept it only when it is a known proto
     class."""
-    if va is None or not 0 < va < 1 << 64:          # a token or a frame address: no class
+    if va is None or isinstance(va, Sym) or not 0 < va < 1 << 64:   # a token, a frame address
         return None
     return class_name_at(ctx, va)
 
@@ -416,9 +416,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                     recv = c.args.get('x0')
                     if not elems & {c.args.get('x1'), c.args.get('x2'), c.args.get('x3')}:
                         continue
-                    if recv is not None and FIELD_BASE <= recv < FIELD_BASE + (1 << 24):
+                    off = field_offset(recv)
+                    if off is not None:
                         # [self->_array addObject:element]: the array IS the ivar
-                        off = recv - FIELD_BASE
                         if off in array_offsets:
                             fd.adder, fd.adder_ivar = c.target, off_to_ivar.get(off)
                             break
@@ -517,7 +517,7 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
         out.cores.append(core_va)
         try:
             _decode_core(ctx, core_va, entry, cls, core_index, out, entries, flows.get(core_va))
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             detail = f"core {core_va:#x}: {type(exc).__name__}: {exc}"

@@ -67,6 +67,8 @@ it picks a safe canonical default.  Specifically:
 
 from __future__ import annotations
 
+from macho.memory import PROGRAM_ERRORS
+
 import argparse
 import logging
 import sys
@@ -304,7 +306,7 @@ def _cmd_list_frameworks(cache_arg: str) -> int:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")   # suppress missing-subcache warnings
             cache = DyldCacheReader(str(cache_path))
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         print(f"error: could not open cache {cache_path}: {exc}", file=sys.stderr)
@@ -541,7 +543,7 @@ def _open_cache(cache_arg, cache_native: bool):
                         f"not found.",
                         file=sys.stderr,
                     )
-            except (NameError, ImportError):
+            except PROGRAM_ERRORS:
                 raise
             except Exception as exc:
                 print(
@@ -607,7 +609,7 @@ def _load_cache_native_context(args, cache, BinaryContext):
     )
     try:
         ctx = BinaryContext.from_cache(cache, mach_va)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -643,7 +645,7 @@ def _load_binary_context(args, BinaryContext):
         t = _step("parsing Mach-O structure")
         ctx = BinaryContext(data)
         _done(t)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         print(f"error: not a valid arm64 Mach-O binary: {exc}",

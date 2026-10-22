@@ -45,6 +45,12 @@ LC_FUNCTION_STARTS     = 0x00000026
 #: an absent section is asked with :meth:`BinaryContext.has_section` (TODO #137).
 READ_ERRORS = (ValueError, struct.error)
 
+#: What an analysis must never take for a fact about the input: an error in this program (a name
+#: it lacks, a value of the wrong kind -- a proto.arm64_eval.Sym in arithmetic --, an object
+#: without the attribute it is given).  A guard that turns other exceptions into a recorded
+#: failure re-raises these first.
+PROGRAM_ERRORS = (NameError, ImportError, TypeError, AttributeError)
+
 
 def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
     """The function entries an ``LC_FUNCTION_STARTS`` table lists: ULEB128 deltas, the first
@@ -1001,7 +1007,7 @@ class BinaryContext:
                         imports.append(
                             blob[abs_name_off:end_b].decode('utf-8', errors='replace')
                         )
-                    except (NameError, ImportError):
+                    except PROGRAM_ERRORS:
                         raise
                     except Exception:
                         imports.append('')

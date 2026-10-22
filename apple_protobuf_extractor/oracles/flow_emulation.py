@@ -35,7 +35,7 @@ from unicorn import (Uc, UcError, UC_ARCH_ARM64, UC_MODE_ARM, UC_HOOK_CODE, UC_H
                      UC_HOOK_MEM_WRITE)
 from unicorn import arm64_const as A
 
-from proto.arm64_eval import _ENTRY, _STACK_TOP, _is_stack, _is_symbolic
+from proto.arm64_eval import _ENTRY, _is_stack, _is_symbolic
 from proto.arm64_operands import CALLS, RETURNS, reads, writes
 from proto.callees import RETURNS_ARGUMENT, callee_name, call_clobbers
 from proto.dispatch import listing_flow
@@ -290,6 +290,13 @@ def random_value(rng):
     return HEAP_BASE + (rng.randrange(HEAP_SIZE) & ~7)
 
 
+def _show(v):
+    """A value Flow knows, for a finding: a number, a frame address (sp+off), an object."""
+    if _is_stack(v):
+        return "sp%+#x" % v.off
+    return str(v) if _is_symbolic(v) else "%#x" % v
+
+
 def random_words(rng, size):
     return struct.pack("<%dQ" % (size // 8), *(random_value(rng) for _ in range(size // 8)))
 
@@ -478,16 +485,16 @@ class Emulation:
             got = uc.reg_read(_X[r]) & MASK64
             rep.stats["known values"] += 1
             if _is_stack(v):
-                want = (SP0 + v - _STACK_TOP) & MASK64
+                want = (SP0 + v.off) & MASK64
                 if got != want:
                     kind = ("a constant Flow takes for a stack address"
                             if not STACK_BASE <= got < STACK_BASE + STACK_SIZE
                             else "a known stack address that does not hold")
-                    rep.find(kind, fn, "before %s: %s known %#x (stack), ran %#x" % (ins, r, v, got),
+                    rep.find(kind, fn, "before %s: %s known sp%+#x, ran %#x" % (ins, r, v.off, got),
                              key=(r, v))
             elif got != v & MASK64:
                 rep.find("a known value that does not hold", fn,
-                         "before %s: %s known %#x, ran %#x" % (ins, r, v, got), key=(r, v))
+                         "before %s: %s known %s, ran %#x" % (ins, r, _show(v), got), key=(r, v))
 
 
 class EntryEmulation(Emulation):
@@ -523,15 +530,14 @@ class EntryEmulation(Emulation):
 
     def _expect(self, v):
         """What the run holds where Flow knows *v* (None: nothing to check)."""
-        from proto.eval_tokens import SELF, FIELD_BASE, _RET_BASE
+        from proto.eval_tokens import SELF
         if _is_stack(v):
-            return (SP0 + v - _STACK_TOP) & MASK64
+            return (SP0 + v.off) & MASK64
         if v == SELF:
             return self.self_ptr
-        if _RET_BASE <= v < FIELD_BASE:
-            return self.returned.get((v - _RET_BASE) // 16)
-        if _is_symbolic(v):
-            return None
+        if _is_symbolic(v):                    # a call's result: what that call returned
+            ret = v.ident if isinstance(v.ident, tuple) and v.ident[0] == "ret" else None
+            return self.returned.get(ret[1]) if ret else None
         return v & MASK64
 
     def _check(self, uc, k, prev, last):
@@ -546,14 +552,14 @@ class EntryEmulation(Emulation):
                 got = uc.reg_read(_X[r]) & MASK64
                 if got != want:
                     rep.find("a value propagated from the entry that does not hold", fn,
-                             "before %s: %s known %#x, ran %#x" % (ins, r, v, got), key=(k, r))
+                             "before %s: %s known %s, ran %#x" % (ins, r, _show(v), got), key=(k, r))
         for r, v in self.args.get(k, {}).items():
             if r in _X and (want := self._expect(v)) is not None:
                 rep.stats["call arguments"] += 1
                 got = uc.reg_read(_X[r]) & MASK64
                 if got != want:
                     rep.find("a call argument run_from records that does not hold", fn,
-                             "%s: %s recorded %#x, ran %#x" % (ins, r, v, got), key=(k, r))
+                             "%s: %s recorded %s, ran %#x" % (ins, r, _show(v), got), key=(k, r))
         if k not in self.first and (ins.mnemonic in CALLS or ins.mnemonic == "br"):
             self.first.add(k)
             ops = ("x0", "x1", "x2") if ins.mnemonic in CALLS else (ins.op_str.strip(),)

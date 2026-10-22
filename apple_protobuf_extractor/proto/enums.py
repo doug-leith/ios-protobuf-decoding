@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
-from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
+from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
@@ -409,7 +409,7 @@ def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
         return XasResult([], False, False)
     try:
         flow, truncated = _xasstring_flow(ctx, imp)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         log.warning("xAsString: at 0x%x could not be disassembled (%s); its enum values "

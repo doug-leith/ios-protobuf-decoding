@@ -297,7 +297,7 @@ class TestCollectForeignMessages(unittest.TestCase):
         orig = SW.swift_messages
         SW.swift_messages = lambda ctx: []          # no swift in this fixture
         try:
-            msgs = F.collect_foreign_messages(ctx=object(), data=data)
+            msgs = F.collect_foreign_messages(ctx=NoImage(), data=data)
         finally:
             SW.swift_messages = orig
         self.assertTrue(any(m.name == "Msg" and m.serializer == F.CPP_SERIALIZER
@@ -319,7 +319,7 @@ class TestCollectForeignMessages(unittest.TestCase):
 
     def test_scan_failure_is_swallowed(self):
         # a ctx whose section read raises must not propagate out of the collector
-        class _Boom:
+        class _Boom(NoImage):
             def has_section(self, *_):
                 return True
             def section(self, *_):
@@ -333,7 +333,7 @@ class TestCollectForeignMessages(unittest.TestCase):
 
 
 class TestSwiftAdapter(unittest.TestCase):
-    class _FakeSwiftCtx:
+    class _FakeSwiftCtx(NoImage):
         pass
 
     def test_swift_message_to_proto(self):

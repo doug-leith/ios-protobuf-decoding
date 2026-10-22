@@ -10,31 +10,33 @@ from __future__ import annotations
 
 from typing import Optional
 
-from proto.arm64_eval import Objects
+from proto.arm64_eval import Objects, Sym
 from proto.callees import callee_name, RETURNS_ARGUMENT
 
-# Symbolic, like a frame address (proto.arm64_eval._SYMBOLIC): above the 64-bit value space, so
-# no constant is taken for one; above the stack partition (2^80 +- 2^32).
-TOKEN_BASE = 1 << 81
-SELF = TOKEN_BASE
-READER = TOKEN_BASE + 0x1000_0000
-_RET_BASE = TOKEN_BASE + 0x2000_0000           # + 16 * insn index: x0 after that call
-FIELD_BASE = TOKEN_BASE + 0x3000_0000          # + offset: self->ivar at that byte offset
+# objects (proto.arm64_eval.Sym, kind "token"): no constant is taken for one
+SELF = Sym("token", "self")
+READER = Sym("token", "reader")
 
 
-def opaque(v: Optional[int]) -> bool:
+def opaque(v) -> bool:
     """SELF, READER, call results and self's ivar values are objects, not numbers."""
-    return v is not None and TOKEN_BASE <= v < FIELD_BASE + (1 << 28)
+    return isinstance(v, Sym) and v.kind == "token"
 
 
-def field_value(obj: int, off: int) -> Optional[int]:
+def field_value(obj, off: int) -> Optional[Sym]:
     """``self->ivar`` at byte offset *off* (the array a reader appends to with addObject:)."""
-    return FIELD_BASE + off if obj == SELF and 0 <= off < (1 << 24) else None
+    return Sym("token", ("field", off)) if obj == SELF and 0 <= off < (1 << 24) else None
 
 
-def ret_value(k: int) -> int:
+def field_offset(v) -> Optional[int]:
+    """The byte offset of the ``self->ivar`` value *v* is (:func:`field_value`), else None."""
+    return v.ident[1] if opaque(v) and isinstance(v.ident, tuple) and v.ident[0] == "field" \
+        else None
+
+
+def ret_value(k: int) -> Sym:
     """The result of the call at instruction index *k*."""
-    return _RET_BASE + 16 * k
+    return Sym("token", ("ret", k))
 
 
 def call_result(ctx):

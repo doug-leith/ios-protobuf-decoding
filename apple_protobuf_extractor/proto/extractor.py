@@ -46,7 +46,7 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 # Direct internal dependencies.  proto.extractor is no longer a re-export facade:
 # each consumer imports the symbol it needs from the module that defines it
 # (proto.protocore / dispatch / repeated / enums / writeto / config, macho.*).
-from macho.memory    import BinaryContext, _ctx_cache, _ctx_store, reset_ctx_caches
+from macho.memory    import BinaryContext, _ctx_cache, _ctx_store, reset_ctx_caches, PROGRAM_ERRORS
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
@@ -294,7 +294,7 @@ def _ensure_readfrom_core_index(ctx: BinaryContext, cl: ClassList) -> Dict[int, 
         return cached
     try:
         index = _build_readfrom_core_index(ctx, cl)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         record_failed_pass(ctx, "readFrom core index", exc,
@@ -343,14 +343,14 @@ def _resolve_dispatch_context(
     if readfrom_core_index:
         try:
             dispatch_elements = _resolve_repeated_via_dispatch(ctx, cls, readfrom_core_index)
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             record_analysis_failure(ctx, cls.name, "readFrom: dispatch (element classes)",
                                     f"{type(exc).__name__}: {exc}")
         try:
             dispatch_ivars = _resolve_repeated_via_dispatch_ivars(ctx, cls, readfrom_core_index)
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             record_analysis_failure(ctx, cls.name, "readFrom: dispatch (element ivars)",
@@ -1243,14 +1243,14 @@ def extract_all(
                                         readfrom_core_index=readfrom_core_index,
                                         prefixes=prefixes,
                                         enum_debug_writer=enum_debug_writer)
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             # A wiring/refactor bug (e.g. the enums-carve missing-import NameError)
             # must HARD-fail, not be swallowed as a per-class "decode failed" — those
             # are never raised by binary-data processing, only by broken code.
             # (ProtoClassDetectionError cannot reach here: the whole-image verdict is
             # rendered by the pre-pass above, before this loop starts.)
             raise
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             # One bad class must not abort the whole run, but a failure here is

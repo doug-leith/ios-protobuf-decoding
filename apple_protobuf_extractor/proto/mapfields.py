@@ -46,7 +46,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
 from proto.callees import real_target, stub_selector
@@ -604,7 +604,7 @@ def _finalize_map_fields(
                 continue
             try:
                 types = resolve_map_types(ctx, cls, writer, core_index, known)
-            except (NameError, ImportError):
+            except PROGRAM_ERRORS:
                 raise
             except Exception as exc:
                 log.debug("map type resolution failed for %s.%s: %s",

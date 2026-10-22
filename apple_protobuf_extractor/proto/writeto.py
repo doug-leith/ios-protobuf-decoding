@@ -23,7 +23,7 @@ flagged ivar-order estimate — fail-safe, never a confident error.
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set, Tuple
 
-from macho.memory import BinaryContext
+from macho.memory import BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ObjcClass, ObjcIvar
 from proto.models import record_analysis_failure
 from proto.arm64_operands import CALLS
@@ -157,7 +157,7 @@ def _extract_writeto_field_numbers(
         return WriteBindings()
     try:
         sites = wf.write_sites(cls)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
         # Bad binary input → per-class fail-safe (flagged ivar-order estimate), reported.
@@ -177,7 +177,7 @@ def writeto_sent_selectors(ctx: BinaryContext, cls: ObjcClass) -> Optional[froze
         return None
     try:
         return wf.sent_selectors(cls)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         record_analysis_failure(ctx, cls.name, "writeTo: flow", f"{type(exc).__name__}: {exc}")

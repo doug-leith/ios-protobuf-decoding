@@ -28,6 +28,12 @@ class NoImage:
     def function_starts(self):
         return []
 
+    def iter_symbols(self):                     # (no symbol table)
+        return iter(())
+
+    def iter_symbol_names(self):
+        return iter(())
+
     def vmaddr_to_offset(self, vmaddr, length=1):
         raise ValueError(f"vmaddr {vmaddr:#x} not in any segment")
 

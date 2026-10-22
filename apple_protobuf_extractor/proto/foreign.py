@@ -25,6 +25,8 @@ the symbol table / export trie — both unavailable for cache-native images.
 """
 from __future__ import annotations
 
+from macho.memory import PROGRAM_ERRORS
+
 import logging
 import re
 from typing import Dict, List, Optional
@@ -304,14 +306,14 @@ def swift_messages(ctx) -> List[ProtoMessage]:
     try:
         from serializers.swift_type_recovery import local_enum_names
         enums = local_enum_names(ctx)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "swift-protobuf", "enum scan", exc)
         enums = set()
     try:
         enum_defs = [e for e in _swift.swift_enums(ctx) if e.fields]
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "swift-protobuf", "enum recovery", exc)
@@ -490,7 +492,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
                 pfx = (fp.package + ".") if fp.package else ""
                 cpp_names.append(pfx + m.name)
                 cpp_names += [f"{pfx}{m.name}.{n.name}" for n in m.nested]
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "C++ libprotobuf", "descriptor inventory", exc)
@@ -504,7 +506,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
         # produced cpp_names above and never reaches here).
         try:
             cpp_ns = cpp_protobuf_namespaces(ctx)
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             _foreign_failed(ctx, "C++ libprotobuf", "namespace scan", exc)
@@ -520,7 +522,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
 
     try:
         sw_msgs, sw_enums, _mods = swift_protobuf_messages(ctx)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "swift-protobuf", "conformance scan", exc)
@@ -532,7 +534,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
         # (cache-native) so the inventory matches what extraction would emit.
         try:
             sw_names = sorted(m.qualified for m in _swift.swift_messages(ctx))
-        except (NameError, ImportError):
+        except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             _foreign_failed(ctx, "swift-protobuf", "detection", exc)
@@ -542,7 +544,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
 
     try:
         gpb_subs, _bases = google_protobuf_classes(ctx, cl)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "Google protobuf-objc (GPBMessage)", "detection", exc)
@@ -554,7 +556,7 @@ def summarize_serializers(ctx, cl, data: Optional[bytes]) -> List[SerializerSumm
 
     try:
         pbc = protobufc_descriptors(ctx)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, PROTOBUFC_SERIALIZER, "detection", exc)
@@ -588,13 +590,13 @@ def collect_foreign_messages(ctx, data: Optional[bytes]) -> List[ProtoMessage]:
     out: List[ProtoMessage] = []
     try:
         out += _cpp_protos_to_messages(cpp_file_protos(ctx, data))
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "C++ libprotobuf", "message collection", exc)
     try:
         out += swift_messages(ctx)
-    except (NameError, ImportError):
+    except PROGRAM_ERRORS:
         raise
     except Exception as exc:
         _foreign_failed(ctx, "swift-protobuf", "message collection", exc)
