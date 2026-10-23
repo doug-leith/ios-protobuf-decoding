@@ -202,18 +202,7 @@ class TestLoadImageSymbolAddrsOffline(unittest.TestCase):
 
 # ─── Live tests against the real GeoServices cache ─────────────────────────────
 
-def _find_cache_main():
-    _names = ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64')
-    cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
-    for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
-        for name in _names:
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
-    return None
-
-
-_CACHE_MAIN = _find_cache_main()
+_CACHE_MAIN = artifacts.cache_file()
 _HAS_SYMBOLS = _CACHE_MAIN is not None and symbols_path_for(_CACHE_MAIN) is not None
 _SKIP_MSG = ('dyld shared cache .symbols file not found — place full cache '
              '(including dyld_shared_cache_arm64.symbols) in the data dir (see the artifacts module / MACHO_DATA_DIR)')

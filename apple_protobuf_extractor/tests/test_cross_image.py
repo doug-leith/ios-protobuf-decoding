@@ -25,6 +25,7 @@ from pathlib import Path
 
 import artifacts
 from macho.dyld_cache import DyldCacheReader
+from macho.load_commands import parse_load_commands
 from proto.cross_image import (VIA_CLASSREF, VIA_LINKED_DYLIB, VIA_SAME_IMAGE,
                                resolve_cross_image)
 from proto.emitter import build_proto_files, referenced_message_class
@@ -36,12 +37,14 @@ from proto.models import FieldLabel, ProtoField, ProtoMessage
 class FakeCache:
     """Just enough of a DyldCacheReader for proto.cross_image: images with __TEXT /
     __DATA / __DATA_CONST segments, ObjC class_t/class_ro_t/name chains, a classlist and
-    classrefs per image, and LC_LOAD_DYLIB commands.  The address-to-image and
-    load-command methods are DyldCacheReader's own."""
+    classrefs per image, and LC_LOAD_DYLIB commands.  The address-to-image, load-command and
+    pointer-read methods are DyldCacheReader's own."""
 
     image_containing = DyldCacheReader.image_containing
     _segment_at = DyldCacheReader._segment_at
     image_dependencies = DyldCacheReader.image_dependencies
+    _commands_or_none = DyldCacheReader._commands_or_none
+    read_ptr = DyldCacheReader.read_ptr
 
     def __init__(self):
         self.mem, self.strs = {}, {}
@@ -87,12 +90,12 @@ class FakeCache:
             segs["__DATA/__objc_classrefs"] = (refs, refs + 8 * len(self._refs[va]))
         return segs
 
-    def _image_load_commands(self, va):
-        out = []
+    def image_load_commands(self, va):
+        cmds = b""
         for path in self._deps.get(va, ()):
             name = path.encode() + b"\x00"
-            out.append((0x0C, struct.pack("<IIIIII", 0x0C, 24 + len(name), 24, 0, 0, 0) + name))
-        return out
+            cmds += struct.pack("<IIIIII", 0x0C, 24 + len(name), 24, 0, 0, 0) + name
+        return parse_load_commands(cmds, len(self._deps.get(va, ())))
 
     def list_images(self):
         return list(self.images)
@@ -369,16 +372,7 @@ class TestSingleFileQualification(unittest.TestCase):
 
 # ── live: the real dyld cache ─────────────────────────────────────────────────
 
-def _find_cache_main():
-    for d in [os.environ.get("MACHO_TEST_CACHE", "").strip(), artifacts.cache_dir()]:
-        for name in ("dyld_shared_cache_arm64e", "dyld_shared_cache_arm64"):
-            p = os.path.join(d, name) if d else ""
-            if p and os.path.isfile(p):
-                return p
-    return None
-
-
-_CACHE_MAIN = _find_cache_main()
+_CACHE_MAIN = artifacts.cache_file()
 _SKIP = "dyld shared cache not found — set MACHO_TEST_CACHE or see artifacts.py"
 
 

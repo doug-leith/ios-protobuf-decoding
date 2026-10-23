@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from typing import Dict, Optional
+from typing import Dict
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -208,17 +208,7 @@ class TestReturnedClassRef(unittest.TestCase):
 # live: GeoServices (dyld cache) and locationd (standalone binary)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _find_cache_main() -> Optional[str]:
-    cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
-    for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
-        for name in ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64'):
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
-    return None
-
-
-_CACHE_MAIN = _find_cache_main()
+_CACHE_MAIN = artifacts.cache_file()
 _LOCATIOND = os.environ.get('MACHO_TEST_LOCATIOND', '').strip() or artifacts.locationd_path()
 
 

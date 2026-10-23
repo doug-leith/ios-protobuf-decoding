@@ -367,11 +367,7 @@ class TestGenericArgumentTokens(unittest.TestCase):
 
 def _ios27_cache():
     import artifacts
-    for name in artifacts.CACHE_BASENAMES:
-        p = os.path.join(artifacts.ios27_cache_dir(), name)
-        if os.path.isfile(p):
-            return p
-    return None
+    return artifacts.cache_file_in(artifacts.ios27_cache_dir())
 
 
 @unittest.skipUnless(_ios27_cache(), "iOS 27 cache not available")

@@ -58,3 +58,21 @@ class TextImage(NoImage):
 
     def function_starts(self):
         return list(self._starts)
+
+
+def load_commands_of(sec_map, flags=None):
+    """The :class:`macho.load_commands.LoadCommands` whose cache view
+    (:meth:`macho.dyld_cache.DyldCacheReader.image_sections`) is *sec_map*
+    (``{"__TEXT": (start, end), "__TEXT/__text": (start, end), ...}``), each section's flags
+    ``flags[key]`` (else 0): for a stand-in reader's ``image_load_commands``."""
+    from macho.load_commands import LoadCommands, Section, Segment
+    segs = {}
+    for key, (start, end) in sec_map.items():
+        if '/' not in key:
+            segs[key] = Segment(key, start, end - start, 0, end - start)
+    for key, (start, end) in sec_map.items():
+        if '/' in key:
+            seg, name = key.split('/', 1)
+            segs[seg].sections.append(Section(name, seg, start, end - start, 0,
+                                              (flags or {}).get(key, 0)))
+    return LoadCommands(segments=list(segs.values()))

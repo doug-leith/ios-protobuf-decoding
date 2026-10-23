@@ -25,17 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 # Live tests against the real GeoServices cache
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _find_cache_main():
-    cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
-    for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
-        for name in ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64'):
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
-    return None
-
-
-_CACHE_MAIN = _find_cache_main()
+_CACHE_MAIN = artifacts.cache_file()
 _SKIP_MSG = ('dyld shared cache not found — place the full cache in '
              '<repo>/iphone8_data/dylib/ (or set MACHO_DATA_DIR)')
 

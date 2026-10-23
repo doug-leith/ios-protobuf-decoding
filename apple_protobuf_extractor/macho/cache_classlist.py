@@ -1,7 +1,8 @@
 """macho/cache_classlist.py -- ObjC class names read straight from a dyld shared cache, with no
-extracted binary: ``__objc_classlist`` entry -> ``class_t`` -> ``class_ro_t`` -> name, each
-pointer decoded by :meth:`DyldCacheReader.decode_ptr` (the cache's slide info) and
-``class_t.data``'s low three tag bits (isSwift / fastAlloc / realised) masked off.
+extracted binary: ``__objc_classlist`` entry -> ``class_t`` -> ``class_ro_t`` -> name
+(:func:`macho.classlist.class_name_at` over the reader), each pointer decoded by
+:meth:`DyldCacheReader.decode_ptr` (the cache's slide info) and ``class_t.data``'s low three tag
+bits (isSwift / fastAlloc / realised) masked off.
 
 Struct offsets (arm64 ObjC ABI, verified against Hopper-loaded GeoServices)
 -----------------------------------------------------------------------------
@@ -25,58 +26,11 @@ class_ro_t:
 
 from __future__ import annotations
 
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, Tuple
 
+from macho.classlist import class_name_at, walk_superclasses
 from macho.dyld_cache import DyldCacheReader
-from macho.objc_abi import CLASS_T_DATA, CLASS_T_SUPERCLASS, CLASS_RO_NAME, FAST_DATA_MASK
-
-
-# ── Pointer decoding ──────────────────────────────────────────────────────────
-
-def _decode_cache_ptr(reader: DyldCacheReader, raw: int) -> int:
-    """A raw DATA-section pointer of the cache as a vmaddr (:meth:`DyldCacheReader.decode_ptr`)."""
-    return reader.decode_ptr(raw)
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
-
-def read_objc_class_name(
-    reader: DyldCacheReader, class_va: int
-) -> Optional[str]:
-    """
-    Return the ObjC class name for the ``class_t`` at *class_va*.
-
-    Follows the two-pointer chain::
-
-        class_t.data [+32]  → class_ro_t*   (mask low 3 tag bits)
-        class_ro_t.name [+24] → const char* → cstring
-
-    Returns ``None`` if *class_va* is unmapped, the pointer chain is broken,
-    or the name string cannot be decoded.
-
-    This function is the core of the cache-native class extraction proof of
-    concept: it requires only a ``DyldCacheReader`` — no extracted binary and
-    no ``BinaryContext``.
-    """
-    # ── Step 1: class_t.data → class_ro_t* ──────────────────────────────────
-    raw_ro = reader.read_u64(class_va + CLASS_T_DATA)
-    if not raw_ro:
-        return None
-    # Strip ObjC/Swift low 3 tag bits (FAST_DATA_MASK convention)
-    ro_va = _decode_cache_ptr(reader, raw_ro & FAST_DATA_MASK)
-    if not ro_va:
-        return None
-
-    # ── Step 2: class_ro_t.name → const char* ───────────────────────────────
-    raw_name = reader.read_u64(ro_va + CLASS_RO_NAME)
-    if not raw_name:
-        return None
-    name_va = _decode_cache_ptr(reader, raw_name)
-    if not name_va:
-        return None
-
-    # ── Step 3: read the null-terminated class name ──────────────────────────
-    return reader.read_cstring(name_va)
+from macho.objc_abi import CLASS_T_SUPERCLASS
 
 
 def iter_class_names(
@@ -89,7 +43,7 @@ def iter_class_names(
 
     Reads each 8-byte entry in the ``__DATA_CONST/__objc_classlist`` range,
     decodes the pointer to a ``class_t``, and resolves the class name via
-    :func:`read_objc_class_name`.  Entries that cannot be resolved are silently
+    :func:`macho.classlist.class_name_at`.  Entries that cannot be resolved are silently
     skipped.
 
     Parameters
@@ -115,10 +69,10 @@ def iter_class_names(
         raw_cls = reader.read_u64(entry_va)
         if not raw_cls:
             continue
-        class_va = _decode_cache_ptr(reader, raw_cls)
+        class_va = reader.decode_ptr(raw_cls)
         if not class_va:
             continue
-        name = read_objc_class_name(reader, class_va)
+        name = class_name_at(reader, class_va)
         if name:
             yield class_va, name
 
@@ -147,10 +101,10 @@ def class_refs_for_image(reader: DyldCacheReader, mach_va: int) -> Dict[str, int
             raw = reader.read_u64(slot)
             if not raw:
                 continue
-            class_va = _decode_cache_ptr(reader, raw)
+            class_va = reader.decode_ptr(raw)
             if not class_va:
                 continue
-            name = read_objc_class_name(reader, class_va)
+            name = class_name_at(reader, class_va)
             if name:
                 out.setdefault(name, class_va)
     return out
@@ -170,12 +124,5 @@ def superclass_chain_names(reader: DyldCacheReader, class_va: int) -> list:
     """Names of the superclasses of the ``class_t`` at *class_va*, nearest first, followed
     across images (the cache builder binds ``superclass`` to the parent's ``class_t``
     wherever it lives): :func:`macho.classlist.walk_superclasses` over the cache reader."""
-    from macho.classlist import walk_superclasses
-
-    def super_at(va: int) -> int:
-        raw = reader.read_u64(va + CLASS_T_SUPERCLASS)
-        if raw is None:
-            raise ValueError(f"superclass slot {va + CLASS_T_SUPERCLASS:#x} not mapped")
-        return _decode_cache_ptr(reader, raw) if raw else 0
-    return list(walk_superclasses(class_va, super_at,
-                                  lambda va: read_objc_class_name(reader, va)).names)
+    return list(walk_superclasses(class_va, lambda va: reader.read_ptr(va + CLASS_T_SUPERCLASS),
+                                  lambda va: class_name_at(reader, va)).names)

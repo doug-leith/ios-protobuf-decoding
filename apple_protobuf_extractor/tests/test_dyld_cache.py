@@ -39,15 +39,19 @@ from typing import Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from macho.dyld_cache import (
+    CACHE_BASENAMES,
     AmbiguousImageError,
+    CacheFileNotFoundError,
     DyldCacheReader,
     ImageNotFoundError,
+    find_main_cache,
 )
 from macho.memory     import BinaryContext
 from macho.strings    import StringTable
 from macho.classlist  import _parse_relative_method, build_class_list
 
 from tests.conftest import build_binary
+from tests._fakes import load_commands_of
 
 
 # ─── Synthetic cache builder ──────────────────────────────────────────────────
@@ -695,7 +699,7 @@ class TestDyldCacheClasslistIntegration(unittest.TestCase):
         }
 
         with DyldCacheReader(cache_path) as reader:
-            reader.image_sections = lambda va: sec_map
+            reader.image_load_commands = lambda va: load_commands_of(sec_map)
             ctx = BinaryContext.from_cache(reader, BASE)
 
             m = _parse_relative_method(ctx, METHOD_VA, self.strings,
@@ -754,7 +758,7 @@ class TestDyldCacheClasslistIntegration(unittest.TestCase):
             '__TEXT/__objc_methname':  (BASE + 0x0000, BASE + 0x0800),
         }
         with DyldCacheReader(cache_path) as reader:
-            reader.image_sections = lambda va: sec_map
+            reader.image_load_commands = lambda va: load_commands_of(sec_map)
             ctx = BinaryContext.from_cache(reader, BASE)
             # has_direct=True: Step 1 should fire since SEL_VA is in methname
             m = _parse_relative_method(ctx, METHOD_VA, self.strings,
@@ -778,33 +782,7 @@ class TestDyldCacheClasslistIntegration(unittest.TestCase):
 
 # ─── TestDyldCacheReaderLive ──────────────────────────────────────────────────
 
-def _find_cache_main() -> 'Optional[str]':
-    """
-    Locate the main dyld shared cache file.  Search order:
-
-    1. MACHO_TEST_CACHE env var (see artifacts.py) — treated as a directory;
-       the first of dyld_shared_cache_arm64{e} found inside it is used.
-    2. The ``dylib/`` subdirectory of the data dir (see artifacts.data_dir()).
-
-    Returns the path string if found, None otherwise.
-    """
-    _names = ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64')
-
-    cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
-    search_dirs = []
-    if cache_dir:
-        search_dirs.append(cache_dir)
-    search_dirs.append(artifacts.cache_dir())
-
-    for d in search_dirs:
-        for name in _names:
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
-    return None
-
-
-_CACHE_MAIN = _find_cache_main()
+_CACHE_MAIN = artifacts.cache_file()
 _HAS_CACHE  = _CACHE_MAIN is not None
 
 _SKIP_MSG   = ('dyld shared cache not found — set MACHO_TEST_CACHE, or place '
@@ -1662,6 +1640,140 @@ class TestImageSections(unittest.TestCase):
         with DyldCacheReader(path) as r:
             secs = r.image_sections(va)
         self.assertEqual(secs, {})
+
+
+class TestFindMainCache(unittest.TestCase):
+    """find_main_cache: a file as it is; a directory's one main cache file; a directory
+    holding both the arm64e and the arm64 cache, or neither, an error naming what is there."""
+
+    def setUp(self):
+        self.tmpdir = _TmpDir()
+
+    def tearDown(self):
+        self.tmpdir.__exit__(None, None, None)
+
+    def test_a_file(self):
+        p = self.tmpdir.write('any_name', b'')
+        self.assertEqual(find_main_cache(p), p)
+
+    def test_a_directory(self):
+        for name in CACHE_BASENAMES:
+            with _TmpDir() as d:
+                p = d.write(name, b'')
+                d.write(name + '.01', b'')
+                d.write(name + '.symbols', b'')
+                self.assertEqual(find_main_cache(d.path), p)
+                self.assertEqual(artifacts.cache_file_in(d.path), p)
+
+    def test_both_raise(self):
+        for name in CACHE_BASENAMES:
+            self.tmpdir.write(name, b'')
+        with self.assertRaisesRegex(ValueError, "holds both dyld_shared_cache_arm64e and "
+                                                "dyld_shared_cache_arm64"):
+            find_main_cache(self.tmpdir.path)
+        with self.assertRaises(ValueError):
+            artifacts.cache_file_in(self.tmpdir.path)
+
+    def test_neither_raises(self):
+        self.tmpdir.write('dyld_shared_cache_arm64.01', b'')
+        with self.assertRaisesRegex(CacheFileNotFoundError, r"holds dyld_shared_cache_arm64\.01"):
+            find_main_cache(self.tmpdir.path)
+        with self.assertRaises(CacheFileNotFoundError):
+            find_main_cache(self.tmpdir.join('no_such'))
+        self.assertIsNone(artifacts.cache_file_in(self.tmpdir.path))
+        self.assertIsNone(artifacts.cache_file_in(self.tmpdir.join('no_such')))
+
+
+class TestImageLoadCommands(unittest.TestCase):
+    """An image whose load commands cannot be read is an error where it is asked for
+    (:meth:`DyldCacheReader.image_load_commands`, :meth:`BinaryContext.from_cache`: recorded as
+    unread input), and left out, with a warning and a record, of the lookups over every image
+    -- not read as an image with fewer segments."""
+    GOOD, BAD, V = 0x100000000, 0x100002000, 0x100000000
+
+    def setUp(self):
+        self.tmpdir = _TmpDir()
+
+    def tearDown(self):
+        self.tmpdir.__exit__(None, None, None)
+
+    def _bad_macho(self):
+        bad = bytearray(_build_macho([('__TEXT', self.BAD, 0x1000, [])]))
+        struct.pack_into('<I', bad, 32 + 64, 3)      # nsects 3: none fits its cmdsize (72)
+        return bytes(bad)
+
+    def _cache(self):
+        good = _build_macho([('__TEXT', self.GOOD, 0x1000, []),
+                             ('__DATA', self.GOOD + 0x1000, 0x1000,
+                              [('__data', self.GOOD + 0x1000, 0x100)])])
+        content = bytearray(0x3000)
+        content[0:len(good)] = good
+        bad = self._bad_macho()
+        content[0x2000:0x2000 + len(bad)] = bad
+        data = _pack_images_cache([(self.GOOD, '/usr/lib/good.dylib'),
+                                   (self.BAD, '/usr/lib/bad.dylib')],
+                                  vmaddr=self.V, content=bytes(content))
+        return self.tmpdir.write('dyld_shared_cache_arm64', data)
+
+    def test_a_malformed_command_raises(self):
+        with DyldCacheReader(self._cache()) as r:
+            self.assertEqual(r.image_load_commands(self.GOOD).segment('__DATA').vmaddr,
+                             self.GOOD + 0x1000)
+            with self.assertRaisesRegex(ValueError, "3 sections do not fit"):
+                r.image_load_commands(self.BAD)
+            with self.assertRaises(ValueError):                  # (memoised: again)
+                r.image_load_commands(self.BAD)
+
+    def test_commands_past_the_mapping_raise(self):
+        macho = bytearray(_build_macho([('__TEXT', self.GOOD, 0x1000, [])]))
+        struct.pack_into('<I', macho, 20, 0x10000)                # sizeofcmds past the end
+        path = self.tmpdir.write('c', _pack_cache(self.GOOD, bytes(macho)))
+        with DyldCacheReader(path) as r:
+            with self.assertRaisesRegex(ValueError, "of load commands mapped"):
+                r.image_load_commands(self.GOOD)
+
+    def test_from_cache_records_the_image_unread(self):
+        from macho.memory import unread_input
+        with DyldCacheReader(self._cache()) as r:
+            ctx = BinaryContext.from_cache(r, self.BAD)
+            self.assertEqual(ctx.segments, [])
+            [(what, where, err)] = unread_input(ctx)
+            self.assertEqual((what, where), ("cache image load commands", f"{self.BAD:#x}"))
+            self.assertIn("do not fit", err)
+
+    def test_lookups_over_images_leave_it_out_and_record_it(self):
+        from macho.memory import unread_input
+        with DyldCacheReader(self._cache()) as r:
+            ctx = BinaryContext.from_cache(r, self.GOOD)
+            self.assertEqual(unread_input(ctx), [])
+            self.assertTrue(ctx.has_section('__DATA', '__data'))
+            with self.assertLogs('macho.dyld_cache', 'WARNING') as logs:
+                self.assertTrue(ctx.is_variable(self.GOOD + 0x1010))       # in __data
+                self.assertFalse(ctx.is_variable(self.BAD + 0x10))
+                self.assertIsNone(r.image_containing(self.BAD + 0x10))
+                self.assertEqual(r.image_containing(self.GOOD + 0x10),
+                                 (self.GOOD, '/usr/lib/good.dylib'))
+            self.assertEqual(len(logs.records), 1)                        # warned once
+            self.assertEqual(list(r.unreadable_images()), [self.BAD])
+            self.assertEqual([e[:2] for e in unread_input(ctx)],
+                             [("cache image load commands", f"{self.BAD:#x}")])
+            self.assertEqual(r.image_sections(self.BAD), {})
+            self.assertEqual(r.image_dependencies(self.BAD), [])
+            self.assertEqual(r.image_exports(self.BAD), {})
+            with self.assertRaises(ValueError):
+                r.image_function_starts(self.BAD)
+
+    def test_from_cache_sections_carry_their_flags(self):
+        """A zero-fill section is one in cache mode as in a file (no content to read)."""
+        macho = bytearray(_build_macho([('__DATA', self.GOOD, 0x1000,
+                                         [('__data', self.GOOD, 0x100),
+                                          ('__bss', self.GOOD + 0x100, 0x100)])]))
+        struct.pack_into('<I', macho, 32 + 72 + 80 + 64, 0x1)       # __bss: S_ZEROFILL
+        path = self.tmpdir.write('c', _pack_cache(self.GOOD, bytes(macho)))
+        with DyldCacheReader(path) as r:
+            ctx = BinaryContext.from_cache(r, self.GOOD)
+            self.assertTrue(ctx.section('__DATA', '__data').has_file_content)
+            self.assertFalse(ctx.section('__DATA', '__bss').has_file_content)
 
 
 # ─── TestImageDiscoveryLive ───────────────────────────────────────────────────

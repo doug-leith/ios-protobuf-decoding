@@ -151,17 +151,7 @@ class TestUnresolvedObjectFieldNote(unittest.TestCase):
         self.assertIsNone(self._note("pts", '^{GEOPoint=ii}'))  # inline struct
 
 
-def _find_cache_main():
-    cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
-    for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
-        for name in ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64'):
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
-    return None
-
-
-@unittest.skipUnless(_find_cache_main() is not None,
+@unittest.skipUnless(artifacts.cache_file() is not None,
                      'dyld shared cache not found in <repo>/iphone8_data/dylib/ (or set MACHO_DATA_DIR)')
 class TestBackingStorePhantomLive(unittest.TestCase):
     """GEOTileGroup keeps its real fields and loses the Count/Space phantoms."""

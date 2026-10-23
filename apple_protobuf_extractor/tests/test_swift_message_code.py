@@ -6,14 +6,6 @@ import unittest
 import artifacts
 
 
-def _ios27_cache():
-    for name in artifacts.CACHE_BASENAMES:
-        p = os.path.join(artifacts.ios27_cache_dir(), name)
-        if os.path.isfile(p):
-            return p
-    return None
-
-
 def _binary(path):
     from macho.memory import BinaryContext
     from serializers.swift_descriptor_extract import load_macho_slice
@@ -21,7 +13,7 @@ def _binary(path):
         return BinaryContext(load_macho_slice(fh.read()))
 
 
-IOS27 = _ios27_cache()
+IOS27 = artifacts.cache_file_in(artifacts.ios27_cache_dir())
 ORACLE = artifacts.swift_oracle_path() if os.path.isfile(artifacts.swift_oracle_path()) else None
 REMINDD = os.path.join(artifacts.data_dir(), "libexec", "remindd")
 REMINDD = REMINDD if os.path.isfile(REMINDD) else None

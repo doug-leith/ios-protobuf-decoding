@@ -1,9 +1,10 @@
 """
 macho/memory.py — BinaryContext: arm64 LE Mach-O binary reader.
 
-Validates 64-bit LE Mach-O (magic 0xFEEDFACF), parses load commands, and
-provides vmaddr-based read primitives.  Chained fixup pointer decoding
-(LC_DYLD_CHAINED_FIXUPS) is handled transparently in read_ptr / iter_ptrs.
+Validates 64-bit LE Mach-O (magic 0xFEEDFACF), parses load commands
+(:mod:`macho.load_commands`), and provides vmaddr-based read primitives.  Chained
+fixup pointer decoding (LC_DYLD_CHAINED_FIXUPS) is handled transparently in
+read_ptr / iter_ptrs.
 """
 
 from __future__ import annotations
@@ -11,10 +12,11 @@ from __future__ import annotations
 import logging
 import struct
 import zlib
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
 from .leb import read_uleb
+from . import load_commands
+from .load_commands import LoadCommands, Section, Segment, parse_load_commands
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +24,8 @@ if TYPE_CHECKING:            # dyld_cache sits ABOVE this module; a runtime
     from .dyld_cache import DyldCacheReader   # import here would be a cycle
 
 # ─── Mach-O constants ────────────────────────────────────────────────────────
+
+ZEROFILL_TYPES = load_commands.ZEROFILL_TYPES      # (re-exported)
 
 MH_MAGIC_64 = 0xFEEDFACF   # arm64 LE
 MH_CIGAM_64 = 0xCFFAEDFE   # arm64 BE — rejected
@@ -31,14 +35,6 @@ CPU_TYPE_ARM64     = 0x0100000C
 
 MH_EXECUTE = 0x2
 MH_DYLIB   = 0x6
-
-LC_SYMTAB              = 0x00000002
-LC_SEGMENT_64          = 0x00000019
-LC_DYLD_INFO           = 0x00000022
-LC_DYLD_INFO_ONLY      = 0x80000022
-LC_DYLD_CHAINED_FIXUPS = 0x80000034
-LC_DYLD_EXPORTS_TRIE   = 0x80000033
-LC_FUNCTION_STARTS     = 0x00000026
 
 #: What reading an image can raise: an address no segment or mapping holds (ValueError, its
 #: UnicodeDecodeError for a non-UTF-8 string), a read past a buffer (struct.error).  A guard
@@ -66,10 +62,6 @@ def decode_function_starts(blob: bytes, text_vmaddr: int) -> List[int]:
         starts.append(addr)
     return starts
 
-# The section types with no file content (loader.h): S_ZEROFILL, S_GB_ZEROFILL,
-# S_THREAD_LOCAL_ZEROFILL
-ZEROFILL_TYPES = frozenset((0x1, 0xc, 0x12))
-
 # Chained fixup pointer formats
 _DYLD_PTR_ARM64E    = 1
 _DYLD_PTR_64        = 2
@@ -84,19 +76,6 @@ _DYLD_PTR_ARM64E_USERLAND24 = 12
 _ARM64E_FAMILY = (_DYLD_PTR_ARM64E, _DYLD_PTR_ARM64E_USERLAND,
                   _DYLD_PTR_ARM64E_USERLAND24)
 
-# [cap:INPUT-SANITY — leave as-is] Both guard iteration against a *header-declared*
-# count from a possibly-malformed binary; the real bound comes from the binary's own
-# validated structure, so on well-formed input the cap is never the operative limit
-# and cannot affect the descriptor.
-#   _MAX_NCMDS — the load-command loop ALSO stops at `off+8 > end` (the header's
-#     sizeofcmds) and validates each cmdsize, so sizeofcmds is the real bound; this
-#     only catches a corrupt ncmds.  Real images have tens of load commands.
-#   _MAX_NSECTS — immediately followed by `min(nsects, (cmdsize-72)//80)` ("sections
-#     must physically fit in the load command"), which is the real guard; this is
-#     redundant belt-and-suspenders.
-_MAX_NCMDS  = 1024
-_MAX_NSECTS = 256
-
 
 #: The sections a program writes -- initialised and zero-fill data, thread-locals: what one holds
 #: at run time need not be what the file does.  The rest of a data segment is the linker's and
@@ -106,37 +85,6 @@ PROGRAM_DATA_SECTIONS = frozenset(("__data", "__bss", "__common", "__thread_vars
 #: S_NON_LAZY_SYMBOL_POINTERS, S_LAZY_SYMBOL_POINTERS: the slots dyld binds to imports (in a
 #: binary without chained fixups, which says per slot).
 _SYMBOL_POINTER_TYPES = (0x6, 0x7)
-
-# ─── Data structures ─────────────────────────────────────────────────────────
-
-@dataclass
-class Section:
-    name:     str
-    segname:  str
-    vmaddr:   int
-    vmsize:   int
-    file_off: int   # 0 for zerofill sections (no on-disk content)
-    flags:    int
-
-    @property
-    def size(self) -> int:
-        return self.vmsize
-
-    @property
-    def has_file_content(self) -> bool:
-        """False for BSS / zerofill sections."""
-        return (self.flags & 0xFF) not in ZEROFILL_TYPES
-
-
-@dataclass
-class Segment:
-    name:     str
-    vmaddr:   int
-    vmsize:   int
-    fileoff:  int
-    filesize: int
-    sections: List[Section] = field(default_factory=list)
-
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -316,6 +264,7 @@ class BinaryContext:
         self._bind_slots: set                        = set()  # every chained-fixup bind
         self._chain_formats: set                     = set()  # pointer formats of its segments
         self._chained = False                        # LC_DYLD_CHAINED_FIXUPS present
+        self._chained_fixups_lc: Optional[Tuple[int, int]] = None   # its (dataoff, datasize)
         self._imports:   List[str]                   = []   # ordinal → import symbol name
         self._image_base: Optional[int]              = None  # cached after load commands
         # LC_SYMTAB (symoff, nsyms, stroff, strsize) — file offsets into _data.
@@ -374,6 +323,8 @@ class BinaryContext:
                     f"Binary truncated: segment {seg.name} needs file bytes "
                     f"{seg.fileoff:#x}..{seg.fileoff + seg.filesize:#x}, "
                     f"the file has {len(data):#x}")
+        if self._chained_fixups_lc is not None:     # (its rebases are offsets from the base)
+            self._parse_chained_fixups_lc(*self._chained_fixups_lc)
 
 
     # ── Cache-mode factory ───────────────────────────────────────────────────
@@ -411,8 +362,8 @@ class BinaryContext:
         # Structural check, not isinstance: dyld_cache imports THIS module's
         # layer, so naming DyldCacheReader at runtime would reintroduce the
         # import cycle (the annotation above resolves via TYPE_CHECKING).  These
-        # four are the whole reader contract this class consumes.
-        for _attr in ('read_u64', 'read_raw', 'read_cstring', 'decode_ptr'):
+        # are the reader's read primitives this class consumes.
+        for _attr in ('read_u64', 'read_raw', 'read_cstring', 'decode_ptr', 'read_ptr'):
             assert callable(getattr(reader, _attr, None)), (
                 f'from_cache() needs a DyldCacheReader-like object; '
                 f'{type(reader).__name__} has no {_attr}()'
@@ -443,44 +394,27 @@ class BinaryContext:
         # Cache images are always shared libraries (frameworks/dylibs).
         self._filetype    = MH_DYLIB
 
-        # Populate sections and segments from image_sections() so that
-        # has_section() / section() work identically to binary mode.
-        sec_map = reader.image_sections(mach_header_va)
-
-        # First pass: collect per-segment vmaddr bounds.
-        seg_bounds: Dict[str, Tuple[int, int]] = {}
-        for key, bounds in sec_map.items():
-            if '/' not in key:
-                seg_bounds[key] = bounds
-
-        # Build Segment objects.
-        _segs: Dict[str, Segment] = {}
-        for segname, (va, vend) in seg_bounds.items():
-            _segs[segname] = Segment(
-                name=segname, vmaddr=va, vmsize=vend - va,
-                fileoff=0, filesize=vend - va,
-            )
-
-        # Second pass: create Section objects inside their segments.
-        for key, (va, vend) in sec_map.items():
-            if '/' not in key:
+        # The image's segments and sections, so has_section() / section() work as in binary
+        # mode; the ones image_sections() lists (a segment that maps something, a section with
+        # an address and a size).  Every read goes through the reader, so no file offsets.
+        try:
+            lc = reader.image_load_commands(mach_header_va)
+        except ValueError as exc:
+            record_unread(self, "cache image load commands", f"{mach_header_va:#x}", exc)
+            lc = LoadCommands()
+        for seg in lc.segments:
+            if not seg.vmsize:
                 continue
-            segname, sectname = key.split('/', 1)
-            if segname not in _segs:
-                # Segment header absent (unusual); create a placeholder.
-                _segs[segname] = Segment(
-                    name=segname, vmaddr=va, vmsize=0, fileoff=0, filesize=0,
-                )
-            sec = Section(
-                name=sectname, segname=segname,
-                vmaddr=va, vmsize=vend - va,
-                file_off=0,  # not used; reads go through cache reader
-                flags=0,     # 0 → has_file_content returns True
-            )
-            _segs[segname].sections.append(sec)
-            self._sections[(segname, sectname)] = sec
-
-        self._segments = list(_segs.values())
+            kept = Segment(name=seg.name, vmaddr=seg.vmaddr, vmsize=seg.vmsize,
+                           fileoff=0, filesize=seg.vmsize)
+            for s in seg.sections:
+                if s.vmaddr and s.vmsize:
+                    sect = Section(name=s.name, segname=seg.name, vmaddr=s.vmaddr,
+                                   vmsize=s.vmsize, file_off=0, flags=s.flags)
+                    kept.sections.append(sect)
+                    self._sections[(seg.name, s.name)] = sect
+            self._segments.append(kept)
+        self._cache_errors_seen = 0
         for path, exc in sorted(reader.subcache_errors().items()):
             record_unread(self, "sub-cache file", path, exc)    # (its pages read as unmapped)
         return self
@@ -708,13 +642,10 @@ class BinaryContext:
           3. Packed-pointer stripping for shared-cache-extracted binaries.
           4. Raw u64 as a fallback.
 
-        In cache mode: decode via :meth:`DyldCacheReader.decode_ptr`.
+        In cache mode: :meth:`DyldCacheReader.read_ptr`.
         """
         if self._cache_reader is not None:
-            val = self._cache_reader.read_u64(vmaddr)
-            if val is None:
-                raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
-            return self._cache_reader.decode_ptr(val)
+            return self._cache_reader.read_ptr(vmaddr)
         decoded = self._fixup_map.get(vmaddr)
         if decoded is not None:
             return decoded
@@ -727,9 +658,16 @@ class BinaryContext:
         (its value is that import's address, in another image: a chained-fixup bind, or a
         symbol-pointer section's slot in a binary without chained fixups).  A dyld cache was
         bound when it was built, so there only the first applies, in whichever image holds
-        *vmaddr*."""
+        *vmaddr* (an image whose load commands cannot be read holds none: recorded)."""
         if self._cache_reader is not None:
-            return self._cache_reader.is_program_data(vmaddr)
+            reader = self._cache_reader
+            out = reader.is_program_data(vmaddr)
+            unread = reader.unreadable_images()
+            if len(unread) != self._cache_errors_seen:     # (another image found unreadable)
+                self._cache_errors_seen = len(unread)
+                for mh, exc in sorted(unread.items()):
+                    record_unread(self, "cache image load commands", f"{mh:#x}", exc)
+            return out
         if vmaddr in self._bind_slots:
             return True
         for sec in self._sections.values():
@@ -860,85 +798,20 @@ class BinaryContext:
     # ── Load command parsing ─────────────────────────────────────────────────
 
     def _parse_load_commands(self, ncmds: int, sizeofcmds: int) -> None:
-        off = 32
-        ncmds = min(ncmds, _MAX_NCMDS)
-        end   = 32 + sizeofcmds
-        for _ in range(ncmds):
-            if off + 8 > end:
-                break
-            cmd, cmdsize = struct.unpack_from('<II', self._data, off)
-            if cmdsize < 8:
-                raise ValueError(f"Bad load command at {off}: cmdsize={cmdsize}")
-            if off + cmdsize > end:
-                raise ValueError(
-                    f"Load command at {off} (cmdsize={cmdsize}) overruns sizeofcmds"
-                )
-            if cmd == LC_SEGMENT_64:
-                self._parse_segment_lc(off, cmdsize)
-            elif cmd == LC_DYLD_CHAINED_FIXUPS:
-                self._chained = True
-                self._parse_chained_fixups_lc(off)
-            elif cmd == LC_SYMTAB and cmdsize >= 24:
-                # symtab_command: cmd, cmdsize, symoff, nsyms, stroff, strsize
-                symoff, nsyms, stroff, strsize = struct.unpack_from(
-                    '<IIII', self._data, off + 8
-                )
-                self._symtab = (symoff, nsyms, stroff, strsize)
-            elif cmd == LC_FUNCTION_STARTS and cmdsize >= 16:
-                self._function_starts_lc = struct.unpack_from('<II', self._data, off + 8)
-            elif cmd == LC_DYLD_EXPORTS_TRIE and cmdsize >= 16:
-                # linkedit_data_command: cmd, cmdsize, dataoff, datasize
-                t_off, t_size = struct.unpack_from('<II', self._data, off + 8)
-                self._export_trie = (t_off, t_size)
-            elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and cmdsize >= 48:
-                # dyld_info_command: …, export_off, export_size are the last 2 u32.
-                exp_off, exp_size = struct.unpack_from('<II', self._data, off + 40)
-                if exp_off and exp_size and self._export_trie is None:
-                    self._export_trie = (exp_off, exp_size)
-            off += cmdsize
+        lc = parse_load_commands(self._data[32:32 + sizeofcmds], ncmds)
+        self._segments = lc.segments
+        for seg in lc.segments:
+            for sect in seg.sections:
+                self._sections[(sect.segname, sect.name)] = sect
+        self._symtab = lc.symtab
+        self._function_starts_lc = lc.function_starts
+        self._export_trie = lc.export_trie
+        self._chained = lc.chained_fixups is not None
+        self._chained_fixups_lc = lc.chained_fixups
 
-    def _parse_segment_lc(self, off: int, cmdsize: int) -> None:
-        if cmdsize < 72:
-            return
-        # segment_command_64: II 16s QQQQ iiii
-        (_, _, segname_b, vmaddr, vmsize, fileoff, filesize,
-         _maxprot, _initprot, nsects, _flags) = struct.unpack_from(
-            '<II16sQQQQiiii', self._data, off
-        )
-        segname = segname_b.rstrip(b'\x00').decode('ascii', errors='replace')
-        seg = Segment(name=segname, vmaddr=vmaddr, vmsize=vmsize,
-                      fileoff=fileoff, filesize=filesize)
-        self._segments.append(seg)
-
-        # Guard: the claimed nsects must fit within the load command's cmdsize.
-        nsects = min(nsects, _MAX_NSECTS)
-        max_sections_by_cmdsize = (cmdsize - 72) // 80
-        nsects = min(nsects, max_sections_by_cmdsize)
-
-        sect_off = off + 72
-        for _ in range(nsects):
-            if sect_off + 80 > off + cmdsize:
-                break
-            # section_64: 16s 16s QQ IIIIIIII
-            (sname_b, sgname_b, addr, sz, foff, _align,
-             _reloff, _nreloc, s_flags, _r1, _r2, _r3) = struct.unpack_from(
-                '<16s16sQQIIIIIIII', self._data, sect_off
-            )
-            sname  = sname_b.rstrip(b'\x00').decode('ascii', errors='replace')
-            sgname = sgname_b.rstrip(b'\x00').decode('ascii', errors='replace')
-            has_content = (s_flags & 0xFF) not in ZEROFILL_TYPES
-            sect = Section(
-                name=sname, segname=sgname,
-                vmaddr=addr, vmsize=sz,
-                file_off=foff if has_content else 0,
-                flags=s_flags,
-            )
-            seg.sections.append(sect)
-            self._sections[(sgname, sname)] = sect
-            sect_off += 80
-
-    def _parse_chained_fixups_lc(self, off: int) -> None:
-        """Parse LC_DYLD_CHAINED_FIXUPS and walk all fixup chains.
+    def _parse_chained_fixups_lc(self, data_off: int, data_size: int) -> None:
+        """Parse the LC_DYLD_CHAINED_FIXUPS data at file range (*data_off*, *data_size*) and
+        walk all fixup chains (after the segments and the image base are known).
 
         Also parses the imports table so that bind entries (external symbol
         references such as ``_OBJC_CLASS_$_NSString``) are recorded in
@@ -946,11 +819,6 @@ class BinaryContext:
         system/Foundation class references that have no entry in the binary's
         own classlist.
         """
-        if off + 16 > len(self._data):
-            return
-        _cmd, _cmdsize, data_off, data_size = struct.unpack_from(
-            '<IIII', self._data, off
-        )
         end = data_off + data_size
         if end > len(self._data) or data_size < 28:
             return
@@ -1056,9 +924,8 @@ class BinaryContext:
 
     def _local_image_base(self) -> int:
         """The image's base: the vmaddr of the segment holding its header (file offset 0 --
-        a dylib's __TEXT is at 0, an executable's after __PAGEZERO).  Read from the segments
-        parsed so far: the chained-fixup walk runs inside _parse_load_commands, after the
-        LC_SEGMENT_64 commands."""
+        a dylib's __TEXT is at 0, an executable's after __PAGEZERO), else the lowest segment
+        other than __PAGEZERO."""
         for s in self._segments:
             if s.fileoff == 0 and s.filesize > 0:
                 return s.vmaddr
@@ -1075,7 +942,7 @@ class BinaryContext:
         (e.g. slot → ``"_OBJC_CLASS_$_NSString"``).
         """
         seen: set = set()
-        base = self._local_image_base()
+        base = self._image_base
         while vmaddr not in seen:
             seen.add(vmaddr)
             try:

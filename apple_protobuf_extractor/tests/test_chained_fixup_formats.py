@@ -111,14 +111,12 @@ class TestArm64eUserlandFormatDecode(unittest.TestCase):
                 self._bind_slots = set()
                 self._segments = []
                 self._data = b""
+                self._image_base = _BASE
 
             def vmaddr_to_offset(self, va, n):
                 if va != 0x1000:
                     raise ValueError("unmapped")
                 return 0
-
-            def _local_image_base(self):
-                return _BASE
 
         import struct as _st
         for fmt, want in ((_DYLD_PTR_ARM64E_USERLAND24, "sym_0x12345"),
@@ -130,6 +128,42 @@ class TestArm64eUserlandFormatDecode(unittest.TestCase):
             self.assertEqual(c._bind_name_map.get(0x1000), want, fmt)
             self.assertIn(0x1000, c._bind_slots)        # a bound slot (BinaryContext.is_variable)
 
+
+
+class TestImageBaseBeforeTheFixups(unittest.TestCase):
+    """The chains are walked once every segment, and so the image base, is known: a fixups
+    command ahead of the segment commands decodes as one after them."""
+
+    def _binary(self, fixups_first):
+        import struct
+        from tests.conftest import _pack_header, _pack_section64, _pack_segment64
+        base, data_va, data_off, blob_off = 0x1_0000_0000, 0x1_0000_4000, 0x1000, 0x1010
+        # dyld_chained_fixups_header, then dyld_chained_starts_in_image (3 segments: only
+        # __DATA's has chains), then its dyld_chained_starts_in_segment: one page, a chain
+        # starting at the page's first byte, DYLD_CHAINED_PTR_64_OFFSET
+        starts = struct.pack('<I3I', 3, 0, 0, 16)
+        in_seg = struct.pack('<IHHQIHH', 24, 0x4000, 6, data_va - base, 0, 1, 0)
+        blob = struct.pack('<7I', 0, 32, 72, 72, 0, 1, 0) + bytes(4) + starts + in_seg
+        blob += bytes(80 - len(blob))
+        fixups = struct.pack('<IIII', 0x80000034, 16, blob_off, len(blob))
+        segs = [_pack_segment64('__PAGEZERO', vmaddr=0, vmsize=base, fileoff=0, filesize=0),
+                _pack_segment64('__TEXT', vmaddr=base, vmsize=0x1000, fileoff=0, filesize=0x1000),
+                _pack_segment64('__DATA', vmaddr=data_va, vmsize=0x10, fileoff=data_off,
+                                filesize=0x10, sections=[
+                                    _pack_section64('__data', '__DATA', data_va, 0x10, data_off)])]
+        cmds = [fixups] + segs if fixups_first else segs + [fixups]
+        lcs = b''.join(cmds)
+        out = bytearray(_pack_header(ncmds=4, sizeofcmds=len(lcs)) + lcs)
+        out += bytes(data_off - len(out))
+        out += struct.pack('<QQ', 0x10, 0)          # a rebase to base + 0x10, the chain's end
+        out += blob
+        return BinaryContext(bytes(out)), base, data_va
+
+    def test_a_rebase_is_from_the_image_base(self):
+        for fixups_first in (False, True):
+            ctx, base, slot = self._binary(fixups_first)
+            self.assertEqual(ctx.image_base, base)
+            self.assertEqual(ctx.read_ptr(slot), base + 0x10, fixups_first)
 
 def _load_expected():
     spec = importlib.util.spec_from_file_location(

@@ -291,10 +291,12 @@ def superclass_chain(ctx: BinaryContext, class_va: int,
     return chain
 
 
-def class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:
+def class_name_at(ctx, va: int) -> Optional[str]:
     """``class_ro_t.name`` of the ObjC class whose ``class_t`` is at *va*: ``class_t.data``
-    (its low tag bits masked) -> ``class_ro_t`` -> the name, read through *ctx* (cross-image
-    in cache mode).  None when the chain does not resolve or the name is empty."""
+    (its low tag bits masked) -> ``class_ro_t`` -> the name, read through *ctx* -- a
+    :class:`BinaryContext` (cross-image in cache mode) or a
+    :class:`~macho.dyld_cache.DyldCacheReader` itself.  None when the chain does not resolve
+    or the name is empty."""
     try:
         ro = ctx.read_ptr(va + CLASS_T_DATA) & FAST_DATA_MASK
         name_va = ctx.read_ptr(ro + CLASS_RO_NAME) if ro else 0
@@ -446,8 +448,7 @@ def _parse_class(
         # tag flags.  read_ptr() only ever strips HIGH chain/cache metadata
         # bits (>= bit 36); it never clears the low tag bits, which can be
         # set simultaneously with a high fixup bit.  So always mask them off
-        # ourselves after decoding, unconditionally (matches
-        # cache_classlist.read_objc_class_name's defensive strip).
+        # ourselves after decoding, unconditionally (as class_name_at does).
         ro_va = ctx.read_ptr(class_va + CLASS_T_DATA) & FAST_DATA_MASK
     except READ_ERRORS as exc:
         record_unread(ctx, "class", f"{class_va:#x}", exc)

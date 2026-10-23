@@ -1186,9 +1186,9 @@ class TestVersioning(unittest.TestCase):
 class TestResolveCachePath(unittest.TestCase):
     """Tests for cli._resolve_cache_path()."""
 
-    def _resolve(self, path_str: str, is_arm64e: bool = False):
+    def _resolve(self, path_str: str):
         from cli import _resolve_cache_path
-        return _resolve_cache_path(path_str, is_arm64e)
+        return _resolve_cache_path(path_str)
 
     # ── direct file path ──────────────────────────────────────────────────────
 
@@ -1220,36 +1220,19 @@ class TestResolveCachePath(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "dyld_shared_cache_arm64e"
             p.write_bytes(b"")
-            result = self._resolve(d, is_arm64e=True)
+            result = self._resolve(d)
             self.assertEqual(result, p)
 
-    def test_directory_prefers_arm64e_for_arm64e_binary(self):
-        """When both files exist and the binary is arm64e, prefer arm64e."""
+    def test_directory_with_both_caches_returns_none(self):
+        """Both files: nothing in the format says which is meant -- a warning naming both."""
         with tempfile.TemporaryDirectory() as d:
-            arm64  = Path(d) / "dyld_shared_cache_arm64"
-            arm64e = Path(d) / "dyld_shared_cache_arm64e"
-            arm64.write_bytes(b"")
-            arm64e.write_bytes(b"")
-            result = self._resolve(d, is_arm64e=True)
-            self.assertEqual(result, arm64e)
-
-    def test_directory_prefers_arm64_for_arm64_binary(self):
-        """When both files exist and the binary is arm64, prefer arm64."""
-        with tempfile.TemporaryDirectory() as d:
-            arm64  = Path(d) / "dyld_shared_cache_arm64"
-            arm64e = Path(d) / "dyld_shared_cache_arm64e"
-            arm64.write_bytes(b"")
-            arm64e.write_bytes(b"")
-            result = self._resolve(d, is_arm64e=False)
-            self.assertEqual(result, arm64)
-
-    def test_directory_falls_back_to_other_arch(self):
-        """arm64e binary but only arm64 cache present → arm64 used as fallback."""
-        with tempfile.TemporaryDirectory() as d:
-            arm64 = Path(d) / "dyld_shared_cache_arm64"
-            arm64.write_bytes(b"")
-            result = self._resolve(d, is_arm64e=True)
-            self.assertEqual(result, arm64)
+            (Path(d) / "dyld_shared_cache_arm64").write_bytes(b"")
+            (Path(d) / "dyld_shared_cache_arm64e").write_bytes(b"")
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                result = self._resolve(d)
+            self.assertIsNone(result)
+            self.assertIn("dyld_shared_cache_arm64e and dyld_shared_cache_arm64", err.getvalue())
 
     def test_empty_directory_returns_none(self):
         with tempfile.TemporaryDirectory() as d:

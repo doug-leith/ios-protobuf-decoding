@@ -10,6 +10,7 @@ from macho.memory import (
     FAT_MAGIC, MH_CIGAM_64, MH_MAGIC_64,
     CPU_TYPE_ARM64,
 )
+from tests._fakes import load_commands_of
 from tests.conftest import (
     build_text_binary,
     NOP_BYTES, RET_BYTES,
@@ -470,9 +471,9 @@ class TestReadCstringBoundary:
 # ─── Section cmdsize validation ──────────────────────────────────────────────
 
 class TestSectionCmdsizeValidation:
-    def test_inflated_nsects_clamped_to_cmdsize(self):
-        """A segment claiming nsects=100 but cmdsize only fitting 1 section
-        must parse exactly 1 section, not overflow."""
+    def test_inflated_nsects_raises(self):
+        """A segment claiming nsects=100 but cmdsize only fitting 1 section is malformed
+        (macho.load_commands): an error, not the sections that fit."""
         import struct as st, tests.conftest as cf
 
         code = b'\x00' * 4
@@ -492,12 +493,8 @@ class TestSectionCmdsizeValidation:
         assert len(seg_b) == cmdsize
 
         hdr = cf._pack_header(ncmds=1, sizeofcmds=cmdsize)
-        ctx = BinaryContext(hdr + seg_b + code)
-        # Must have parsed exactly 1 section, not 100
-        assert ctx.has_section('__TEXT', '__text')
-        # No additional garbage sections should exist
-        sect = ctx.section('__TEXT', '__text')
-        assert sect.vmaddr == 0x1000
+        with pytest.raises(ValueError, match="100 sections do not fit"):
+            BinaryContext(hdr + seg_b + code)
 
 
 # ─── TestBinaryContextFromCache ───────────────────────────────────────────────
@@ -590,7 +587,7 @@ class TestBinaryContextFromCache:
         self._tmpdir, path, self._base, _ = _build_from_cache_fixture(0x100000000)
         from macho.dyld_cache import DyldCacheReader
         self._reader = DyldCacheReader(path)
-        self._reader.image_sections = lambda va: self._SEC_MAP
+        self._reader.image_load_commands = lambda va: load_commands_of(self._SEC_MAP)
         self._ctx = BinaryContext.from_cache(self._reader, self._base)
 
     def teardown_method(self, method):
@@ -731,7 +728,7 @@ class TestChainedFixupImports:
                            sym_fmt) + entries + pool
         c = BinaryContext.__new__(BinaryContext)
         c._data = struct.pack('<IIII', 0x80000034, 16, 16, len(blob)) + blob
-        c._parse_chained_fixups_lc(0)
+        c._parse_chained_fixups_lc(16, len(blob))
         return c._imports
 
     def test_every_format(self):

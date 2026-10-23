@@ -17,16 +17,8 @@ import artifacts
 FULL = os.environ.get("MACHO_TEST_ORACLE_FULL", "").strip() == "1"
 
 
-def _cache(cache_dir):
-    for name in artifacts.CACHE_BASENAMES:
-        p = os.path.join(cache_dir, name)
-        if os.path.isfile(p):
-            return p
-    return None
-
-
 IPHONE8_CACHE = artifacts.cache_file()
-IOS27_CACHE = _cache(artifacts.ios27_cache_dir())
+IOS27_CACHE = artifacts.cache_file_in(artifacts.ios27_cache_dir())
 LOCATIOND = artifacts.locationd_path() if os.path.isfile(artifacts.locationd_path()) else None
 
 

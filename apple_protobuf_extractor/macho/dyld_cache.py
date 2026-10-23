@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import bisect
+import logging
 import os
 import re
 import struct
@@ -38,13 +39,45 @@ import sys
 import warnings
 from typing import Dict, List, Optional, Set, Tuple
 
-from .memory import (LC_DYLD_EXPORTS_TRIE, LC_DYLD_INFO, LC_DYLD_INFO_ONLY, LC_FUNCTION_STARTS,
-                     LC_SEGMENT_64, PROGRAM_DATA_SECTIONS, decode_function_starts)
+from .load_commands import LoadCommands, parse_load_commands
+from .memory import MH_MAGIC_64, PROGRAM_DATA_SECTIONS, decode_function_starts
 from .local_symbols import (
     load_image_local_symbols,
     load_image_symbol_addrs,
     symbols_path_for,
 )
+
+log = logging.getLogger(__name__)
+
+# ── The main cache file ───────────────────────────────────────────────────────
+
+#: The main cache file of a cache directory: the arm64e cache's or the arm64 one's.
+CACHE_BASENAMES = ("dyld_shared_cache_arm64e", "dyld_shared_cache_arm64")
+
+
+class CacheFileNotFoundError(ValueError):
+    """No main cache file where one was looked for (:func:`find_main_cache`)."""
+
+
+def find_main_cache(path: str) -> str:
+    """The main dyld shared cache file *path* names: *path* itself when it is a file; for a
+    directory, the one of :data:`CACHE_BASENAMES` in it.  A directory holding both is a
+    ValueError (nothing in the format says which is meant: pass the file); one holding neither,
+    or a *path* that does not exist, a :class:`CacheFileNotFoundError`.  Each names what is
+    there."""
+    if os.path.isfile(path):
+        return path
+    if not os.path.isdir(path):
+        raise CacheFileNotFoundError(f"{path}: no such file or directory")
+    present = [n for n in CACHE_BASENAMES if os.path.isfile(os.path.join(path, n))]
+    if len(present) == 1:
+        return os.path.join(path, present[0])
+    if present:
+        raise ValueError(f"{path} holds both {present[0]} and {present[1]}: pass the file to use")
+    there = sorted(n for n in os.listdir(path) if n.startswith("dyld_shared_cache"))
+    held = (", ".join(there[:5]) + (", ..." if len(there) > 5 else "") if there
+            else "nothing named dyld_shared_cache*")
+    raise CacheFileNotFoundError(f"no {CACHE_BASENAMES[1]}{{e}} found in {path} (it holds {held})")
 
 
 # ── Image-name resolution (find_image_header / resolve_image) ────────────────
@@ -195,75 +228,10 @@ _HDR_IMG_TEXT_OFF   = 0x88
 _HDR_IMG_TEXT_CNT   = 0x90
 _MAX_IMAGES         = 65536    # sanity cap on imagesTextCount
 
-# Mach-O constants for the image load-command walker (the LC_* command types are memory.py's)
-_MH_MAGIC_64        = 0xFEEDFACF  # little-endian 64-bit mach-o magic
-# load commands naming a dylib the image links (dylib_command: name offset at +8)
-_LC_LINKED_DYLIBS = frozenset((
-    0x0C,          # LC_LOAD_DYLIB
-    0x80000018,    # LC_LOAD_WEAK_DYLIB
-    0x8000001F,    # LC_REEXPORT_DYLIB
-    0x80000023,    # LC_LOAD_UPWARD_DYLIB
-))
-_MAX_SIZEOFCMDS     = 1 << 20     # 1 MB sanity cap on sizeofcmds
-# [cap:INPUT-SANITY — leave as-is] Bounds the section-iteration loop against a corrupt
-# header `nsects` on the cache-image parse path (the analogue of memory.py's
-# _MAX_NSECTS).  Real segments have a handful of sections; never the operative limit
-# on well-formed input, so cannot affect the descriptor.
-_MAX_LC_SECTIONS    = 512         # sanity cap on sections per LC_SEGMENT_64
+# [cap:INPUT-SANITY — leave as-is] A header's sizeofcmds above this is taken for corrupt (an
+# error), not read: real images have a few KB of load commands.
+_MAX_SIZEOFCMDS     = 1 << 20     # 1 MB
 
-
-
-def _parse_segment64_lc(
-    lc_data: bytes, offset: int
-) -> Dict[str, Tuple[int, int]]:
-    """
-    Parse one ``LC_SEGMENT_64`` load command at *offset* within *lc_data*.
-
-    Returns a dict mapping names to exclusive ``(vm_start, vm_end)`` ranges:
-
-    * ``"<segname>"`` — the segment itself (e.g. ``"__TEXT"``).
-    * ``"<segname>/<sectname>"`` — each section within it
-      (e.g. ``"__TEXT/__objc_methname"``).
-
-    Sections with ``vmaddr == 0`` or ``vmsize == 0`` are omitted; they are
-    zero-fill placeholders or padding entries that carry no useful data.
-
-    ``segment_command_64`` layout (first 72 bytes)::
-
-        cmd u32, cmdsize u32, segname char[16],
-        vmaddr u64, vmsize u64, fileoff u64, filesize u64,
-        maxprot i32, initprot i32, nsects u32, flags u32
-
-    ``section_64`` layout (80 bytes each, immediately after the segment hdr)::
-
-        sectname char[16], segname char[16], addr u64, size u64,
-        offset u32, align u32, reloff u32, nreloc u32,
-        flags u32, reserved1 u32, reserved2 u32, reserved3 u32
-    """
-    if offset + 72 > len(lc_data):
-        return {}
-
-    segname = lc_data[offset + 8 : offset + 24].rstrip(b'\x00').decode('utf-8', errors='replace')
-    vmaddr  = struct.unpack_from('<Q', lc_data, offset + 24)[0]
-    vmsize  = struct.unpack_from('<Q', lc_data, offset + 32)[0]
-    nsects  = struct.unpack_from('<I', lc_data, offset + 64)[0]
-
-    result: Dict[str, Tuple[int, int]] = {}
-    if vmsize > 0:
-        result[segname] = (vmaddr, vmaddr + vmsize)
-
-    sect_base = offset + 72
-    for i in range(min(nsects, _MAX_LC_SECTIONS)):
-        so = sect_base + i * 80
-        if so + 80 > len(lc_data):
-            break
-        sectname = lc_data[so : so + 16].rstrip(b'\x00').decode('utf-8', errors='replace')
-        addr     = struct.unpack_from('<Q', lc_data, so + 32)[0]
-        size     = struct.unpack_from('<Q', lc_data, so + 40)[0]
-        if addr > 0 and size > 0:
-            result[f'{segname}/{sectname}'] = (addr, addr + size)
-
-    return result
 
 def _detect_subcache_stride(raw: bytes) -> int:
     """
@@ -706,6 +674,14 @@ class DyldCacheReader:
         except OSError:
             return None
 
+    def read_ptr(self, vmaddr: int) -> int:
+        """The pointer at *vmaddr*, decoded (:meth:`decode_ptr`; 0 for one that resolves to no
+        mapped address).  ValueError when *vmaddr* is not mapped."""
+        raw = self.read_u64(vmaddr)
+        if raw is None:
+            raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
+        return self.decode_ptr(raw)
+
     def read_cstring(self, vmaddr: int, max_len: int = _MAX_CSTRING_LEN) -> Optional[str]:
         """
         Return the null-terminated UTF-8 string at *vmaddr* in the cache, or
@@ -1046,12 +1022,64 @@ class DyldCacheReader:
             sym_path, self.cache_base, mach_header_va, list(substrs) or None
         )
 
+    def image_load_commands(self, mach_header_va: int) -> LoadCommands:
+        """The load commands of the image at *mach_header_va* (:mod:`macho.load_commands`),
+        read once.  ValueError when no 64-bit Mach-O header is mapped there, when its commands
+        cannot all be read, or when one is malformed."""
+        memo = self.__dict__.setdefault('_load_commands_memo', {})
+        if mach_header_va not in memo:
+            try:
+                memo[mach_header_va] = self._read_load_commands(mach_header_va)
+            except ValueError as exc:
+                memo[mach_header_va] = exc
+        got = memo[mach_header_va]
+        if isinstance(got, ValueError):
+            raise got.with_traceback(None)
+        return got
+
+    def _read_load_commands(self, mach_header_va: int) -> LoadCommands:
+        hdr = self.read_raw(mach_header_va, 32)
+        if hdr is None or len(hdr) < 32:
+            raise ValueError(f"no Mach-O header mapped at {mach_header_va:#x}")
+        magic = struct.unpack_from('<I', hdr, 0)[0]
+        if magic != MH_MAGIC_64:
+            raise ValueError(f"no 64-bit Mach-O header at {mach_header_va:#x} "
+                             f"(magic {magic:#010x})")
+        ncmds, sizeofcmds = struct.unpack_from('<II', hdr, 16)
+        if sizeofcmds > _MAX_SIZEOFCMDS:
+            raise ValueError(f"image at {mach_header_va:#x}: sizeofcmds {sizeofcmds} "
+                             f"(over {_MAX_SIZEOFCMDS})")
+        cmds = (self.read_raw(mach_header_va + 32, sizeofcmds) or b'') if sizeofcmds else b''
+        if len(cmds) < sizeofcmds:
+            raise ValueError(f"image at {mach_header_va:#x}: {len(cmds)} of its {sizeofcmds} "
+                             f"bytes of load commands mapped")
+        return parse_load_commands(cmds, ncmds)
+
+    def _commands_or_none(self, mach_header_va: int) -> Optional[LoadCommands]:
+        """:meth:`image_load_commands`, or None for an image whose commands cannot be read: it
+        is then left out of every lookup over images (warned the first time; each one is in
+        :meth:`unreadable_images`)."""
+        try:
+            return self.image_load_commands(mach_header_va)
+        except ValueError as exc:
+            unread = self.__dict__.setdefault('_unreadable_images', {})
+            if not unread:
+                log.warning("cache image at %#x: load commands unreadable (%s); it is left out "
+                            "of every cross-image lookup", mach_header_va, exc)
+            unread.setdefault(mach_header_va, exc)
+            return None
+
+    def unreadable_images(self) -> Dict[int, ValueError]:
+        """``{mach_header vmaddr: error}`` of each image left out of a lookup over images
+        because its load commands cannot be read (:meth:`_commands_or_none`)."""
+        return dict(self.__dict__.get('_unreadable_images', {}))
+
     def image_sections(
         self, mach_header_va: int
     ) -> Dict[str, Tuple[int, int]]:
         """
-        Parse the Mach-O load commands at *mach_header_va* and return section
-        and segment bounds.
+        Section and segment bounds of the image at *mach_header_va*, from its load
+        commands (:meth:`image_load_commands`).
 
         Returns a dict of exclusive ``(vm_start, vm_end)`` ranges keyed by:
 
@@ -1059,12 +1087,9 @@ class DyldCacheReader:
         * ``"<segname>/<sectname>"`` — section bound,
           e.g. ``"__TEXT/__objc_methname"``.
 
-        Sections with ``vmaddr == 0`` or ``vmsize == 0`` are excluded (those
-        are zero-fill / padding entries that hold no binary content).
-
-        Returns an empty dict if *mach_header_va* is not mapped, does not
-        start with the 64-bit Mach-O magic (``0xFEEDFACF``), or has
-        obviously malformed load commands.
+        Segments with ``vmsize == 0`` and sections with ``vmaddr == 0`` or ``vmsize == 0``
+        are excluded (they map nothing).  ``{}`` for an image whose load commands cannot be
+        read (:meth:`_commands_or_none`).
 
         All returned vmaddrs are absolute cache virtual addresses and can be
         passed to :meth:`read_raw`, :meth:`read_cstring`, etc.
@@ -1074,33 +1099,15 @@ class DyldCacheReader:
         Obtain *mach_header_va* from :meth:`find_image_header` for a named
         framework, or supply an address found via another mechanism.
         """
+        lc = self._commands_or_none(mach_header_va)
         result: Dict[str, Tuple[int, int]] = {}
-        for cmd, body in self._image_load_commands(mach_header_va):
-            if cmd == LC_SEGMENT_64:
-                result.update(_parse_segment64_lc(body, 0))
+        for seg in lc.segments if lc is not None else ():
+            if seg.vmsize > 0:
+                result[seg.name] = (seg.vmaddr, seg.vmaddr + seg.vmsize)
+            for sect in seg.sections:
+                if sect.vmaddr > 0 and sect.vmsize > 0:
+                    result[f'{seg.name}/{sect.name}'] = (sect.vmaddr, sect.vmaddr + sect.vmsize)
         return result
-
-    def _image_load_commands(self, mach_header_va: int) -> List[Tuple[int, bytes]]:
-        """``[(cmd, command bytes)]`` of the image at *mach_header_va*; ``[]`` if unreadable."""
-        hdr = self.read_raw(mach_header_va, 32)
-        if not hdr or len(hdr) < 32 or struct.unpack_from('<I', hdr, 0)[0] != _MH_MAGIC_64:
-            return []
-        ncmds, sizeofcmds = struct.unpack_from('<II', hdr, 16)
-        if ncmds == 0 or sizeofcmds < 8 or sizeofcmds > _MAX_SIZEOFCMDS:
-            return []
-        lc = self.read_raw(mach_header_va + 32, sizeofcmds)
-        if not lc:
-            return []
-        out, pos = [], 0
-        for _ in range(ncmds):
-            if pos + 8 > len(lc):
-                break
-            cmd, cmdsize = struct.unpack_from('<II', lc, pos)
-            if cmdsize < 8:
-                break
-            out.append((cmd, lc[pos:pos + cmdsize]))
-            pos += cmdsize
-        return out
 
     def image_exports(self, mach_header_va: int) -> Dict[str, int]:
         """``{exported symbol name: vmaddr}`` for the image at *mach_header_va*, from its dyld
@@ -1110,14 +1117,14 @@ class DyldCacheReader:
         file offset, which maps to a vmaddr through the image's own ``__LINKEDIT`` segment
         (``vmaddr + (offset - fileoff)``).  Names keep their leading underscore
         (``_objc_retain_x2``).  Re-exports are omitted (they name another image's symbol).
-        Memoised per image; ``{}`` when the image has no readable trie."""
+        Memoised per image; ``{}`` when the image has no readable trie (or load commands:
+        :meth:`_commands_or_none`)."""
         memo = self.__dict__.setdefault('_image_exports_memo', {})
         if mach_header_va in memo:
             return memo[mach_header_va]
         from .export_trie import decode_export_trie
-        segs, cmds = self._image_linkedit_commands(mach_header_va)
-        trie = cmds.get(LC_DYLD_EXPORTS_TRIE) or cmds.get(LC_DYLD_INFO) or cmds.get(LC_DYLD_INFO_ONLY)
-        data = self._linkedit_read(segs, trie)
+        lc = self._commands_or_none(mach_header_va)
+        data = self._linkedit_read(lc, lc.export_trie) if lc is not None else None
         out = ({name: mach_header_va + off for name, (_flags, off) in decode_export_trie(data).items()}
                if data else {})
         memo[mach_header_va] = out
@@ -1126,38 +1133,25 @@ class DyldCacheReader:
     def image_function_starts(self, mach_header_va: int) -> List[int]:
         """The function entries of the image at *mach_header_va* (``LC_FUNCTION_STARTS``,
         in the shared ``__LINKEDIT`` like the export trie: :meth:`image_exports`), sorted;
-        ``[]`` when the image has none.  Raises ValueError when it has one that cannot be read."""
-        segs, cmds = self._image_linkedit_commands(mach_header_va)
-        table = cmds.get(LC_FUNCTION_STARTS)
-        data = self._linkedit_read(segs, table)
-        if data is None and table is not None and table[1] and '__LINKEDIT' in segs:
+        ``[]`` when the image has none.  Raises ValueError when it has one that cannot be read,
+        or its load commands cannot be (:meth:`image_load_commands`)."""
+        lc = self.image_load_commands(mach_header_va)
+        table = lc.function_starts
+        data = self._linkedit_read(lc, table)
+        if data is None and table is not None and table[1] and lc.segment('__LINKEDIT'):
             raise ValueError(f"LC_FUNCTION_STARTS of the image at {mach_header_va:#x} unreadable")
-        return decode_function_starts(data, segs['__TEXT'][0]) if data and '__TEXT' in segs else []
+        text = lc.segment('__TEXT')
+        return decode_function_starts(data, text.vmaddr) if data and text is not None else []
 
-    def _image_linkedit_commands(self, mach_header_va: int):
-        """``({segment name: (vmaddr, fileoff)}, {cmd: (dataoff, datasize)})`` of the image's
-        load commands that locate linkedit data (the export trie, function starts)."""
-        segs: Dict[str, Tuple[int, int]] = {}
-        cmds: Dict[int, Tuple[int, int]] = {}
-        for cmd, body in self._image_load_commands(mach_header_va):
-            if cmd == LC_SEGMENT_64 and len(body) >= 56:
-                vmaddr, _vmsize, fileoff = struct.unpack_from('<QQQ', body, 24)
-                segs[body[8:24].rstrip(b'\x00').decode('ascii', 'replace')] = (vmaddr, fileoff)
-            elif cmd in (LC_DYLD_EXPORTS_TRIE, LC_FUNCTION_STARTS) and len(body) >= 16:
-                cmds[cmd] = struct.unpack_from('<II', body, 8)
-            elif cmd in (LC_DYLD_INFO, LC_DYLD_INFO_ONLY) and len(body) >= 48:
-                cmds[cmd] = struct.unpack_from('<II', body, 40)     # the export range
-        return segs, cmds
-
-    def _linkedit_read(self, segs: Dict[str, Tuple[int, int]],
+    def _linkedit_read(self, lc: LoadCommands,
                        table: Optional[Tuple[int, int]]) -> Optional[bytes]:
         """The bytes of a linkedit table ``(file offset, size)``: in the cache the offset maps to
         a vmaddr through the image's own ``__LINKEDIT`` segment (``vmaddr + (offset -
         fileoff)``).  None when the image has no such table or segment."""
-        linkedit = segs.get('__LINKEDIT')
+        linkedit = lc.segment('__LINKEDIT')
         if linkedit is None or table is None or not table[1]:
             return None
-        return self.read_raw(linkedit[0] + (table[0] - linkedit[1]), table[1]) or None
+        return self.read_raw(linkedit.vmaddr + (table[0] - linkedit.fileoff), table[1]) or None
 
     def export_name_at(self, vmaddr: int) -> Optional[str]:
         """Name of the symbol some cache image exports at *vmaddr*, or None.
@@ -1204,7 +1198,8 @@ class DyldCacheReader:
                     ) -> Optional[Tuple[int, int, int, str, str]]:
         """``(start, end, mach_header vmaddr, path, segment name)`` of the image segment holding
         *vmaddr* (only segments named *segname*, when given), or None.  One table of every
-        image's segments, built on first use (images' segments do not overlap)."""
+        image's segments, built on first use (images' segments do not overlap; an image whose
+        load commands cannot be read has none, :meth:`image_sections`)."""
         tables = self.__dict__.setdefault('_segment_tables', {})
         if segname not in tables:
             segs = []
@@ -1223,18 +1218,9 @@ class DyldCacheReader:
     def image_dependencies(self, mach_header_va: int) -> List[str]:
         """Install names of the dylibs the image at *mach_header_va* links
         (``LC_LOAD_DYLIB`` / ``_WEAK_`` / ``_REEXPORT_`` / ``_UPWARD_``), in load-command
-        order; ``[]`` if its load commands are unreadable."""
-        out: List[str] = []
-        for cmd, data in self._image_load_commands(mach_header_va):
-            if cmd not in _LC_LINKED_DYLIBS or len(data) < 12:
-                continue
-            name_off = struct.unpack_from('<I', data, 8)[0]
-            if name_off >= len(data):
-                continue
-            name = data[name_off:].split(b'\x00', 1)[0]
-            if name:
-                out.append(name.decode('utf-8', errors='replace'))
-        return out
+        order; ``[]`` if its load commands are unreadable (:meth:`_commands_or_none`)."""
+        lc = self._commands_or_none(mach_header_va)
+        return list(lc.dylibs) if lc is not None else []
 
     def decode_ptr(self, raw: int) -> int:
         """

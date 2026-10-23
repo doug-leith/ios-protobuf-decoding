@@ -236,45 +236,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 # ── Cache resolution ───────────────────────────────────────────────────────────
 
-_CACHE_NAMES = (
-    "dyld_shared_cache_arm64e",
-    "dyld_shared_cache_arm64",
-)
-
-
-def _resolve_cache_path(cache_arg: str, prefer_arm64e: bool = False) -> Optional[Path]:
+def _resolve_cache_path(cache_arg: str) -> Optional[Path]:
     """
     Return the main cache file path from *cache_arg*, or None with a warning.
 
     *cache_arg* may be a direct path to the main cache file, or a directory
-    that is searched for dyld_shared_cache_arm64{e}.
+    holding one dyld_shared_cache_arm64{e} (:func:`macho.dyld_cache.find_main_cache`).
     """
+    from macho.dyld_cache import find_main_cache
+
     p = Path(cache_arg)
-
-    if p.is_file():
-        return p
-
-    if p.is_dir():
-        names = (
-            [_CACHE_NAMES[0], _CACHE_NAMES[1]] if prefer_arm64e
-            else [_CACHE_NAMES[1], _CACHE_NAMES[0]]
-        )
-        for name in names:
-            candidate = p / name
-            if candidate.is_file():
-                return candidate
+    if not p.exists():
         print(
-            f"  warning: no dyld_shared_cache_arm64{{e}} found in {p}; "
-            "running without cache",
+            f"  warning: --cache path not found: {p}; running without cache",
             file=sys.stderr,
         )
         return None
-
-    print(
-        f"  warning: --cache path not found: {p}; running without cache",
-        file=sys.stderr,
-    )
-    return None
+    try:
+        return Path(find_main_cache(str(p)))
+    except ValueError as exc:
+        print(f"  warning: {exc}; running without cache", file=sys.stderr)
+        return None
 
 
 # ── Progress helpers ───────────────────────────────────────────────────────────

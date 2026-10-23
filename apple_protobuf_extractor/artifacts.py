@@ -27,10 +27,6 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 #: this (or set ``MACHO_DATA_DIR``) to point the whole tool at a different dump.
 DEFAULT_DATA_DIRNAME = "iphone8_data"
 
-#: Cache file basenames, in preference order (arm64e before arm64).
-CACHE_BASENAMES = ("dyld_shared_cache_arm64e", "dyld_shared_cache_arm64")
-
-
 def data_dir():
     """Root directory of the iPhone8 artifacts (cache + standalone binaries)."""
     return os.environ.get("MACHO_DATA_DIR", "").strip() or \
@@ -57,13 +53,26 @@ def cache_dir():
     return cache_dirs()[-1]
 
 
+def cache_file_in(d):
+    """The main dyld cache file in directory *d* (:func:`macho.dyld_cache.find_main_cache`),
+    or ``None`` when *d* holds none or is no directory.  ValueError when it holds both the
+    arm64e and the arm64 cache."""
+    from macho.dyld_cache import CacheFileNotFoundError, find_main_cache
+    if not os.path.isdir(d):
+        return None
+    try:
+        return find_main_cache(d)
+    except CacheFileNotFoundError:
+        return None
+
+
 def cache_file():
-    """Absolute path to the main dyld cache file, or ``None`` if not present."""
+    """Path to the main dyld cache file of the first of :func:`cache_dirs` holding one, or
+    ``None``."""
     for d in cache_dirs():
-        for name in CACHE_BASENAMES:
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
+        p = cache_file_in(d)
+        if p is not None:
+            return p
     return None
 
 

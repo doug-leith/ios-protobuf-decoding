@@ -7,12 +7,12 @@ names directly from the dyld shared cache.
 Test classes
 ------------
 TestDecodeCachePtr
-    Unit tests for _decode_cache_ptr().
+    Unit tests for DyldCacheReader.decode_ptr() as the class-name reads use it.
     Covers all three resolution strategies (direct VA, tag-bit masking,
     packed-pointer strip) as well as unmapped / zero inputs.
 
 TestReadObjcClassName
-    Synthetic tests for read_objc_class_name() using in-memory caches
+    Synthetic tests for macho.classlist.class_name_at() over a DyldCacheReader, in-memory caches
     with hand-crafted class_t / class_ro_t / name-string layouts.
     Covers: happy path, ObjC tag bits on class_ro_t pointer, null data
     pointer, unmapped class_va, bad name pointer.
@@ -24,7 +24,7 @@ TestIterClassNames
 
 TestClassNamesLive
     Live tests against the real dyld cache.  Skipped when the cache is
-    absent.  Data-section tests (read_objc_class_name, iter_class_names)
+    absent.  Data-section tests (class_name_at, iter_class_names)
     have an additional inner skip if the DATA sub-caches are absent
     (verified by probing a Hopper-verified class_t address).
 """
@@ -38,16 +38,12 @@ import struct
 import sys
 import tempfile
 import unittest
-from typing import Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from macho.dyld_cache     import DyldCacheReader
-from macho.cache_classlist import (
-    _decode_cache_ptr,
-    read_objc_class_name,
-    iter_class_names,
-)
+from macho.cache_classlist import iter_class_names
+from macho.classlist import class_name_at
 
 
 # ── Synthetic cache builder (reused from test_dyld_cache.py pattern) ──────────
@@ -149,7 +145,7 @@ def _build_objc_cache(
 # ─── TestDecodeCachePtr ───────────────────────────────────────────────────────
 
 class TestDecodeCachePtr(unittest.TestCase):
-    """Unit tests for _decode_cache_ptr()."""
+    """Unit tests for DyldCacheReader.decode_ptr()."""
 
     BASE = 0x180000000
 
@@ -166,17 +162,17 @@ class TestDecodeCachePtr(unittest.TestCase):
 
     def test_direct_vmaddr_in_mapping_returned_as_is(self):
         with DyldCacheReader(self.path) as r:
-            result = _decode_cache_ptr(r, self.BASE)
+            result = r.decode_ptr(self.BASE)
         self.assertEqual(result, self.BASE)
 
     def test_direct_vmaddr_middle_of_mapping(self):
         with DyldCacheReader(self.path) as r:
-            result = _decode_cache_ptr(r, self.BASE + 0x500)
+            result = r.decode_ptr(self.BASE + 0x500)
         self.assertEqual(result, self.BASE + 0x500)
 
     # ── strategy 1: tagged vmaddr still in mapping returned as-is ───────────
-    # _decode_cache_ptr is a generic decoder; ObjC tag-bit stripping is
-    # the caller's responsibility (done in read_objc_class_name via & ~0x7).
+    # decode_ptr is a generic decoder; ObjC tag-bit stripping is
+    # the caller's responsibility (done in class_name_at via & ~0x7).
     # Here we verify that a tagged address that IS within a mapping comes back
     # unchanged — the caller must strip before passing if it wants the
     # clean address.
@@ -185,14 +181,14 @@ class TestDecodeCachePtr(unittest.TestCase):
         """Tagged address still in mapping → returned unchanged (caller strips)."""
         tagged = self.BASE | 0x7   # within mapping [BASE, BASE+0x1000)
         with DyldCacheReader(self.path) as r:
-            result = _decode_cache_ptr(r, tagged)
+            result = r.decode_ptr(tagged)
         self.assertEqual(result, tagged)   # NOT BASE — tag bits preserved
 
     def test_tagged_then_strip_gives_correct_address(self):
         """Pre-stripping tag bits before calling decoder gives clean address."""
         tagged = self.BASE | 0x3
         with DyldCacheReader(self.path) as r:
-            result = _decode_cache_ptr(r, tagged & ~0x7)
+            result = r.decode_ptr(tagged & ~0x7)
         self.assertEqual(result, self.BASE)
 
     def test_tagged_outside_mapping_with_clean_inside(self):
@@ -209,7 +205,7 @@ class TestDecodeCachePtr(unittest.TestCase):
         try:
             with DyldCacheReader(tmp) as r:
                 tagged = inner_base | 0x3     # inner_base+3; within [inner_base, inner_base+8) → in map
-                result = _decode_cache_ptr(r, tagged & ~0x7)
+                result = r.decode_ptr(tagged & ~0x7)
             self.assertEqual(result, inner_base)
         finally:
             os.unlink(tmp)
@@ -220,30 +216,30 @@ class TestDecodeCachePtr(unittest.TestCase):
         """Bits 63+ set (ipsw-extracted format): low 36 bits yield the vmaddr."""
         raw = 0xC000_0000_0000_0000 | self.BASE  # bits 62-63 set
         with DyldCacheReader(self.path) as r:
-            result = _decode_cache_ptr(r, raw)
+            result = r.decode_ptr(raw)
         self.assertEqual(result, self.BASE)
 
     # ── null / unmapped inputs ────────────────────────────────────────────────
 
     def test_zero_returns_zero(self):
         with DyldCacheReader(self.path) as r:
-            self.assertEqual(_decode_cache_ptr(r, 0), 0)
+            self.assertEqual(r.decode_ptr(0), 0)
 
     def test_unmapped_address_returns_zero(self):
         with DyldCacheReader(self.path) as r:
-            self.assertEqual(_decode_cache_ptr(r, 0xDEAD000000000000), 0)
+            self.assertEqual(r.decode_ptr(0xDEAD000000000000), 0)
 
     def test_unmapped_after_tag_masking_returns_zero(self):
         """Value not in mapping even after masking → 0."""
         not_mapped = 0x999000007  # bits 0-2 set, low36 in range but not mapped
         with DyldCacheReader(self.path) as r:
-            self.assertEqual(_decode_cache_ptr(r, not_mapped), 0)
+            self.assertEqual(r.decode_ptr(not_mapped), 0)
 
 
 # ─── TestReadObjcClassName ────────────────────────────────────────────────────
 
 class TestReadObjcClassName(unittest.TestCase):
-    """Unit tests for read_objc_class_name() using synthetic caches."""
+    """Unit tests for class_name_at() over a DyldCacheReader, synthetic caches."""
 
     def setUp(self):
         self.tmpdir = _TmpDir()
@@ -261,7 +257,7 @@ class TestReadObjcClassName(unittest.TestCase):
     def test_single_class_name_resolved(self):
         r, _, _, class_vas = self._make_reader([('GEOFoo',)])
         with r:
-            name = read_objc_class_name(r, class_vas[0])
+            name = class_name_at(r, class_vas[0])
         self.assertEqual(name, 'GEOFoo')
 
     def test_multiple_classes_correct_names(self):
@@ -269,12 +265,12 @@ class TestReadObjcClassName(unittest.TestCase):
         r, _, _, class_vas = self._make_reader(classes)
         with r:
             for i, (expected,) in enumerate(classes):
-                self.assertEqual(read_objc_class_name(r, class_vas[i]), expected)
+                self.assertEqual(class_name_at(r, class_vas[i]), expected)
 
     def test_name_with_special_chars(self):
         r, _, _, class_vas = self._make_reader([('GEOPDPlaceRequest',)])
         with r:
-            self.assertEqual(read_objc_class_name(r, class_vas[0]), 'GEOPDPlaceRequest')
+            self.assertEqual(class_name_at(r, class_vas[0]), 'GEOPDPlaceRequest')
 
     # ── class_t.data with ObjC tag bits ──────────────────────────────────────
 
@@ -293,7 +289,7 @@ class TestReadObjcClassName(unittest.TestCase):
         class_va = BASE + 0x3000
 
         with DyldCacheReader(path) as r:
-            result = read_objc_class_name(r, class_va)
+            result = class_name_at(r, class_va)
         self.assertEqual(result, 'TaggedClass')
 
     # ── error / edge cases ────────────────────────────────────────────────────
@@ -305,13 +301,13 @@ class TestReadObjcClassName(unittest.TestCase):
         cache = _pack_cache(BASE, bytes(content))
         path  = self.tmpdir.write('null_data', cache)
         with DyldCacheReader(path) as r:
-            result = read_objc_class_name(r, BASE)
+            result = class_name_at(r, BASE)
         self.assertIsNone(result)
 
     def test_unmapped_class_va_returns_none(self):
         r, _, _, _ = self._make_reader([('X',)])
         with r:
-            result = read_objc_class_name(r, 0xDEADBEEF00000000)
+            result = class_name_at(r, 0xDEADBEEF00000000)
         self.assertIsNone(result)
 
     def test_unmapped_class_ro_pointer_returns_none(self):
@@ -323,7 +319,7 @@ class TestReadObjcClassName(unittest.TestCase):
         cache = _pack_cache(BASE, bytes(content))
         path  = self.tmpdir.write('bad_ro', cache)
         with DyldCacheReader(path) as r:
-            result = read_objc_class_name(r, BASE + 0x3000)
+            result = class_name_at(r, BASE + 0x3000)
         self.assertIsNone(result)
 
     def test_null_name_pointer_returns_none(self):
@@ -335,7 +331,7 @@ class TestReadObjcClassName(unittest.TestCase):
         cache = _pack_cache(BASE, bytes(content))
         path  = self.tmpdir.write('null_name', cache)
         with DyldCacheReader(path) as r:
-            result = read_objc_class_name(r, BASE + 0x3000)
+            result = class_name_at(r, BASE + 0x3000)
         self.assertIsNone(result)
 
 
@@ -413,18 +409,7 @@ class TestIterClassNames(unittest.TestCase):
 
 # ─── Live test helpers ────────────────────────────────────────────────────────
 
-def _find_cache_main() -> Optional[str]:
-    _names = ('dyld_shared_cache_arm64e', 'dyld_shared_cache_arm64')
-    cache_dir = os.environ.get('MACHO_TEST_CACHE', '').strip()
-    for d in ([cache_dir] if cache_dir else []) + [artifacts.cache_dir()]:
-        for name in _names:
-            p = os.path.join(d, name)
-            if os.path.isfile(p):
-                return p
-    return None
-
-
-_CACHE_MAIN = _find_cache_main()
+_CACHE_MAIN = artifacts.cache_file()
 _HAS_CACHE  = _CACHE_MAIN is not None
 _SKIP_MSG   = ('dyld shared cache not found — set MACHO_TEST_CACHE, or place '
                'cache files under <data dir>/dylib/ (see artifacts.py)')
@@ -497,51 +482,51 @@ class TestClassNamesLive(unittest.TestCase):
                 "__TEXT sub-cache not accessible — class name strings unmapped"
             )
 
-    # ── _decode_cache_ptr (live mappings) ─────────────────────────────────────
+    # ── decode_ptr (live mappings) ────────────────────────────────────────────
 
     def test_decode_direct_va_in_main_mapping(self):
         """A VA covered by the main cache mapping is returned unchanged."""
         # The main file maps [0x180000000, 0x18005c000); use an address inside it.
         va = 0x180000000
-        result = _decode_cache_ptr(self.reader, va)
+        result = self.reader.decode_ptr(va)
         self.assertEqual(result, va)
 
     def test_decode_unmapped_va_returns_zero(self):
-        result = _decode_cache_ptr(self.reader, 0xDEAD000000000000)
+        result = self.reader.decode_ptr(0xDEAD000000000000)
         self.assertEqual(result, 0)
 
     def test_decode_text_classname_va_direct(self):
         """__TEXT sub-cache VA (class name address) resolves if TEXT is loaded."""
         self._require_text()
-        result = _decode_cache_ptr(self.reader, self._NAME_VA_PLACE_REQUEST)
+        result = self.reader.decode_ptr(self._NAME_VA_PLACE_REQUEST)
         self.assertEqual(result, self._NAME_VA_PLACE_REQUEST)
 
     def test_decode_class_ro_va_direct(self):
         """__DATA_CONST VA (class_ro_t) resolves directly if sub-cache loaded."""
         if not self.reader.has_vmaddr(self._CLASS_RO_PLACE_REQUEST):
             self.skipTest("__DATA_CONST sub-cache not accessible")
-        result = _decode_cache_ptr(self.reader, self._CLASS_RO_PLACE_REQUEST)
+        result = self.reader.decode_ptr(self._CLASS_RO_PLACE_REQUEST)
         self.assertEqual(result, self._CLASS_RO_PLACE_REQUEST)
 
-    # ── read_objc_class_name ──────────────────────────────────────────────────
+    # ── class_name_at ──────────────────────────────────────────────────
 
     def test_read_name_geopd_place_request(self):
         """class_t for GEOPDPlaceRequest → 'GEOPDPlaceRequest'."""
         self._require_data()
-        name = read_objc_class_name(self.reader, self._CLASS_T_PLACE_REQUEST)
+        name = class_name_at(self.reader, self._CLASS_T_PLACE_REQUEST)
         self.assertEqual(name, 'GEOPDPlaceRequest',
                          f"Got {name!r} from class_t @ 0x{self._CLASS_T_PLACE_REQUEST:x}")
 
     def test_read_name_geopd_place_response(self):
         """class_t for GEOPDPlaceResponse → 'GEOPDPlaceResponse'."""
         self._require_data()
-        name = read_objc_class_name(self.reader, self._CLASS_T_PLACE_RESPONSE)
+        name = class_name_at(self.reader, self._CLASS_T_PLACE_RESPONSE)
         self.assertEqual(name, 'GEOPDPlaceResponse',
                          f"Got {name!r} from class_t @ 0x{self._CLASS_T_PLACE_RESPONSE:x}")
 
     def test_read_name_unmapped_returns_none(self):
         """Bad class_t address → None."""
-        result = read_objc_class_name(self.reader, 0x1)
+        result = class_name_at(self.reader, 0x1)
         self.assertIsNone(result)
 
     def test_class_ro_ptr_decode_via_read_u64(self):
@@ -552,7 +537,7 @@ class TestClassNamesLive(unittest.TestCase):
         self._require_data()
         raw = self.reader.read_u64(self._CLASS_T_PLACE_REQUEST + 32)
         self.assertIsNotNone(raw, "read_u64 at class_t+32 returned None")
-        decoded = _decode_cache_ptr(self.reader, raw)
+        decoded = self.reader.decode_ptr(raw)
         self.assertEqual(decoded, self._CLASS_RO_PLACE_REQUEST,
                          f"raw=0x{raw:x}, decoded=0x{decoded:x}, "
                          f"expected=0x{self._CLASS_RO_PLACE_REQUEST:x}")
@@ -566,7 +551,7 @@ class TestClassNamesLive(unittest.TestCase):
             self.skipTest("__DATA_CONST sub-cache not accessible")
         raw = self.reader.read_u64(self._CLASS_RO_PLACE_REQUEST + 24)
         self.assertIsNotNone(raw, "read_u64 at class_ro_t+24 returned None")
-        decoded = _decode_cache_ptr(self.reader, raw)
+        decoded = self.reader.decode_ptr(raw)
         self.assertEqual(decoded, self._NAME_VA_PLACE_REQUEST,
                          f"raw=0x{raw:x}, decoded=0x{decoded:x}, "
                          f"expected=0x{self._NAME_VA_PLACE_REQUEST:x}")
@@ -739,8 +724,8 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
         if not raw_str_ptr:
             return None
         # For builtFromChainedFixups=0 caches, str_ptr is a direct cache vmaddr.
-        # _decode_cache_ptr handles both direct and packed-pointer formats.
-        str_va = _decode_cache_ptr(self.reader, raw_str_ptr)
+        # decode_ptr handles both direct and packed-pointer formats.
+        str_va = self.reader.decode_ptr(raw_str_ptr)
         if not str_va:
             return None
         return self.reader.read_cstring(str_va)
@@ -752,7 +737,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
         self._require_data_const()
         raw = self.reader.read_u64(self._CFSTR_STATUS_SUCCESS + self._CFSTRING_STR_PTR_OFFSET)
         self.assertIsNotNone(raw, "read_u64 returned None for STATUS_SUCCESS str_ptr")
-        decoded = _decode_cache_ptr(self.reader, raw)
+        decoded = self.reader.decode_ptr(raw)
         self.assertEqual(
             decoded, self._STR_STATUS_SUCCESS,
             f"str_ptr decoded to 0x{decoded:x}, expected 0x{self._STR_STATUS_SUCCESS:x}"
@@ -770,7 +755,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
         self._require_data_const()
         raw = self.reader.read_u64(self._CFSTR_STATUS_FAILED + self._CFSTRING_STR_PTR_OFFSET)
         self.assertIsNotNone(raw)
-        decoded = _decode_cache_ptr(self.reader, raw)
+        decoded = self.reader.decode_ptr(raw)
         self.assertEqual(
             decoded, self._STR_STATUS_FAILED,
             f"str_ptr decoded to 0x{decoded:x}, expected 0x{self._STR_STATUS_FAILED:x}"
@@ -807,7 +792,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
         self._require_data_const()
         raw_ptr = self.reader.read_u64(self._REQTYPE_TABLE_BASE)
         self.assertIsNotNone(raw_ptr, "read_u64 at table[0] returned None")
-        cfstring_va = _decode_cache_ptr(self.reader, raw_ptr)
+        cfstring_va = self.reader.decode_ptr(raw_ptr)
         self.assertNotEqual(cfstring_va, 0,
                             f"table[0] raw=0x{raw_ptr:x} decoded to 0 (unmapped)")
         self.assertTrue(
@@ -819,7 +804,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
         """Following pointer table entry 0 all the way to the string gives a REQUEST_TYPE_ value."""
         self._require_both()
         raw_ptr = self.reader.read_u64(self._REQTYPE_TABLE_BASE)
-        cfstring_va = _decode_cache_ptr(self.reader, raw_ptr)
+        cfstring_va = self.reader.decode_ptr(raw_ptr)
         self.assertNotEqual(cfstring_va, 0)
         result = self._read_cfstring(cfstring_va)
         self.assertIsNotNone(result, "pointer-chain read for table[0] returned None")
@@ -836,7 +821,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
             raw_ptr = self.reader.read_u64(entry_va)
             if not raw_ptr:
                 continue   # sparse table; skip null entries gracefully
-            cfstring_va = _decode_cache_ptr(self.reader, raw_ptr)
+            cfstring_va = self.reader.decode_ptr(raw_ptr)
             if not cfstring_va:
                 self.fail(f"table[{i}] raw=0x{raw_ptr:x} decoded to 0 (unmapped)")
             result = self._read_cfstring(cfstring_va)
@@ -853,7 +838,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
         The cache at rest uses an internal pointer encoding for DATA-section
         pointers even when builtFromChainedFixups=0: the low 36 bits hold the
         absolute cache vmaddr; upper bits carry chain-info metadata.
-        _decode_cache_ptr strategy 2 (strip bits 63:36) handles this, which
+        decode_ptr strategy 2 (strip bits 63:36) handles this, which
         is why the end-to-end read tests pass.
 
         This test verifies that the raw values CAN be decoded to a mapped
@@ -872,7 +857,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
             raw = self.reader.read_u64(va + self._CFSTRING_STR_PTR_OFFSET)
             if raw is None:
                 self.skipTest(f"{name}: CFStringRef at 0x{va:x} not mapped")
-            decoded = _decode_cache_ptr(self.reader, raw)
+            decoded = self.reader.decode_ptr(raw)
             self.assertNotEqual(
                 decoded, 0,
                 f"{name}: raw str_ptr 0x{raw:x} could not be decoded "
