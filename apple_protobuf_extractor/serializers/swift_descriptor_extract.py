@@ -408,9 +408,12 @@ def _sym(flow: Flow, k: int, reg: Optional[str], memo: Dict[int, tuple]) -> tupl
 
 def _sym_fragment(flow: Flow, d: int, j: int, reg: Optional[str], memo: Dict) -> tuple:
     """:func:`_sym` of *reg* before instruction *j* of the outlined fragment the ``bl``
-    ``insns[d]`` runs (:meth:`Flow.fragment`): set by an earlier instruction of it, or the value
-    the register has at the call."""
+    ``insns[d]`` runs (:meth:`Flow.fragment`; *j* its length: after it): set by an earlier
+    instruction of it, or the value the register has at the call.  After a thunk, a register its
+    tail call writes (:meth:`Flow.tail_writes`) is that call's: an atom of its own."""
     frag = flow.fragment(d)
+    if j == len(frag) and flow.fragment_tail(d) is not None and reg in flow.tail_writes(d):
+        return (("def", d, ""),), 0
     w = next((i for i in range(j - 1, -1, -1) if reg in writes(frag[i])), None)
     if w is None:
         return _sym(flow, d, reg, memo)

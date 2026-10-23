@@ -15,8 +15,8 @@ Whatever a run does, what Flow says holds on every path must hold on it:
   one its propagation reaches.
 
 The runs model what Flow assumes of the rest of the program, and nothing more: a call (other
-than an outlined fragment, which runs) returns with every caller-saved register and the flags
-random, the callee-saved ones kept, and the stack from the lowest frame address any argument
+than outlined code, which runs: a fragment, or a thunk's prefix and then its tail call) returns
+with every caller-saved register and the flags random, the callee-saved ones kept, and the stack from the lowest frame address any argument
 register hands it up to the entry ``sp`` overwritten; the runtime functions Flow has contracts
 for keep them (the ARC calls return their argument, the stack probe writes x9, x16, x17).  The
 image's own memory is as loaded (chained-fixup rebases applied, each bound slot pointing at its
@@ -337,9 +337,9 @@ class Emulation:
 
     # ── one run ──────────────────────────────────────────────────────────────
 
-    def _stub(self, uc, ins, rng):
-        """A call's effect (see the module docstring)."""
-        target = _parse_imm(ins.op_str) if ins.mnemonic == "bl" else None
+    def _stub(self, uc, target, ret, rng):
+        """The effect of a call to *target* (None: unknown) that returns to *ret* (see the
+        module docstring)."""
         name = callee_name(self.ctx, target) if target is not None else None
         keep = call_clobbers(self.ctx, target)
         written = list(keep) if keep is not None else CALLER_SAVED + ["x30"]
@@ -359,7 +359,7 @@ class Emulation:
             uc.reg_write(A.UC_ARM64_REG_X0, x0)
         if keep is None:
             uc.reg_write(A.UC_ARM64_REG_NZCV, rng.getrandbits(4) << 28)
-        uc.reg_write(A.UC_ARM64_REG_X30, ins.addr + 4)
+        uc.reg_write(A.UC_ARM64_REG_X30, ret)
         return written
 
     def run(self, seed, regs=None):
@@ -394,13 +394,14 @@ class Emulation:
             self._check(uc, k, prev, last)
             ins = flow.insns[k]
             if ins.mnemonic in CALLS and flow.fragment(k) is None:
-                for r in self._stub(uc, ins, rng):
+                target = _parse_imm(ins.op_str) if ins.mnemonic == "bl" else None
+                for r in self._stub(uc, target, ins.addr + 4, rng):
                     last[r] = k
                 self._returned(uc, k)
                 pc, prev = ins.addr + 4, None
                 continue
             if flow.fragment(k) is not None:
-                if not self._fragment(uc, k, last):
+                if not self._fragment(uc, k, last, rng):
                     return
                 pc, prev = ins.addr + 4, None
                 continue
@@ -435,12 +436,13 @@ class Emulation:
     def _returned(self, uc, k):
         """After the call ``insns[k]`` (a hook for :class:`EntryEmulation`)."""
 
-    def _fragment(self, uc, k, last):
-        """Run the outlined fragment the ``bl`` at *k* calls; its writes are the call's."""
-        ins = self.flow.insns[k]
+    def _fragment(self, uc, k, last, rng):
+        """Run the outlined fragment the ``bl`` at *k* calls -- a thunk's prefix, then its tail
+        call as a call; its writes are the ``bl``'s."""
+        flow, ins = self.flow, self.flow.insns[k]
         uc.reg_write(A.UC_ARM64_REG_X30, ins.addr + 4)
         pc = _parse_imm(ins.op_str)
-        for fi in self.flow.fragment(k):
+        for fi in flow.fragment(k):
             try:
                 uc.emu_start(pc, RET_SENTINEL, count=1)
             except UcError:
@@ -450,7 +452,15 @@ class Emulation:
                 last[r] = k
             pc = uc.reg_read(A.UC_ARM64_REG_PC)
         last["x30"] = k
-        return pc == ins.addr + 4
+        tail = flow.fragment_tail(k)
+        if tail is None:
+            return pc == ins.addr + 4
+        if pc != _parse_imm(ins.op_str) + 4 * len(flow.fragment(k)):
+            return False
+        for r in self._stub(uc, tail, ins.addr + 4, rng):
+            last[r] = k
+        self._returned(uc, k)
+        return True
 
     # ── the checks ───────────────────────────────────────────────────────────
 

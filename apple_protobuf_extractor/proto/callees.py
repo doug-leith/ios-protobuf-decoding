@@ -314,17 +314,31 @@ _CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" fo
 _RETURN_REGS = frozenset(("x0",))
 
 
-def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
-    """The instructions a ``bl`` to *target* runs as part of its caller (its ``ret`` left out),
-    when the callee is a straight line of this image's ``__text`` that returns inside its own
-    extent (up to the next function start) with no branch, call, or write to sp or the link
-    register: the machine outliner's fragments (``ldrsw x9, [x23, #0x30] ; add x0, x8, x9 ;
-    ret``) keep no calling convention.  Running them in the caller's state is what the call
-    does, so a caller evaluates through them rather than assume the AAPCS64 clobber.  None
-    for any other callee, or without a function index to bound it.  Memoised on *ctx*."""
+class Outlined(NamedTuple):
+    """Code a ``bl`` runs as part of its caller (:func:`outlined_code`)."""
+    body: Tuple             # the instructions the caller runs (a thunk's prefix)
+    tail: Optional[int]     # a thunk's tail-call target; None for a fragment
+
+
+def outlined_code(ctx, target: Optional[int]) -> Optional[Outlined]:
+    """What a ``bl`` to *target* runs as part of its caller, when the callee is a straight line
+    of this image's ``__text`` (up to the next function start) whose instructions run in the
+    caller (:func:`_runs_in_caller`: no branch, call, or link-register write, sp moved only by
+    an immediate) and that ends in
+
+    * a ``ret``: a *fragment* (``ldrsw x9, [x23, #0x30] ; add x0, x8, x9 ; ret``, the outlined
+      prologue ``sub sp, sp, #0x80 ; stp x28, x27, [sp, #0x20] ; ... ; ret``), ``tail`` None;
+    * the last instruction of its extent, a ``b`` out of it, after an optional arm64e
+      return-address check (``eor x16, x30, x30, lsl #1 ; tbz x16, #62, L ; brk ; L: b T``): a
+      *thunk*, its prefix run in the caller and then a call to ``tail`` = T.
+
+    The machine outliner's helpers keep no calling convention: running them in the caller's
+    state is what the call does, so a caller evaluates through them rather than assume the
+    AAPCS64 clobber.  None for any other callee (a tail call through a register is a call), or
+    without a function index to bound it.  Memoised on *ctx*."""
     if target is None or ctx is None:
         return None
-    memo = _ctx_cache(ctx, "_outlined_fragments", dict)
+    memo = _ctx_cache(ctx, "_outlined_code", dict)
     if target in memo:
         return memo[target]
     from proto.function_body import function_end      # (function_body imports this module)
@@ -333,13 +347,46 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
         end = function_end(ctx, target) if ctx.function_starts() else None
         if end is not None:
             body = disasm(ctx, target, max_insns=max(0, (end - target) // 4), stop_at_ret=True)
-            if body and body[-1].mnemonic in RETURNS and all(
-                    _runs_in_caller(ins) for ins in body[:-1]):
-                res = tuple(body[:-1])
+            j = next((i for i, ins in enumerate(body) if not _runs_in_caller(ins)), len(body))
+            if j < len(body) and body[j].mnemonic in RETURNS:
+                res = Outlined(tuple(body[:j]), None)
+            else:
+                prefix, last = (j - 1, j + 2) if _return_address_check(body, j - 1) else (j, j)
+                if last == len(body) - 1 and body[last].mnemonic == "b":
+                    t = branch_target(body[last])
+                    if t is not None and not target <= t < end:
+                        res = Outlined(tuple(body[:prefix]), t)
     except READ_ERRORS:                               # unreadable bytes: an ordinary call
         res = None
     memo[target] = res
     return res
+
+
+def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
+    """The instructions a ``bl`` to *target* runs in its caller (:func:`outlined_code`'s
+    ``body``: a fragment without its ``ret``, a thunk's prefix), else None."""
+    o = outlined_code(ctx, target)
+    return None if o is None else o.body
+
+
+def outlined_tail(ctx, target: Optional[int]) -> Optional[int]:
+    """The target of the tail call a thunk at *target* ends in (:func:`outlined_code`), else
+    None."""
+    o = outlined_code(ctx, target)
+    return None if o is None else o.tail
+
+
+def _return_address_check(body, i: int) -> bool:
+    """``body[i:i + 3]`` is arm64e's check of the return address before a tail call:
+    ``eor x16, x30, x30, lsl #1 ; tbz x16, #62, <past the brk> ; brk``."""
+    if i < 0 or i + 3 > len(body):
+        return False
+    eor, tbz, brk = body[i:i + 3]
+    ops = split_ops(tbz.op_str)
+    return (eor.mnemonic == "eor" and split_ops(eor.op_str)[:3] == ["x16", "x30", "x30"]
+            and tbz.mnemonic == "tbz" and len(ops) == 3 and ops[0] == "x16"
+            and _parse_imm(ops[1]) == 62 and _parse_imm(ops[2]) == brk.addr + 4
+            and brk.mnemonic == "brk")
 
 
 def text_holding(ctx, va: Optional[int]):
@@ -357,13 +404,25 @@ def _moves_sp(ins) -> bool:
         ops and ops[0] in ("sp", "wsp") and ins.mnemonic not in NO_DEST)
 
 
+def _moves_sp_by_immediate(ins) -> bool:
+    """*ins* moves sp by an immediate: ``add`` / ``sub sp, sp, #imm``, or a pre- / post-index
+    access through sp (``[sp, #-0x10]!``, ``[sp], #0x10``)."""
+    ops = split_ops(ins.op_str)
+    if ins.mnemonic in ("add", "sub") and len(ops) == 3:
+        return ops[0] == "sp" and ops[1] == "sp" and ops[2].startswith("#")
+    if writeback_base(ops) != "sp":
+        return False
+    return ops[-1].endswith("!") or ops[-1].startswith("#")
+
+
 def _runs_in_caller(ins) -> bool:
-    """*ins* may run as part of the calling function: not a control transfer, and it leaves sp
-    and the link register (x30) as the caller has them."""
+    """*ins* may run as part of the calling function: not a control transfer, and it leaves the
+    link register (x30) as the caller has it and moves sp, if at all, by an immediate (the
+    caller's state tracks sp)."""
     mn = ins.mnemonic
     if mn in BLOCK_ENDS or is_cond_branch(mn) or mn in TRAPS or mn == "svc":
         return False
-    return "x30" not in writes(ins) and not _moves_sp(ins)
+    return "x30" not in writes(ins) and (not _moves_sp(ins) or _moves_sp_by_immediate(ins))
 
 def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     """The registers a call to *target* may read: a runtime function's ABI contract
@@ -462,7 +521,8 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     (:func:`call_reads`) and leaves the caller-saved registers to the callee; a call to an
     outlined fragment runs the fragment's instructions; a tail call reads what its target
     reads; a return hands back :data:`_RETURN_REGS`; a trap or a call that does not return
-    ends the path.  A prologue spill of a callee-saved register is not a read.  An
+    ends the path.  A call to a thunk runs its prefix, then reads what its tail target reads
+    (:func:`outlined_code`).  A prologue spill of a callee-saved register is not a read.  An
     authenticated branch with no successor is a tail call through a signed pointer: it reads
     what an unknown callee reads.  Every register when the body is read only in part or a
     ``br`` goes somewhere unknown."""
@@ -474,7 +534,9 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     flow = decoded_flow(ctx, list(body))
     cfg = flow.cfg
     own = frozenset(i.addr for i in flow.insns)
-    frame = any(_moves_sp(i) for i in flow.insns)     # it has a frame of its own
+    # it has a frame of its own (set up in place or by an outlined prologue it calls)
+    frame = any(_moves_sp(i) or any(_moves_sp(fi) for fi in _outlined_body(ctx, i))
+                for i in flow.insns)
     live_in: Dict[int, frozenset] = {b: frozenset() for b in cfg.order}
     unresolved = [cfg.blocks[b][-1].addr for b in cfg.order
                   if cfg.blocks[b][-1].mnemonic == 'br' and not cfg.succ.get(b)]
@@ -528,18 +590,16 @@ def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) 
         return set(live_after) if t in own else set(call_reads(ctx, t))
     if mn in CALLS:
         t = _parse_imm(ops[0]) if mn == "bl" and ops else None
-        frag = outlined_fragment(ctx, t) if t is not None else None
-        if frag is not None:
+        code = outlined_code(ctx, t) if t is not None else None
+        if code is not None:
             live = set(live_after)
-            for fi in reversed(frag):
+            if code.tail is not None:                    # a thunk's tail call
+                live = _live_before_call(ctx, code.tail, live)
+            for fi in reversed(code.body):
                 live = _live_before(ctx, fi, live, own, frame)
             live.discard("x30")
             return live
-        used = set(call_reads(ctx, t)) | set(reads(ins))      # reads(): the target (and modifier)
-        if callee_name(ctx, t) in NORETURN:
-            return used
-        clob = call_clobbers(ctx, t)
-        return (set(live_after) - set(clob if clob is not None else CALLER_SAVED)) | used
+        return _live_before_call(ctx, t, live_after) | set(reads(ins))   # (the target register)
     src = set(reads(ins))
     if frame and (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
         src -= _CALLEE_SAVED                            # a prologue spill is not a read
@@ -548,6 +608,23 @@ def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) 
         if t not in own:                                # a conditional tail call
             src |= set(call_reads(ctx, t))
     return (set(live_after) - set(writes(ins))) | src
+
+
+def _live_before_call(ctx, t: Optional[int], live_after: set) -> set:
+    """The registers live before a call to *t* given *live_after*: what it reads, and what it
+    leaves alone of *live_after* (nothing, for a function that does not return)."""
+    used = set(call_reads(ctx, t))
+    if callee_name(ctx, t) in NORETURN:
+        return used
+    clob = call_clobbers(ctx, t)
+    return (set(live_after) - set(clob if clob is not None else CALLER_SAVED)) | used
+
+
+def _outlined_body(ctx, ins) -> Tuple:
+    """The instructions the call *ins* runs in its caller (:func:`outlined_fragment`), else ()."""
+    if ins.mnemonic != "bl":
+        return ()
+    return outlined_fragment(ctx, branch_target(ins)) or ()
 
 
 #: Functions that never return.

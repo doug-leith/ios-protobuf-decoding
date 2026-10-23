@@ -27,11 +27,13 @@ from macho.memory import READ_ERRORS
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder)
 from macho.strings import read_cfstring_text
-from proto.callees import call_reads, call_clobbers as callee_clobbers, outlined_fragment
+from proto.callees import (call_reads, call_clobbers as callee_clobbers, outlined_fragment,
+                           outlined_tail)
 from proto.arm64_operands import (
-    ARG_GPRS, AUTHENTICATED_BRANCHES, CALL_ARG_GPRS, CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES,
-    POINTER_AUTH, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES, TRAPS, split_ops, writes_memory,
-    reg_bytes, reg_mask, reg_bits, branch_target, is_cond_branch, is_conditional, writes,
+    ARG_GPRS, AUTHENTICATED_BRANCHES, CALL_ARG_GPRS, CALLER_SAVED, CALLER_SAVED_GPRS, CALLS,
+    INDIRECT_BRANCHES, POINTER_AUTH, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES, TRAPS,
+    split_ops, writes_memory, reg_bytes, reg_mask, reg_bits, branch_target, is_cond_branch,
+    is_conditional, writes,
     parse_mem, index_offset, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
     operand2,
 )
@@ -572,6 +574,7 @@ class Flow:
         self._ivar_memo: Dict[int, Optional[int]] = {}
         self._reg_targets: Optional[Dict[int, int]] = None   # :meth:`_register_call_targets`
         self._fragments: Dict[int, Optional[Tuple[Insn, ...]]] = {}   # :meth:`fragment`
+        self._tails: Dict[int, Optional[int]] = {}                    # :meth:`fragment_tail`
         self._known: Dict[int, Dict[str, int]] = {}                   # :meth:`known_before`
         self._entry_states: Optional[Dict[int, "_Machine"]] = None    # :meth:`known_before`
 
@@ -676,6 +679,8 @@ class Flow:
     def _const_of_def(self, d: int, reg: str) -> Optional[int]:
         frag = self.fragment(d)
         if frag is not None:                             # *reg* as the fragment leaves it
+            if self.fragment_tail(d) is not None and reg in self.tail_writes(d):
+                return None                              # set by a thunk's tail call
             m = _Machine({}, fallback=lambda r: self.const_before(d, r))
             for fi in frag:
                 self._exec(m, fi)
@@ -811,7 +816,7 @@ class Flow:
             for k in range(lo, self.block_range(blk).stop):
                 if self.insns[k].mnemonic in CALLS:
                     clobbers = self.call_writes(k)
-                    if clobbers is None:
+                    if clobbers is None or self.fragment_tail(k) is not None:
                         return []                      # the path ends at its first call
                     for r in clobbers:
                         st.pop(r, None)
@@ -940,8 +945,8 @@ class Flow:
         ``'indirect'`` (a ``br`` when not *follow_indirect*; else it jumps to its register's
         value), ``'trap'``, or ``'end'`` (past the listing).  An outlined fragment runs in
         place and a call with a contract (:meth:`call_clobbers`) changes what it clobbers;
-        neither ends the path.  Raises _Abort at a loop, a branch it cannot decide, a jump to an
-        address it does not know."""
+        neither ends the path.  A thunk runs its prefix, then is a call (``'call'``).  Raises
+        _Abort at a loop, a branch it cannot decide, a jump to an address it does not know."""
         seen: Set[int] = set()
 
         def jump(target: Optional[int]) -> int:
@@ -960,6 +965,8 @@ class Flow:
             nxt = k + 1
             if self.fragment(k) is not None:
                 self._run_fragment(m, k)
+                if self.fragment_tail(k) is not None:
+                    return 'call', k              # a thunk's tail call, after its prefix
             elif mn in CALLS and (clobbers := self.call_clobbers(
                     k, self._call_target(m, ins), evaluated=True)) is not None:
                 m.call((), clobbers)
@@ -1290,7 +1297,8 @@ class Flow:
         branch whose condition is known follows only the side taken, so code that depends on
         *entry* is resolved the same way whether it was compiled to a ``csel`` or a branch.
         *objects*: see :class:`Objects`; *fragments_out*, when given, receives for each outlined
-        fragment a ``bl`` runs (:meth:`fragment`) the registers before each of its instructions;
+        fragment a ``bl`` runs (:meth:`fragment`) the registers before each of its instructions
+        (and, for a thunk, before its tail call);
         *slots_out*, when given, receives the stack slots known
         before each ``insns[k]`` in *at*."""
         return self._replay(self._fixpoint(entry, objects), at, objects, slots_out, fragments_out)
@@ -1361,31 +1369,59 @@ class Flow:
 
     def fragment(self, k: int) -> Optional[Tuple[Insn, ...]]:
         """The instructions the ``bl`` ``insns[k]`` runs as part of this function (an outlined
-        fragment, :func:`proto.callees.outlined_fragment`), else None."""
+        fragment, or a thunk's prefix: :func:`proto.callees.outlined_code`), else None."""
         if k not in self._fragments:
             ins = self.insns[k]
             self._fragments[k] = (outlined_fragment(self.ctx, _parse_imm(ins.op_str))
                                   if ins.mnemonic == 'bl' and self.ctx is not None else None)
         return self._fragments[k]
 
+    def fragment_tail(self, k: int) -> Optional[int]:
+        """The target of the tail call the thunk the ``bl`` ``insns[k]`` runs ends in: after
+        its prefix (:meth:`fragment`) the ``bl`` is a call to it.  None for a fragment or a
+        call."""
+        if k not in self._tails:
+            self._tails[k] = (outlined_tail(self.ctx, _parse_imm(self.insns[k].op_str))
+                              if self.fragment(k) is not None else None)
+        return self._tails[k]
+
+    def tail_clobbers(self, k: int) -> Optional[Tuple[str, ...]]:
+        """The registers the tail call of the thunk at ``insns[k]`` (:meth:`fragment_tail`)
+        changes when its callee changes fewer than a call may
+        (:func:`proto.callees.call_clobbers`), else None."""
+        return callee_clobbers(self.ctx, self.fragment_tail(k))
+
+    def tail_writes(self, k: int) -> Tuple[str, ...]:
+        """The registers the tail call of the thunk at ``insns[k]`` changes:
+        :meth:`tail_clobbers`, else every caller-saved one."""
+        clobbers = self.tail_clobbers(k)
+        return clobbers if clobbers is not None else CALLER_SAVED
+
     def call_writes(self, k: int) -> Optional[Tuple[str, ...]]:
-        """The registers the call ``insns[k]`` writes when fewer than a call may: an outlined
-        fragment's own (and the link register), a contract's (:meth:`call_clobbers`); else
-        None (every caller-saved register)."""
+        """The registers the call ``insns[k]`` writes when not a call's caller-saved set: an
+        outlined fragment's own (and the link register; a thunk's tail call adds
+        :meth:`tail_writes`), a contract's (:meth:`call_clobbers`); else None (every
+        caller-saved register)."""
         frag = self.fragment(k)
         if frag is not None:
-            return tuple(sorted({r for fi in frag for r in writes(fi)} | {'x30'}))
+            w = {r for fi in frag for r in writes(fi)} | {'x30'}
+            if self.fragment_tail(k) is not None:
+                w.update(self.tail_writes(k))
+            return tuple(sorted(w))
         return self.call_clobbers(k)
 
     def _run_fragment(self, m: "_Machine", k: int,
                       trace: Optional[List[Dict[str, int]]] = None) -> None:
-        """Run the outlined fragment the ``bl`` ``insns[k]`` calls in *m*, its stores included;
-        *trace* receives the registers before each of its instructions."""
+        """Run the outlined fragment (or thunk prefix) the ``bl`` ``insns[k]`` calls in *m*, its
+        stores included; *trace* receives the registers before each of its instructions, and
+        before a thunk's tail call."""
         m.put('x30', None)
         for fi in self.fragment(k):
             if trace is not None:
                 trace.append(dict(m.regs))
             self._exec(m, fi)
+        if trace is not None and self.fragment_tail(k) is not None:
+            trace.append(dict(m.regs))
 
     def _register_call_targets(self) -> Dict[int, int]:
         """``{index: target}`` of the calls through a register whose register the forward
@@ -1410,33 +1446,53 @@ class Flow:
     def _propagate_step(self, m: "_Machine", k: int, call_result=None,
                         trace: Optional[List[Dict[str, int]]] = None,
                         on_call: Optional[Callable[[Optional[int]], None]] = None) -> None:
-        """Run ``insns[k]`` in *m*: an outlined fragment's instructions; a call with a contract
-        (:meth:`call_clobbers`); any other call as one that reads what its target reads
-        (:meth:`_call_reads`), clobbers the caller-saved registers and returns *call_result*'s
-        x0; a branch changes nothing.  *on_call(target)*, when given, is told of each of those
-        other calls before it runs."""
+        """Run ``insns[k]`` in *m*: an outlined fragment's instructions; a thunk's prefix, then
+        its tail call; a call with a contract (:meth:`call_clobbers`); any other call as one
+        that reads what its target reads (:meth:`_call_reads`), clobbers the caller-saved
+        registers and returns *call_result*'s x0; a branch changes nothing.  *on_call(target)*,
+        when given, is told of each of those other calls before it runs.  A thunk's ``bl`` is
+        the call site, with the registers at it (a consumer that follows the call runs the
+        prefix itself), and its result is that call's: *call_result* is told the ``bl``'s
+        target and x0 (a named function of this shape, a metadata accessor say, is known by
+        its own name, not its tail callee's)."""
         ins = self.insns[k]
         mn = ins.mnemonic
         if self.fragment(k) is not None:
+            tail = self.fragment_tail(k)
+            if tail is None:
+                self._run_fragment(m, k, trace)
+                return
+            site = (self._call_target(m, ins), m.copy_of('x0'))
+            if on_call is not None:
+                on_call(site[0])
             self._run_fragment(m, k, trace)
+            self._call(m, k, tail, self.tail_clobbers(k), call_result, site)
             return
         if mn in CALLS:
             target = self._call_target(m, ins)
             clobbers = self.call_clobbers(k, target, evaluated=True)
-            if clobbers is not None:
-                m.call((), clobbers)
-                return
-            if on_call is not None:
+            if clobbers is None and on_call is not None:
                 on_call(target)
-            x0 = m.copy_of('x0')
-            m.call(self._call_reads(target))
-            v = call_result(k, target, x0) if call_result is not None else None
-            if v is not None:
-                m.put('x0', v)
+            self._call(m, k, target, clobbers, call_result)
         elif mn == 'b' or mn in INDIRECT_BRANCHES or mn in RETURNS or is_conditional(mn):
             return
         else:
             self._exec(m, ins)
+
+    def _call(self, m: "_Machine", k: int, target: Optional[int],
+              clobbers: Optional[Tuple[str, ...]], call_result=None,
+              site: Optional[Tuple[Optional[int], Optional[int]]] = None) -> None:
+        """The call to *target* at ``insns[k]`` in *m*: with a contract, the *clobbers* only;
+        else it reads what *target* reads, clobbers the caller-saved registers and returns
+        *call_result*'s x0, told *site* ``(target, x0)`` (default: *target* and x0 now)."""
+        if clobbers is not None:
+            m.call((), clobbers)
+            return
+        target_of, x0 = site if site is not None else (target, m.copy_of('x0'))
+        m.call(self._call_reads(target))
+        v = call_result(k, target_of, x0) if call_result is not None else None
+        if v is not None:
+            m.put('x0', v)
 
     def _live_successors(self, blk: int, m: "_Machine") -> List[int]:
         """The successors of *blk* that can execute under *m*: one side of a branch whose

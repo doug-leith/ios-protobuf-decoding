@@ -113,8 +113,9 @@ def _loc(flow, k, reg, kind, memo, depth=0, entry=None):
             return None
         i = int(m.group(2)) - (1 if kind == "traverse" and m.group(1) == "x" else 0)
         return ("val", ("gpr" if m.group(1) == "x" else "fpr", i), ()) if 0 <= i <= 7 else None
-    if flow.fragment(d) is not None:
-        return None
+    if flow.fragment(d) is not None and not (
+            flow.fragment_tail(d) is not None and reg in flow.tail_writes(d)):
+        return None         # set by outlined code; one a thunk's tail call sets is the bl's (below)
     key = (d, reg)
     if key in memo:
         return memo[key]
@@ -247,7 +248,8 @@ class _Frame:
     def __init__(self, ctx, flow):
         self.ctx, self.flow = ctx, flow
         n = len(flow.insns)
-        self.regs = flow.propagate({}, range(n))
+        self._inside: Dict[int, List[Dict[str, int]]] = {}     # in each outlined fragment run
+        self.regs = flow.propagate({}, range(n), fragments_out=self._inside)
         self._before: Dict[int, _Stores] = {}
         self._leaked = any(                         # a frame address stored to memory
             _is_stack(self.regs.get(k, {}).get(reg_name(r)))
@@ -261,8 +263,8 @@ class _Frame:
                 self._before[k] = st.copy()
                 self._step(st, k)
 
-    def stack(self, k, reg) -> Optional[int]:
-        v = self.regs.get(k, {}).get(reg_name(reg) or reg)
+    def stack(self, k, reg, regs=None) -> Optional[int]:
+        v = (self.regs.get(k, {}) if regs is None else regs).get(reg_name(reg) or reg)
         return v if _is_stack(v) else None
 
     def last_store(self, k, addr) -> Optional[Tuple[int, str]]:
@@ -297,20 +299,13 @@ class _Frame:
             if any("[" in fi.op_str and fi.mnemonic not in LOAD_BYTES and
                    fi.mnemonic not in PAIR_LOADS and fi.mnemonic != "prfm" for fi in frag):
                 st.slots.clear()                    # an outlined fragment that writes memory
+            tail = flow.fragment_tail(k)
+            if tail is not None:                    # a thunk: then its tail call
+                inside = self._inside.get(k)
+                self._call(st, k, tail, inside[-1] if inside else {})
             return
         if mn in CALLS:
-            for lo, hi in st.kept:
-                st.kill(lo, hi)
-            for r in (f"x{i}" for i in range(9)):
-                v = self.stack(k, r)
-                if v is not None:
-                    st.kill(v)
-            if self._leaked and st.esc is not None:
-                st.kill(st.esc)
-            if _callee(self.ctx, _call_target(flow, k, None)) == "swift_beginAccess":
-                b = self.stack(k, "x1")
-                if b is not None:
-                    st.kept = st.kept | {(b, b + _ACCESS_BUFFER)}
+            self._call(st, k, _call_target(flow, k, None), self.regs.get(k, {}))
             return
         mem = next((i for i, o in enumerate(ops) if o.startswith("[")), None)
         if mem is None or mn in LOAD_BYTES or mn in PAIR_LOADS or mn == "prfm":
@@ -335,6 +330,21 @@ class _Frame:
         st.kill(addr, addr + w * len(srcs))
         for i, r in enumerate(srcs):
             st.slots[addr + i * w] = (w, k, None if reg_name(r) == "xzr" else reg_name(r))
+
+    def _call(self, st, k, target, regs):
+        """A call at ``insns[k]`` to *target*, the registers before it *regs*."""
+        for lo, hi in st.kept:
+            st.kill(lo, hi)
+        for r in (f"x{i}" for i in range(9)):
+            v = self.stack(k, r, regs)
+            if v is not None:
+                st.kill(v)
+        if self._leaked and st.esc is not None:
+            st.kill(st.esc)
+        if _callee(self.ctx, target) == "swift_beginAccess":
+            b = self.stack(k, "x1", regs)
+            if b is not None:
+                st.kept = st.kept | {(b, b + _ACCESS_BUFFER)}
 
 
 def _proven_equal(flow, k, c):

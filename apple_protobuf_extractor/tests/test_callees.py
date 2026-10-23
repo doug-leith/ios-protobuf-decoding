@@ -132,7 +132,8 @@ class TestCallReads(unittest.TestCase):
         with mock.patch.object(C, 'callee_name',
                                lambda ctx, va: name if va == 0x9000 else named.get(va)), \
                 mock.patch.object(C, 'stub_selector', lambda ctx, va: sel if va == 0x9000 else None), \
-                mock.patch('proto.function_body.disasm', fd):
+                mock.patch('proto.function_body.disasm', fd), \
+                mock.patch.object(C, 'disasm', fd):
             image = TextImage(text, starts=({a for a, _body in blocks} | set(named))
                               if starts is None else starts)
             got = set(C.call_reads(image, 0x9000))
@@ -167,6 +168,22 @@ class TestCallReads(unittest.TestCase):
     def test_an_outlined_fragment_reads_what_it_reads_before_writing(self):
         got = self._reads(blocks=[(0x9000, [('mov', 'x0, x21'), ('add', 'x1, x22, #8'), ('ret', '')])])
         self.assertEqual(got, {'x21', 'x22'})            # x0 written before it returns
+
+    def test_a_thunk_runs_its_prefix_then_reads_what_its_tail_target_reads(self):
+        # x21 set by the thunk's prefix is not the caller's x21
+        check = [('eor', 'x16, x30, x30, lsl #1'), ('tbz', 'x16, #62, #0xa010'), ('brk', '#0xc471')]
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('bl', '#0xa000'), ('mov', 'x0, x21'), ('ret', '')]),
+                                  (0xa000, [('mov', 'x21, x1'), *check, ('b', '#0xb000')])],
+                          names={0xb000: '_f'})
+        self.assertEqual(got, set(ABI_ARGS))
+
+    def test_an_outlined_prologue_gives_the_caller_a_frame(self):
+        # the spills after its `sub sp` are saves, not reads
+        got = self._reads(blocks=[(0x9000, [('bl', '#0xa000'), ('mov', 'x0, #0'), ('ret', '')]),
+                                  (0xa000, [('sub', 'sp, sp, #0x20'),
+                                            ('stp', 'x20, x19, [sp, #0x10]'), ('ret', '')])])
+        self.assertFalse(got & {'x19', 'x20'})
 
     def test_a_function_of_another_image_reads_the_abi_arguments(self):
         from proto.callees import ABI_ARGS

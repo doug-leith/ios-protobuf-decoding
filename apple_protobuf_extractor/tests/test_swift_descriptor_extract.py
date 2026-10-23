@@ -1002,6 +1002,45 @@ class TestLiveIos27PackedBytecode(unittest.TestCase):
         self.assertGreater(checked, 30)
 
 
+@unittest.skipUnless(_ios27_cache_file(), "iOS 27 cache (+ .symbols) not available")
+class TestLiveIos27PromptKitOutlinedHelpers(unittest.TestCase):
+    """iOS 27 PromptKit's Candidate{Annotation,Audio,File,Image}Event share one name-map
+    builder whose entry 4 reloads x2 / x3, spilled by two machine-outlined helpers: a prologue
+    that moves sp (``sub sp, sp, #0x80 ; stp ... ; ret``) and a thunk (``stp x2, x3, [sp,
+    #0x10] ; ... ; <LR check> ; b <metadata accessor>``).  Both run in the caller; taken as
+    calls, entry 4 was lost."""
+    @classmethod
+    def setUpClass(cls):
+        from macho.dyld_cache import DyldCacheReader
+        from macho.memory import BinaryContext
+        cls.reader = DyldCacheReader(_ios27_cache_file())
+        ctx = BinaryContext.from_cache(cls.reader, cls.reader.resolve_image("PromptKit"))
+        cls.msgs = {m.name: m for m in S.swift_messages(ctx)}
+
+    @classmethod
+    def tearDownClass(cls):
+        try:
+            cls.reader.close()
+        except Exception:
+            pass
+
+    def test_candidate_annotation_event_has_its_four_fields(self):
+        m = self.msgs["Promptkit_Wireformat_CandidateAnnotationEvent"]
+        self.assertEqual([(f.number, f.name, f.proto_type, f.number_confirmed) for f in m.fields],
+                         [(1, "response_identifier", "string", True),
+                          (2, "candidate_identifier", "string", True),
+                          (3, "segment_index", "int32", True),
+                          (4, "annotation", "Promptkit_Wireformat_Annotation", True)])
+        self.assertEqual(m.shape, "shared-once")
+
+    def test_the_other_events_of_the_builder_have_field_4(self):
+        for event, name in (("Audio", "audio"), ("File", "file"), ("Image", "image")):
+            m = self.msgs[f"Promptkit_Wireformat_Candidate{event}Event"]
+            self.assertEqual({(f.number, f.name) for f in m.fields},
+                             {(1, "response_identifier"), (2, "candidate_identifier"),
+                              (3, "segment_index"), (4, name)}, event)
+
+
 def _enum_oracle(name):
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "swift_enum_oracle_fixture", name)
     return p if os.path.isfile(p) else None

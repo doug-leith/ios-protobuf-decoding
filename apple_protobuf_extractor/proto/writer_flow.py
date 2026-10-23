@@ -254,7 +254,8 @@ class _Result:
 class _Run:
     """One function body being analysed: its :class:`proto.arm64_eval.Flow`, the registers
     before each instruction of its ``propagate`` run (``values``: an index missing is not
-    reached) and before each instruction of the outlined fragments it calls (``fragments``),
+    reached) and before each instruction of the outlined fragments it calls, and a thunk's tail
+    call (``fragments``),
     its jump-table arms, the summary depth, the function whose summary it is (``top``) and
     its address window ``[lo, hi)``."""
     flow: Flow
@@ -399,8 +400,11 @@ class WriterFlow:
             tgt = branch_target(ins) if mn in ('b', 'bl') else None
             frag = flow.fragment(k)
             if frag is not None:
-                self._run_in_place(st, frag, run.fragments.get(k, ()), tgt, res, run.depth,
-                                   ins.addr, vals)
+                frag_vals = run.fragments.get(k, ())
+                self._run_in_place(st, frag, frag_vals, tgt, res, run.depth, ins.addr, vals)
+                if flow.fragment_tail(k) is not None and self._tail_call(
+                        st, k, res, run, frag_vals[-1] if len(frag_vals) > len(frag) else {}):
+                    return True                      # no-return callee
                 continue
             if mn in CALLS:
                 callee = (tgt if mn == 'bl'
@@ -459,8 +463,9 @@ class WriterFlow:
     def _run_in_place(self, st: _St, frag, frag_vals, tgt: int, res: _Result, depth: int,
                       addr: int, vals: Dict[str, int]) -> None:
         """The ``bl`` at *addr* to code that runs as part of this function
-        (:meth:`proto.arm64_eval.Flow.fragment`): an outlined fragment, or a leaf function
-        its shape cannot be told from.  Its effect on the state is its instructions' (run
+        (:meth:`proto.arm64_eval.Flow.fragment`): an outlined fragment, a thunk's prefix (its
+        tail call: :meth:`_tail_call`), or a leaf function its shape cannot be told from.  Its
+        effect on the state is its instructions' (run
         with *frag_vals*, the registers before each); as a call it is a write site when handed
         the writer, and may serialise what it reads (:func:`proto.callees.call_reads`)."""
         self._site(st, tgt, None, res, depth, addr, vals)
@@ -470,6 +475,20 @@ class WriterFlow:
         for fi, fv in zip(frag, frag_vals):
             self._exec(st, fi, fi.mnemonic, split_ops(fi.op_str), fv, res)
         st.kill('x30')
+
+    def _tail_call(self, st: _St, k: int, res: _Result, run: _Run,
+                   vals: Dict[str, int]) -> bool:
+        """The tail call the thunk the ``bl`` ``insns[k]`` runs makes after its prefix
+        (:meth:`proto.arm64_eval.Flow.fragment_tail`), the registers there *vals*: a call
+        whose site is the ``bl``'s (:meth:`_run_in_place` records it); True when it does not
+        return."""
+        clobbers = run.flow.tail_clobbers(k)
+        if clobbers is not None:                     # changes only these (the stack probe)
+            for r in clobbers:
+                st.r.pop(r, None)
+            return False
+        return self._call(st, run.flow.fragment_tail(k), res, run.depth, run.top,
+                          run.flow.insns[k].addr, vals, site=False)
 
     def _read_origins(self, st: _St, reads, vals: Dict[str, int]):
         """``(origins, frame addresses)`` of what a callee reading the registers *reads* can
@@ -506,9 +525,9 @@ class WriterFlow:
                                       for stk in st.om)
 
     def _call(self, st: _St, tgt: Optional[int], res: _Result, depth: int, top: int,
-              addr: int, vals: Dict[str, int]) -> bool:
+              addr: int, vals: Dict[str, int], site: bool = True) -> bool:
         """The call at *addr* to *tgt* (None: unknown), the registers before it *vals*;
-        True when it does not return."""
+        True when it does not return.  *site*: record it as a write site (:meth:`_site`)."""
         name = callee_name(self.ctx, tgt) if tgt is not None else None
         sel = sent_selector(self.ctx, tgt, self._const(vals, 'x1'))
         if depth == 0:
@@ -516,7 +535,8 @@ class WriterFlow:
                 res.indirect_calls += 1
             elif sel is not None:
                 res.sends.add(sel)
-        self._site(st, tgt, name, res, depth, addr, vals)
+        if site:
+            self._site(st, tgt, name, res, depth, addr, vals)
         if name in _NORETURN:
             return True
         state = self._frame(vals, 'x2')
