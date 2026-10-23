@@ -124,8 +124,17 @@ CALLS = frozenset(('bl', 'blr', 'blraa', 'blrab', 'blraaz', 'blrabz'))
 INDIRECT_BRANCHES = frozenset(('br', 'braa', 'brab', 'braaz', 'brabz'))
 
 
+# Branches through a signed function pointer, never a jump table: one with no successor is a
+# tail call through that pointer.
+AUTHENTICATED_BRANCHES = INDIRECT_BRANCHES - {'br'}
+
+
 # Traps: a path that reaches one ends there.
 TRAPS = frozenset(('brk', 'udf', 'hlt'))
+
+
+# What ends a path through a function: a return, an indirect jump, a trap.
+PATH_ENDS = RETURNS | INDIRECT_BRANCHES | TRAPS
 
 
 # Every branch but ``b.cond`` (:func:`is_cond_branch`): what ends a straight-line run.
@@ -134,6 +143,23 @@ BLOCK_ENDS = frozenset(('b',)) | CALLS | INDIRECT_BRANCHES | RETURNS | COMPARE_B
 
 def is_cond_branch(mn: str) -> bool:
     return mn.startswith('b.')
+
+
+def is_conditional(mn: str) -> bool:
+    """*mn* branches or falls through: ``b.cond``, ``cbz`` / ``cbnz``, ``tbz`` / ``tbnz``."""
+    return is_cond_branch(mn) or mn in COMPARE_BRANCHES
+
+
+def branch_target(ins: Insn) -> Optional[int]:
+    """Target of a direct branch (``b``, ``bl``, ``b.cond``, ``cbz`` / ``tbz`` ...): its last
+    operand."""
+    ops = split_ops(ins.op_str)
+    return _parse_imm(ops[-1]) if ops else None
+
+
+def first_end(insns, ends) -> Optional[int]:
+    """Index of the first instruction of *insns* whose mnemonic is in *ends*, else None."""
+    return next((k for k, i in enumerate(insns) if i.mnemonic in ends), None)
 
 
 class MemOperand(NamedTuple):
@@ -162,6 +188,17 @@ def parse_mem(op: str):
         ext = parts[2].split()[0]
         shift = (_parse_imm(parts[2]) or 0) if '#' in parts[2] else 0
     return MemOperand(base, index, disp, ext, shift, idx_w)
+
+
+def index_offset(iv: int, pm: MemOperand) -> int:
+    """The bytes index value *iv* adds to the address of memory operand *pm*: a w index (or
+    ``uxtw`` / ``sxtw``) its low 32 bits, sign-extended by ``sxtw``, shifted by the operand's
+    amount."""
+    if pm.index_w or pm.ext in ('sxtw', 'uxtw'):
+        iv &= 0xFFFFFFFF
+        if pm.ext == 'sxtw' and iv & 0x80000000:
+            iv -= 1 << 32
+    return iv << pm.shift
 
 
 def _list_regs(tok: str) -> List[str]:
@@ -228,18 +265,20 @@ def _is_store(mn: str) -> bool:
 def writes_memory(mn: str) -> bool:
     """*mn* writes memory: a store (an exclusive one included), an LSE atomic, a compare-and-swap."""
     return mn.startswith('st') or bool(_LSE_LOAD.match(mn)) or mn.startswith('cas')
-# Instructions that read their destination too: they change only some of its bits (movk, the
-# bitfield inserts, a shift-insert), accumulate into it (multiply-add, shift-right-accumulate,
-# the bitwise selects, a table lookup's extension) or authenticate / sign / strip the pointer
-# it holds.
-_READS_DEST = frozenset((
-    'movk', 'bfi', 'bfxil', 'bfm', 'bfc', 'sli', 'sri',
-    'mla', 'mls', 'fmla', 'fmls', 'usra', 'ssra', 'ursra', 'srsra', 'bsl', 'bit', 'bif', 'tbx',
-    'smlal', 'smlal2', 'umlal', 'umlal2', 'smlsl', 'smlsl2', 'umlsl', 'umlsl2', 'sqdmlal',
-    'sqdmlal2', 'sqdmlsl', 'sqdmlsl2', 'sdot', 'udot', 'fmlal', 'fmlsl', 'sadalp', 'uadalp',
+# Pointer authentication of the pointer the destination holds: sign, authenticate, strip.
+_PAC_EXPLICIT = frozenset((
     'autia', 'autib', 'autda', 'autdb', 'autiza', 'autizb', 'autdza', 'autdzb',
     'pacia', 'pacib', 'pacda', 'pacdb', 'paciza', 'pacizb', 'pacdza', 'pacdzb',
     'xpaci', 'xpacd'))
+# Instructions that read their destination too: they change only some of its bits (movk, the
+# bitfield inserts, a shift-insert), accumulate into it (multiply-add, shift-right-accumulate,
+# the bitwise selects, a table lookup's extension) or authenticate / sign / strip the pointer
+# it holds (:data:`_PAC_EXPLICIT`).
+_READS_DEST = _PAC_EXPLICIT | frozenset((
+    'movk', 'bfi', 'bfxil', 'bfm', 'bfc', 'sli', 'sri',
+    'mla', 'mls', 'fmla', 'fmls', 'usra', 'ssra', 'ursra', 'srsra', 'bsl', 'bit', 'bif', 'tbx',
+    'smlal', 'smlal2', 'umlal', 'umlal2', 'smlsl', 'smlsl2', 'umlsl', 'umlsl2', 'sqdmlal',
+    'sqdmlal2', 'sqdmlsl', 'sqdmlsl2', 'sdot', 'udot', 'fmlal', 'fmlsl', 'sadalp', 'uadalp'))
 # Pointer authentication with implicit operands: (registers read, registers written).  The
 # return-address forms sign / authenticate / strip x30 in place (with sp or zero as the
 # modifier); the 1716 forms sign x17 with x16.
@@ -247,6 +286,12 @@ _IMPLICIT = {mn: (('x30',), ('x30',)) for mn in (
     'paciasp', 'pacibsp', 'autiasp', 'autibsp', 'paciaz', 'pacibz', 'autiaz', 'autibz', 'xpaclri')}
 _IMPLICIT.update({mn: (('x16', 'x17'), ('x17',)) for mn in (
     'pacia1716', 'pacib1716', 'autia1716', 'autib1716')})
+_PAC_IMPLICIT = frozenset(_IMPLICIT)
+# arm64e pointer authentication in place (``pacia x16, x8``, ``autibsp``, ``xpaci x0``): the
+# pointer keeps the address it points at -- only its PAC bits change -- so a value keeps its
+# identity through it (a signed code pointer is still that function).  Not ``pacga``, which
+# computes a code from two registers.
+POINTER_AUTH = _PAC_EXPLICIT | _PAC_IMPLICIT
 # Loads that write two registers.
 _PAIR_DESTS = PAIR_LOADS | frozenset(('ldxp', 'ldaxp'))
 

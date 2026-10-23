@@ -26,9 +26,10 @@ properties share names nothing, and nor does one the getters and the metadata na
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from proto.arm64_eval import _POINTER_AUTH, _is_stack
-from proto.arm64_operands import (CALLS, LOAD_BYTES, PAIR_LOADS, PAIR_STORES, RETURNS, STORE_BYTES,
-                                  parse_mem, reg_name, split_ops, writeback_base)
+from proto.arm64_eval import _is_stack
+from proto.arm64_operands import (CALLS, LOAD_BYTES, PAIR_LOADS, PAIR_STORES, POINTER_AUTH, RETURNS,
+                                  STORE_BYTES, branch_target, parse_mem, reg_name, split_ops,
+                                  writeback_base)
 from macho.disasm import _parse_imm
 from macho.memory import READ_ERRORS
 from serializers import swift_descriptor_extract as S
@@ -61,7 +62,7 @@ def _const(flow, k, reg, entry, depth=0) -> Optional[int]:
         return entry.get(reg) if entry else None
     ins = flow.insns[d]
     ops = split_ops(ins.op_str)
-    if ins.mnemonic in _POINTER_AUTH and ops and reg_name(ops[0]) == reg or \
+    if ins.mnemonic in POINTER_AUTH and ops and reg_name(ops[0]) == reg or \
             ins.mnemonic == "mov" and len(ops) == 2 and not ops[1].startswith("#"):
         return _const(flow, d, ops[-1] if ins.mnemonic == "mov" else reg, entry, depth + 1)
     return flow.const_before(k, reg)
@@ -87,7 +88,7 @@ def _is_const(flow, k, tok, entry) -> bool:
 def _call_target(flow, d, entry) -> Optional[int]:
     ins = flow.insns[d]
     if ins.mnemonic == "bl":
-        return S._branch_target(ins)
+        return branch_target(ins)
     ops = split_ops(ins.op_str)
     return _const(flow, d, ops[0], entry) if ops else None
 
@@ -132,7 +133,7 @@ def _loc(flow, k, reg, kind, memo, depth=0, entry=None):
         if b is not None and isinstance(b[2], int) and step is not None:
             res = ("addr", b[0], b[1], b[2] + step)
     elif (mn in ("mov", "fmov") and len(ops) == 2 and not ops[1].startswith("#")) or \
-            (mn in _POINTER_AUTH and ops and reg_name(ops[0]) == reg):
+            (mn in POINTER_AUTH and ops and reg_name(ops[0]) == reg):
         res = _loc(flow, d, ops[1] if mn in ("mov", "fmov") else reg, kind, memo, depth + 1, entry)
     elif mn in CALLS and reg == "x0":
         t = _call_target(flow, d, entry)
@@ -347,7 +348,7 @@ def _proven_equal(flow, k, c):
     last = flow.cfg.blocks[preds[0]][-1]
     kl = flow.addr_idx[last.addr]
     nxt = flow.insns[kl + 1].addr if kl + 1 < len(flow.insns) else None
-    taken = S._branch_target(last) == blk if last.mnemonic in ("b.eq", "b.ne") else None
+    taken = branch_target(last) == blk if last.mnemonic in ("b.eq", "b.ne") else None
     if taken is None or taken == (nxt == blk) or (last.mnemonic == "b.eq") != taken or kl < 1:
         return None
     cmp = flow.insns[kl - 1]
@@ -403,8 +404,8 @@ def getter_location(ctx, va, fp=False, entry=None, depth=0) -> Optional[tuple]:
     for k, ins in enumerate(insns):
         if ins.mnemonic in RETURNS:
             reg = "v0" if fp else "x0"
-        elif ins.mnemonic == "b" and S._branch_target(ins) not in inside:
-            t = S._branch_target(ins)
+        elif ins.mnemonic == "b" and branch_target(ins) not in inside:
+            t = branch_target(ins)
             if _callee(ctx, t) in _RET_TAIL and not fp:
                 reg = "x0"
             elif entry is None and depth < 2 and flow.from_entry(k, "x20"):

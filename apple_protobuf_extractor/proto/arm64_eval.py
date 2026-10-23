@@ -29,10 +29,10 @@ from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_
 from macho.strings import read_cfstring_text
 from proto.callees import call_reads, call_clobbers as callee_clobbers, outlined_fragment
 from proto.arm64_operands import (
-    ARG_GPRS, CALL_ARG_GPRS, CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES, RETURNS, LOAD_BYTES,
-    SIGNED_LOADS, STORE_BYTES, TRAPS, split_ops, writes_memory,
-    reg_bytes, reg_mask, reg_bits, is_cond_branch, writes,
-    parse_mem, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
+    ARG_GPRS, AUTHENTICATED_BRANCHES, CALL_ARG_GPRS, CALLER_SAVED_GPRS, CALLS, INDIRECT_BRANCHES,
+    POINTER_AUTH, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES, TRAPS, split_ops, writes_memory,
+    reg_bytes, reg_mask, reg_bits, branch_target, is_cond_branch, is_conditional, writes,
+    parse_mem, index_offset, mem_regs, SHIFT_MNEMONICS, shift_value, as_signed, imm_operand,
     operand2,
 )
 
@@ -114,18 +114,6 @@ _REPRESENTATIVE_SP = 1 << 62
 _FRAME_REGS = ('sp', 'x29')
 # Registers that may carry a flag argument into a function: x0 holds the object / struct.
 _FLAG_ARG_REGS = ARG_GPRS[1:]
-
-
-# arm64e pointer authentication in place (``pacia x16, x8``, ``autibsp``, ``xpaci x0``): the
-# pointer keeps the address it points at -- only its unmodelled PAC bits change -- so a value
-# keeps its identity through it (a signed code pointer is still that function).  Not
-# ``pacga``, which computes a code from two registers.
-_POINTER_AUTH = frozenset((
-    "pacia", "pacib", "pacda", "pacdb", "paciza", "pacizb", "pacdza", "pacdzb",
-    "paciaz", "pacibz", "paciasp", "pacibsp", "pacia1716", "pacib1716",
-    "autia", "autib", "autda", "autdb", "autiza", "autizb", "autdza", "autdzb",
-    "autiaz", "autibz", "autiasp", "autibsp", "autia1716", "autib1716",
-    "xpaci", "xpacd", "xpaclri"))
 
 
 def _is_stack(v) -> bool:
@@ -937,6 +925,23 @@ class Flow:
                      fallback=lambda r: self.const_before(root, r))
         if root < 0:
             m.put('sp', _STACK_TOP)               # from the entry the frame is the function's
+        end, k = self._single_path(m, root + 1, stop.__contains__, follow_indirect=True)
+        if end not in ('call', 'return', 'tail'):
+            return {}                             # at a stop, a trap: no string reaches a call
+        if where is not None:
+            where.append(k)
+        return self._string_args(m.get, direct)
+
+    def _single_path(self, m: "_Machine", k: int, until: Callable[[int], bool],
+                     follow_indirect: bool) -> Tuple[str, int]:
+        """Run *m* from ``insns[k]`` along the one path its values decide, to ``(end, index)``:
+        *end* ``'until'`` (``until(index)`` holds), ``'call'``, ``'return'``, ``'tail'`` (a ``b``
+        out of the listing, or an authenticated branch: through a signed function pointer),
+        ``'indirect'`` (a ``br`` when not *follow_indirect*; else it jumps to its register's
+        value), ``'trap'``, or ``'end'`` (past the listing).  An outlined fragment runs in
+        place and a call with a contract (:meth:`call_clobbers`) changes what it clobbers;
+        neither ends the path.  Raises _Abort at a loop, a branch it cannot decide, a jump to an
+        address it does not know."""
         seen: Set[int] = set()
 
         def jump(target: Optional[int]) -> int:
@@ -944,12 +949,11 @@ class Flow:
                 raise _Abort(f"indirect/unresolvable jump at {self.insns[k].addr:#x}")
             return self.addr_idx[target]
 
-        k = root + 1
         while k < len(self.insns):
             if k in seen:
                 raise _Abort(f"loop at {self.insns[k].addr:#x}")
-            if k in stop:
-                return {}
+            if until(k):
+                return 'until', k
             seen.add(k)
             ins = self.insns[k]
             mn, ops = ins.mnemonic, split_ops(ins.op_str)
@@ -959,22 +963,24 @@ class Flow:
             elif mn in CALLS and (clobbers := self.call_clobbers(
                     k, self._call_target(m, ins), evaluated=True)) is not None:
                 m.call((), clobbers)
-            elif mn in CALLS or mn in RETURNS:
-                if where is not None:
-                    where.append(k)
-                return self._string_args(m.get, direct)
-            if mn == 'b' and len(ops) == 1:
-                target = _parse_imm(ops[0])
+            elif mn in CALLS:
+                return 'call', k
+            elif mn in RETURNS:
+                return 'return', k
+            elif mn == 'b':
+                target = branch_target(ins)
                 if target is not None and target not in self.addr_idx:
-                    if where is not None:
-                        where.append(k)
-                    return self._string_args(m.get, direct)   # a tail call out of the function
+                    return 'tail', k              # a tail call out of the function
                 nxt = jump(target)
-            elif mn in INDIRECT_BRANCHES and ops:
-                nxt = jump(m.get(ops[0]))          # (an authenticated one: its register's target)
+            elif mn in AUTHENTICATED_BRANCHES:
+                return 'tail', k                  # through a signed function pointer
+            elif mn in INDIRECT_BRANCHES:
+                if not follow_indirect:
+                    return 'indirect', k
+                nxt = jump(m.get(ops[0]) if ops else None)
             elif mn in TRAPS:
-                return {}                          # the path ends: no string reaches a call
-            elif is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
+                return 'trap', k
+            elif is_conditional(mn):
                 taken, target = self._branch(m, ins)
                 if taken is None:
                     if is_cond_branch(mn):
@@ -986,34 +992,18 @@ class Flow:
             else:
                 self._exec(m, ins)
             k = nxt
-        return {}
+        return 'end', k
 
     def known_before(self, k: int) -> Dict[str, int]:
         """The registers known before ``insns[k]`` whatever the listing was entered with: what
         :meth:`propagate` (entered with nothing known) finds every path there agrees on --
         through loops and calls, so a table base the compiler parks in a callee-saved register
         across a call and copies back is still that constant.  One fixpoint per Flow (its
-        blocks' entry states), replayed to *k*; memoised per index."""
+        blocks' entry states, :meth:`_fixpoint`), *k*'s block replayed; memoised per index."""
         if k not in self._known:
             if self._entry_states is None:
-                start = NO_OBJECTS.machine({})
-                start.put('sp', _STACK_TOP)
-
-                def run_block(blk: int, st: _Machine):
-                    for j in self.block_range(blk):
-                        self._propagate_step(st, j)
-                    return [(succ, st) for succ in self._live_successors(blk, st)]
-                self._entry_states = (self.forward([(self.cfg.entry, start)], run_block)
-                                      if self.cfg.entry is not None else {})
-            b = self._block_of.get(k)
-            st0 = self._entry_states.get(b)
-            if st0 is None:                     # unreachable with nothing known
-                self._known[k] = {}
-            else:
-                st = st0.copy()
-                for j in range(self._first_in_block[b], k):
-                    self._propagate_step(st, j)
-                self._known[k] = dict(st.regs)
+                self._entry_states = self._fixpoint({}, NO_OBJECTS)
+            self._known[k] = self._replay(self._entry_states, [k], NO_OBJECTS).get(k, {})
         return self._known[k]
 
     def value_at(self, k0: int, regs: Dict[str, int], kt: int, reg: str) -> Optional[int]:
@@ -1022,59 +1012,29 @@ class Flow:
         its reaching-definition constant there), following the branches the run decides.  None
         when the run does not reach *kt* -- a call, a return, a jump out of the listing, a branch
         it cannot decide, a loop -- or the value there is unknown."""
+        if k0 < 0:
+            return None
         m = _Machine({}, fallback=lambda r: self.const_before(k0, r))
         for r, v in {**self.known_before(k0), **regs}.items():
             m.put(r, v)                         # put: a stack address marks the frame escaped
-        seen: Set[int] = set()
-        k = k0
-        while 0 <= k < len(self.insns) and k not in seen:
-            if k == kt:
-                return m.get(reg)
-            seen.add(k)
-            ins = self.insns[k]
-            mn = ins.mnemonic
-            nxt = k + 1
-            if mn == 'b':
-                nxt = self.addr_idx.get(_parse_imm(ins.op_str))
-                if nxt is None:
-                    return None
-            elif is_cond_branch(mn) or mn in ('cbz', 'cbnz', 'tbz', 'tbnz'):
-                taken, target = self._branch(m, ins)
-                if taken is None:
-                    if is_cond_branch(mn):
-                        return None
-                    try:
-                        nxt = self._skip_trap_branch(k, target, mn, ins)
-                    except _Abort:
-                        return None
-                elif taken:
-                    nxt = self.addr_idx.get(target)
-                    if nxt is None:
-                        return None
-            elif self.fragment(k) is not None:
-                self._run_fragment(m, k)
-            elif mn in CALLS and (clobbers := self.call_clobbers(
-                    k, self._call_target(m, ins), evaluated=True)) is not None:
-                m.call((), clobbers)
-            elif mn in CALLS or mn in INDIRECT_BRANCHES or mn in RETURNS or mn in TRAPS:
-                return None
-            else:
-                self._exec(m, ins)
-            k = nxt
-        return None
+        try:
+            end, _ = self._single_path(m, k0, lambda k: k == kt, follow_indirect=False)
+        except _Abort:
+            return None
+        return m.get(reg) if end == 'until' else None
 
     def _branch(self, m: "_Machine", ins: Insn) -> Tuple[Optional[bool], Optional[int]]:
         """``(taken, target)`` of a conditional branch under *m*; ``taken`` is None when the
         condition is not known."""
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        target = branch_target(ins)
         if is_cond_branch(mn):
-            target = _parse_imm(ops[0]) if ops else None
             return (None if m.flags is None else _eval_cond(mn[2:], m.flags)), target
         if mn in ('cbz', 'cbnz') and len(ops) == 2:
             v = m.get(ops[0])
             if v is not None and _is_symbolic(v) and not _is_stack(v):
                 v = None                            # a pointer into an object may be nil
-            return (None if v is None else (v == 0) == (mn == 'cbz')), _parse_imm(ops[1])
+            return (None if v is None else (v == 0) == (mn == 'cbz')), target
         if mn in ('tbz', 'tbnz') and len(ops) == 3:
             v = m.get(ops[0])
             bit = _parse_imm(ops[1]) or 0
@@ -1082,7 +1042,7 @@ class Flow:
                 v = v.off if bit < 4 else None
             elif v is not None and _is_symbolic(v):
                 v = None                            # (a pointer's bits are its encoding's)
-            return (None if v is None else (((v >> bit) & 1) == 0) == (mn == 'tbz')), _parse_imm(ops[2])
+            return (None if v is None else (((v >> bit) & 1) == 0) == (mn == 'tbz')), target
         return None, None
 
     def _exec(self, m: "_Machine", ins: Insn) -> None:
@@ -1110,7 +1070,7 @@ class Flow:
                     ((lit >> 3) & 1, (lit >> 2) & 1, (lit >> 1) & 1, lit & 1)
         elif mn in ('mov', 'movz') and len(ops) == 2:
             put(ops[0], _parse_imm(ops[1]) if ops[1].startswith('#') else m.copy_of(ops[1]))
-        elif mn in _POINTER_AUTH:
+        elif mn in POINTER_AUTH:
             pass            # signs / authenticates / strips a pointer in place: same address
         elif mn == 'movn' and len(ops) >= 2:
             v = _parse_imm(ops[1])
@@ -1221,7 +1181,7 @@ class Flow:
         pm = parse_mem(mem)
         if pm is None or mem.endswith('!'):
             return None
-        base, index, disp, ext, shift, idx_w = pm
+        base, index, disp = pm.base, pm.index, pm.disp
         r = _norm_reg(base) if base else None
         obj = m.regs.get(r) if r else None
         if obj is None or not ((m.opaque is not None and m.opaque(obj)) or
@@ -1232,11 +1192,7 @@ class Flow:
             iv = m.number(index)                    # (a frame address or a pointer: no offset)
             if iv is None:
                 return None
-            if idx_w or ext in ('sxtw', 'uxtw'):
-                iv &= 0xFFFFFFFF
-                if ext == 'sxtw' and iv & 0x80000000:
-                    iv -= 1 << 32
-            off += iv << shift
+            off += index_offset(iv, pm)
         return m.field_value(obj, off)
 
     def _access(self, m: "_Machine", mem: str, post: Optional[str]) -> Optional[int]:
@@ -1245,21 +1201,14 @@ class Flow:
         pm = parse_mem(mem)
         if pm is None:
             return None
-        base, index, disp, ext, shift, idx_w = pm
+        base, index, disp = pm.base, pm.index, pm.disp
         b = m.get(base) if base else None
         if isinstance(b, Sym) and b.kind == "token":
             b = None                            # (an object's own address is not known)
         addr = b
         if addr is not None and index:
             iv = m.number(index)
-            if iv is None:
-                addr = None
-            else:
-                if idx_w or ext in ('sxtw', 'uxtw'):
-                    iv &= 0xFFFFFFFF
-                    if ext == 'sxtw' and iv & 0x80000000:
-                        iv -= 1 << 32
-                addr += iv << shift
+            addr = None if iv is None else addr + index_offset(iv, pm)
         if mem.endswith('!'):
             addr = None if addr is None else addr + disp
             m.put(base, addr)
@@ -1344,9 +1293,12 @@ class Flow:
         fragment a ``bl`` runs (:meth:`fragment`) the registers before each of its instructions;
         *slots_out*, when given, receives the stack slots known
         before each ``insns[k]`` in *at*."""
-        cfg = self.cfg
-        want = set(at)
-        if cfg.entry is None:
+        return self._replay(self._fixpoint(entry, objects), at, objects, slots_out, fragments_out)
+
+    def _fixpoint(self, entry: Dict[str, int], objects: Objects) -> Dict[int, "_Machine"]:
+        """``{block: state on entry to it}`` of every block :meth:`propagate` reaches from
+        *entry* (sp at the frame's top)."""
+        if self.cfg.entry is None:
             return {}
         start = objects.machine(entry)
         start.put('sp', _STACK_TOP)
@@ -1355,9 +1307,21 @@ class Flow:
             for k in self.block_range(blk):
                 self._propagate_step(st, k, objects.call_result)
             return [(succ, st) for succ in self._live_successors(blk, st)]
+        return self.forward([(self.cfg.entry, start)], run_block)
 
+    def _replay(self, states: Dict[int, "_Machine"], at: Iterable[int], objects: Objects,
+                slots_out: Optional[Dict[int, Dict[int, Tuple[int, int]]]] = None,
+                fragments_out: Optional[Dict[int, List[Dict[str, int]]]] = None
+                ) -> Dict[int, Dict[str, int]]:
+        """:meth:`propagate`'s answer from the blocks' entry *states* (:meth:`_fixpoint`): each
+        block holding an index of *at* -- with *fragments_out*, every block -- run again from
+        its entry state, recording the registers before each index of *at*."""
+        want = set(at)
+        blocks = {self._block_of.get(k) for k in want}
         out: Dict[int, Dict[str, int]] = {}
-        for blk, st0 in self.forward([(cfg.entry, start)], run_block).items():
+        for blk, st0 in states.items():
+            if blk not in blocks and fragments_out is None:
+                continue
             st = st0.copy()
             for k in self.block_range(blk):
                 if k in want:
@@ -1469,8 +1433,7 @@ class Flow:
             v = call_result(k, target, x0) if call_result is not None else None
             if v is not None:
                 m.put('x0', v)
-        elif (mn == 'b' or mn in INDIRECT_BRANCHES or mn in RETURNS
-              or mn in ('cbz', 'cbnz', 'tbz', 'tbnz') or is_cond_branch(mn)):
+        elif mn == 'b' or mn in INDIRECT_BRANCHES or mn in RETURNS or is_conditional(mn):
             return
         else:
             self._exec(m, ins)
@@ -1534,7 +1497,7 @@ class Flow:
         def step(st: _Machine, k: int, record: bool) -> None:
             ins = self.insns[k]
             if ins.mnemonic == 'b':
-                tgt = _parse_imm(ins.op_str)
+                tgt = branch_target(ins)
                 if record and tgt is not None and (tgt not in self.addr_idx or tgt in tail_targets):
                     record_call(st, k, tgt, True)
                 return
@@ -1543,7 +1506,7 @@ class Flow:
 
         def successors(blk: int, st: _Machine) -> List[int]:
             last = cfg.blocks[blk][-1]
-            if last.mnemonic == 'b' and _parse_imm(last.op_str) in tail_targets:
+            if last.mnemonic == 'b' and branch_target(last) in tail_targets:
                 return []
             return self._live_successors(blk, st)
 

@@ -50,8 +50,9 @@ from proto.function_body import is_function_entry
 from proto.callees import (callee_name, sent_selector, stub_selector, call_reads, text_holding,
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
 from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
-                                  PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
-                                  CALLS, INDIRECT_BRANCHES, ARG_GPRS, split_ops)
+                                  PAIR_LOADS, PAIR_STORES, RETURNS, CALLER_SAVED, CALLS,
+                                  AUTHENTICATED_BRANCHES, ARG_GPRS, branch_target, is_conditional,
+                                  split_ops)
 
 from proto.models import record_heuristic_hit
 
@@ -395,7 +396,7 @@ class WriterFlow:
             if mn in RETURNS:
                 res.ret |= st.p('x0') | st.p('v0')
                 return True
-            tgt = _parse_imm(ops[0]) if (mn in ('b', 'bl') and ops) else None
+            tgt = branch_target(ins) if mn in ('b', 'bl') else None
             frag = flow.fragment(k)
             if frag is not None:
                 self._run_in_place(st, frag, run.fragments.get(k, ()), tgt, res, run.depth,
@@ -411,7 +412,7 @@ class WriterFlow:
                     continue
             lo, hi = run.lo, run.hi
             out_of_window = mn == 'b' and tgt is not None and not (lo <= tgt < hi)
-            if mn in CALLS or out_of_window or (mn in INDIRECT_BRANCHES and mn != 'br'):
+            if mn in CALLS or out_of_window or mn in AUTHENTICATED_BRANCHES:
                 if out_of_window and not self._is_function(tgt):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
                     return True
@@ -426,8 +427,8 @@ class WriterFlow:
                 if not run.arms.get(ins.addr):
                     res.fail(f"unresolved indirect jump at {ins.addr:#x}")
                 return False
-            if mn == 'b' or mn.startswith('b.') or mn in COMPARE_BRANCHES:
-                t = _parse_imm(ops[-1]) if ops else None
+            if mn == 'b' or is_conditional(mn):
+                t = branch_target(ins)
                 if t is not None and not (lo <= t < hi):
                     res.fail(f"branch out of the function window at {ins.addr:#x}")
                     return True
@@ -445,7 +446,7 @@ class WriterFlow:
             return None
         ops = split_ops(ins.op_str)
         r = _norm_reg(ops[0]) if ops else None
-        t = _parse_imm(ops[-1]) if len(ops) > 1 else None
+        t = branch_target(ins)
         if r is None or t is None:
             return None
         return (r, t) if ins.mnemonic == 'cbz' else (r, ins.addr + 4)

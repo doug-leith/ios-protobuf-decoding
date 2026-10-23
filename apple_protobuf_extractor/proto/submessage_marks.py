@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 from macho.disasm import _parse_imm
-from proto.arm64_operands import RETURNS, split_ops
+from proto.arm64_operands import RETURNS, branch_target, is_conditional, split_ops
 from proto.dispatch import listing_flow
 from proto.writeto import field_number_at
 
@@ -44,11 +44,6 @@ def scratch_slot_of(flow, k: int) -> Optional[int]:
         k_off = _parse_imm(ops[2])
         return None if k_off is None else -k_off
     return _sp_offset(ins)
-
-
-def _branch_target(ins) -> Optional[int]:
-    ops = split_ops(ins.op_str)
-    return _parse_imm(ops[-1]) if ops and ops[-1].startswith('#') else None
 
 
 @dataclass(frozen=True)
@@ -95,7 +90,7 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
             if mn in ('bl', 'b'):
                 j_slot = scratch_slot_of(flow, k) if mn == 'bl' else None
                 fn = field_number_at(flow, k)
-                target = _branch_target(ins)
+                target = branch_target(ins)
                 if j_slot is not None:
                     if fn is None and j_slot == slot:
                         ended = True
@@ -112,8 +107,8 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
                     if t is None:
                         return None
                     nxt = t                          # in-function jump
-            elif mn in ('cbz', 'cbnz', 'tbz', 'tbnz') or mn.startswith('b.'):
-                t = at.get(_branch_target(ins))
+            elif is_conditional(mn):
+                t = at.get(branch_target(ins))
                 if t is None:
                     return None
                 work.append(t)

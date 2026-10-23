@@ -6,16 +6,13 @@ dominators, and operand helpers.  They carry no writeTo: or readFrom: meaning an
 on decoded ``macho.disasm.Insn`` objects.  Imports only ``macho.*`` and :mod:`proto.arm64_operands`.
 """
 
-from macho.disasm import _parse_imm, _norm_reg, _STOP_MNEMONICS
+from macho.disasm import _parse_imm, _norm_reg
 from proto.arm64_operands import split_ops, parse_mem
-from proto.arm64_operands import CALLS, COMPARE_BRANCHES, INDIRECT_BRANCHES, TRAPS
+from proto.arm64_operands import (CALLS, INDIRECT_BRANCHES, RETURNS, TRAPS, branch_target,
+                                  is_conditional)
 
 # a block that ends here has no successor: a return, or a trap (brk / udf / hlt)
-TERMINALS = _STOP_MNEMONICS | TRAPS
-
-
-def _is_cond(mn: str) -> bool:
-    return mn in COMPARE_BRANCHES or mn.startswith('b.')
+TERMINALS = RETURNS | TRAPS
 
 
 # ── Operand toolkit ───────────────────────────────────────────────────────────
@@ -50,16 +47,6 @@ def mem_operand(op_str):
     return ops[0], pm.base, pm.index, pm.disp, pm.shift
 
 
-def _cond_target(ins):
-    """Branch target of a conditional.  tbz/tbnz carry the test bit as the first
-    immediate, so take the LAST immediate; cbz/b.cc have the target as the only
-    immediate."""
-    if ins.mnemonic in ('tbz', 'tbnz'):
-        toks = [t for t in ins.op_str.replace(',', ' ').split() if t.startswith('#')]
-        return _parse_imm(toks[-1]) if toks else None
-    return _parse_imm(ins.op_str)
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Basic-block CFG + dominators
 # ══════════════════════════════════════════════════════════════════════════════
@@ -79,13 +66,13 @@ def _succ_addrs(ins, fallthrough, lo, hi):
     if mn in CALLS:
         return [fallthrough] if fallthrough is not None else []
     if mn == 'b':
-        t = _parse_imm(ins.op_str)
+        t = branch_target(ins)
         return [t] if (t is not None and lo <= t < hi) else []
     if mn in INDIRECT_BRANCHES:
         return []
-    if _is_cond(mn):
+    if is_conditional(mn):
         out = []
-        t = _cond_target(ins)
+        t = branch_target(ins)
         if t is not None and lo <= t < hi:
             out.append(t)
         if fallthrough is not None:
@@ -96,7 +83,7 @@ def _succ_addrs(ins, fallthrough, lo, hi):
 
 def _is_block_end(ins):
     return (ins.mnemonic in TERMINALS or ins.mnemonic == 'b' or ins.mnemonic in INDIRECT_BRANCHES
-            or _is_cond(ins.mnemonic))
+            or is_conditional(ins.mnemonic))
 
 
 class CFG:

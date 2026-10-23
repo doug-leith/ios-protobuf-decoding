@@ -18,15 +18,12 @@ import bisect
 from typing import Dict, Iterable, Optional
 
 from macho.memory import READ_ERRORS, BinaryContext
-from macho.disasm import disasm, _parse_imm
-from proto.arm64_operands import (COMPARE_BRANCHES, INDIRECT_BRANCHES, RETURNS, TRAPS,
-                                  is_cond_branch, split_ops)
+from macho.disasm import disasm
+from proto.arm64_operands import PATH_ENDS, branch_target, is_conditional
 from proto.callees import text_holding
 from proto.dispatch import _jump_table_arm_addrs
 from proto.models import record_heuristic_hit
 
-# What ends a path through a function: a return, an indirect jump, a trap.
-_PATH_ENDS = RETURNS | INDIRECT_BRANCHES | TRAPS
 # [cap:INPUT-SANITY] runaway guard on a body read with no known extent (:func:`function_body`;
 # with one, the extent bounds it).  A body that reaches it is marked truncated.
 _UNBOUNDED_MAX_INSNS = 4000
@@ -71,12 +68,6 @@ def is_function_entry(ctx: BinaryContext, va: int, entries=None) -> bool:
     starts = ctx.function_starts()
     i = bisect.bisect_left(starts, va)
     return i < len(starts) and starts[i] == va
-
-
-def _branch_target(ins) -> Optional[int]:
-    """Target of a direct branch (``b``, ``b.cond``, ``cbz``/``tbz``...): its last operand."""
-    ops = split_ops(ins.op_str)
-    return _parse_imm(ops[-1]) if ops else None
 
 
 def function_body(ctx: BinaryContext, va: int, entries=None,
@@ -137,15 +128,15 @@ def function_body(ctx: BinaryContext, va: int, entries=None,
                 out[a] = ins
                 mn = ins.mnemonic
                 a += 4
-                if mn in _PATH_ENDS:
+                if mn in PATH_ENDS:
                     break
                 if mn == "b":
-                    t = _branch_target(ins)
+                    t = branch_target(ins)
                     if inside(t) if end is not None else t == ins.addr + 4:
                         work.append(t)
                     break
-                if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
-                    t = _branch_target(ins)
+                if is_conditional(mn):
+                    t = branch_target(ins)
                     if inside(t):
                         work.append(t)
         targets = {t for b, ts in (arms or {}).items() if b in out for t in ts}

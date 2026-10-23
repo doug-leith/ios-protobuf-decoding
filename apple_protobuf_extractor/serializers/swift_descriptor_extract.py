@@ -75,8 +75,8 @@ from macho.disasm import _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import callee_name
 from proto.dispatch import listing_flow
-from proto.function_body import FunctionBody, _branch_target, function_body
-from proto.arm64_operands import CALLS, parse_mem, split_ops, writes
+from proto.function_body import FunctionBody, function_body
+from proto.arm64_operands import CALLS, branch_target, parse_mem, split_ops, writes
 from proto.models import MAX_FIELD_NUMBER, record_analysis_failure, record_heuristic_hit
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
@@ -214,7 +214,7 @@ def _tail_calls(insns) -> List[int]:
     """Indices of the listing's ``b`` instructions to an address outside it."""
     inside = {i.addr for i in insns}
     return [k for k, ins in enumerate(insns)
-            if ins.mnemonic == "b" and _branch_target(ins) not in inside]
+            if ins.mnemonic == "b" and branch_target(ins) not in inside]
 
 
 def _cstr(ctx: BinaryContext, va: Optional[int]) -> Optional[str]:
@@ -241,7 +241,7 @@ def _static_objects(ctx: BinaryContext, insns) -> List[int]:
     ``_NameMap`` array the compiler laid out in the image (shape C)."""
     out: List[int] = []
     for k, regs in call_site_registers(ctx, insns, _flow_of(ctx, insns)):
-        t = _branch_target(insns[k]) if insns[k].mnemonic in ("bl", "b") else None
+        t = branch_target(insns[k]) if insns[k].mnemonic in ("bl", "b") else None
         if _symbol_at(ctx, t).lstrip("_") == "swift_initStaticObject" and "x1" in regs:
             out.append(regs["x1"])
     return out
@@ -584,7 +584,7 @@ def _tail_callee(ctx: BinaryContext, insns) -> Optional[Tuple[int, Dict[str, int
     if len(tails) != 1:
         return None
     k = tails[0]
-    t = _branch_target(insns[k])
+    t = branch_target(insns[k])
     regs = _flow_of(ctx, insns).propagate({}, at=[k]).get(k)
     if t is None or t == insns[0].addr or regs is None or not _in_executable_text(ctx, t):
         return None
@@ -774,7 +774,7 @@ def _visit_method(ctx: BinaryContext, flow: Flow, k: int) -> Optional[Tuple[str,
     ins = flow.insns[k]
     name = ""
     if ins.mnemonic == "bl":
-        name = _symbol_at(ctx, _branch_target(ins))
+        name = _symbol_at(ctx, branch_target(ins))
     elif ins.mnemonic in CALLS:
         reg = _norm_reg(split_ops(ins.op_str)[0])
         d = next(iter(flow.defs_before(k, reg)), -1) if len(flow.defs_before(k, reg)) == 1 else -1

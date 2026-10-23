@@ -5,7 +5,8 @@ from unittest import mock
 
 from macho.disasm import Insn
 import proto.arm64_eval as E
-from proto.arm64_eval import Flow, Objects, Sym, _Abort
+from proto.arm64_eval import Flow, Objects, Sym
+from tests._fakes import NoImage
 
 B = 0x1000
 
@@ -37,12 +38,16 @@ class TestFlowReview(unittest.TestCase):
                  I(B + 12, 'brk', '#0x1'), I(B + 16, 'mov', 'w0, #1'), I(B + 20, 'b', '#0x1008')]
         self.assertEqual(Flow(None, insns).cfg.succ[B + 12], [])
 
-    def test_evaluate_stops_at_an_authenticated_branch_and_a_trap(self):
+    def test_evaluate_ends_at_an_authenticated_branch_and_a_trap(self):
+        """An authenticated branch is a tail call through a signed pointer, even to a target
+        in the listing: the strings are the ones at it."""
         with mock.patch.object(E, "read_cfstring_text", lambda ctx, va: f"S{va:#x}"):
-            braa = [I(B, 'ldr', 'w8, [x0]'), I(B + 4, 'braaz', 'x16'), I(B + 8, 'mov', 'x1, #0x10'),
-                    I(B + 12, 'ret')]
-            with self.assertRaises(_Abort):
-                Flow(None, braa).evaluate(0, 'x8', 1)
+            braa = [I(B, 'ldr', 'w8, [x0]'), I(B + 4, 'mov', 'x1, #0x20'),
+                    I(B + 8, 'adr', 'x16, #0x1010'), I(B + 12, 'braaz', 'x16'),
+                    I(B + 16, 'mov', 'x1, #0x10'), I(B + 20, 'ret')]
+            where = []
+            self.assertEqual(Flow(None, braa).evaluate(0, 'x8', 1, where=where), {'x1': 'S0x20'})
+            self.assertEqual(where, [3])
             brk = [I(B, 'ldr', 'w8, [x0]'), I(B + 4, 'brk', '#0x1'), I(B + 8, 'mov', 'x1, #0x10'),
                    I(B + 12, 'ret')]
             self.assertEqual(Flow(None, brk).evaluate(0, 'x8', 1), {})
@@ -139,6 +144,43 @@ class TestSymbolicValues(unittest.TestCase):
         got = Flow(None, insns).propagate({'x0': tok, 'sp': E.frame(0)}, [3])[3]
         self.assertNotIn('x1', got)          # a token plus a number: no object, no address
         self.assertNotIn('x2', got)          # a frame address 2^47 bytes off: not one
+
+
+class TestOnePath(unittest.TestCase):
+    """evaluate and value_at follow one path the same way (Flow._single_path)."""
+
+    FRAG, PROBE = 0x7000, 0x8000
+
+    def _evaluate(self, callee):
+        """``x1`` = a string, then ``bl`` *callee*, then an ordinary call: the strings there."""
+        frag = (I(self.FRAG, 'mov', 'x2, #0x30'),)
+        insns = [I(B, 'ldr', 'w8, [x0]'), I(B + 4, 'mov', 'x1, #0x20'),
+                 I(B + 8, 'bl', f'#{callee:#x}'), I(B + 12, 'bl', '#0x9000'), I(B + 16, 'ret')]
+        where = []
+        with mock.patch.object(E, "read_cfstring_text", lambda ctx, va: f"S{va:#x}"), \
+                mock.patch.object(E, "outlined_fragment",
+                                  lambda ctx, t: frag if t == self.FRAG else None), \
+                mock.patch.object(E, "callee_clobbers",
+                                  lambda ctx, t: ('x16', 'x17') if t == self.PROBE else None):
+            got = Flow(NoImage(), insns).evaluate(0, 'x8', 1, where=where)
+        return got, where
+
+    def test_evaluate_runs_through_an_outlined_fragment(self):
+        """The fragment's own writes, and the caller's registers it leaves alone (they were
+        taken as a call's)."""
+        self.assertEqual(self._evaluate(self.FRAG), ({'x1': 'S0x20', 'x2': 'S0x30'}, [3]))
+
+    def test_evaluate_runs_through_a_contracted_call(self):
+        """The stack probe changes x16 / x17 only: x1 still holds its string."""
+        self.assertEqual(self._evaluate(self.PROBE), ({'x1': 'S0x20'}, [3]))
+
+    def test_value_at_stops_at_an_authenticated_branch(self):
+        insns = [I(B, 'mov', 'x1, #5'), I(B + 4, 'braa', 'x16, x17'), I(B + 8, 'mov', 'x1, #6'),
+                 I(B + 12, 'ret')]
+        self.assertIsNone(Flow(None, insns).value_at(0, {}, 3, 'x1'))
+        insns[1] = I(B + 4, 'nop')
+        self.assertEqual(Flow(None, insns).value_at(0, {}, 3, 'x1'), 6)
+
 
 if __name__ == "__main__":
     unittest.main()

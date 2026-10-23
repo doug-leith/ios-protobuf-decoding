@@ -27,10 +27,10 @@ from typing import Dict, NamedTuple, Optional, Tuple
 from macho.disasm import disasm, _norm_reg, _parse_imm
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, reads, writes, writeback_base, STORE_BYTES,
-                                  PAIR_STORES, RETURNS, COMPARE_BRANCHES, BLOCK_ENDS, NO_DEST,
+                                  PAIR_STORES, RETURNS, BLOCK_ENDS, NO_DEST, AUTHENTICATED_BRANCHES,
                                   INDIRECT_BRANCHES, CALL_ARG_GPRS, ARG_FPRS, CALLS, CALLER_SAVED,
                                   TRAPS,
-                                  is_cond_branch)
+                                  branch_target, is_cond_branch, is_conditional)
 from proto.arm64cfg import parse_adrp
 
 
@@ -462,8 +462,10 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     (:func:`call_reads`) and leaves the caller-saved registers to the callee; a call to an
     outlined fragment runs the fragment's instructions; a tail call reads what its target
     reads; a return hands back :data:`_RETURN_REGS`; a trap or a call that does not return
-    ends the path.  A prologue spill of a callee-saved register is not a read.  Every
-    register when the body is read only in part or a ``br`` goes somewhere unknown."""
+    ends the path.  A prologue spill of a callee-saved register is not a read.  An
+    authenticated branch with no successor is a tail call through a signed pointer: it reads
+    what an unknown callee reads.  Every register when the body is read only in part or a
+    ``br`` goes somewhere unknown."""
     from proto.dispatch import decoded_flow, function_entries
     from proto.function_body import function_body
     body = function_body(ctx, target, function_entries(ctx))
@@ -475,7 +477,7 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     frame = any(_moves_sp(i) for i in flow.insns)     # it has a frame of its own
     live_in: Dict[int, frozenset] = {b: frozenset() for b in cfg.order}
     unresolved = [cfg.blocks[b][-1].addr for b in cfg.order
-                  if cfg.blocks[b][-1].mnemonic in INDIRECT_BRANCHES and not cfg.succ.get(b)]
+                  if cfg.blocks[b][-1].mnemonic == 'br' and not cfg.succ.get(b)]
     changed = True
     while changed:
         changed = False
@@ -484,6 +486,8 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
             last = cfg.blocks[b][-1]
             if last.addr in unresolved:
                 live = set(_ALL_REGS)                   # a jump nothing resolved
+            elif not succ and last.mnemonic in AUTHENTICATED_BRANCHES:
+                live = set(call_reads(ctx, None))       # a tail call through a pointer
             else:
                 live = set().union(*(live_in[x] for x in succ)) if succ else set()
             for ins in reversed(cfg.blocks[b]):
@@ -520,7 +524,7 @@ def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) 
     if mn in TRAPS:
         return set()
     if mn == "b":
-        t = _parse_imm(ops[0]) if ops else None
+        t = branch_target(ins)
         return set(live_after) if t in own else set(call_reads(ctx, t))
     if mn in CALLS:
         t = _parse_imm(ops[0]) if mn == "bl" and ops else None
@@ -539,8 +543,8 @@ def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) 
     src = set(reads(ins))
     if frame and (mn in STORE_BYTES or mn in PAIR_STORES) and "[sp" in ins.op_str:
         src -= _CALLEE_SAVED                            # a prologue spill is not a read
-    if is_cond_branch(mn) or mn in COMPARE_BRANCHES:
-        t = _parse_imm(ops[-1]) if ops else None
+    if is_conditional(mn):
+        t = branch_target(ins)
         if t not in own:                                # a conditional tail call
             src |= set(call_reads(ctx, t))
     return (set(live_after) - set(writes(ins))) | src

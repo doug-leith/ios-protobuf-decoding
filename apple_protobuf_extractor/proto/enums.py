@@ -30,7 +30,7 @@ from proto.dictrep_flow import Flow
 from proto.callees import text_holding
 from proto.eval_tokens import SELF, OPAQUE, opaque
 from proto.function_body import FunctionBody, function_listing
-from proto.arm64_operands import CALLS, INDIRECT_BRANCHES, RETURNS, TRAPS
+from proto.arm64_operands import CALLS, PATH_ENDS, first_end
 from proto.config     import _class_to_proto_name
 from proto.defaults    import DEFAULT_PREFIXES
 
@@ -167,9 +167,7 @@ def _wrapper_first_call(ctx: BinaryContext, cls: ObjcClass, selector: str):
     except READ_ERRORS as exc:
         record_unread(ctx, "method body", f"-[{cls.name} {selector}] {m.imp:#x}", exc)
         return None
-    end = next((k for k, i in enumerate(insns)
-                if i.mnemonic == 'b' or i.mnemonic in TRAPS or i.mnemonic in CALLS
-                or i.mnemonic in INDIRECT_BRANCHES or i.mnemonic in RETURNS), None)
+    end = first_end(insns, PATH_ENDS | CALLS | {'b'})
     if end is None:
         return None
     try:

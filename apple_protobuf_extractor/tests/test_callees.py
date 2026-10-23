@@ -241,6 +241,16 @@ class TestCallReads(unittest.TestCase):
         self.assertEqual(got, set(_ALL_REGS))
         self.assertIn('undecoded jump table hit', logs.output[0])
 
+    def test_an_authenticated_tail_call_reads_what_an_unknown_callee_reads(self):
+        """A braa is a tail call through a signed pointer, not an undecoded jump table."""
+        from proto.callees import ABI_ARGS
+        logger = logging.getLogger('proto.models')
+        with self.assertLogs(logger, 'WARNING') as logs:
+            logger.warning("sentinel")
+            got = self._reads(blocks=[(0x9000, [('mov', 'x0, x21'), ('braa', 'x16, x17')])])
+        self.assertEqual(got, set(ABI_ARGS) - {'x0'} | {'x21', 'x16', 'x17'})
+        self.assertEqual(len(logs.output), 1)
+
     def test_a_return_hands_back_x0(self):
         self.assertEqual(self._reads(blocks=[(0x9000, [('add', 'x1, x22, #8'), ('ret', '')])]),
                          {'x22', 'x0'})

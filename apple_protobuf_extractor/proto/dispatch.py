@@ -20,8 +20,8 @@ from macho.classlist import ClassList, ObjcClass
 from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.arm64_operands import (INDIRECT_BRANCHES, RETURNS, TRAPS, imm_operand, is_cond_branch,
-                                  reads, split_ops)
+from proto.arm64_operands import (PATH_ENDS, first_end, imm_operand, is_cond_branch, reads,
+                                  split_ops)
 from proto.models import record_heuristic_hit
 from proto.protoclass_set import _proto_class_set
 
@@ -59,9 +59,7 @@ def _find_readfrom_c_func(
     except READ_ERRORS as exc:
         record_unread(ctx, "method body", f"-[{cls.name} readFrom:] {method.imp:#x}", exc)
         return None
-    end = next((k for k, i in enumerate(insns)
-                if i.mnemonic == 'b' or i.mnemonic in TRAPS or i.mnemonic in INDIRECT_BRANCHES
-                or i.mnemonic in RETURNS), None)
+    end = first_end(insns, PATH_ENDS | {'b'})
     insns = insns[:end + 1] if end is not None else insns
     if not insns:
         return None
