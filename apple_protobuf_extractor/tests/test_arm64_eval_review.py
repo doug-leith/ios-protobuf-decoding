@@ -92,6 +92,25 @@ class TestFlowReview(unittest.TestCase):
         self.assertNotIn('x1', got)
 
 
+    def test_an_object_field_load_with_a_symbolic_index_is_unknown(self):
+        """``ldr x0, [x19, x8]`` off an object, with x8 a frame address or a pointer: no
+        offset, so nothing is loaded (#144: it raised TypeError, and PegasusAPI's Swift messages
+        were lost)."""
+        model = Objects(pointer=is_pointer, field_value=lambda v, d: pointer(5, d))
+        for name, pre, regs, mem in (
+                ("frame address", [I(B, 'add', 'x8, sp, #0x10')], {}, 'x0, [x19, x8]'),
+                ("frame address, uxtw", [I(B, 'add', 'x8, sp, #0x10')], {}, 'x0, [x19, w8, uxtw]'),
+                ("pointer, lsl", [I(B, 'nop', '')], {'x8': pointer(1)}, 'x0, [x19, x8, lsl #3]')):
+            with self.subTest(name):
+                insns = pre + [I(B + 4, 'ldr', mem), I(B + 8, 'ret')]
+                got = Flow(None, insns).propagate({'x19': pointer(0), **regs}, [2],
+                                                  objects=model)[2]
+                self.assertNotIn('x0', got)
+        # a number index still loads the field at its offset
+        insns = [I(B, 'mov', 'x8, #0x18'), I(B + 4, 'ldr', 'x0, [x19, x8]'), I(B + 8, 'ret')]
+        got = Flow(None, insns).propagate({'x19': pointer(0)}, [2], objects=model)[2]
+        self.assertEqual(got.get('x0'), pointer(5, 0x18))
+
 
 class TestSymbolicValues(unittest.TestCase):
     """Frame addresses, pointers and tokens are Sym values, not integers in bands (TODO #139):

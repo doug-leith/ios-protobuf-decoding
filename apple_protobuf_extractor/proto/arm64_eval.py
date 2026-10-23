@@ -1225,7 +1225,7 @@ class Flow:
             return None
         off = disp
         if index:
-            iv = m.get(index)
+            iv = m.number(index)                    # (a frame address or a pointer: no offset)
             if iv is None:
                 return None
             if idx_w or ext in ('sxtw', 'uxtw'):
