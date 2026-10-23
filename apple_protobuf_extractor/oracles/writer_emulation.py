@@ -274,22 +274,17 @@ def _ldr(rt, rn, off):
 
 def _method(cl, cls, sel):
     """The IMP of instance method *sel* of *cls* or the nearest superclass in the image."""
-    c = cls
-    while c is not None:
+    for c in cl.ancestors(cls):
         for m in c.methods:
             if m.name == sel:
                 return m.imp
-        c = cl.find(c.superclass_name) if c.superclass_name else None
-        if c is not None and c.is_meta:
-            c = None
     return None
 
 
 def _all_ivars(cl, cls):
-    out, c = [], cls
-    while c is not None:
+    out = []
+    for c in cl.ancestors(cls):
         out = list(c.ivars) + out
-        c = cl.find(c.superclass_name) if c.superclass_name else None
     return out
 
 

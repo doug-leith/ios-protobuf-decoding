@@ -275,7 +275,7 @@ def make_machine(ctx):
 
 def import_address(raw):
     """The address a run gives the import a bound slot's raw chained-fixup value names (its
-    ordinal, the low 24 bits: :meth:`BinaryContext.import_name_for_bind`)."""
+    ordinal, the low 24 bits; an arm64e bind's 16 are followed by zero bits)."""
     return BIND_BASE + (raw & 0xFFFFFF) * BIND_STRIDE
 
 

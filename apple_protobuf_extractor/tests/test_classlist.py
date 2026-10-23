@@ -824,3 +824,86 @@ class TestAnIvarOffsetTheRuntimeSets:
         ivars = _parse_ivars(ctx, 0x4000, StringTable())
         assert [(i.name, i.offset, i.offset_slot) for i in ivars] == [("count", None, VAR)]
         assert unread_input(ctx) == []
+
+
+class TestSuperclassChain:
+    """macho.classlist.superclass_chain: a class of the image read from the class list,
+    another image's through its class_t (+8 its superclass), a bound slot by its import."""
+
+    @staticmethod
+    def _cls(va, name, super_va):
+        return ObjcClass(vmaddr=va, name=name, is_meta=False, superclass_vmaddr=super_va,
+                         superclass_name=None, ro_flags=0, instance_size=0, methods=[], ivars=[])
+
+    @staticmethod
+    def _ctx(supers=(), names=(), binds=(), mapped=(), cache=False):
+        """A stand-in: *supers* {class_t: superclass} and *names* {class_t: name} of other
+        images' classes, *binds* {slot: symbol}, *mapped* the file's addresses."""
+        import macho.classlist as CL
+        from tests._fakes import NoImage
+
+        class Ctx(NoImage):
+            is_cache_backed = cache
+
+            def read_ptr(self, va):
+                if va - 8 in dict(supers):
+                    return dict(supers)[va - 8]
+                raise ValueError("unmapped")
+
+            def bind_name_for(self, vmaddr):
+                return dict(binds).get(vmaddr)
+
+            def vmaddr_to_offset(self, vmaddr, length=1):
+                if vmaddr in mapped:
+                    return vmaddr
+                raise ValueError("unmapped")
+        table = dict(names)
+        return Ctx(), (lambda ctx, va: table.get(va)), CL
+
+    def _chain(self, cl, va, **kw):
+        from unittest import mock
+        ctx, name_at, CL = self._ctx(**kw)
+        with mock.patch.object(CL, "class_name_at", name_at):
+            return CL.superclass_chain(ctx, va, cl)
+
+    def test_across_images_to_the_root(self):
+        cl = ClassList([self._cls(0x1000, "A", 0x2000), self._cls(0x2000, "B", 0x8000)])
+        ch = self._chain(cl, 0x1000, supers={0x8000: 0x9000, 0x9000: 0}, cache=True,
+                         names={0x8000: "Shared", 0x9000: "PBCodable"})
+        assert (ch.names, ch.end) == (("B", "Shared", "PBCodable"), "root")
+        assert ch.links[0] == (0x2000, "B")
+
+    def test_a_bound_slot_ends_at_its_import(self):
+        cl = ClassList([self._cls(0x1000, "A", 0x8010000000000002)])
+        ch = self._chain(cl, 0x1000, binds={0x1008: "_OBJC_CLASS_$_NSObject"})
+        assert (ch.links, ch.end) == (((None, "NSObject"),), "import")
+
+    def test_a_cycle_ends_it(self):
+        cl = ClassList([self._cls(0x1000, "A", 0x2000), self._cls(0x2000, "B", 0x1000)])
+        ch = self._chain(cl, 0x1000)
+        assert (ch.names, ch.end) == (("B",), "cycle")
+
+    def test_where_it_leaves_the_file(self):
+        # a pointer the file does not map: outside; one it maps but cannot name: inside
+        cl = ClassList([self._cls(0x1000, "A", 0x201e1d7c688)])
+        ch = self._chain(cl, 0x1000)
+        assert (ch.end, ch.end_va, ch.left_file) == ("unnamed", 0x201e1d7c688, True)
+        cl = ClassList([self._cls(0x1000, "A", 0x3000)])
+        ch = self._chain(cl, 0x1000, mapped={0x3000})
+        assert (ch.end, ch.left_file) == ("unnamed", False)
+        # a cache reads every image: nothing is outside it
+        cl = ClassList([self._cls(0x1000, "A", 0x201e1d7c688)])
+        assert self._chain(cl, 0x1000, cache=True).left_file is False
+
+
+class TestAncestors:
+
+    def test_the_image_s_classes_then_a_stop(self):
+        cl = ClassList([TestSuperclassChain._cls(0x1000, "A", 0x2000),
+                        TestSuperclassChain._cls(0x2000, "B", 0x8000)])
+        assert [c.name for c in cl.ancestors(cl.find("A"))] == ["A", "B"]
+
+    def test_a_cycle_ends_it(self):
+        cl = ClassList([TestSuperclassChain._cls(0x1000, "A", 0x2000),
+                        TestSuperclassChain._cls(0x2000, "B", 0x1000)])
+        assert [c.name for c in cl.ancestors(cl.find("A"))] == ["A", "B"]

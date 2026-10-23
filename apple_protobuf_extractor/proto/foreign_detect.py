@@ -12,10 +12,9 @@ import logging
 import re
 from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, PROGRAM_ERRORS
-from macho.classlist import ClassList, ObjcClass
+from macho.memory import BinaryContext, _ctx_cache, PROGRAM_ERRORS
+from macho.classlist import ClassList, superclass_chain
 from proto.models import record_failed_pass
-from proto.protoclass_set import _resolve_class_name_at
 from serializers import cpp_descriptor_extract as _cpp
 from serializers.protobufc_detect import ProtobufCDescriptors, find_protobufc_descriptors
 
@@ -39,37 +38,18 @@ def google_protobuf_classes(
     ``PBCodable``: their wire (de)serialization is driven by a shared ``GPBDescriptor``
     runtime, with no per-class ``writeTo:``/``readFrom:`` to disassemble — so this tool
     does not extract them.  Detection is purely by NAME (the runtime base always ends
-    in ``GPBMessage``), mirroring the PBCodable name anchor; ``_resolve_class_name_at``
-    supplies cross-image / bind names so it works in cache and binary mode alike."""
-    non_meta = [c for c in cl if not c.is_meta]
-    by_va: Dict[int, ObjcClass] = {c.vmaddr: c for c in non_meta}
-    name_memo: Dict[int, Optional[str]] = {}
-
-    def _name(va: int) -> Optional[str]:
-        if va not in name_memo:
-            c = by_va.get(va)
-            name_memo[va] = c.name if c is not None else _resolve_class_name_at(ctx, va)
-        return name_memo[va]
-
+    in ``GPBMessage``), mirroring the PBCodable name anchor, on the same superclass chain
+    (:func:`macho.classlist.superclass_chain`: cache and binary mode alike)."""
     subs: List[str] = []
     bases: Set[str] = set()
-    for c in non_meta:
-        cur, seen = c.superclass_vmaddr, set()
-        while cur and cur not in seen:
-            seen.add(cur)
-            nm = _name(cur)
-            if nm is None:
-                break
-            if nm.endswith(_GPB_RUNTIME_SUFFIX):
-                subs.append(c.name); bases.add(nm); break
-            nxt = by_va.get(cur)
-            if nxt is not None:
-                cur = nxt.superclass_vmaddr
-                continue
-            try:
-                cur = ctx.read_ptr(cur + 8)                # a class of another image
-            except READ_ERRORS:
-                break
+    for c in cl:
+        if c.is_meta:
+            continue
+        base = next((n for n in superclass_chain(ctx, c.vmaddr, cl).names
+                     if n.endswith(_GPB_RUNTIME_SUFFIX)), None)
+        if base is not None:
+            subs.append(c.name)
+            bases.add(base)
     return subs, frozenset(bases)
 
 

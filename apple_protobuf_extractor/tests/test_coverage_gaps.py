@@ -107,6 +107,7 @@ class TestFieldCountGateRemoval(unittest.TestCase):
             def by_vmaddr(self, va): return None
             def find(self, n): return None
             def find_subclasses(self, n, transitive=True): return []
+            def ancestors(self, cls): return iter([cls])
             def __len__(self): return 0
             def __contains__(self, n): return False
 

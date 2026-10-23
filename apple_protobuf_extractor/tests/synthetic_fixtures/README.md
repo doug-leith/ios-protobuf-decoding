@@ -815,7 +815,7 @@ two fixtures. Skipping any of them produces a fixture that silently degrades
 1. **Link against a real (if trivial) dylib**, never `-undefined
    dynamic_lookup`. The latter makes `ld64` emit legacy `LC_DYLD_INFO_ONLY`
    binds instead of `LC_DYLD_CHAINED_FIXUPS`; the extractor's binary-mode
-   superclass resolution (`macho/memory.py:import_name_for_bind`) requires
+   superclass resolution (the bound superclass slot, `BinaryContext.bind_name_for`) requires
    chained fixups to identify the class's `PBCodable` superclass at all.
    `build_fixtures.sh` always links fixtures against `shim/libpbshim.dylib`.
 

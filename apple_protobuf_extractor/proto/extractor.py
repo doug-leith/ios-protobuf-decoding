@@ -465,12 +465,7 @@ def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
     if cls.get_method("writeTo:") is not None:
         return None
     below: Set[str] = set()
-    seen: Set[int] = set()
-    cur = cls
-    while True:
-        if cur.vmaddr in seen:                       # a malformed superclass cycle
-            return None
-        seen.add(cur.vmaddr)
+    for cur in cl.ancestors(cls):
         if any(m.name is None for m in cur.methods):
             return None
         if cur is not cls and cur.get_method("writeTo:") is not None:
@@ -480,10 +475,8 @@ def _inherited_writeto_owner(ctx: BinaryContext, cl: ClassList,
             # fields the inherited writeTo: never writes: cannot tell.
             return None
         below.update(m.name for m in cur.methods)
-        parent = cl.find(cur.superclass_name) if cur.superclass_name else None
-        if parent is None:
-            return None
-        cur = parent
+    else:                                            # (no writeTo: among the image's ancestors)
+        return None
     sent = writeto_sent_selectors(ctx, cur)
     if sent is None or sent & below:
         return None

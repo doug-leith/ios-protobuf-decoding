@@ -47,9 +47,10 @@ from __future__ import annotations
 
 import logging
 
-from typing import Dict, Iterator, List, Optional, Set
+from dataclasses import dataclass
+from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple
 
-from .memory import READ_ERRORS, BinaryContext, record_unread
+from .memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
 from .objc_model import ObjcClass, ObjcIvar, ObjcMethod   # re-exported; see below
 from .strings import StringTable
 from .objc_abi import (CLASS_T_SUPERCLASS, CLASS_T_DATA, CLASS_RO_FLAGS,
@@ -156,6 +157,16 @@ class ClassList:
     def by_vmaddr(self, vmaddr: int) -> Optional[ObjcClass]:
         return self._by_vmaddr.get(vmaddr)
 
+    def ancestors(self, cls: ObjcClass) -> Iterator[ObjcClass]:
+        """*cls*, then its superclasses as far as they are classes of this image (a cycle,
+        malformed, ends it)."""
+        seen: Set[int] = set()
+        c: Optional[ObjcClass] = cls
+        while c is not None and not c.is_meta and c.vmaddr not in seen:
+            seen.add(c.vmaddr)
+            yield c
+            c = self._by_vmaddr.get(c.superclass_vmaddr) if c.superclass_vmaddr else None
+
     def find_subclasses(
         self, name: str, transitive: bool = True
     ) -> List[ObjcClass]:
@@ -186,6 +197,98 @@ class ClassList:
 
     def __repr__(self) -> str:
         return f"ClassList({len(self)} classes)"
+
+
+_OBJC_CLASS_SYM_PREFIX = "_OBJC_CLASS_$_"
+
+
+@dataclass(frozen=True)
+class SuperclassChain:
+    """The superclasses of an ObjC class, nearest first, as far as they are named.  *end*:
+    ``root`` (a null superclass), ``import`` (the last is a class another image defines, bound
+    by name: a standalone file goes no further), ``cycle`` (malformed), ``unnamed`` (no name
+    is read at *end_va*; *left_file*: it is no address of this file, a pointer into the dyld
+    cache a dylib was extracted from) or ``unreadable`` (the superclass slot at *end_va*)."""
+    links: Tuple[Tuple[Optional[int], str], ...]   # (class_t vmaddr, None for an import; name)
+    end: str
+    end_va: Optional[int] = None
+    left_file: bool = False
+
+    @property
+    def names(self) -> Tuple[str, ...]:
+        return tuple(name for _va, name in self.links)
+
+
+def walk_superclasses(class_va: int, super_at: Callable[[int], int],
+                      name_at: Callable[[int], Optional[str]],
+                      import_at: Callable[[int], Optional[str]] = lambda slot: None,
+                      outside: Callable[[int], bool] = lambda va: False) -> SuperclassChain:
+    """The chain from the ``class_t`` at *class_va*: *super_at* (its superclass pointer,
+    READ_ERRORS when unreadable), *name_at* (a class's name, None when none is read),
+    *import_at* (the symbol a superclass slot is bound to, binary mode) and *outside* (whether
+    an address is no address of the file)."""
+    links: List[Tuple[Optional[int], str]] = []
+    seen, va = {class_va}, class_va
+    while True:
+        slot = va + CLASS_T_SUPERCLASS
+        sym = import_at(slot)
+        if sym:
+            name = sym[len(_OBJC_CLASS_SYM_PREFIX):] if sym.startswith(_OBJC_CLASS_SYM_PREFIX) else sym
+            return SuperclassChain(tuple(links) + ((None, name),), "import")
+        try:
+            nxt = super_at(va)
+        except READ_ERRORS:
+            return SuperclassChain(tuple(links), "unreadable", slot)
+        if not nxt:
+            return SuperclassChain(tuple(links), "root")
+        if nxt in seen:
+            return SuperclassChain(tuple(links), "cycle", nxt)
+        seen.add(nxt)
+        name = name_at(nxt)
+        if not name:
+            return SuperclassChain(tuple(links), "unnamed", nxt, outside(nxt))
+        links.append((nxt, name))
+        va = nxt
+
+
+def superclass_chain(ctx: BinaryContext, class_va: int,
+                     cl: Optional["ClassList"] = None) -> SuperclassChain:
+    """The superclass chain of the class at *class_va*, read through *ctx* (cross-image in a
+    cache; a class another image defines named by the symbol its slot is bound to in a
+    standalone file); a class of *cl* is read from the class list.  Memoised on *ctx*."""
+    held = _ctx_cache(ctx, "_superclass_chains", dict)     # {id(cl): (cl, {va: chain})}
+    entry = held.get(id(cl))
+    if entry is None or entry[0] is not cl:
+        entry = held[id(cl)] = (cl, {})
+    memo = entry[1]
+    if class_va in memo:
+        return memo[class_va]
+    cached = getattr(ctx, "is_cache_backed", False)
+
+    def local(va: int) -> Optional[ObjcClass]:
+        return cl.by_vmaddr(va) if cl is not None else None
+
+    def super_at(va: int) -> int:
+        c = local(va)
+        return c.superclass_vmaddr if c is not None else ctx.read_ptr(va + CLASS_T_SUPERCLASS)
+
+    def name_at(va: int) -> Optional[str]:
+        c = local(va)
+        return c.name if c is not None else class_name_at(ctx, va)
+
+    def outside(va: int) -> bool:
+        if cached or local(va) is not None:
+            return False
+        try:
+            ctx.vmaddr_to_offset(va)
+            return False
+        except READ_ERRORS:
+            return True
+
+    memo[class_va] = chain = walk_superclasses(
+        class_va, super_at, name_at,
+        import_at=(lambda slot: None) if cached else ctx.bind_name_for, outside=outside)
+    return chain
 
 
 def class_name_at(ctx: BinaryContext, va: int) -> Optional[str]:

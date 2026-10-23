@@ -29,19 +29,19 @@ def _cls(va, name, super_va, ivars=()):
 
 
 class _NoReadCtx(NoImage):
-    """Standalone-binary-like ctx: cross-image reads always fail, so the name-anchor
-    contributes nothing and the VA-cluster anchor must carry detection."""
-    def is_variable(self, vmaddr):        # no program data, no binds
-        return False
+    """Standalone-binary-like ctx: cross-image reads always fail, and a superclass slot is
+    bound to an import only when *binds* says so ({slot: symbol}); with none, the name
+    anchor contributes nothing and the VA-cluster anchor must carry detection."""
+    def __init__(self, binds=None, **attrs):
+        super().__init__(**attrs)
+        self.binds = dict(binds or {})
 
     def read_ptr(self, va):
         raise ValueError("unmapped (binary mode)")
     def read_cstring(self, va):
         raise ValueError("unmapped (binary mode)")
-    def import_name_for_bind(self, raw):
-        # No imports table in this synthetic ctx → name anchor contributes nothing,
-        # so the VA-cluster anchor alone must carry detection.
-        return None
+    def bind_name_for(self, vmaddr):
+        return self.binds.get(vmaddr)
 
 
 @contextlib.contextmanager
@@ -95,20 +95,16 @@ class TestProtoClassSetOffline(unittest.TestCase):
         NOT turn NSObject into a PB-cluster root and sweep in every NSObject
         subclass.  Guards the SymptomNetworkUsage 4→28 blow-up: even if a class is
         mis-seeded, the unrelated siblings are not dragged in."""
-        from unittest import mock
-        NSOBJECT = 0x8020_0000_0000_0001          # cross-image NSObject VA
+        NSOBJECT = 0x8020_0000_0000_0001          # the bind's raw value
         # A class the heuristic seeds (has _reader+_readerLock) but whose super is
         # NSObject — i.e. a detector false positive.
         s = _cls(0x1000, "FalseSeed", NSOBJECT,
                  ivars=[_ivar("_reader"), _ivar("_readerLock")])
         t = _cls(0x2000, "UnrelatedSibling", NSOBJECT)   # plain NSObject subclass
         cl = ClassList([s, t])
-        ctx = _NoReadCtx()
+        ctx = _NoReadCtx({0x1008: "_OBJC_CLASS_$_NSObject", 0x2008: "_OBJC_CLASS_$_NSObject"})
 
-        def _fake_name(_ctx, va):
-            return "NSObject" if va == NSOBJECT else None
-
-        with _allow_heuristic(), mock.patch.object(PS, "_resolve_class_name_at", _fake_name):
+        with _allow_heuristic():
             pset = PS._proto_class_set(ctx, cl)
         # The false seed itself is still present (it IS the heuristic seed), but the
         # NSObject-root guard stops the unrelated sibling from being swept in.
@@ -133,17 +129,15 @@ class TestProtoClassSetOffline(unittest.TestCase):
         self.assertEqual(ctx._proto_class_cluster_only, frozenset({"BReq", "CSub"}))
 
     def test_structurally_confirmed_class_is_flagged_by_neither(self):
-        """The normal case: the by-name superclass walk reaches PBCodable, so the
-        class is structurally confirmed and NO error stamp applies to it."""
-        from unittest import mock
+        """The normal case: the by-name superclass walk reaches PBCodable (the superclass
+        slot is bound to it), so the class is structurally confirmed and NO error stamp
+        applies to it."""
         PB = 0x8010_0000_0000_0b0b
         a = _cls(0x1000, "AReq", PB, ivars=[_ivar("_reader"), _ivar("_readerLock")])
         cl = ClassList([a])
-        ctx = _NoReadCtx()
+        ctx = _NoReadCtx({0x1008: "_OBJC_CLASS_$_PBCodable"})
 
-        with mock.patch.object(PS, "_resolve_class_name_at",
-                               lambda _c, va: "PBCodable" if va == PB else None):
-            pset = PS._proto_class_set(ctx, cl)
+        pset = PS._proto_class_set(ctx, cl)
         self.assertIn("AReq", pset)
         self.assertEqual(ctx._proto_class_heuristic_only, frozenset())
         self.assertEqual(ctx._proto_class_cluster_only, frozenset())
@@ -250,16 +244,13 @@ class TestNonStructuralDetectionFailsTheRun(unittest.TestCase):
         Route through extract_all instead, matching the sibling tests in
         TestNonStructuralDetectionFailsTheRun above.
         """
-        from unittest import mock
         PB = 0x8010_0000_0000_0b0b
         a = _cls(0x1000, "AReq", PB, ivars=[_ivar("_reader"), _ivar("_readerLock")])
-        cl, ctx = ClassList([a]), _NoReadCtx()
+        cl, ctx = ClassList([a]), _NoReadCtx({0x1008: "_OBJC_CLASS_$_PBCodable"})
         ctx.is_cache_backed = False
         ctx.is_executable = False
         ctx.iter_symbol_names = lambda: iter(())
-        with mock.patch.object(PS, "_resolve_class_name_at",
-                               lambda _c, va: "PBCodable" if va == PB else None):
-            msgs = E.extract_all(ctx, None, cl)   # must not raise
+        msgs = E.extract_all(ctx, None, cl)   # must not raise
         self.assertTrue(any(m.class_name == "AReq" for m in msgs))
 
 
@@ -394,15 +385,16 @@ class TestProtoClassSetBinaryNameAnchor(unittest.TestCase):
         import live_artifacts as V
         cls.ctx, cls.st, cls.cl = V.load_locationd()
 
-    def test_resolve_class_name_at_resolves_bind_super_to_pbcodable(self):
-        # Every PB subclass shares the same raw bind super value; it must resolve
-        # to the PB root NAME via the imports table (not None as before the fix).
+    def test_a_bound_superclass_is_named_by_its_import(self):
+        # A PB subclass's superclass slot is bound to _OBJC_CLASS_$_PBCodable: the chain
+        # ends at that import, named.
+        from macho.classlist import superclass_chain
         from proto.protoclass_heuristic import _is_proto_class
         sub = next(c for c in self.cl if not c.is_meta and _is_proto_class(c)
                    and c.superclass_vmaddr and c.superclass_vmaddr not in
                    {x.vmaddr for x in self.cl})
-        self.assertEqual(PS._resolve_class_name_at(self.ctx, sub.superclass_vmaddr),
-                         "PBCodable")
+        chain = superclass_chain(self.ctx, sub.vmaddr, self.cl)
+        self.assertEqual((chain.names, chain.end), (("PBCodable",), "import"))
 
     def test_name_anchor_alone_reproduces_full_set(self):
         from unittest import mock
@@ -412,7 +404,7 @@ class TestProtoClassSetBinaryNameAnchor(unittest.TestCase):
         # the same set in binary mode (heuristic retired as primary).
         if hasattr(self.ctx, "_proto_class_names_cache"):
             delattr(self.ctx, "_proto_class_names_cache")
-        with mock.patch.object(E, "_is_proto_class", lambda c: False):
+        with mock.patch.object(PS, "_is_proto_class", lambda c: False):     # (its own binding)
             anchor_only = PS._proto_class_set(self.ctx, self.cl)
         if hasattr(self.ctx, "_proto_class_names_cache"):
             delattr(self.ctx, "_proto_class_names_cache")

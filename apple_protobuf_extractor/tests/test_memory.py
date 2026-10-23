@@ -664,77 +664,83 @@ class TestBinaryContextFromCache:
         with pytest.raises(ValueError):
             self._ctx.read_u64(0xDEAD000000000000)
 
-    # ── bind_name_for in cache mode ───────────────────────────────────────────
+    # ── another image's class in cache mode ───────────────────────────────────
 
-    def test_bind_name_for_resolves_class_name(self):
-        """bind_name_for follows ptr→class_t→class_ro_t→name chain."""
-        result = self._ctx.bind_name_for(self._base + 0x4000)
-        assert result == 'CacheClass'
+    def test_a_cache_binds_nothing_by_name(self):
+        """A dyld cache was bound when it was built: a class slot is read through, to the
+        class it points at (ptr→class_t→class_ro_t→name), not named by a bind."""
+        from macho.classlist import class_name_at
+        assert self._ctx.bind_name_for(self._base + 0x4000) is None
+        assert class_name_at(self._ctx, self._ctx.read_ptr(self._base + 0x4000)) == 'CacheClass'
 
     def test_bind_name_for_unmapped_returns_none(self):
         assert self._ctx.bind_name_for(0xDEAD000000000000) is None
 
 
-# ─── import_name_for_bind: ordinal → symbol name (binary mode) ─────────────────
+# ─── chained-fixup binds: named by their slot (binary mode) ──────────────────
 
-class TestImportNameForBind:
-    """The principled binary-mode anchor: an undecoded bind pointer value (a slot
-    that binds to an external symbol, e.g. a standalone binary's superclass slot)
-    carries the import ordinal in its low bits, which indexes the imports table.
-    See proto.extractor._resolve_class_name_at / TODO protoclass-PRINCIPLED."""
+class TestBindSlots:
+    """A chained-fixup bind is named by the slot the chain walk found it at
+    (``bind_name_for``); ``read_ptr`` gives its raw value, which is no address of the file
+    -- even where its low bits, the import ordinal, fall inside a segment (a dylib whose
+    ``__TEXT`` is at vmaddr 0)."""
 
-    def _ctx_with_imports(self, imports, fmt=None):
-        from macho.memory import _DYLD_PTR_64
+    def _base0_ctx(self):
+        raw = 0x8010000000000002            # ptr64 bind, ordinal 2: inside __TEXT at 0
+        c = BinaryContext(build_text_binary(struct.pack('<Q', raw) + NOP_BYTES * 2, vmaddr=0))
+        return c, raw
+
+    def test_a_bind_slot_reads_as_its_raw_value(self):
+        c, raw = self._base0_ctx()
+        assert c.read_ptr(0) == 2           # (not a bind: the packed-pointer reading)
+        c._bind_slots.add(0)
+        c._bind_name_map[0] = '_OBJC_CLASS_$_NSObject'
+        assert c.read_ptr(0) == raw
+        assert list(c.iter_ptrs(0, 1)) == [raw]
+        assert c.bind_name_for(0) == '_OBJC_CLASS_$_NSObject'
+        assert c.bind_name_for(8) is None
+
+    def test_a_bound_superclass_is_named(self):
+        from macho.classlist import ClassList, ObjcClass, superclass_chain
+        c, raw = self._base0_ctx()
+        c._bind_slots.add(8)
+        c._bind_name_map[8] = '_OBJC_CLASS_$_PBCodable'
+        cls = ObjcClass(vmaddr=0, name="AReq", is_meta=False, superclass_vmaddr=raw,
+                        superclass_name=None, ro_flags=0, instance_size=0, methods=[], ivars=[])
+        chain = superclass_chain(c, 0, ClassList([cls]))
+        assert (chain.names, chain.end) == (("PBCodable",), "import")
+
+
+class TestChainedFixupImports:
+    """The imports table of LC_DYLD_CHAINED_FIXUPS, each format by its own layout
+    (fixup-chains.h), the symbol pool as it is or zlib-compressed."""
+    NAMES = [b"_first", b"_OBJC_CLASS_$_PBCodable", b"_objc_msgSend"]
+
+    def _imports(self, imp_fmt, sym_fmt=0):
+        import zlib
+        pool = b"".join(n + b"\x00" for n in self.NAMES)
+        offs = [pool.index(n + b"\x00") for n in self.NAMES]
+        if imp_fmt == 3:        # u64 lib_ordinal:16 weak:1 reserved:15 name_offset:32, u64 addend
+            entries = b"".join(struct.pack('<QQ', (o << 32) | 1, 0) for o in offs)
+        else:                   # u32 lib_ordinal:8 weak:1 name_offset:23 (+ int32 addend)
+            entries = b"".join(struct.pack('<I', (o << 9) | 1) + (b"\x00" * 4 if imp_fmt == 2 else b"")
+                               for o in offs)
+        if sym_fmt == 1:
+            pool = zlib.compress(pool)
+        blob = struct.pack('<IIIIIII', 0, 0xFFFF, 28, 28 + len(entries), len(offs), imp_fmt,
+                           sym_fmt) + entries + pool
         c = BinaryContext.__new__(BinaryContext)
-        c._cache_reader = None
-        c._imports = imports
-        c._bind_name_map = {}
-        c._chain_formats = {_DYLD_PTR_64 if fmt is None else fmt}
-        return c
+        c._data = struct.pack('<IIII', 0x80000034, 16, 16, len(blob)) + blob
+        c._parse_chained_fixups_lc(0)
+        return c._imports
 
-    def test_ordinal_resolves_to_symbol(self):
-        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable',
-                                     '_OBJC_CLASS_$_NSString'])
-        # bit 63 set marks a bind sentinel; low bits = ordinal.
-        assert c.import_name_for_bind(0x8010000000000001) == '_OBJC_CLASS_$_PBCodable'
-        assert c.import_name_for_bind(0x8010000000000002) == '_OBJC_CLASS_$_NSString'
+    def test_every_format(self):
+        want = [n.decode() for n in self.NAMES]
+        for imp_fmt in (1, 2, 3):
+            assert self._imports(imp_fmt) == want, imp_fmt
 
-    def test_real_vmaddr_is_not_a_bind(self):
-        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
-        # A real mapped vmaddr is far below 2**62 → never mistaken for a bind.
-        assert c.import_name_for_bind(0x101c6ae70) is None
-        # (its low bits an ordinal the table has, bit 32 set)
-        assert c.import_name_for_bind(0x100000001) is None
-
-    def test_ordinal_out_of_range_returns_none(self):
-        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
-        assert c.import_name_for_bind(0x8010000000000099) is None
-        assert c.import_name_for_bind(0x8010000000000002) is None    # (one past the end)
-
-    def test_empty_imports_returns_none(self):
-        c = self._ctx_with_imports([])
-        assert c.import_name_for_bind(0x8010000000000001) is None
-
-    def test_blank_symbol_returns_none(self):
-        c = self._ctx_with_imports(['', ''])
-        assert c.import_name_for_bind(0x8010000000000001) is None
-
-    def test_an_arm64e_authenticated_rebase_is_not_a_bind(self):
-        """arm64e: bit 63 is auth, bit 62 bind -- an auth rebase is a pointer (#133)."""
-        from macho.memory import _DYLD_PTR_ARM64E
-        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'], _DYLD_PTR_ARM64E)
-        assert c.import_name_for_bind(0x8000000000000001) is None
-        assert c.import_name_for_bind(0xC000000000000001) == '_OBJC_CLASS_$_PBCodable'
-
-    def test_several_pointer_formats_say_nothing(self):
-        from macho.memory import _DYLD_PTR_64, _DYLD_PTR_ARM64E
-        c = self._ctx_with_imports(['', '_OBJC_CLASS_$_PBCodable'])
-        c._chain_formats = {_DYLD_PTR_64, _DYLD_PTR_ARM64E}
-        # a bind in each format alone
-        assert c.import_name_for_bind(0x8010000000000001) is None
-        assert c.import_name_for_bind(0xC000000000000001) is None
-        c._chain_formats = {_DYLD_PTR_64, _DYLD_PTR_ARM64E, 6}
-        assert c.import_name_for_bind(0xC000000000000001) is None
+    def test_a_compressed_symbol_pool(self):
+        assert self._imports(3, sym_fmt=1) == [n.decode() for n in self.NAMES]
 
 
 def _uleb(n: int) -> bytes:

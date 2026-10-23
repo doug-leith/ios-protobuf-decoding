@@ -136,12 +136,11 @@ def _alnum(s):
 def _as_string_methods(cl, cls):
     """``{field name: selector}`` of the ``-<field>AsString:`` methods of *cls* and its superclasses
     in the image."""
-    out, c = {}, cls
-    while c is not None and not c.is_meta:
+    out = {}
+    for c in cl.ancestors(cls):
         for m in c.methods:
             if m.name.endswith("AsString:") and len(m.name) > len("AsString:"):
                 out.setdefault(m.name[:-len("AsString:")], m.name)
-        c = cl.find(c.superclass_name) if c.superclass_name else None
     return out
 
 

@@ -333,11 +333,7 @@ class WriterFlow:
                 sites, sends)
 
     def _chain(self, cls: ObjcClass) -> List[ObjcClass]:
-        out, c = [], cls
-        while c is not None and len(out) < 64:
-            out.append(c)
-            c = self.cl.find(c.superclass_name) if c.superclass_name else None
-        return out
+        return list(self.cl.ancestors(cls))
 
     # ── function body ────────────────────────────────────────────────────────
     def _insns(self, va: int):

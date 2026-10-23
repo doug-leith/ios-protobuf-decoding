@@ -289,10 +289,6 @@ def _resolve_symbolic(ctx, va):
         return _SWIFT_SCALAR.get(name, name) if name else None
     # Indirect: ptr_site is a GOT slot holding a chained-fixup pointer to the
     # descriptor — a REBASE to a local type, or a BIND to an external one.
-    try:
-        raw = struct.unpack("<Q", ctx.read_bytes(ptr_site, 8))[0]
-    except READ_ERRORS:
-        return None
     # local rebase: the pointer through the image's fixups.
     name = None
     try:
@@ -301,11 +297,8 @@ def _resolve_symbolic(ctx, va):
         pass
     if name:
         return _SWIFT_SCALAR.get(name, name)
-    # external bind: demangle the import symbol name.
-    try:
-        return _type_from_bind(ctx.import_name_for_bind(raw))
-    except READ_ERRORS:
-        return None
+    # external bind: demangle the import symbol name the slot is bound to.
+    return _type_from_bind(ctx.bind_name_for(ptr_site))
 
 
 def _local_type_ref(ctx, desc):

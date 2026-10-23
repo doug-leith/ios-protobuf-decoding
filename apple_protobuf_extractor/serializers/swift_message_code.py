@@ -169,11 +169,10 @@ def _named(ctx, va: int, indirect: bool) -> Optional[str]:
     """The symbol a (possibly indirect) reference names: an indirect one's slot holds the
     address (bound: the import's name)."""
     if indirect:
-        raw = ctx.read_ptr(va)
-        name = ctx.import_name_for_bind(raw)
+        name = ctx.bind_name_for(va)
         if name:
             return name
-        va = raw
+        va = ctx.read_ptr(va)
     return _symbols(ctx).get(va)
 
 

@@ -10,6 +10,9 @@ the informative warning; GeoServices (PBCodable) has none (no false positive).
 """
 import unittest
 
+from unittest import mock
+
+import macho.classlist as CL
 from macho.classlist import ObjcClass, ClassList
 import proto.extractor as E
 import proto.foreign_detect as FD
@@ -23,14 +26,10 @@ def _cls(va, name, super_va):
                      methods=[], ivars=[])
 
 
-class _NoReadCtx:
+class _NoReadCtx(NoImage):
     """External supers don't resolve (so a plain NSObject super yields no name)."""
-    def is_variable(self, vmaddr):        # no program data, no binds
-        return False
-
     def read_ptr(self, va): raise ValueError("unmapped")
     def read_cstring(self, va): raise ValueError("unmapped")
-    def import_name_for_bind(self, raw): return None
 
 
 class TestGoogleProtobufDetectOffline(unittest.TestCase):
@@ -76,12 +75,8 @@ class TestGoogleProtobufDetectOffline(unittest.TestCase):
                     return GPB
                 raise ValueError("unmapped")
         names = {OTHER: "SharedBase", GPB: "FooGPBMessage"}
-        orig = FD._resolve_class_name_at
-        FD._resolve_class_name_at = lambda ctx, va: names.get(va)
-        try:
+        with mock.patch.object(CL, "class_name_at", lambda ctx, va: names.get(va)):
             subs, bases = FD.google_protobuf_classes(_Ctx(), ClassList([msg]))
-        finally:
-            FD._resolve_class_name_at = orig
         self.assertEqual(subs, ["MyMessage"])
         self.assertEqual(set(bases), {"FooGPBMessage"})
 
@@ -224,7 +219,8 @@ class _SymClassCtx(_SymCtx):
 
     def read_ptr(self, va): raise ValueError("unmapped")
     def read_cstring(self, va): raise ValueError("unmapped")
-    def import_name_for_bind(self, raw): return None
+    def bind_name_for(self, vmaddr): return None
+    def vmaddr_to_offset(self, vmaddr, length=1): raise ValueError("unmapped")
 
 
 class TestForeignProtobufWarnings(unittest.TestCase):

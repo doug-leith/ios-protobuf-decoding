@@ -169,19 +169,13 @@ def class_names_defined_by_image(reader: DyldCacheReader, mach_va: int) -> Dict[
 def superclass_chain_names(reader: DyldCacheReader, class_va: int) -> list:
     """Names of the superclasses of the ``class_t`` at *class_va*, nearest first, followed
     across images (the cache builder binds ``superclass`` to the parent's ``class_t``
-    wherever it lives).  Stops at a root (null superclass), an unreadable link, or a
-    repeated class (a malformed cycle)."""
-    names, seen = [], {class_va}
-    va = class_va
-    while True:
+    wherever it lives): :func:`macho.classlist.walk_superclasses` over the cache reader."""
+    from macho.classlist import walk_superclasses
+
+    def super_at(va: int) -> int:
         raw = reader.read_u64(va + CLASS_T_SUPERCLASS)
-        if not raw:
-            return names
-        va = _decode_cache_ptr(reader, raw)
-        if not va or va in seen:
-            return names
-        seen.add(va)
-        name = read_objc_class_name(reader, va)
-        if name is None:
-            return names
-        names.append(name)
+        if raw is None:
+            raise ValueError(f"superclass slot {va + CLASS_T_SUPERCLASS:#x} not mapped")
+        return _decode_cache_ptr(reader, raw) if raw else 0
+    return list(walk_superclasses(class_va, super_at,
+                                  lambda va: read_objc_class_name(reader, va)).names)

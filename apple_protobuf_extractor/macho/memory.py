@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import struct
+import zlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Tuple
 
@@ -702,8 +703,10 @@ class BinaryContext:
 
         Resolution order (binary mode):
           1. ``_fixup_map`` (populated from LC_DYLD_CHAINED_FIXUPS).
-          2. Packed-pointer stripping for shared-cache-extracted binaries.
-          3. Raw u64 as a fallback.
+          2. A chained-fixup bind: its raw value, which is no address of this file (the
+             import it binds, :meth:`bind_name_for`, names it).
+          3. Packed-pointer stripping for shared-cache-extracted binaries.
+          4. Raw u64 as a fallback.
 
         In cache mode: decode via :meth:`DyldCacheReader.decode_ptr`.
         """
@@ -715,7 +718,8 @@ class BinaryContext:
         decoded = self._fixup_map.get(vmaddr)
         if decoded is not None:
             return decoded
-        return self._decode_packed_ptr(self.read_u64(vmaddr))
+        raw = self.read_u64(vmaddr)
+        return raw if vmaddr in self._bind_slots else self._decode_packed_ptr(raw)
 
     def is_variable(self, vmaddr: int) -> bool:
         """Whether the file does not give *vmaddr*'s run-time value: it lies in a section the
@@ -737,8 +741,8 @@ class BinaryContext:
     def iter_ptrs(self, vmaddr: int, count: int) -> Iterator[int]:
         """Iterate over *count* consecutive pointer values starting at vmaddr.
 
-        Binary mode: fixup-map entries are returned decoded; others go through
-        ``_decode_packed_ptr``.  Cache mode: each slot is decoded via
+        Binary mode: fixup-map entries are returned decoded, binds raw (:meth:`read_ptr`);
+        others go through ``_decode_packed_ptr``.  Cache mode: each slot is decoded via
         :meth:`DyldCacheReader.decode_ptr`.
         """
         if self._cache_reader is not None:
@@ -752,45 +756,16 @@ class BinaryContext:
             raw  = struct.unpack_from('<Q', self._data, off + i * 8)[0]
             slot = vmaddr + i * 8
             decoded = self._fixup_map.get(slot)
-            yield decoded if decoded is not None else self._decode_packed_ptr(raw)
+            if decoded is None:
+                decoded = raw if slot in self._bind_slots else self._decode_packed_ptr(raw)
+            yield decoded
 
     def bind_name_for(self, vmaddr: int) -> Optional[str]:
-        """Return the class name for an external-class reference slot, or None.
-
-        Binary mode: looks up the bind table populated from
-        ``LC_DYLD_CHAINED_FIXUPS`` (e.g. slot → ``"_OBJC_CLASS_$_NSString"``).
-
-        Cache mode: follows the encoded pointer at *vmaddr* to the external
-        ``class_t`` in whichever framework owns it and reads the name directly
-        from ``class_ro_t.name``.  No bind table is needed.
-
-        In both modes callers receive a bare class name (``"NSString"``) via
-        the ``_OBJC_CLASS_$_`` stripping in ``extractor.py``, or the raw name
-        when the prefix is absent.
-        """
-        if self._cache_reader is not None:
-            from macho.cache_classlist import read_objc_class_name
-            raw = self._cache_reader.read_u64(vmaddr)
-            if not raw:
-                return None
-            class_t_va = self._cache_reader.decode_ptr(raw)
-            if not class_t_va:
-                return None
-            return read_objc_class_name(self._cache_reader, class_t_va)
+        """The symbol the chained-fixup bind at *vmaddr* binds to (``_OBJC_CLASS_$_NSString``),
+        or None (no bind there).  Binary mode: the chain walk's table, by slot -- a value
+        alone cannot say it is a bind.  A dyld cache was bound when it was built: None (its
+        pointers are read through, :meth:`read_ptr`)."""
         return self._bind_name_map.get(vmaddr)
-
-    def import_name_for_bind(self, raw: int) -> Optional[str]:
-        """The imported symbol an *undecoded* chained-fixup value binds to (binary mode):
-        ``read_ptr`` returns a bind's raw value unchanged, and its ordinal indexes the imports
-        of ``LC_DYLD_CHAINED_FIXUPS``.  None for a value that is not a bind in the image's
-        pointer format (an arm64e authenticated rebase has bit 63 set too) or whose ordinal
-        is unknown."""
-        if not self._imports or len(self._chain_formats) != 1:
-            return None                     # (several formats: a value alone cannot say)
-        ordinal = _bind_ordinal(raw, next(iter(self._chain_formats)))
-        if ordinal is not None and ordinal < len(self._imports):
-            return self._imports[ordinal] or None
-        return None
 
     def iter_symbol_names(self) -> Iterator[str]:
         """Yield every symbol name the binary declares (:meth:`iter_symbols`).
@@ -984,49 +959,47 @@ class BinaryContext:
 
         # dyld_chained_fixups_header (28 bytes)
         (_ver, starts_off, imp_off, sym_off,
-         imp_cnt, imp_fmt, _sym_fmt) = struct.unpack_from('<IIIIIII', blob, 0)
+         imp_cnt, imp_fmt, sym_fmt) = struct.unpack_from('<IIIIIII', blob, 0)
 
         # ── Parse imports table ──────────────────────────────────────────────
-        # Each import maps an ordinal (embedded in bind chain entries) to an
-        # external symbol name.  Three formats exist:
-        #   1 = DYLD_CHAINED_IMPORT          (4 bytes per entry)
-        #   2 = DYLD_CHAINED_IMPORT_ADDEND   (8 bytes per entry)
-        #   3 = DYLD_CHAINED_IMPORT_ADDEND64 (16 bytes per entry)
-        # All formats store the symbol name as a uint23 offset from sym_off.
+        # Each import maps an ordinal (embedded in bind chain entries) to an external
+        # symbol name, an offset into the symbol pool at sym_off (fixup-chains.h):
+        #   1 = DYLD_CHAINED_IMPORT          u32: lib_ordinal:8 weak_import:1 name_offset:23
+        #   2 = DYLD_CHAINED_IMPORT_ADDEND   the same u32, then an int32 addend
+        #   3 = DYLD_CHAINED_IMPORT_ADDEND64 u64: lib_ordinal:16 weak_import:1 reserved:15
+        #                                    name_offset:32, then a u64 addend
+        # symbols_format 0: the pool as it is; 1: zlib-compressed.
         imports: List[str] = []
-        _IMPORT_ENTRY_SIZE = {1: 4, 2: 8, 3: 16}
-        entry_size = _IMPORT_ENTRY_SIZE.get(imp_fmt, 0)
-        if entry_size and imp_cnt and imp_cnt < 65536:
-            for i in range(imp_cnt):
-                entry_blob_off = imp_off + i * entry_size
-                if entry_blob_off + 4 > len(blob):
-                    break
-                raw_imp = struct.unpack_from('<I', blob, entry_blob_off)[0]
-                # dyld_chained_import bitfield: lib_ordinal:8, weak_import:1,
-                # name_offset:23.  name_offset therefore starts at bit 9 (NOT 8 —
-                # an earlier off-by-one front-truncated every symbol, e.g.
-                # "_OBJC_CLASS_$_PBRequest" → "_$_PBRequest").
-                name_off = (raw_imp >> 9) & 0x7FFFFF
-                abs_name_off = sym_off + name_off
-                if abs_name_off < len(blob):
-                    end_b = blob.find(b'\x00', abs_name_off)
-                    if end_b < 0:
-                        end_b = min(abs_name_off + 256, len(blob))
-                    try:
-                        imports.append(
-                            blob[abs_name_off:end_b].decode('utf-8', errors='replace')
-                        )
-                    except PROGRAM_ERRORS:
-                        raise
-                    except Exception:
-                        imports.append('')
-                else:
-                    imports.append('')
+        entry_size = {1: 4, 2: 8, 3: 16}.get(imp_fmt, 0)
+        pool = blob[sym_off:]
+        if sym_fmt == 1:
+            try:
+                pool = zlib.decompress(pool)
+            except zlib.error as exc:
+                record_unread(self, "chained-fixup symbol pool", f"{data_off:#x}", exc)
+                pool = b""
+        elif sym_fmt != 0:
+            record_unread(self, "chained-fixup symbol pool", f"{data_off:#x}",
+                          ValueError(f"symbols_format {sym_fmt}"))
+            pool = b""
+        if not entry_size and imp_cnt:
+            record_unread(self, "chained-fixup imports", f"{data_off:#x}",
+                          ValueError(f"imports_format {imp_fmt}"))
+        for i in range(imp_cnt if entry_size else 0):
+            entry = imp_off + i * entry_size
+            if entry + entry_size > len(blob):
+                record_unread(self, "chained-fixup imports", f"{data_off:#x}",
+                              ValueError(f"{imp_cnt} imports past the end of the data"))
+                break
+            if imp_fmt == 3:
+                name_off = struct.unpack_from('<Q', blob, entry)[0] >> 32
+            else:
+                name_off = (struct.unpack_from('<I', blob, entry)[0] >> 9) & 0x7FFFFF
+            end_b = pool.find(b'\x00', name_off) if name_off < len(pool) else -1
+            imports.append(pool[name_off:end_b].decode('utf-8', errors='replace')
+                           if end_b >= 0 else '')
 
-        # Retain the ordinal → symbol-name table.  ``import_name_for_bind`` uses it
-        # to resolve an undecoded bind slot (e.g. a standalone binary's superclass
-        # pointer to an external class) straight from the ordinal in the raw value,
-        # without depending on the chain walk having visited that slot.
+        # Retain the ordinal → symbol-name table (the emulation oracles bind by ordinal).
         self._imports = imports
 
         if starts_off + 4 > len(blob):

@@ -25,6 +25,9 @@ class NoImage:
     def is_variable(self, vmaddr):
         return False
 
+    def bind_name_for(self, vmaddr):            # (no chained-fixup binds)
+        return None
+
     def function_starts(self):
         return []
 
