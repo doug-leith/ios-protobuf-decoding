@@ -435,8 +435,10 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
 
     Unnamed functions that call one another in a cycle are solved together, as the least
     fixpoint: a call back to a function still being read sees what is known of it so far
-    (nothing, at first), the function the cycle entered at is read again until that stops
-    growing, and only then is any of it memoised."""
+    (nothing, at first), and the function the cycle entered at is read again until nothing in
+    it grows.  A function of the cycle read in one round of that is not read again in the same
+    round (its answer is held on the outermost function it depended on, for that round); the
+    whole cycle is memoised once its entry settles."""
     name = callee_name(ctx, target) if target is not None else None
     contract = RUNTIME_CONTRACTS.get(name) if name else None
     if contract is not None:
@@ -454,6 +456,7 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     size = len(function_entries(ctx))
     if stamp[0] != size:
         memo.clear()
+        _ctx_cache(ctx, "_call_reads_held", dict).clear()
         stamp[0] = size
     if target in memo:
         return memo[target]
@@ -463,25 +466,54 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
         _depends_on(open_, frame.index)
         provisional_answers(ctx)[0] += 1
         return frame.reads
+    # read in this round of an open cycle: {target: (the open function it depended on, its
+    # round, the answer)}
+    held = _ctx_cache(ctx, "_call_reads_held", dict)
+    before: Tuple[str, ...] = ()
+    if target in held:
+        owner, rnd, before = held.pop(target)
+        f = open_.get(owner)
+        if f is not None and f.round == rnd:
+            held[target] = (owner, rnd, before)
+            _depends_on(open_, f.index)
+            provisional_answers(ctx)[0] += 1
+            return before
     frame = _Open(len(open_))
+    frame.reads = before                     # (read in an earlier round: answers only grow)
     open_[target] = frame
     try:
         while True:
-            frame.low, frame.cyclic = frame.index, False
+            frame.round += 1
+            frame.low, frame.cyclic, frame.stale = frame.index, False, False
             try:
                 res = _live_in(ctx, target)
             except READ_ERRORS:
                 res = _ALL_REGS
             grew = res != frame.reads
             frame.reads = res
-            if not (frame.cyclic and grew and frame.low == frame.index):
+            if not ((frame.cyclic and grew or frame.stale) and frame.low == frame.index):
                 break
     finally:
         del open_[target]
     if frame.low < frame.index:
-        _depends_on(open_, frame.low)        # settled only once that outer function is
+        # settled only once the outermost function it depended on is: held for that one's
+        # round, and what was held on it moves there
+        owner = list(open_)[frame.low]
+        f = open_[owner]
+        if frame.cyclic and grew or frame.stale:
+            f.stale = True                   # an answer used in this round was short of it
+        for t, (o, rnd, r) in list(held.items()):
+            if o == target:
+                held[t] = (owner, f.round, r)
+        held[target] = (owner, f.round, res)
+        _depends_on(open_, frame.low)
     else:
         memo[target] = res
+        for t, (o, rnd, r) in list(held.items()):
+            if o == target:
+                if rnd == frame.round:
+                    memo[t] = r              # read in the round its cycle settled in
+                del held[t]
     if not open_:
         recheck_provisional_decodes(ctx)     # every cycle has settled
     return res
@@ -497,11 +529,13 @@ def provisional_answers(ctx) -> list:
 class _Open:
     """A function whose reads are being computed (:func:`call_reads`): its depth among those
     open, what is known of its reads so far, the outermost open function its reading has
-    used, and whether a call came back to it."""
-    __slots__ = ("index", "reads", "low", "cyclic")
+    used, whether a call came back to it, its round (each reading of it), and whether an
+    answer used in this round has since grown (another round is due)."""
+    __slots__ = ("index", "reads", "low", "cyclic", "round", "stale")
 
     def __init__(self, index: int):
         self.index, self.reads, self.low, self.cyclic = index, (), index, False
+        self.round, self.stale = 0, False
 
 
 def _depends_on(open_: dict, index: int) -> None:

@@ -303,6 +303,35 @@ class TestCallReads(unittest.TestCase):
                                             ('bl', '#0x9000'), ('ret', '')])])
         self.assertEqual(got, {'x2', 'x3', 'x5'})        # x0: set on both paths to a return
 
+    def _cycle(self, n):
+        """call_reads of the first of *n* functions that call one another in one cycle -- each
+        calls the next twice and the first back; the last reads x9 -- and how many times each
+        was read."""
+        import collections
+        import proto.callees as C
+        fns = [0x9000 + 0x100 * i for i in range(n)]
+        blocks = [(fns[i], [('bl', f'#{fns[i + 1]:#x}'), ('bl', f'#{fns[i + 1]:#x}'),
+                            ('bl', f'#{fns[0]:#x}'), ('ret', '')]) for i in range(n - 1)]
+        blocks.append((fns[-1], [('mov', 'x0, x9'), ('ret', '')]))
+        counts = collections.Counter()
+        real = C._live_in
+
+        def counted(ctx, target):
+            counts[target] += 1
+            return real(ctx, target)
+        with mock.patch.object(C, '_live_in', counted):
+            return self._reads(blocks=blocks), counts
+
+    def test_a_cycle_s_functions_are_read_once_a_round(self):
+        # Read again at every call, a cycle's function was read a number of times exponential
+        # in the cycle's length (iOS 27 GeoServices: 73,894 reads of 475 functions unfinished
+        # in 300 s); once a round, a few times each.  The answer is the same either way.
+        small, _ = self._cycle(4)
+        got, counts = self._cycle(16)
+        self.assertEqual(got, small)
+        self.assertIn('x9', got)
+        self.assertLessEqual(max(counts.values()), 4)
+
     def test_a_tail_call_reads_what_its_target_reads(self):
         from proto.callees import ABI_ARGS
         got = self._reads(blocks=[(0x9000, [('mov', 'x0, x20'), ('b', '#0xa000')])],
