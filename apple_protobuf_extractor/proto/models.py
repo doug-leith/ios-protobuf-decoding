@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
@@ -246,6 +246,16 @@ VA_CLUSTER_CLASS_DETECTION_COMMENT = (
     "superclass chain does NOT reach PBCodable by name, which should never happen; "
     "the class may not be a protobuf message at all and must not be trusted"
 )
+
+
+def retag_enums(fields: Iterable["ProtoField"], renames: Mapping[str, str]) -> None:
+    """Every field of an enum *renames* renames (``type_class`` ``ENUM:<name>``) becomes one
+    of its new name."""
+    for f in fields:
+        tc = f.type_class
+        new = renames.get(tc[5:]) if tc and tc.startswith("ENUM:") else None
+        if new is not None:
+            f.type_name, f.type_class = new, f"ENUM:{new}"
 
 
 @dataclass

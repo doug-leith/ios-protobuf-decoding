@@ -49,7 +49,7 @@ from macho.disasm import _parse_imm, _norm_reg
 from macho.memory import READ_ERRORS, _ctx_cache, record_unread
 
 from proto.arm64cfg import mem_operand
-from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, RETURNS, BLOCK_ENDS,
+from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, BLOCK_ENDS,
                                   reg_name, split_ops)
 from proto import arm64_eval, dictrep_flow
 from proto.callees import stub_selector, text_holding
@@ -58,9 +58,9 @@ from proto.config import _class_to_proto_name
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, function_entries, listing_flow
 from proto.function_body import function_body, function_listing
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
-from proto.mapfields import _scratch_slot_of
+from proto.submessage_marks import Bracket, analyze_bracket
 from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
-from proto.writeto import BoundWrite, field_number_at
+from proto.writeto import BoundWrite
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.eval_tokens import SELF, READER, OPAQUE
 from proto.protocore import _SCALAR_ENC
@@ -179,11 +179,6 @@ class MemberWrite:
     width: int           # bytes loaded from the struct for the value
 
 
-def _branch_target(ins) -> Optional[int]:
-    ops = split_ops(ins.op_str)
-    return _parse_imm(ops[-1]) if ops and ops[-1].startswith('#') else None
-
-
 def _writer_insns(ctx, entry: int) -> List:
     """The struct serialiser at *entry*: the instructions its entry reaches
     (:func:`proto.function_body.function_body`), [] when *entry* cannot be read (recorded when
@@ -273,78 +268,6 @@ def match_layout(layout: StructLayout, writes: Sequence[MemberWrite]) -> Optiona
 
 
 # ── the owner's begin/end-marked sub-message write ────────────────────────────
-
-
-@dataclass(frozen=True)
-class Bracket:
-    """What one ``begin(F) … end`` sub-message write in an owner's ``writeTo:`` contains."""
-    number: int                  # the field number the begin mark carries
-    callees: Tuple[int, ...]     # calls with no field number — candidate struct writers
-    region: Tuple[int, ...]      # indices (into the listing) of every instruction between the marks
-    writes: Tuple[Tuple[int, int, int], ...]   # inline member writes: (index, field#, helper)
-
-
-def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
-    """Analyse the sub-message write whose BEGIN mark (``bl`` with a stack-scratch ``x1`` and a
-    literal field number) is at ``insns[begin_idx]`` in the owner's linear ``writeTo:``
-    listing.  The body is every instruction reachable from the mark WITHOUT passing the
-    matching END mark (same scratch slot, no field number): the branches an inlined struct's
-    has-bit tests compile to put some members out of line, past the loop's back-edge, so a
-    straight read to the end mark would miss them.
-
-    Returns the field number, the calls inside that carry NO field number (candidate struct
-    serialisers ``f(&struct, writer)``) and the calls that DO carry one (members written
-    inline), or ``None`` if there is no begin mark here, a path leaves the listing or reaches
-    ``ret`` before an end mark, or a nested/foreign mark appears (an unmodelled shape)."""
-    flow = listing_flow(ctx, insns)
-    begin = insns[begin_idx]
-    slot = _scratch_slot_of(flow, begin_idx)
-    if begin.mnemonic != 'bl' or slot is None:
-        return None
-    number = field_number_at(flow, begin_idx)
-    if number is None or number < 1:
-        return None
-    at = {ins.addr: k for k, ins in enumerate(insns)}
-    seen, work = set(), [begin_idx + 1]
-    callees: List[int] = []
-    writes: List[Tuple[int, int, int]] = []
-    ended = False
-    while work:
-        k = work.pop()
-        while k is not None and 0 <= k < len(insns) and k not in seen:
-            seen.add(k)
-            ins, mn, nxt = insns[k], insns[k].mnemonic, k + 1
-            if mn in RETURNS:
-                return None                          # a path with no end mark
-            if mn in ('bl', 'b'):
-                j_slot = _scratch_slot_of(flow, k) if mn == 'bl' else None
-                fn = field_number_at(flow, k)
-                target = _branch_target(ins)
-                if j_slot is not None:
-                    if fn is None and j_slot == slot:
-                        ended = True
-                        break                        # END mark: this path is complete
-                    return None                      # nested begin / foreign scratch
-                if fn is not None and target is not None:
-                    writes.append((k, fn, target))
-                elif mn == 'bl' and target is not None:
-                    callees.append(target)
-                if mn == 'b':
-                    if fn is not None:
-                        return None                  # a tail-called write ends the function: no end mark
-                    t = at.get(target)
-                    if t is None:
-                        return None
-                    nxt = t                          # in-function jump
-            elif mn in ('cbz', 'cbnz', 'tbz', 'tbnz') or mn.startswith('b.'):
-                t = at.get(_branch_target(ins))
-                if t is None:
-                    return None
-                work.append(t)
-            k = nxt
-    if not ended:
-        return None
-    return Bracket(number, tuple(dict.fromkeys(callees)), tuple(sorted(seen)), tuple(writes))
 
 
 # ── inlined struct members: a symbolic base-register data flow ─────────────────

@@ -95,6 +95,7 @@ class TestFastEnumerationContract(unittest.TestCase):
         st = WF._St({'x0': frozenset({('I', '_b')})})
         st.frame_write(0x40, 64, frozenset({('I', '_a')}))      # an earlier loop's state
         with mock.patch.object(WF, 'stub_selector', lambda ctx, va: WF._FAST_ENUMERATION), \
+                mock.patch.object(WF, 'sent_selector', lambda ctx, va, x1: WF._FAST_ENUMERATION), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None):
             wf._call(st, 0x9000, WF._Result(), 0, 0, 0x1000, vals)
         self.assertEqual(st.frame_read(0x48, 8), frozenset({('I', '_b')}))   # itemsPtr

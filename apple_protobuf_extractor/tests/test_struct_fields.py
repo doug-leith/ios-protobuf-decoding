@@ -863,7 +863,8 @@ class TestFramePointerScratch(_Patched):
             ('bl', '#0x18dbdab88'), ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'),
             ('bl', '#0x18dbdab94')]))
         flow = listing_flow(None, order)
-        begin, end = SF._scratch_slot_of(flow, 3), SF._scratch_slot_of(flow, 6)
+        from proto.submessage_marks import scratch_slot_of
+        begin, end = scratch_slot_of(flow, 3), scratch_slot_of(flow, 6)
         self.assertEqual(begin, end)
         self.assertIsNotNone(begin)
 

@@ -23,6 +23,7 @@ import proto.callees as C
 import proto.function_body as FB
 import proto.extractor as E
 from proto.dispatch import FunctionEntries, listing_flow
+from proto.submessage_marks import scratch_slot_of
 from proto.emitter import build_proto_files, write_from_messages
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 
@@ -192,7 +193,7 @@ class TestAnalyzeEntry(_Patched):
 
     def _begin(self, insns):
         return next(i for i, x in enumerate(insns) if x.mnemonic == 'bl'
-                    and M._scratch_slot_of(listing_flow(None, insns), i) is not None)
+                    and scratch_slot_of(listing_flow(None, insns), i) is not None)
 
     def test_block_invoke_string_key_message_value(self):
         insns, fd = asm(_MANIFEST_INVOKE)
@@ -241,6 +242,25 @@ class TestAnalyzeEntry(_Patched):
             i = L.index(('bl', '#0x18dbdac24'))
             L[i - 1] = ('mov', 'w2, #3')
         self.assertIsNone(self._mutate(third))
+
+    def test_a_value_written_out_of_line_is_read(self):
+        # the value's write past the ret, branched to and back (where a has-bit test puts it)
+        def ool(L):
+            base = _MANIFEST_INVOKE[0]
+            i = L.index(('ldr', 'x0, [x20, #0x20]'), L.index(('bl', '#0x18dbdac18')))
+            value = L[i:i + 5]
+            del L[i:i + 5]
+            L.insert(i, ('b', f'#{base + 4 * (len(L) + 1):#x}'))
+            L.extend(value + [('b', f'#{base + 4 * (i + 1):#x}')])
+        e = self._mutate(ool)
+        self.assertEqual((e.number, e.key_helper, e.value_helper), (1, 0x18dbdac18, 0x18dbdac24))
+
+    def test_a_path_that_returns_before_the_end_mark_is_rejected(self):
+        def early(L):
+            i = L.index(('bl', '#0x18dbdac18'))
+            L.insert(i + 1, None)
+            L[i + 1] = ('cbz', f'x0, #{_MANIFEST_INVOKE[0] + 4 * (len(L) - 1):#x}')   # to the ret
+        self.assertIsNone(self._mutate(early))
 
     def test_not_a_begin_mark_is_rejected(self):
         insns, fd = asm(_MANIFEST_INVOKE)

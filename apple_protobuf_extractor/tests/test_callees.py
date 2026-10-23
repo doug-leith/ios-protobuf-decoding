@@ -94,6 +94,29 @@ class TestStubSelector(unittest.TestCase):
         self.assertIsNone(self._sel([_ins('ret', '')]))
 
 
+class TestSentSelector(unittest.TestCase):
+    """The selector a call sends: a stub's, else -- a call to the generic objc_msgSend --
+    the string its x1 points at (a number; a frame address or an unknown x1 names nothing)."""
+
+    def _sel(self, x1, stub=None, name='_objc_msgSend'):
+        import proto.callees as C
+        with mock.patch.object(C, 'stub_selector', lambda ctx, va: stub), \
+                mock.patch.object(C, 'callee_name', lambda ctx, va: name):
+            return C.sent_selector(_SelrefCtx(), 0x9000, x1)
+
+    def test_a_stub_names_its_selector(self):
+        self.assertEqual(self._sel(None, stub='count'), 'count')
+
+    def test_the_generic_send_reads_x1(self):
+        self.assertEqual(self._sel(0x3000), 'count')
+        self.assertIsNone(self._sel(0x3000, name='_objc_retain'))   # (another callee)
+        self.assertIsNone(self._sel(None))
+
+    def test_no_target_no_selector(self):
+        import proto.callees as C
+        self.assertIsNone(C.sent_selector(_SelrefCtx(), None, 0x3000))
+
+
 class TestCallReads(unittest.TestCase):
     """proto.callees.call_reads: one answer to "what may this call read" for both
     interpreters (WriterFlow and arm64_eval.Flow)."""

@@ -778,6 +778,10 @@ class Flow:
         ``ldrsw``, :meth:`load_address`); None for any other instruction."""
         return self.load_address(k) if self.insns[k].mnemonic == 'ldrsw' else None
 
+    def slot_loads(self, ks: Iterable[int]) -> Set[int]:
+        """The ivar-offset variables the loads at *ks* read (:meth:`slot_load_address`)."""
+        return {a for k in ks if (a := self.slot_load_address(k)) is not None}
+
     def load_address(self, k: int) -> Optional[int]:
         """Address the single-register load ``insns[k]`` reads: ``[Xb, #o]`` / ``[Xb]``, the
         base taken from its reaching definitions (:meth:`const_before`: the ``adrp`` of a page

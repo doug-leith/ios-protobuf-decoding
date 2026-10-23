@@ -51,6 +51,7 @@ from proto.models import (
     FieldLabel, ProtoField, ProtoMessage, ProtoEnum, ProtoEnumValue,
     OPAQUE_PASSTHROUGH_COMMENT, HEURISTIC_CLASS_DETECTION_COMMENT,
     VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix, PACKABLE_SCALARS as _PACKABLE_SCALARS,
+    retag_enums,
 )
 
 _GENERATOR = "apple_protobuf_extractor (ios_protobuf_decoding)"
@@ -233,6 +234,13 @@ def referenced_message_class(fld: ProtoField) -> Optional[str]:
     if fld.type_name in _KNOWN_SCALAR_TYPES and fld.unresolved_type_class is None:
         return None                     # a scalar the class maps to (NSString → string)
     return fld.type_class
+
+
+def emitted_message_class(fld: ProtoField) -> Optional[str]:
+    """The class *fld* is emitted as a reference to (qualified, imported, an import-cycle
+    edge): :func:`referenced_message_class`, unless the reference was not resolved (it is
+    emitted as ``bytes``).  After :func:`resolve_type_refs`."""
+    return None if fld.unresolved_type_class is not None else referenced_message_class(fld)
 
 
 # ── Enum-compatibility helpers ─────────────────────────────────────────────────
@@ -571,8 +579,9 @@ class ProtoFile:
         # name, or a proto message qualified like any other message reference.
         if fld.map_key_type is not None:
             value = fld.map_value_type or "bytes"
-            if fld.map_value_class and fld.unresolved_type_class is None:
-                ref_pkg = class_to_pkg.get(fld.map_value_class)
+            cls = emitted_message_class(fld)
+            if cls:
+                ref_pkg = class_to_pkg.get(cls)
                 if ref_pkg and ref_pkg != self.package:
                     value = f"{ref_pkg}.{value}"
             return f"map<{fld.map_key_type}, {value}>"
@@ -583,17 +592,13 @@ class ProtoFile:
         # type_class/ENUM-sentinel path below does not.  Same-package → flat.
         if fld.ref_package is not None and fld.ref_package != self.package:
             return f"{fld.ref_package}.{fld.type_name}"
-        if fld.type_class is None:
-            return fld.type_name
-        if fld.unresolved_type_class is not None:
+        if fld.type_class is not None and fld.unresolved_type_class is not None:
             return "bytes"
-        if fld.type_class.startswith("ENUM:"):
-            return fld.type_name   # enum defined in same file, no package prefix
-        if fld.type_name in _KNOWN_SCALAR_TYPES:
-            # type was silently converted (e.g. NSArray → bytes)
+        cls = emitted_message_class(fld)
+        if cls is None:            # an enum (same file), a scalar or a converted builtin
             return fld.type_name
         # Message type — qualify if cross-package
-        ref_pkg = class_to_pkg.get(fld.type_class)
+        ref_pkg = class_to_pkg.get(cls)
         if ref_pkg and ref_pkg != self.package:
             return f"{ref_pkg}.{fld.type_name}"
         return fld.type_name
@@ -676,17 +681,7 @@ class ProtoFile:
 
         # ── Step 3: patch field references for any splits ─────────────────────
         for msg in self.messages:
-            renames = field_renames.get(msg.class_name, {})
-            if not renames:
-                continue
-            for fld in msg.fields:
-                if not (fld.type_class and fld.type_class.startswith("ENUM:")):
-                    continue
-                old = fld.type_class[5:]
-                if old in renames:
-                    new = renames[old]
-                    fld.type_name  = new
-                    fld.type_class = f"ENUM:{new}"
+            retag_enums(msg.fields, field_renames.get(msg.class_name, {}))
 
         # ── Step 4: de-collide enum names against message names ───────────────
         # proto3 forbids an enum and a message sharing a name within one
@@ -767,14 +762,7 @@ class ProtoFile:
 
         # Patch every field across the file that referenced a renamed enum.
         for msg in self.messages:
-            for fld in msg.fields:
-                if not (fld.type_class and fld.type_class.startswith("ENUM:")):
-                    continue
-                old = fld.type_class[5:]
-                new = renames.get(old)
-                if new is not None:
-                    fld.type_name  = new
-                    fld.type_class = f"ENUM:{new}"
+            retag_enums(msg.fields, renames)
 
         return rebuilt
 
@@ -875,8 +863,9 @@ def _compute_imports(
             for fld in msg.fields:
                 # Recovered map<K, V> with a message value: import the value class's file.
                 if fld.map_key_type is not None:
-                    if fld.map_value_class and fld.unresolved_type_class is None:
-                        ref_pkg = class_to_pkg.get(fld.map_value_class)
+                    cls = emitted_message_class(fld)
+                    if cls:
+                        ref_pkg = class_to_pkg.get(cls)
                         if ref_pkg and ref_pkg != pf.package:
                             fname = pkg_to_filename.get(ref_pkg)
                             if fname:
@@ -897,15 +886,10 @@ def _compute_imports(
                         needed.add(fname)
                     continue
                 # Only resolved message-type fields generate imports.
-                if fld.type_class is None:
+                cls = emitted_message_class(fld)
+                if cls is None:
                     continue
-                if fld.type_class.startswith("ENUM:"):
-                    continue  # enum type defined in same file — no import needed
-                if fld.unresolved_type_class is not None:
-                    continue  # fell back to bytes — no import
-                if fld.type_name in _KNOWN_SCALAR_TYPES:
-                    continue  # silently converted — no import
-                ref_pkg = class_to_pkg.get(fld.type_class)
+                ref_pkg = class_to_pkg.get(cls)
                 if ref_pkg and ref_pkg != pf.package:
                     fname = pkg_to_filename.get(ref_pkg)
                     if fname:
@@ -990,18 +974,14 @@ def _break_map_import_cycles(
         for pf in proto_files:
             for msg in pf.messages:
                 for fld in msg.fields:
-                    if fld.map_key_type is not None:
-                        if not fld.map_value_class or fld.unresolved_type_class is not None:
-                            continue
-                        dst = pkg_to_filename.get(class_to_pkg.get(fld.map_value_class, ""))
-                        if same_cycle(pf.filename, dst):
-                            map_edges.setdefault((pf.filename, dst), []).append(fld)
-                    elif (fld.type_class and not fld.type_class.startswith("ENUM:")
-                          and fld.unresolved_type_class is None
-                          and fld.type_name not in _KNOWN_SCALAR_TYPES):
-                        dst = pkg_to_filename.get(class_to_pkg.get(fld.type_class, ""))
-                        if same_cycle(pf.filename, dst):
-                            field_edges.setdefault((pf.filename, dst), []).append(fld)
+                    # (a foreign reference -- ref_file / ref_package -- is not ours to cut)
+                    cls = emitted_message_class(fld)
+                    if cls is None:
+                        continue
+                    dst = pkg_to_filename.get(class_to_pkg.get(cls, ""))
+                    if same_cycle(pf.filename, dst):
+                        edges_of = map_edges if fld.map_key_type is not None else field_edges
+                        edges_of.setdefault((pf.filename, dst), []).append(fld)
         edges = map_edges or field_edges
         if not edges:
             return                      # remaining cycles aren't ours to cut

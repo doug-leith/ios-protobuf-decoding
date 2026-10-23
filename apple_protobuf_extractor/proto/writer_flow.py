@@ -41,13 +41,13 @@ from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm import _parse_imm, _norm_reg
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_store, PROGRAM_ERRORS
+from macho.memory import BinaryContext, _ctx_store, PROGRAM_ERRORS
 from proto.arm64_eval import Flow, Objects, _STACK_TOP, _is_stack
 from proto.dispatch import (_jump_table_arm_addrs, build_function_index, decoded_flow,
                             function_entries)
 from proto.dispatch_eval import _function_insns
 from proto.function_body import is_function_entry
-from proto.callees import (callee_name, stub_selector, call_reads, text_holding,
+from proto.callees import (callee_name, sent_selector, stub_selector, call_reads, text_holding,
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
 from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, COMPARE_BRANCHES, CALLER_SAVED,
@@ -450,12 +450,6 @@ class WriterFlow:
             return None
         return (r, t) if ins.mnemonic == 'cbz' else (r, ins.addr + 4)
 
-    def _cstring(self, va: int) -> Optional[str]:
-        try:
-            return self.ctx.read_cstring(va)
-        except READ_ERRORS:
-            return None
-
     def _is_function(self, va: int) -> bool:
         return (is_function_entry(self.ctx, va, self.entries) or callee_name(self.ctx, va) is not None
                 or stub_selector(self.ctx, va) is not None)
@@ -515,10 +509,7 @@ class WriterFlow:
         """The call at *addr* to *tgt* (None: unknown), the registers before it *vals*;
         True when it does not return."""
         name = callee_name(self.ctx, tgt) if tgt is not None else None
-        sel = stub_selector(self.ctx, tgt) if tgt is not None else None
-        x1 = self._const(vals, 'x1')
-        if sel is None and name == "_objc_msgSend" and x1 is not None:
-            sel = self._cstring(x1)           # the generic send: x1 is the selector
+        sel = sent_selector(self.ctx, tgt, self._const(vals, 'x1'))
         if depth == 0:
             if tgt is None:
                 res.indirect_calls += 1
@@ -783,14 +774,20 @@ class WriterFlow:
                 res.fail(f"writer stored outside the frame at {ins.addr:#x}")
 
 
-def writer_reachable_ivars(ctx: BinaryContext, cl: ClassList, cls: ObjcClass
-                           ) -> Tuple[Optional[FrozenSet[str]], List[str]]:
-    """``(ivars whose values can reach -[cls writeTo:]'s writer, reasons)``: the set is None
-    when undecided.  One :class:`WriterFlow` per image is cached on *ctx*."""
+def writer_flow_for(ctx: BinaryContext, cl: ClassList) -> "WriterFlow":
+    """The image's :class:`WriterFlow`, cached on *ctx* (built again for another class list)."""
     wf = getattr(ctx, "_writer_flow", None)
     if wf is None or wf.cl is not cl:
         wf = WriterFlow(ctx, cl)
         _ctx_store(ctx, "_writer_flow", wf)
+    return wf
+
+
+def writer_reachable_ivars(ctx: BinaryContext, cl: ClassList, cls: ObjcClass
+                           ) -> Tuple[Optional[FrozenSet[str]], List[str]]:
+    """``(ivars whose values can reach -[cls writeTo:]'s writer, reasons)``: the set is None
+    when undecided.  One :class:`WriterFlow` per image is cached on *ctx*."""
+    wf = writer_flow_for(ctx, cl)
     try:
         return wf.reachable_ivars(cls)
     except PROGRAM_ERRORS:

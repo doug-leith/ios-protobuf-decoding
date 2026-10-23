@@ -257,6 +257,21 @@ for _name in ("_objc_opt_isKindOfClass", "_objc_opt_respondsToSelector"):
     RUNTIME_CONTRACTS[_name] = (("x0", "x1"), None)
 
 
+
+def sent_selector(ctx, target: Optional[int], x1) -> Optional[str]:
+    """Selector a call to *target* sends: a ``_objc_msgSend$<sel>`` stub's, or -- for a call
+    to the generic ``objc_msgSend`` a standalone binary imports by name -- the selector string
+    *x1* (the call's x1, a number) points at."""
+    if target is None:
+        return None
+    sel = stub_selector(ctx, target)
+    if sel is not None or type(x1) is not int or callee_name(ctx, target) != '_objc_msgSend':
+        return sel
+    try:
+        return ctx.read_cstring(x1)
+    except READ_ERRORS:
+        return None
+
 def call_clobbers(ctx, target: Optional[int]) -> Optional[Tuple[str, ...]]:
     """The registers a call to *target* changes when its callee changes fewer than a call may
     (:data:`CALL_CLOBBERS`); None for any other callee, or an unknown target (every

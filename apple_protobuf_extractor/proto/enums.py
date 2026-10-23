@@ -22,7 +22,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
-from proto.models     import ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics
+from proto.models     import (ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics,
+                              retag_enums)
 from proto.protocore  import _proto_name
 from proto.dispatch   import _jump_table_arm_addrs, function_entries
 from proto.dictrep_flow import Flow
@@ -594,7 +595,7 @@ def _collect_enum_definitions(
         if pairs:
             derived_name = _enum_name_from_pairs(pairs, enum_name)
             if derived_name != enum_name:
-                _retag_enum(fields, enum_name, derived_name)
+                retag_enums(fields, {enum_name: derived_name})
                 seen_enum_names.discard(enum_name)
                 seen_enum_names.add(derived_name)
                 enum_name = derived_name
@@ -620,13 +621,6 @@ def _is_untyped_int(fld: ProtoField) -> bool:
 def _tag_enum(fld: ProtoField, qualified: str) -> None:
     fld.type_name  = qualified
     fld.type_class = f"ENUM:{qualified}"
-
-
-def _retag_enum(fields: List[ProtoField], enum_name: str, new_name: str) -> None:
-    """Every field of enum *enum_name* becomes one of *new_name*."""
-    for f in fields:
-        if f.type_class == f"ENUM:{enum_name}":
-            _tag_enum(f, new_name)
 
 
 def _revert_enum(fields: List[ProtoField], enum_name: str) -> None:

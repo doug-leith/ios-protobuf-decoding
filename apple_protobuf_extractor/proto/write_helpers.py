@@ -30,7 +30,7 @@ from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store, 
 from macho.classlist import ClassList, ObjcIvar
 
 from proto.writeto   import _extract_writeto_field_numbers
-from proto.writer_flow import WriterFlow
+from proto.writer_flow import writer_flow_for
 from proto.dispatch  import _jump_table_arm_addrs, build_function_index, function_entries
 from proto.function_body import function_body
 from proto.callees   import import_name, real_target
@@ -288,9 +288,7 @@ def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
     (single-class extraction, unit tests) without ``extract_all`` — so build it on
     first use here too; without this, a standalone call would silently get NO writeTo
     decoding.  Rebuilt for a different class list."""
-    wf = getattr(ctx, "_writer_flow", None)
-    if wf is None or wf.cl is not cl:
-        _ctx_store(ctx, "_writer_flow", WriterFlow(ctx, cl))
+    writer_flow_for(ctx, cl)
     if getattr(ctx, "_function_entries", None) is None:
         build_function_index(ctx, cl)
 

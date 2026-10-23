@@ -55,7 +55,8 @@ from proto.arm64cfg import mem_operand
 from proto.arm64_operands import split_ops
 from proto.dispatch import FunctionEntries, function_entries
 from proto.function_body import function_body, function_listing
-from proto.writeto import BoundWrite, field_number_at
+from proto.writeto import BoundWrite
+from proto.submessage_marks import analyze_bracket, scratch_slot_of
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
@@ -148,17 +149,6 @@ class MapTypes:
 # definition is its reaching definition over the listing's CFG.
 
 
-def _sp_offset(ins) -> Optional[int]:
-    """``K`` of ``add xD, sp, #K`` (``0`` for the ``mov xD, sp`` a block at the very
-    bottom of the frame compiles to); else None — i.e. the stack offset *xD* points at."""
-    ops = split_ops(ins.op_str)
-    if ins.mnemonic == 'add' and len(ops) == 3 and ops[1] == 'sp' and ops[2].startswith('#'):
-        return _parse_imm(ops[2])
-    if ins.mnemonic == 'mov' and len(ops) == 2 and ops[1] == 'sp':
-        return 0
-    return None
-
-
 def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
     """Address of the ivar-offset variable whose value is in *offreg* at ``insns[i]``: the
     one load reaching it (:meth:`Flow.slot_load_address`).  Reaching definitions only, so
@@ -232,67 +222,28 @@ def _trace_unbox_selector(ctx: BinaryContext, flow, i: int) -> Optional[str]:
 
 
 def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Optional[MapEntryWriter]:
-    """Analyse one map-entry body in the linear instruction list *insns*, whose
-    BEGIN-submessage ``bl`` (stack-scratch ``x1``, literal field number ``F``) is at
-    ``begin_idx``.  Returns the :class:`MapEntryWriter` or ``None`` unless the body is
-    exactly ``begin(F) … write(1) … write(2) … end`` with ONE helper call per sub-field
-    and a matching END mark (same scratch slot, no field number) — anything else
-    (nested sub-messages, a second write of a sub-field, an unterminated body, a
-    sub-field other than 1/2) is not a recognisable map entry."""
-    flow = listing_flow(ctx, insns)
-    begin = insns[begin_idx]
-    slot = _scratch_slot_of(flow, begin_idx)       # shared by the begin and end marks
-    if begin.mnemonic != 'bl' or slot is None:
+    """Analyse one map-entry body: the sub-message whose BEGIN mark is at ``insns[begin_idx]``
+    (:func:`proto.submessage_marks.analyze_bracket`: every path from the mark to the matching
+    END mark).  Returns the :class:`MapEntryWriter` or ``None`` unless the body writes
+    exactly sub-fields 1 and 2, ONE helper call each -- anything else (nested sub-messages,
+    a second write of a sub-field, a path with no end mark, a sub-field other than 1/2) is
+    not a recognisable map entry."""
+    br = analyze_bracket(ctx, insns, begin_idx)
+    if br is None:
         return None
-    number = field_number_at(flow, begin_idx)
-    if number is None or number < 1:
-        return None
-
     writes: Dict[int, Tuple[int, int]] = {}            # sub-field -> (helper_va, insn index)
-    for j in range(begin_idx + 1, len(insns)):
-        ins = insns[j]
-        if ins.mnemonic != 'bl':
-            continue
-        target = _parse_imm(ins.op_str)
-        fn = field_number_at(flow, j)
-        j_slot = _scratch_slot_of(flow, j)
-        if j_slot is not None:
-            if fn is None and j_slot == slot:                         # END mark
-                break
-            return None                                               # nested begin / foreign scratch
-        if fn in (_KEY_FIELD, _VALUE_FIELD):
-            if fn in writes or target is None:
-                return None
-            writes[fn] = (target, j)
-        elif fn is not None:
-            return None                                               # not a {key, value} entry
-    else:
-        return None                                                   # no END mark
-    if _KEY_FIELD not in writes or _VALUE_FIELD not in writes:
+    for j, fn, helper in br.writes:
+        if fn not in (_KEY_FIELD, _VALUE_FIELD) or fn in writes:
+            return None                                # not a {key, value} entry
+        writes[fn] = (helper, j)
+    if len(writes) != 2:
         return None
+    flow = listing_flow(ctx, insns)
     (kh, kj), (vh, vj) = writes[_KEY_FIELD], writes[_VALUE_FIELD]
     return MapEntryWriter(
-        number=number, key_helper=kh, value_helper=vh,
+        number=br.number, key_helper=kh, value_helper=vh,
         key_sel=_trace_unbox_selector(ctx, flow, kj),
         value_sel=_trace_unbox_selector(ctx, flow, vj))
-
-
-def _scratch_slot_of(flow, k: int) -> Optional[int]:
-    """Stack offset K of the ``add x1, sp, #K`` that defines ``x1`` as the argument of
-    the call at ``insns[k]`` (the begin/end-mark idiom), else None.  A function that
-    addresses its locals from the frame pointer says ``sub x1, x29, #K`` instead; that
-    slot is reported as ``-K`` (never equal to an sp-relative one), which is all the
-    begin/end pairing needs.  A call between the definition and *k* redefines ``x1``,
-    so a stale scratch is never reported."""
-    d = flow.only_def(k, 'x1')
-    if d is None:
-        return None
-    ins = flow.insns[d]
-    ops = split_ops(ins.op_str)
-    if ins.mnemonic == 'sub' and len(ops) == 3 and ops[1] == 'x29' and ops[2].startswith('#'):
-        k_off = _parse_imm(ops[2])
-        return None if k_off is None else -k_off
-    return _sp_offset(ins)
 
 
 # ── Shape A: enumerateKeysAndObjectsUsingBlock: ───────────────────────────────
@@ -344,7 +295,7 @@ def scan_block_enumerated_maps(
             continue                                    # never analyse a truncated body
         body_flow = listing_flow(ctx, body)
         for k, b in enumerate(body):
-            if b.mnemonic == 'bl' and _scratch_slot_of(body_flow, k) is not None:
+            if b.mnemonic == 'bl' and scratch_slot_of(body_flow, k) is not None:
                 entry = analyze_entry(ctx, body, k)
                 if entry is not None:
                     out[ivar] = entry

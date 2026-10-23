@@ -54,7 +54,7 @@ from proto.arm64cfg import dominators, dominates
 from proto.arm64_operands import split_ops
 from proto.arm64_eval import Flow, _MAX_GATE_SPAN, Sym
 from proto.repeated import _adder_array_ivar
-from proto.callees import callee_name, stub_selector, text_holding
+from proto.callees import sent_selector, text_holding
 from proto.function_body import function_body
 from proto.eval_tokens import (SELF, READER, field_offset, ret_value,
                                object_model)
@@ -74,24 +74,6 @@ _ARM_ROUNDS = 4
 _ARM_REACH = 0x40000
 
 _ARRAY_ENCS = ('@"NSMutableArray"', '@"NSArray"')
-
-
-def _selector_of(ctx, call) -> Optional[str]:
-    """Selector a call sends: a ``_objc_msgSend$<sel>`` stub's, or -- for a call to the
-    generic ``objc_msgSend`` a standalone binary imports by name -- the selector string x1
-    points at."""
-    if call.target is None:
-        return None
-    sel = stub_selector(ctx, call.target)
-    if sel is not None:
-        return sel
-    x1 = call.args.get('x1')
-    if type(x1) is int and callee_name(ctx, call.target) == '_objc_msgSend':
-        try:
-            return ctx.read_cstring(x1)
-        except READ_ERRORS:
-            return None
-    return None
 
 
 @dataclass
@@ -407,7 +389,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                     x0 = c.args.get('x0')
                     if _class_name_at(ctx, x0) in known:
                         elems.add(ret_value(c.k))
-                    elif x0 in elems and (_selector_of(ctx, c) or '').startswith('init'):
+                    elif x0 in elems and (sent_selector(ctx, c.target, c.args.get('x1')) or '').startswith('init'):
                         elems.add(ret_value(c.k))
             if elems and fd.adder_ivar is None:
                 for c in calls:
@@ -431,7 +413,7 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                         # at that byte offset (f25's PBAppendMessageAtOffset)
                         fd.adder_ivar = off_to_ivar.get(lit[0])
                         break
-                    sel = _selector_of(ctx, c)
+                    sel = sent_selector(ctx, c.target, c.args.get('x1'))
                     tgt = sel_to_imp.get(sel, c.target) if sel is not None else c.target
                     off = _adder_array_ivar(ctx, tgt, array_offsets) if tgt else None
                     if off is not None:
@@ -450,8 +432,8 @@ def _slots_loaded(ctx, va: Optional[int]) -> FrozenSet[int]:
     if va not in memo:
         ins = _function_insns(ctx, va, entries=D.function_entries(ctx))
         flow = D.decoded_flow(ctx, ins) if ins else None
-        memo[va] = frozenset(sl for k in range(len(ins)) if flow is not None
-                             and (sl := flow.slot_load_address(k)) is not None)
+        memo[va] = frozenset(flow.slot_loads(range(len(flow.insns)))) if flow is not None \
+            else frozenset()
     return memo[va]
 
 
@@ -459,14 +441,7 @@ def _block_slot_loads(flow: Flow, blocks: Set[int]) -> Set[int]:
     """Addresses of the 4-byte ivar-offset loads (``ldrsw Xd, [Xb, #o]``) in *blocks*, the base
     register's value taken from its reaching definition -- the ``adrp`` of the offset page is
     usually hoisted out of the handler into the preamble."""
-    out: Set[int] = set()
-    for b in blocks:
-        first = flow._first_in_block[b]
-        for k in range(first, first + len(flow.cfg.blocks[b])):
-            addr = flow.slot_load_address(k)
-            if addr is not None:
-                out.add(addr)
-    return out
+    return flow.slot_loads(k for b in blocks for k in flow.block_range(b))
 
 
 def _writes_foreign_object(ctx, flow: Flow, blocks: Set[int], calls, own_slots: FrozenSet[int],
