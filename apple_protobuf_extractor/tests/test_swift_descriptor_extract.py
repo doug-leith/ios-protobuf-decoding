@@ -18,6 +18,7 @@ import struct
 import unittest
 
 from serializers import swift_descriptor_extract as S
+from serializers import swift_message_code as MC
 from proto import function_body as FB
 from tests.conftest import encode_adrp, encode_add_imm64, encode_movz, NOP_BYTES, RET_BYTES
 from tests._listing import insns as _listing
@@ -282,8 +283,9 @@ class TestInlineClosureWalk(unittest.TestCase):
 
 class _NamedListingCtx(NoImage):
     """A cache-style ctx over a hand-built listing whose call targets have export names, so
-    :func:`FB.function_body`, Flow's call model and :func:`S._symbol_at` run offline.  Every call
-    target in a test needs a name (an unnamed own-image target would be scanned)."""
+    :func:`FB.function_body`, Flow's call model and the call naming of
+    :mod:`serializers.swift_symbols` run offline.  Every call target in a test needs a name (an
+    unnamed own-image target would be scanned)."""
     is_cache_backed = True
     image_base = 0
 
@@ -299,6 +301,9 @@ class _NamedListingCtx(NoImage):
 
         def image_exports(self, base):
             return {}
+
+        def image_dependencies(self, base):
+            return []
 
     def __init__(self, lines, names, base=0x1000):
         from tests._listing import layout
@@ -318,63 +323,73 @@ def _visit(label, kind):
     return _VISIT.format(n=len(f"visit{label}{kind}Field"), l=label, k=kind)
 
 
-def _traverse(lines, names):
+def _traverse(lines, names, slots=None):
+    """``{N: proto type or None}`` :func:`MC.visited_fields` reads off the listing, the visitor's
+    witness-table slots named *slots* (offset -> requirement)."""
+    from unittest import mock
     ctx = _NamedListingCtx(lines, names)
-    orig = FB.disasm
-    FB.disasm = ctx.fake
-    try:
-        return ctx, S._traverse_visits(ctx, 0x1000)
-    finally:
-        FB.disasm = orig
+    with mock.patch.object(FB, "disasm", ctx.fake), \
+            mock.patch.object(MC, "_visitor_slots", lambda ctx: dict(slots or {})):
+        got = MC.visited_fields(ctx, 0x1000)
+    return {n: [MC.decoded_type(v) for v in vs] for n, vs in got.items()}
 
 
 class TestTraverseVisits(unittest.TestCase):
-    """`_traverse_visits`: a named Visitor method gives the field number from the register its
-    signature puts it in, and the field's type; any other call keeps the highest w-register
-    immediate set since the previous call."""
+    """:func:`MC.visited_fields`: a call to a Visitor method -- named by its symbol, or through
+    a ``blr`` by the visitor witness-table slot its target is loaded from -- gives the field
+    number from the register its signature puts it in, and the field's type.  A call it cannot
+    name visits nothing."""
     def test_named_visit_number_follows_the_value_registers(self):
         # String value in x0/x1 -> fieldNumber in x2, whatever else holds a small constant
-        _ctx, got = _traverse([("mov", "w2, #4"), ("mov", "w3, #9"), ("bl", "#0x3000")],
-                              {0x3000: _visit("Singular", "String")})
-        self.assertEqual(got, [(4, "string")])
+        got = _traverse([("mov", "w2, #4"), ("mov", "w3, #9"), ("bl", "#0x3000")],
+                        {0x3000: _visit("Singular", "String")})
+        self.assertEqual(got, {4: ["string"]})
 
     def test_named_visit_gives_the_integer_encoding(self):
-        _ctx, got = _traverse([("mov", "w0, #3"), ("mov", "w1, #7"), ("bl", "#0x3000"),
-                               ("mov", "w1, #8"), ("bl", "#0x3100"),
-                               ("mov", "w0, #2"), ("bl", "#0x3200")],
-                              {0x3000: _visit("Singular", "SInt32"),
-                               0x3100: _visit("Repeated", "Fixed64"),
-                               0x3200: _visit("Singular", "Double")})
-        self.assertEqual(got, [(7, "sint32"), (8, "repeated fixed64"), (2, "double")])
+        got = _traverse([("mov", "w0, #3"), ("mov", "w1, #7"), ("bl", "#0x3000"),
+                         ("mov", "w1, #8"), ("bl", "#0x3100"),
+                         ("mov", "w0, #2"), ("bl", "#0x3200")],
+                        {0x3000: _visit("Singular", "SInt32"),
+                         0x3100: _visit("Repeated", "Fixed64"),
+                         0x3200: _visit("Singular", "Double")})
+        self.assertEqual(got, {7: ["sint32"], 8: ["repeated fixed64"], 2: ["double"]})
 
-    def test_message_visit_has_no_scalar_type(self):
-        _ctx, got = _traverse([("mov", "w1, #5"), ("bl", "#0x3000")],
-                              {0x3000: _visit("Singular", "Message")})
-        self.assertEqual(got, [(5, None)])
+    def test_message_visit_without_its_metadata_has_no_type(self):
+        got = _traverse([("mov", "w1, #5"), ("bl", "#0x3000")],
+                        {0x3000: _visit("Singular", "Message")})
+        self.assertEqual(got, {5: [None]})
 
-    def test_unnamed_witness_call_keeps_the_highest_w_immediate(self):
-        _ctx, got = _traverse([("mov", "w2, #5"), ("mov", "x3, x22"), ("blr", "x8")], {})
-        self.assertEqual(got, [(5, None)])
-        # three w immediates: the highest register (w10) wins, not the lowest (w2), the last
-        # set or the largest value (w9), nor 'w9' by string order
-        _ctx, got = _traverse([("mov", "w2, #3"), ("mov", "w10, #5"), ("mov", "w9, #7"),
-                               ("mov", "x3, x22"), ("blr", "x8")], {})
-        self.assertEqual(got, [(5, None)])
+    def test_unnamed_witness_call_visits_nothing(self):
+        # a blr whose slot the image cannot name: no number is guessed from the immediates
+        # set before it (the highest w register's, the guess this replaced)
+        self.assertEqual(_traverse([("mov", "w2, #5"), ("mov", "x3, x22"), ("blr", "x8")], {}), {})
+        self.assertEqual(_traverse([("mov", "w2, #3"), ("mov", "w10, #5"), ("mov", "w9, #7"),
+                                    ("mov", "x3, x22"), ("blr", "x8")], {}), {})
+        # nor through the visitor's witness table when that slot has no name
+        self.assertEqual(_traverse([("ldr", "x8, [x2, #0x20]"), ("mov", "w1, #6"),
+                                    ("blr", "x8")], {}, slots={0x28: _visit("Singular", "Bool")}),
+                         {})
 
-    def test_other_calls_contribute_nothing_and_order_is_kept(self):
-        # a non-Visitor call with no w immediate pending adds nothing, though x1 holds a
-        # constant (only a Visitor method's number register is read)
-        _ctx, got = _traverse([("mov", "x1, #9"), ("bl", "#0x2000"), ("mov", "w1, #1"),
-                               ("bl", "#0x3000"), ("mov", "w1, #2"), ("bl", "#0x3000")],
-                              {0x2000: _OTHER, 0x3000: _visit("Singular", "Bool")})
-        self.assertEqual(got, [(1, "bool"), (2, "bool")])
+    def test_witness_table_slot_names_the_blr(self):
+        got = _traverse([("ldr", "x8, [x2, #0x20]"), ("mov", "w1, #6"), ("blr", "x8")], {},
+                        slots={0x20: _visit("Singular", "Bool")})
+        self.assertEqual(got, {6: ["bool"]})
+
+    def test_other_calls_contribute_nothing(self):
+        # a non-Visitor call adds nothing, though x1 holds a constant (only a Visitor method's
+        # number register is read)
+        got = _traverse([("mov", "x1, #9"), ("bl", "#0x2000"), ("mov", "w1, #1"),
+                         ("bl", "#0x3000"), ("mov", "w1, #2"), ("bl", "#0x3000")],
+                        {0x2000: _OTHER, 0x3000: _visit("Singular", "Bool")})
+        self.assertEqual(got, {1: ["bool"], 2: ["bool"]})
 
 
 class TestNameMapBuilderValidation(unittest.TestCase):
     """The runtime-_NameMap reading is cross-validated: the cold-builder stp pair
     is `(smallInt, namePtr)` whose int is the field NUMBER in the older codegen
     but the name LENGTH in the newer packed-bytecode form, so the walker can
-    mis-read lengths as numbers (e.g. nptocompaniond: 6=len'domain', 4='code')."""
+    mis-read lengths as numbers (e.g. nptocompaniond: 6=len'domain', 4='code');
+    and every number the message's traverse visits must be in it."""
     def test_length_form_rejected(self):
         # every entry's number == len(name) -> the (length, ptr) packed form; the rejection
         # (a heuristic, kept by choice) is reported
@@ -391,31 +406,62 @@ class TestNameMapBuilderValidation(unittest.TestCase):
         # numbers differ from name lengths, no oracle to contradict -> accept
         got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURL")]
         self.assertTrue(S._namemap_builder_validated(None, got, None))
+        self.assertTrue(S._namemap_builder_validated(None, got, set()))
         # one entry whose number happens to equal its name's length: not every entry -> accept
         got.append(S.SwiftField(4, "code"))
         self.assertTrue(S._namemap_builder_validated(None, got, None))
 
-    def _validated(self, numbers, got):
-        lines = []
-        for n in numbers:
-            lines += [("mov", f"w1, #{n}"), ("bl", "#0x3000")]
-        ctx = _NamedListingCtx(lines, {0x3000: _visit("Singular", "UInt32")})
-        orig = FB.disasm
-        FB.disasm = ctx.fake
-        try:
-            return S._namemap_builder_validated(ctx, got, 0x1000)
-        finally:
-            FB.disasm = orig
-
     def test_oracle_subset_of_recovered_accepted(self):
         # traverse visits {1,2}; the reading recovered a strict SUPERSET {1,2,3} -> accept
         got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURLX"), S.SwiftField(3, "extra")]
-        self.assertTrue(self._validated([1, 2], got))
+        self.assertTrue(S._namemap_builder_validated(None, got, {1, 2}))
 
     def test_oracle_contradiction_rejected(self):
         # traverse visits {1,2,5} but the reading only recovered {1,2} -> reject
         got = [S.SwiftField(1, "dsID"), S.SwiftField(2, "baseURLX")]
-        self.assertFalse(self._validated([1, 2, 5], got))
+        self.assertFalse(S._namemap_builder_validated(None, got, {1, 2, 5}))
+
+    def _extract(self, visited):
+        """:func:`S._extract_namemap` of a getter whose runtime builder reads {1, 2, 3}, its
+        message's traverse visiting *visited*."""
+        from unittest import mock
+        ctx = _NamedListingCtx([("ret", "")], {})
+        read = [(1, "a_field"), (2, "b_field"), (3, "c_field")]
+        visits = {n: [MC.Visited("Singular", "Int32")] for n in visited}
+        with mock.patch.object(FB, "disasm", ctx.fake), \
+                mock.patch.object(S, "_runtime_namemap_fields",
+                                  lambda *a, **k: [S.SwiftField(*e) for e in read]), \
+                mock.patch.object(MC, "visited_fields", lambda ctx, code: visits):
+            got, shape = S._extract_namemap(ctx, 0x1000, MC.Code(0x2000), owner="Mod.M")
+        return [(f.number, f.name) for f in got], shape
+
+    def test_a_reading_missing_a_visited_number_is_not_emitted(self):
+        # traverse visits 4, the reading has no 4: it is not this message's table
+        self.assertEqual(self._extract({1, 2, 3, 4}), ([], "none"))
+        self.assertEqual(self._extract({1, 3}),
+                         ([(1, "a_field"), (2, "b_field"), (3, "c_field")], "runtime-namemap"))
+
+
+class TestUnlistedVisitedNumbersReported(unittest.TestCase):
+    """A reading with no check of its own (here a bytecode literal) that lacks a number
+    traverse visits is emitted, and the message's analysis failure says so."""
+    def test_reported(self):
+        from unittest import mock
+        import serializers.swift_type_recovery as TR
+        from proto.models import get_diagnostics
+        m = S.SwiftMessage("Mod", "M", fields=[S.SwiftField(n, f"f{n}") for n in (1, 2, 3)],
+                           shape="bytecode")
+        ctx = type("Ctx", (), {})()
+        visits = {n: [MC.Visited("Singular", "Int32")] for n in (1, 2, 3, 4)}
+        with mock.patch.object(MC, "message_witnesses", lambda ctx: {}), \
+                mock.patch.object(MC, "visited_fields", lambda ctx, code: visits), \
+                mock.patch.object(TR, "collect_field_types", lambda ctx: ({}, {}, set(), {})):
+            S._attach_types(ctx, [m], {("Mod", "M"): MC.Code(0x2000)})
+        self.assertEqual(get_diagnostics(ctx).analysis_failures,
+                         [("Mod.M", "swift name map",
+                           "traverse visits [4], the name map does not list them")])
+        self.assertEqual([(f.number, f.proto_type) for f in m.fields],
+                         [(1, "int32"), (2, "int32"), (3, "int32")])
 
 
 class TestSharedOnceInitTargets(unittest.TestCase):
@@ -467,7 +513,7 @@ class TestSharedOnceInitTargets(unittest.TestCase):
 
 
 class _TextCtx:
-    """Just enough ctx for ``_in_executable_text``: one __TEXT,__text section."""
+    """Just enough ctx for :func:`proto.callees.text_holding`: one __TEXT,__text section."""
     class _Sec:
         vmaddr, vmsize = 0x1000, 0x1000
 
@@ -887,22 +933,17 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
                          "bytes")
 
     def test_traverse_numbers_never_contradict_namemap(self):
-        syms = S.symbol_addrs(self.ctx)
-        traversers = {}
-        for name, va in syms.items():
-            if "V8traverse" in name and name.endswith("F"):
-                t = S._type_of_symbol(name, "8traverse")
-                if t and t[2] == "V":
-                    traversers.setdefault(t[:2], va)
+        # every message's traverse is its Message conformance's witness; each number it visits
+        # is in the name map
+        witnesses = S._witnesses(self.ctx)
         checked = 0
         for m in self.msgs.values():
-            va = traversers.get((m.module, m.name))
-            if va is None or not m.fields:
+            if not m.fields:
                 continue
-            seen = set(S._traverse_field_numbers(self.ctx, va))
+            seen = set(MC.visited_fields(self.ctx, witnesses[m.name]["traverse"]))
             self.assertLessEqual(seen, {f.number for f in m.fields}, m.name)
             checked += bool(seen)
-        self.assertGreater(checked, 20)      # the cross-check actually ran
+        self.assertGreaterEqual(checked, 60)     # 64 (the cross-check actually ran)
 
 
 def _seymourcore_path():
@@ -1515,22 +1556,25 @@ class TestLiveCacheNative(unittest.TestCase):
                         and n.endswith(S._FUNCTION_BODY_SUFFIXES)}
         self.assertTrue(local_bodies)
         self.assertLessEqual(local_bodies, set(bodies))
-        # and each message's reading is handed its traverse for the cross-check
+        # and each message's reading is handed its traverse for the cross-check: its Message
+        # conformance's witness, here the body its symbol names
         handed = {}
         orig = S._extract_namemap
 
-        def record(ctx, init_va, traverse_va=None, enum=False):
-            handed[init_va] = traverse_va
-            return orig(ctx, init_va, traverse_va, enum)
+        def record(ctx, init_va, traverse=None, enum=False, owner=""):
+            handed[init_va] = traverse
+            return orig(ctx, init_va, traverse, enum, owner)
         S._extract_namemap = record
         try:
             S.swift_messages(self.ctx)
         finally:
             S._extract_namemap = orig
         self.assertEqual(len(handed), len(self.msgs))
-        self.assertTrue(all(handed.values()))
-        self.assertEqual(handed[syms["_$s14CopresenceCore11CP_KeyValueV17_protobuf_nameMap_WZ"]],
-                         syms[kv_traverse])
+        self.assertTrue(all(isinstance(t, MC.Code) for t in handed.values()))
+        kv = handed[syms["_$s14CopresenceCore11CP_KeyValueV17_protobuf_nameMap_WZ"]]
+        self.assertEqual(kv, S._witnesses(self.ctx)["CP_KeyValue"]["traverse"])
+        self.assertEqual(kv.va, syms[kv_traverse])
+        self.assertEqual(set(MC.visited_fields(self.ctx, kv)), {1, 2})
 
     def test_cp_keyvalue(self):
         self.assertEqual(

@@ -20,7 +20,7 @@ Two things name a location:
   offset global (``ldr x8, <…Wvd>``), is the class field that global's symbol names, when the
   record loaded from is typed by a direct reference to that class.
 
-Only visits whose Visitor method :func:`serializers.swift_descriptor_extract._visit_method` names
+Only visits whose Visitor method :func:`serializers.swift_message_code.visit_methods` names
 are read (the method fixes the field number's register); a location two visits or two
 properties share names nothing, and nor does one the getters and the metadata name apart."""
 import re
@@ -33,6 +33,8 @@ from proto.arm64_operands import (CALLS, LOAD_BYTES, PAIR_LOADS, PAIR_STORES, PO
 from macho.disasm import _parse_imm
 from macho.memory import READ_ERRORS
 from serializers import swift_descriptor_extract as S
+from serializers import swift_message_code as MC
+from serializers import swift_symbols as SY
 from serializers.swift_type_recovery import _cstr, _demangle_one, _i32, _relptr, _u16, _u32
 
 _LOADS = frozenset(("ldr", "ldur", "ldrb", "ldurb", "ldrh", "ldurh", "ldrsw", "ldursw", "ldp"))
@@ -45,7 +47,7 @@ _ACCESS_BUFFER = 24    # swift_beginAccess's ValueBuffer: 3 words the runtime ke
 
 
 def _callee(ctx, va) -> str:
-    return S._symbol_at(ctx, va).lstrip("_")
+    return SY.symbol_at(ctx, va).lstrip("_")
 
 
 def _const(flow, k, reg, entry, depth=0) -> Optional[int]:
@@ -369,15 +371,17 @@ def _proven_equal(flow, k, c):
 
 
 def traverse_locations(ctx, va) -> Dict[tuple, int]:
-    """{location: field number} over the visits :func:`S._visit_method` names."""
-    insns = S.function_body(ctx, va)
-    flow = S._flow_of(ctx, insns)
+    """{location: field number} over the visits :func:`MC.visit_methods` names."""
+    flow = SY.function_flow(ctx, va)
+    if flow is None:
+        return {}
+    visits = MC.visit_methods(ctx, va)
     out: Dict[tuple, int] = {}
     shared = set()
     frame = None
-    for k, ins in enumerate(insns):
-        visit = S._visit_method(ctx, flow, k) if ins.mnemonic in CALLS else None
-        nreg = S._visit_number_register(*visit) if visit else None
+    for k in range(len(flow.insns)):
+        visit = visits.get(k)
+        nreg = MC.visit_number_register(*visit) if visit else None
         num = flow.const_before(k, nreg) if nreg else None
         if num is None:
             continue

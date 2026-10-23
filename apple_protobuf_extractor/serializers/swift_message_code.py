@@ -29,16 +29,17 @@ offset where they are static (a library-evolution build reads its offsets from t
 from __future__ import annotations
 
 import re
-import struct
 from dataclasses import dataclass
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from proto.arm64_eval import Flow, Objects, Sym
 from proto.arm64_operands import CALLS, CALLER_SAVED
-from proto.callees import callee_name
+from proto.callees import callee_name, text_holding
 from proto.function_body import function_body
 from proto.models import MAX_FIELD_NUMBER
+from serializers import swift_symbols as SY
+from serializers.swift_symbols import read_i32, rel
 
 # self; the decoder (or visitor) argument, its type and its witness table
 SELF, DECODER, DECODER_TYPE, DECODER_WITNESSES = range(4)
@@ -134,48 +135,6 @@ class Decoded:
 
 # ── conformances ──────────────────────────────────────────────────────────────
 
-def _i32(ctx, va):
-    return struct.unpack("<i", ctx.read_bytes(va, 4))[0]
-
-
-def _u32(ctx, va):
-    return struct.unpack("<I", ctx.read_bytes(va, 4))[0]
-
-
-def _rel(ctx, va):
-    return va + _i32(ctx, va)
-
-
-def _rel_indirect(ctx, va) -> Tuple[int, bool]:
-    """A relative indirectable pointer: ``(target, through a slot)``; for an indirect one the
-    slot's address (its value read by :func:`_slot_name` / ``read_ptr``)."""
-    v = _i32(ctx, va)
-    return (va + (v & ~1), True) if v & 1 else (va + v, False)
-
-
-def _symbols(ctx) -> Dict[int, str]:
-    """address -> name of the symbols that can name a swift-protobuf requirement or protocol."""
-    from serializers.swift_descriptor_extract import _visitor_symbols
-
-    def build():
-        out: Dict[int, str] = {}
-        for n, a in _visitor_symbols(ctx).items():
-            out.setdefault(a, n)
-        return out
-    return _ctx_cache(ctx, "_swift_requirement_symbols", build)
-
-
-def _named(ctx, va: int, indirect: bool) -> Optional[str]:
-    """The symbol a (possibly indirect) reference names: an indirect one's slot holds the
-    address (bound: the import's name)."""
-    if indirect:
-        name = ctx.bind_name_for(va)
-        if name:
-            return name
-        va = ctx.read_ptr(va)
-    return _symbols(ctx).get(va)
-
-
 # traverse(visitor:) / decodeMessage(decoder:), as a requirement's or a witness's symbol spells
 # them ("Message" a word substitution: ``06decodeD07decoder``, ``06decodeF07decoder``)
 _TRAVERSE_RE = re.compile(r"8traverse7visitor")
@@ -199,49 +158,33 @@ def message_witnesses(ctx) -> Dict[int, Dict[str, Code]]:
 
 
 def _message_witnesses(ctx) -> Dict[int, Dict[str, Code]]:
-    if not ctx.has_section("__TEXT", "__swift5_proto"):
-        return {}
-    sec = ctx.section("__TEXT", "__swift5_proto")
     out: Dict[int, Dict[str, Code]] = {}
-    for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
-        try:
-            cd = _rel(ctx, rec)
-            proto, ind = _rel_indirect(ctx, cd)
-            pname = _named(ctx, proto, ind) or ""
-            if not pname.endswith("7MessageMp"):
-                continue
-            flags = _u32(ctx, cd + 12)
-            kind = (flags >> 3) & 7
-            tref = _rel(ctx, cd + 4)
-            tdesc = tref if kind == 0 else ctx.read_ptr(tref) if kind == 1 else None
-            if not tdesc:
-                continue
-            found: Dict[str, Code] = {}
-            at = cd + 16 + (4 if flags & (1 << 6) else 0) + 12 * ((flags >> 8) & 0xFF)
-            if flags & (1 << 16):                  # resilient witnesses: requirement, impl
-                for i in range(_u32(ctx, at)):
-                    w = at + 4 + 8 * i
-                    req, rind = _rel_indirect(ctx, w)
-                    _note(ctx, found, _named(ctx, req, rind), _rel(ctx, w + 4))
-            else:                                  # a witness table, in requirement order
-                names = _slot_names(ctx, pname)
-                wt = _rel(ctx, cd + 8)
-                for i, req in names.items():
-                    for name in req:
-                        _note(ctx, found, name, ctx.read_ptr(wt + 8 + 8 * i))
-            if found:
-                out[tdesc] = found
-        except READ_ERRORS:
+    for c in SY.conformances(ctx):
+        protocol = next((n for n in c.protocol if n.endswith("7MessageMp")), None)
+        if protocol is None or not c.type_descriptor:
             continue
+        found: Dict[str, Code] = {}
+        if c.witness_table is None:                # resilient witnesses: requirement, impl
+            for names, impl in c.resilient:
+                _note(ctx, found, names, impl)
+        else:                                      # a witness table, in requirement order
+            for off, names in requirement_slots(ctx, protocol).items():
+                try:
+                    impl = ctx.read_ptr(c.witness_table + off)
+                except READ_ERRORS:
+                    continue
+                _note(ctx, found, names, impl)
+        if found:
+            out[c.type_descriptor] = found
     return out
 
 
-def _note(ctx, found: Dict[str, Code], requirement: Optional[str], impl: Optional[int]) -> None:
-    if not requirement or not impl:
+def _note(ctx, found: Dict[str, Code], requirement: Tuple[str, ...], impl: Optional[int]) -> None:
+    if not impl:
         return
-    if _TRAVERSE_RE.search(requirement):
+    if any(_TRAVERSE_RE.search(n) for n in requirement):
         found["traverse"] = implementation(ctx, impl)
-    elif _DECODE_MESSAGE_RE.search(requirement):
+    elif any(_DECODE_MESSAGE_RE.search(n) for n in requirement):
         found["decodeMessage"] = implementation(ctx, impl)
 
 
@@ -274,7 +217,7 @@ def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int], Dict[str,
     if not all(flow.entry_arg(k, r) == r for r in ("x0", "x1", "x2", "x20")):
         return None
     target = _parse_imm(insns[k].op_str)
-    if target is None or not _in_image_text(ctx, target):
+    if text_holding(ctx, target) is None:
         return None
     objs = _Objects(ctx)
     known = flow.propagate({}, [k], objects=objs.objects(va)).get(k, {})
@@ -290,135 +233,92 @@ def _forwarded_to(ctx, va: int) -> Optional[Tuple[int, Dict[str, int], Dict[str,
     return target, args, imports
 
 
-def _in_image_text(ctx, va: int) -> bool:
-    if not ctx.has_section("__TEXT", "__text"):
-        return False
-    text = ctx.section("__TEXT", "__text")
-    return text.vmaddr <= va < text.vmaddr + text.vmsize
+# ── protocol requirements, and the calls they name ────────────────────────────
+
+def requirement_slots(ctx, protocol: str) -> Dict[int, Tuple[str, ...]]:
+    """``{witness-table offset: names}`` of each requirement of *protocol* (its descriptor's
+    symbol): its descriptor's symbols (:func:`serializers.swift_symbols.protocol_requirements`),
+    and those of what the image's static witness tables for it hold at that slot and of the
+    function that forwards to (``…P8traverse7visitor…TW``, a body ``…V8traverse7visitor…F``) --
+    an image that links swift-protobuf in may have only those.  Memoised."""
+    memo = _ctx_cache(ctx, "_swift_requirement_slots", dict)
+    if protocol not in memo:
+        memo[protocol] = _requirement_slots(ctx, protocol)
+    return memo[protocol]
 
 
-# ── decodeMessage ─────────────────────────────────────────────────────────────
+def _requirement_slots(ctx, protocol: str) -> Dict[int, Tuple[str, ...]]:
+    tables = [c.witness_table for c in SY.conformances(ctx)
+              if protocol in c.protocol and c.witness_table is not None]
+    out: Dict[int, Tuple[str, ...]] = {}
+    for i, required in enumerate(SY.protocol_requirements(ctx, protocol)):
+        names = list(required)
+        for wt in tables:
+            try:
+                impl = ctx.read_ptr(wt + 8 + 8 * i)
+            except READ_ERRORS:
+                continue
+            if impl:                               # the witness, and the body it forwards to
+                names.extend(SY.names_at(ctx, impl))
+                names.extend(SY.names_at(ctx, implementation(ctx, impl).va))
+        out[8 + 8 * i] = tuple(dict.fromkeys(names))
+    return out
+
+
+def _slots(ctx, suffix: str, pattern) -> Dict[int, str]:
+    """``{witness-table offset: requirement}`` of the swift-protobuf protocols whose descriptor's
+    symbol ends in *suffix*: the first of a slot's :func:`requirement_slots` names *pattern*
+    matches."""
+    def build():
+        out: Dict[int, str] = {}
+        for protocol in SY.names_ending(ctx, suffix):
+            for off, names in requirement_slots(ctx, protocol).items():
+                hit = next((n for n in names if pattern.search(n)), None)
+                if hit:
+                    out.setdefault(off, hit)
+        return out
+    return _ctx_cache(ctx, "_swift_slots_" + suffix, build)
+
 
 def _decoder_slots(ctx) -> Dict[int, str]:
-    """``{witness-table offset: Decoder requirement}`` (:func:`_requirement_slots`)."""
-    return _requirement_slots(ctx, "7DecoderMp", _DECODE_RE)
+    """The ``Decoder`` requirements by witness-table offset (:func:`_slots`)."""
+    return _slots(ctx, "7DecoderMp", _DECODE_RE)
 
 
 def _visitor_slots(ctx) -> Dict[int, str]:
-    """``{witness-table offset: Visitor requirement}`` (:func:`_requirement_slots`)."""
-    return _requirement_slots(ctx, "7VisitorMp", _VISIT_RE)
+    """The ``Visitor`` requirements by witness-table offset (:func:`_slots`)."""
+    return _slots(ctx, "7VisitorMp", _VISIT_RE)
 
 
-def _requirement_slots(ctx, suffix: str, pattern) -> Dict[int, str]:
-    """``{witness-table offset: requirement}`` of the swift-protobuf protocol whose descriptor's
-    symbol ends in *suffix*: by the requirements' descriptors
-    (:func:`serializers.swift_descriptor_extract._protocol_slots`), else -- an image that links
-    swift-protobuf in, without those symbols -- by what the image's conformances' witnesses at
-    each slot are named (a name *pattern* matches)."""
-    from serializers.swift_descriptor_extract import _protocol_slots
-
-    def build():
-        out = dict(_protocol_slots(ctx, suffix))
-        for pname in [n for n in _symbols(ctx).values() if n.endswith(suffix)]:
-            for i, names in _slot_names(ctx, pname).items():
-                hit = next((n for n in names if pattern.search(n)), None)
-                if hit:
-                    out.setdefault(8 + 8 * i, hit)
-        return out
-    return _ctx_cache(ctx, "_swift_requirement_slots_" + suffix, build)
+def _match(pattern, names: Tuple[str, ...]):
+    """The first match of *pattern* in *names*, or None."""
+    return next((m for m in map(pattern.search, names) if m), None)
 
 
-def _static_tables(ctx) -> List[Tuple[str, int]]:
-    """``(protocol symbol, witness table)`` of each conformance in the image with a static
-    witness table (not resilient witnesses)."""
-    def build():
-        out = []
-        if not ctx.has_section("__TEXT", "__swift5_proto"):
-            return out
-        sec = ctx.section("__TEXT", "__swift5_proto")
-        for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
-            try:
-                cd = _rel(ctx, rec)
-                proto, ind = _rel_indirect(ctx, cd)
-                if not _u32(ctx, cd + 12) & (1 << 16):
-                    out.append((_named(ctx, proto, ind) or "", _rel(ctx, cd + 8)))
-            except READ_ERRORS:
-                continue
-        return out
-    return _ctx_cache(ctx, "_swift_static_tables", build)
-
-
-def _slot_names(ctx, protocol: str) -> Dict[int, List[str]]:
-    """``{requirement index: [names]}`` of *protocol* (its descriptor's symbol): each
-    requirement's method-descriptor symbol (``…Tq``), and the symbols of what the image's static
-    witness tables for it hold at that slot and of the function that forwards to
-    (``…P8traverse7visitor…TW``, a body ``…V8traverse7visitor…F``) -- an image that links
-    swift-protobuf in may have only those."""
-    def build():
-        out: Dict[int, List[str]] = {}
-        va = next((a for a, n in _symbols(ctx).items() if n == protocol), None)
-        if va is None:
-            return out
-        try:
-            _f, _p, _n, nsig, nreq, _a = struct.unpack("<IiiIIi", ctx.read_bytes(va, 24))
-        except READ_ERRORS:
-            return out
-        start = va + 24 + 12 * nsig
-        impl_names = _impl_symbols(ctx)
-        for i in range(nreq):
-            names = [n for n in (_symbols(ctx).get(start + 8 * i),) if n]
-            for pname, wt in _static_tables(ctx):
-                if pname != protocol:
-                    continue
-                try:
-                    impl = ctx.read_ptr(wt + 8 + 8 * i)
-                except READ_ERRORS:
-                    continue
-                if impl:                           # the witness, and the body it forwards to
-                    names.extend(impl_names.get(impl, ()))
-                    names.extend(impl_names.get(implementation(ctx, impl).va, ()))
-            out[i] = list(dict.fromkeys(names))
-        return out
-    return _ctx_cache(ctx, "_swift_slot_names_" + protocol, build)
-
-
-def _impl_symbols(ctx) -> Dict[int, List[str]]:
-    """address -> every symbol of the image there (a witness may carry several)."""
-    def build():
-        out: Dict[int, List[str]] = {}
-        try:
-            for n, a in ctx.iter_symbols():
-                if a:
-                    out.setdefault(a, []).append(n)
-        except READ_ERRORS:
-            pass
-        return out
-    return _ctx_cache(ctx, "_swift_impl_symbols", build)
-
-
-def _call_name(ctx, objs: _Objects, target: Optional[int], via: Optional[int],
-               thunks: bool = False, slots=_decoder_slots) -> str:
-    """The symbol a call reaches: its target's (with *thunks*, an outlined thunk's tail
+def _call_names(ctx, objs: _Objects, target: Optional[int], via: Optional[int],
+                thunks: bool = False, slots=_decoder_slots) -> Tuple[str, ...]:
+    """The symbols a call reaches: its target's (with *thunks*, an outlined thunk's tail
     callee's), or -- through a ``blr`` -- the requirement at the slot of the argument's witness
     table (the decoder's, or with *slots* = :func:`_visitor_slots` the visitor's) its target was
     loaded from."""
-    from serializers.swift_descriptor_extract import _symbol_at
     if target is not None:
-        return _symbol_at(ctx, (_tail_called(ctx, target) if thunks else None) or target)
+        return SY.function_names(ctx, (_tail_called(ctx, target) if thunks else None) or target)
     if is_pointer(via):
         origin = objs.origin.get(split(via)[0], ())
         if origin[:2] == ("load", DECODER_WITNESSES):
-            return slots(ctx).get(origin[2], "")
+            hit = slots(ctx).get(origin[2])
+            return (hit,) if hit else ()
         if origin[:1] == ("import",):
-            return ctx.bind_name_for(origin[1]) or ""
-    return ""
+            name = ctx.bind_name_for(origin[1])
+            return (name,) if name else ()
+    return ()
 
 
 def _tail_called(ctx, va: int) -> Optional[int]:
     """The function an outlined thunk of the image tail-calls (``mov x0, x24 ; ... ; b <T>``: no
     call of its own, a ``b`` out of itself), else None."""
     from macho.disasm import _parse_imm
-    if not _in_image_text(ctx, va):
+    if text_holding(ctx, va) is None:
         return None
 
     def build():
@@ -437,21 +337,12 @@ def _tail_called(ctx, va: int) -> Optional[int]:
     return memo[va]
 
 
-def _flow(ctx, va: int) -> Optional[Flow]:
-    from serializers.swift_descriptor_extract import _flow_of
-    try:
-        return _flow_of(ctx, list(function_body(ctx, va)))
-    except READ_ERRORS:
-        return None
-
-
 def _decodes(ctx, objs: _Objects, calls, depth: int, seen) -> List[Decoded]:
     """The Decoder field calls among *calls* (a run's), and in the image's functions they reach
     (run with the arguments handed them)."""
     out: List[Decoded] = []
     for c in calls:
-        name = _call_name(ctx, objs, c.target, c.via)
-        m = _DECODE_RE.search(name)
+        m = _match(_DECODE_RE, _call_names(ctx, objs, c.target, c.via))
         if m:
             if m.group(4):
                 continue                           # nextFieldNumber
@@ -469,10 +360,10 @@ def _decodes(ctx, objs: _Objects, calls, depth: int, seen) -> List[Decoded]:
                 d.origin, d.offset = objs.origin[split(v)[0]], split(v)[1]
             out.append(d)
             continue
-        if c.target is None or depth >= _MAX_DEPTH or not _in_image_text(ctx, c.target) \
+        if c.target is None or depth >= _MAX_DEPTH or text_holding(ctx, c.target) is None \
                 or c.target in seen:
             continue
-        flow = _flow(ctx, c.target)
+        flow = SY.function_flow(ctx, c.target)
         if flow is None:
             continue
         region = flow.run_from(0, dict(c.args), objects=objs.objects(c.target))
@@ -495,7 +386,7 @@ def decoded_fields(ctx, decode, numbers) -> Optional[Dict[int, List[Decoded]]]:
 def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth: int
             ) -> Optional[Dict[int, List[Decoded]]]:
     from macho.disasm import _parse_imm
-    flow = _flow(ctx, va)
+    flow = SY.function_flow(ctx, va)
     if flow is None:
         return None
     model = objs.objects(va)
@@ -513,10 +404,10 @@ def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth:
         if target is None:
             target = st.get(reg) if not isinstance(st.get(reg), Sym) else None
         via = None if target is not None else st.get(reg)
-        m = _DECODE_RE.search(_call_name(ctx, objs, target, via, thunks=True))
+        m = _match(_DECODE_RE, _call_names(ctx, objs, target, via, thunks=True))
         if m and m.group(4):
             nexts.append(k)
-        elif target is not None and _in_image_text(ctx, target):
+        elif text_holding(ctx, target) is not None:
             inner.append((target, st))
     if not nexts:
         # the loop is in a function this one calls, handed what it holds
@@ -579,8 +470,8 @@ def _accessors(ctx) -> Dict[int, int]:
         for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
             try:
                 desc = TR._type_record(ctx, rec)
-                if desc and TR._desc_kind(ctx, desc) in (16, 17, 18) and _i32(ctx, desc + 0x0C):
-                    out.setdefault(_rel(ctx, desc + 0x0C), desc)
+                if desc and TR._desc_kind(ctx, desc) in (16, 17, 18) and read_i32(ctx, desc + 0x0C):
+                    out.setdefault(rel(ctx, desc + 0x0C), desc)
             except READ_ERRORS:
                 continue
         return out
@@ -608,7 +499,6 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
     name (``__swift_instantiateConcreteTypeFromMangledName`` handed its cache, whose first word
     is a relative reference to the name); or a static metadata record (its descriptor at +8)."""
     import serializers.swift_type_recovery as TR
-    from serializers.swift_descriptor_extract import _symbol_at
     if v is None:
         return None
     if is_pointer(v):
@@ -621,14 +511,14 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         desc = _accessors(ctx).get(target)
         if desc:
             return TR._qualified_name(ctx, desc)
-        name = _symbol_at(ctx, target)
-        if name in _INSTANTIATE and x0 is not None and not isinstance(x0, Sym):
+        names = SY.function_names(ctx, target)
+        if any(n in _INSTANTIATE for n in names) and x0 is not None and not isinstance(x0, Sym):
             try:
-                ptype, label = TR.decode_mangled(ctx, _rel(ctx, x0))
+                ptype, label = TR.decode_mangled(ctx, rel(ctx, x0))
             except READ_ERRORS:
                 return None
             return ("repeated " + ptype if label == "repeated" else ptype) if ptype else None
-        return _type_of_accessor_symbol(name)
+        return next(filter(None, map(_type_of_accessor_symbol, names)), None)
     if isinstance(v, Sym):                       # (a frame address)
         return None
     try:
@@ -653,9 +543,12 @@ class Visited:
     type: Optional[str] = None
 
 
-def _number_register(label: str, kind: str) -> str:
-    """Where a Visitor method takes its field number: after a value of two words (String, Data)
-    or none in a general register (Float, Double: v0), else after one."""
+def visit_number_register(label: str, kind: str) -> str:
+    """Where a Visitor method takes its field number.  swift-protobuf's Visitor methods take
+    ``(value, fieldNumber: Int, …)``: in the Swift calling convention the number is the integer
+    argument after the value's registers -- none for a Float / Double (it travels in an FP
+    register), two for a String / Data (two words), one for everything else (an integer, a Bool,
+    an Array, a Dictionary, an enum or message by reference)."""
     if label == "Singular" and kind in ("Float", "Double"):
         return "x0"
     if label == "Singular" and kind in ("String", "Bytes"):
@@ -663,33 +556,68 @@ def _number_register(label: str, kind: str) -> str:
     return "x1"
 
 
+def _visitor_method(ctx, objs: _Objects, c) -> Optional[Tuple[str, str]]:
+    """``(label, kind)`` of the Visitor method call *c* goes to, or None."""
+    m = _match(_VISIT_RE, _call_names(ctx, objs, c.target, c.via, slots=_visitor_slots))
+    return ((m.group(1) or "Map"), (m.group(2) or "Map")) if m else None
+
+
+def _visits_a_field(visit: Tuple[str, str]) -> bool:
+    """Not an extension's or the unknown fields' visit."""
+    return visit[1] != "Extension" and not visit[1].startswith("Unknown")
+
+
+def _code(traverse) -> "Code":
+    return traverse if isinstance(traverse, Code) else Code(traverse)
+
+
+def visit_methods(ctx, traverse) -> Dict[int, Tuple[str, str]]:
+    """``{k: (label, kind)}``: the Visitor method of each call ``insns[k]`` of a
+    ``traverse(visitor:)`` body itself (a :class:`Code` or its address; *insns* those of its
+    :func:`serializers.swift_symbols.function_flow`) that visits a field, named as
+    :func:`visited_fields` names them."""
+    code = _code(traverse)
+    flow = SY.function_flow(ctx, code.va)
+    if flow is None:
+        return {}
+    objs = _Objects(ctx)
+    region = flow.run_from(0, objs.entry(code), objects=objs.objects(code.va))
+    out: Dict[int, Tuple[str, str]] = {}
+    for c in region.calls:
+        visit = _visitor_method(ctx, objs, c)
+        if visit is not None and _visits_a_field(visit):
+            out[c.k] = visit
+    return out
+
+
 def visited_fields(ctx, traverse) -> Dict[int, List[Visited]]:
     """``{N: [Visited]}``: the Visitor calls a ``traverse(visitor:)`` (a :class:`Code` or its
     address) makes, by the field number it hands each -- run with self (x20), the visitor (x0),
     its type (x1) and witness table (x2) as :func:`decoded_fields` runs decodeMessage, and the
     functions it calls (a oneof's cases, the generated closures) run with what they are
-    handed."""
-    code = traverse if isinstance(traverse, Code) else Code(traverse)
-    objs = _Objects(ctx)
-    entry = objs.entry(code)
-    out: Dict[int, List[Visited]] = {}
-    _visits(ctx, objs, code.va, entry, 1, frozenset(), out)
-    return out
+    handed.  Memoised per code."""
+    code = _code(traverse)
+    memo = _ctx_cache(ctx, "_swift_visited_fields", dict)
+    if code not in memo:
+        objs = _Objects(ctx)
+        out: Dict[int, List[Visited]] = {}
+        _visits(ctx, objs, code.va, objs.entry(code), 1, frozenset(), out)
+        memo[code] = out
+    return memo[code]
 
 
 def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
-    flow = _flow(ctx, va)
+    flow = SY.function_flow(ctx, va)
     if flow is None:
         return
     region = flow.run_from(0, dict(entry), objects=objs.objects(va))
     for c in region.calls:
-        m = _VISIT_RE.search(_call_name(ctx, objs, c.target, c.via, slots=_visitor_slots))
-        if m:
-            label, kind = (m.group(1) or "Map"), (m.group(2) or "Map")
-            if kind == "Extension" or kind.startswith("Unknown"):
-                continue
-            n = c.args.get(_number_register(label, kind))
-            if n is None or isinstance(n, Sym) or not 1 <= n <= MAX_FIELD_NUMBER:
+        visit = _visitor_method(ctx, objs, c)
+        if visit is not None:
+            label, kind = visit
+            n = c.args.get(visit_number_register(label, kind))
+            if not _visits_a_field(visit) or n is None or isinstance(n, Sym) \
+                    or not 1 <= n <= MAX_FIELD_NUMBER:
                 continue
             v = Visited(label, kind)
             if kind in _GENERIC_KINDS:
@@ -702,7 +630,28 @@ def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
             if (v.label, v.kind, v.type) not in {(x.label, x.kind, x.type) for x in out.get(n, ())}:
                 out.setdefault(n, []).append(v)
             continue
-        if c.target is None or depth >= _MAX_DEPTH or not _in_image_text(ctx, c.target) \
+        if c.target is None or depth >= _MAX_DEPTH or text_holding(ctx, c.target) is None \
                 or c.target in seen:
             continue
         _visits(ctx, objs, c.target, c.args, depth + 1, seen | {c.target}, out)
+
+
+# ── the proto type a call stands for ──────────────────────────────────────────
+
+# a Decoder / Visitor method's scalar kind -> its proto type
+SCALARS = {
+    "Int32": "int32", "Int64": "int64", "UInt32": "uint32", "UInt64": "uint64",
+    "SInt32": "sint32", "SInt64": "sint64", "Fixed32": "fixed32", "Fixed64": "fixed64",
+    "SFixed32": "sfixed32", "SFixed64": "sfixed64", "Bool": "bool", "Float": "float",
+    "Double": "double", "String": "string", "Bytes": "bytes",
+}
+
+
+def decoded_type(d) -> Optional[str]:
+    """The proto type a :class:`Decoded` (or :class:`Visited`) call stands for."""
+    if d.kind == "Map":
+        return d.type
+    base = d.type if d.kind in _GENERIC_KINDS else SCALARS.get(d.kind)
+    if base is None:
+        return None
+    return f"repeated {base}" if d.label in ("Repeated", "Packed") else base
