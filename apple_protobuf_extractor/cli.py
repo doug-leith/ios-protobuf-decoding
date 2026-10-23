@@ -758,6 +758,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     from macho.memory    import BinaryContext
     from macho.load      import load_classes
     from proto.extractor import extract_all, SelectorsUnresolvedError
+    from proto.protoclass_heuristic import ProtoClassDetectionError
     from proto.emitter   import InputKind
 
     # ObjC class-name prefixes to strip → threaded into extract_all(prefixes=…);
@@ -818,10 +819,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         messages = extract_all(ctx, st, cl,
                                prefixes=_prefixes,
                                enum_debug_writer=_enum_writer)
-    except SelectorsUnresolvedError as exc:
-        # No ObjC selector names resolved in a mode where that is fatal
-        # (cache-native or a standalone executable).  Fail loudly rather than
-        # emit silently-degraded schemas.
+    except (SelectorsUnresolvedError, ProtoClassDetectionError) as exc:
+        # No ObjC selector names resolved in a mode where that is fatal (cache-native
+        # or a standalone executable), or classes the superclass walk did not confirm:
+        # fail loudly rather than emit silently-degraded or guessed schemas.
         print(f"error: {exc}", file=sys.stderr)
         return 1
     finally:

@@ -1217,7 +1217,8 @@ def extract_all(
     check_no_heuristic_detection(
         getattr(ctx, "_proto_class_heuristic_only", None) or frozenset(),
         getattr(ctx, "_proto_class_cluster_only", None) or frozenset(),
-        source=getattr(ctx, "source_name", None) or "<binary>")
+        source=getattr(ctx, "source_name", None) or "<binary>",
+        exits=getattr(ctx, "_proto_class_chain_exits", None))
 
     # Image-wide pre-passes, built once here (per class would be O(n^2)); a failure is
     # recorded in the run diagnostics and the run continues without it.

@@ -192,6 +192,33 @@ class TestNonStructuralDetectionFailsTheRun(unittest.TestCase):
         self.assertIn("VA-cluster", text)                # which detector claimed it
         self.assertIn("MACHO_ALLOW_HEURISTIC_PROTO_CLASSES", text)   # the way out
 
+    def test_a_chain_that_leaves_the_file_is_named_as_the_cause(self):
+        """The shared root is a pointer the file does not map (a dylib extracted from a
+        dyld cache): the error says so, with the pointer, and points at the cache."""
+        from proto.protoclass_heuristic import ProtoClassDetectionError
+        cl, ctx = self._cluster_only_fixture()
+        with self.assertRaises(ProtoClassDetectionError) as cm:
+            E.extract_all(ctx, None, cl)
+        text = str(cm.exception)
+        self.assertIn("[2] of them: the superclass chain leaves this file", text)
+        self.assertIn("(AReq: 0x8010000000000b0b)", text)
+        self.assertIn("--cache", text)
+        self.assertNotIn("never happened", text)
+
+    def test_a_chain_that_ends_in_the_file_is_not_explained(self):
+        """A seeded class under a local root class: its chain ends in the file, so the
+        failure has no known cause and the error says to investigate."""
+        from proto.protoclass_heuristic import ProtoClassDetectionError
+        _cl, ctx = self._cluster_only_fixture()
+        cl = ClassList([_cls(0x1000, "AReq", 0x2000, ivars=[_ivar("_reader"),
+                                                            _ivar("_readerLock")]),
+                        _cls(0x2000, "LocalRoot", 0)])
+        with self.assertRaises(ProtoClassDetectionError) as cm:
+            E.extract_all(ctx, None, cl)
+        text = str(cm.exception)
+        self.assertIn("This has never happened", text)
+        self.assertNotIn("leaves this file", text)
+
     def test_failure_is_raised_before_any_extraction_work(self):
         """The verdict must abort the run, not surface after a schema was built —
         so it fires before the writeTo/string-helper pre-passes even start."""

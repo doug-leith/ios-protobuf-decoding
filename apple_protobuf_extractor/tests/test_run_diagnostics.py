@@ -193,6 +193,24 @@ class TestCliEndToEnd(unittest.TestCase):
                 self.assertEqual(rc, cli.EXIT_INCOMPLETE)
 
 
+class TestCliRejectsUnconfirmedClasses(unittest.TestCase):
+
+    @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
+    def test_an_error_and_a_status_not_a_traceback(self):
+        import proto.extractor as E
+        from proto.protoclass_heuristic import ProtoClassDetectionError
+
+        def unconfirmed(*a, **kw):
+            raise ProtoClassDetectionError('proto-class detection FAILED STRUCTURALLY')
+        err = io.StringIO()
+        with mock.patch.object(E, 'extract_all', unconfirmed), \
+                mock.patch.object(sys, 'stderr', err), \
+                mock.patch.object(sys, 'stdout', io.StringIO()):
+            rc = cli.main(['--binary', _FIXTURE, '--dry-run'])
+        self.assertEqual(rc, 1)
+        self.assertIn('error: proto-class detection FAILED STRUCTURALLY', err.getvalue())
+
+
 class TestUnreadInputIsAnError(unittest.TestCase):
     """Structural input that could not be read is recorded with the context (TODO #137): it
     counts as an error, survives the reset at the start of a run (the class list is read

@@ -53,7 +53,7 @@ Imports only ``proto.protocore`` + ``macho.classlist`` + stdlib — never
 """
 import logging
 import os
-from typing import Callable, Dict, FrozenSet, Iterable, List, Optional, Set
+from typing import Callable, Dict, FrozenSet, Iterable, List, Mapping, Optional, Set
 
 from macho.classlist import ObjcClass
 from proto.protocore import _is_proto_flags_ivar, _REQUIRED_INSTANCE_METHODS
@@ -194,8 +194,11 @@ def check_no_heuristic_detection(
     heuristic_only: FrozenSet[str],
     cluster_only: FrozenSet[str],
     source: str = "<binary>",
+    exits: Optional[Mapping[str, int]] = None,
 ) -> None:
-    """Fail the run if either retired detector was the SOLE claimant of a class.
+    """Fail the run if either retired detector was the SOLE claimant of a class.  *exits*:
+    where a class's superclass chain left the image (:func:`proto.protoclass_set._proto_class_set`),
+    the cause the error then names.
 
     Raises :class:`ProtoClassDetectionError` unless ``MACHO_ALLOW_HEURISTIC_PROTO_CLASSES``
     is set, in which case the same text is logged at ERROR level and extraction
@@ -219,11 +222,22 @@ def check_no_heuristic_detection(
         parts.append(
             f"  [{len(cluster_only)}] claimed by the heuristic-seeded VA-cluster "
             f"closure alone: {_fmt(cluster_only)}")
-    parts.append(
-        "  This has never happened on any measured corpus (391 classes/258 binaries, "
-        "1642 classes/GeoServices cache) and indicates either a tool bug in the "
-        "name-anchor walk or a genuinely new binary shape — investigate before "
-        "trusting ANY output for this image. See proto/protoclass_heuristic.py.")
+    claimed = heuristic_only | cluster_only
+    left = {n: va for n, va in (exits or {}).items() if n in claimed}
+    if left:
+        name = min(left)
+        parts.append(
+            f"  [{len(left)}] of them: the superclass chain leaves this file, at a class "
+            f"pointer it does not map ({name}: {left[name]:#x}). A dylib extracted from a "
+            f"dyld shared cache points into the cache, where its superclasses are: run it "
+            f"on the cache instead (--cache DIR --framework NAME).")
+    if len(left) < len(claimed):
+        parts.append(
+            f"  {'The other ' + str(len(claimed) - len(left)) + ': t' if left else 'T'}"
+            "his has never happened on any measured corpus (391 classes/258 binaries, "
+            "1642 classes/GeoServices cache) and indicates either a tool bug in the "
+            "name-anchor walk or a genuinely new binary shape — investigate before "
+            "trusting ANY output for this image. See proto/protoclass_heuristic.py.")
     parts.append(
         f"  To investigate anyway, set {_ALLOW_ENV}=1 to downgrade this to a "
         f"warning; affected messages are then tagged '// ERROR:' inline.")

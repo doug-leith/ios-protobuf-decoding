@@ -7,7 +7,7 @@ the inheritance and "claimed only by a heuristic" sets on ``ctx`` for the emitte
 """
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Optional, Set
+from typing import Dict, FrozenSet, Optional, Set, Tuple
 
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store
 from macho.classlist import ClassList, ObjcClass, class_name_at
@@ -75,17 +75,29 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                 name_memo[va] = _resolve_class_name_at(ctx, va)
             return name_memo[va]
 
-        def _reaches_pb_root(va: int) -> bool:
+        def _outside(va: int) -> bool:
+            """*va* is no address of this file (a cache reads every image's)."""
+            if ctx.is_cache_backed:
+                return False
+            try:
+                ctx.vmaddr_to_offset(va)
+                return False
+            except READ_ERRORS:
+                return True
+
+        def _reaches_pb_root(va: int) -> Tuple[bool, Optional[int]]:
+            """Whether the chain from *va* reaches a PB root; when it does not, the class
+            pointer where it left the image unnamed (None: it ended inside it)."""
             cur, seen = va, set()
             while True:
                 if not cur or cur in seen:
-                    return False
+                    return False, None
                 seen.add(cur)
                 nm = _name(cur)
                 if nm is None:
-                    return False
+                    return False, (cur if cur not in by_va and _outside(cur) else None)
                 if nm in _PB_ROOT_NAMES:
-                    return True
+                    return True, None
                 local = by_va.get(cur)
                 if local is not None:                      # read with the class list (where
                     cur = local.superclass_vmaddr          # a failure is recorded)
@@ -93,7 +105,7 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
                 try:
                     cur = ctx.read_ptr(cur + 8)            # another image's class: in binary
                 except READ_ERRORS:                        # mode, not in this file
-                    return False
+                    return False, None
 
         # Track anchor 1's reach FULLY independently of the heuristic seed (run for
         # every class, not just ones the seed hasn't already claimed) so we can
@@ -101,12 +113,18 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         # heuristic at all, or is independently confirmed by pure superclass-chain
         # structure. Same detection, just not short-circuited by prior membership.
         anchor1_names: Set[str] = set()
+        exits: Dict[str, int] = {}
         for c in non_meta:
-            if c.superclass_vmaddr and _reaches_pb_root(c.superclass_vmaddr):
+            if not c.superclass_vmaddr:
+                continue
+            reached, left_at = _reaches_pb_root(c.superclass_vmaddr)
+            if reached:
                 anchor1_names.add(c.name)
                 if c.name not in proto:
                     proto.add(c.name)
                     proto_va.add(c.vmaddr)
+            elif left_at is not None:
+                exits[c.name] = left_at
 
         # Anchor 2 — RETIRED heuristic-seeded VA-cluster closure, now living in
         # proto.protoclass_heuristic.  Mutates proto/proto_va in place and returns
@@ -141,6 +159,9 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         _heuristic_only = frozenset(proto - anchor1_names - anchor2_names)
         _ctx_store(ctx, "_proto_class_cluster_only", _cluster_only)
         _ctx_store(ctx, "_proto_class_heuristic_only", _heuristic_only)
+        # where an unconfirmed class's chain left the image (a standalone file cannot
+        # follow it: a dylib extracted from a dyld cache points into the cache)
+        _ctx_store(ctx, "_proto_class_chain_exits", exits)
         return frozenset(proto)
 
     return _ctx_cache(ctx, "_proto_class_names_cache", _build)
