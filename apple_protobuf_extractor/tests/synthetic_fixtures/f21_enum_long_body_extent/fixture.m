@@ -484,7 +484,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_mode) PBWriteInt32Field(writer, _mode, 3);
-    [super writeTo:writer];
 }
 
 @end

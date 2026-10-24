@@ -64,7 +64,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 @end
@@ -80,7 +79,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 @end
@@ -96,7 +94,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 @end
@@ -113,7 +110,6 @@
 - (void)writeTo:(PBDataWriter *)writer {
     for (id e in _widgets) { PBWriteMessageField(writer, e, 5); }
     for (id e in _values)  { PBWriteMessageField(writer, e, 6); }
-    [super writeTo:writer];
 }
 
 @end

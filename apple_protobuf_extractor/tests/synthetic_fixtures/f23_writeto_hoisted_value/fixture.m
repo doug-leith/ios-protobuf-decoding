@@ -46,7 +46,6 @@ __attribute__((noinline)) void TestHoistHelper(id self) {
     TestHoistHelper(self);
     PBWriteDoubleField(writer, a, 1);
     PBWriteDoubleField(writer, _b, 2);
-    [super writeTo:writer];
 }
 
 @end

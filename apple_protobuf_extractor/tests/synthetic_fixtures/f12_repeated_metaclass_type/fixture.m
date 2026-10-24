@@ -57,7 +57,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 @end
@@ -77,7 +76,6 @@
     for (id elem in _items) {
         PBWriteMessageField(writer, elem, 6);
     }
-    [super writeTo:writer];
 }
 
 @end

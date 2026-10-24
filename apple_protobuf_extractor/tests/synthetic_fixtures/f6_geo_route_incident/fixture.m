@@ -119,7 +119,6 @@
     for (id rid in _userReportIds) PBWriteStringField(writer, rid, 17);
     if (_has.has_delaySeconds)     PBWriteUInt32Field(writer, _delaySeconds, 18);
     if (_has.has_artwork)          PBWriteMessageField(writer, _artwork, 19);
-    [super writeTo:writer];
 }
 
 @end

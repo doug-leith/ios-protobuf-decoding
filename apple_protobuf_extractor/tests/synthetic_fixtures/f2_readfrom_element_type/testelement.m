@@ -4,7 +4,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {

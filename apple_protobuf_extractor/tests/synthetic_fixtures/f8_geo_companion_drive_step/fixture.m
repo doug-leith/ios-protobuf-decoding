@@ -87,7 +87,6 @@ extern __attribute__((noinline)) void GEOCompanionDriveStepReadFrom_core(
     if (_has.has_artworkOverride) PBWriteMessageField(writer, _artworkOverride, 15);
     if (_has.has_chargingInfo)   PBWriteMessageField(writer, _chargingInfo, 16);
     if (_has.has_evInfo)         PBWriteMessageField(writer, _evInfo, 17);
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {

@@ -86,7 +86,6 @@ extern __attribute__((noinline)) void GEOLogMsgEventReadFrom_core(
     if (_has.has_stateTimingEvent) PBWriteMessageField(writer, _stateTimingEvent, 102);
     if (_has.has_networkEvent)     PBWriteMessageField(writer, _networkEvent, 106);
     if (_has.has_mapLaunchEvent)   PBWriteMessageField(writer, _mapLaunchEvent, 117);
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {
@@ -143,7 +142,6 @@ extern __attribute__((noinline)) void GEOLogMessageReadFrom_core(
     for (id e in _logMsgEvents) PBWriteMessageField(writer, e, 102);
     if (_has.has_logMessageType)  PBWriteInt32Field(writer, _logMessageType, 1000);
     if (_has.has_groupRetryCount) PBWriteUInt32Field(writer, _groupRetryCount, 2000);
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {

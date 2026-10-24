@@ -33,7 +33,6 @@ extern void TestJumpContainerReadFrom_core(TestJumpContainer *self, PBDataReader
     for (id elem in _items) {
         PBWriteMessageField(writer, elem, 5);
     }
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {

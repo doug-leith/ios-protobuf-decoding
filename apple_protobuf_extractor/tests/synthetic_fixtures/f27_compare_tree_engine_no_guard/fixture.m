@@ -62,11 +62,11 @@ extern __attribute__((noinline)) BOOL TestGrElemAReadFrom_core(TestGrElemA *self
 extern __attribute__((noinline)) BOOL TestGrElemBReadFrom_core(TestGrElemB *self, PBDataReader *reader);
 
 @implementation TestGrElemA
-- (void)writeTo:(PBDataWriter *)w { if (_has.has_value) PBWriteStringField(w, _value, 1); [super writeTo:w]; }
+- (void)writeTo:(PBDataWriter *)w { if (_has.has_value) PBWriteStringField(w, _value, 1); }
 - (BOOL)readFrom:(PBDataReader *)r { return TestGrElemAReadFrom_core(self, r); }
 @end
 @implementation TestGrElemB
-- (void)writeTo:(PBDataWriter *)w { if (_has.has_label) PBWriteStringField(w, _label, 1); [super writeTo:w]; }
+- (void)writeTo:(PBDataWriter *)w { if (_has.has_label) PBWriteStringField(w, _label, 1); }
 - (BOOL)readFrom:(PBDataReader *)r { return TestGrElemBReadFrom_core(self, r); }
 @end
 
@@ -108,7 +108,6 @@ extern __attribute__((noinline)) void TestGrEngine(TestGrContainer *self, PBData
 - (void)writeTo:(PBDataWriter *)w {
     for (id e in _alphas) PBWriteMessageField(w, e, 5);
     for (id e in _betas) PBWriteMessageField(w, e, 6);
-    [super writeTo:w];
 }
 - (BOOL)readFrom:(PBDataReader *)r { return TestGrContainerReadFrom_wrapper(self, r); }
 @end
@@ -152,7 +151,6 @@ extern __attribute__((noinline)) void TestGrPlainEngine(TestGrPlainCall *self, P
 @implementation TestGrPlainCall
 - (void)writeTo:(PBDataWriter *)w {
     for (id e in _gammas) PBWriteMessageField(w, e, 5);
-    [super writeTo:w];
 }
 - (BOOL)readFrom:(PBDataReader *)r { return TestGrPlainCallReadFrom_wrapper(self, r); }
 @end
@@ -188,7 +186,6 @@ extern __attribute__((noinline)) BOOL TestGrForeignEngineReadFrom_wrapper(TestGr
 @implementation TestGrForeignEngine
 - (void)writeTo:(PBDataWriter *)w {
     for (id e in _deltas) PBWriteMessageField(w, e, 5);
-    [super writeTo:w];
 }
 - (BOOL)readFrom:(PBDataReader *)r { return TestGrForeignEngineReadFrom_wrapper(self, r); }
 @end

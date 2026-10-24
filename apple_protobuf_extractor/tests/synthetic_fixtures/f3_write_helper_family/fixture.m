@@ -46,7 +46,6 @@
     if (_has.has_sfVal32) PBWriteFixed32Field(writer, (uint32_t)_sfVal32, 4);
     if (_has.has_fVal64)  PBWriteFixed64Field(writer, _fVal64, 5);
     if (_has.has_sfVal64) PBWriteFixed64Field(writer, (uint64_t)_sfVal64, 6);
-    [super writeTo:writer];
 }
 
 @end

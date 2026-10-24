@@ -27,7 +27,6 @@
     if (_has.has_first)  PBWriteStringField(writer, _first, 5);
     if (_has.has_second) PBWriteStringField(writer, _second, 2);
     if (_has.has_third)  PBWriteStringField(writer, _third, 9);
-    [super writeTo:writer];
 }
 
 @end

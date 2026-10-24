@@ -90,7 +90,6 @@
     if (_has.has_geoIds)
         PBWritePackedInt64Field(writer, _geoIds.list, 14);
     if (_has.has_openlr)      PBWriteBytesField(writer, _openlr, 15);
-    [super writeTo:writer];
 }
 
 @end

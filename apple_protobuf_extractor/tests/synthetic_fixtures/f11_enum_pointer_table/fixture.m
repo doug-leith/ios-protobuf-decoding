@@ -68,7 +68,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_status) PBWriteInt32Field(writer, _status, 7);
-    [super writeTo:writer];
 }
 
 @end
@@ -103,7 +102,6 @@
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_sourceType) PBWriteInt32Field(writer, _sourceType, 11);
-    [super writeTo:writer];
 }
 
 @end

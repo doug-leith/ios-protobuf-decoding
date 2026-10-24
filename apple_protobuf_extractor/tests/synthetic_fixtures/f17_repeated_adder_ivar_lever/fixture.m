@@ -68,7 +68,6 @@ extern __attribute__((noinline)) BOOL TestAdderElemReadFrom_core(TestAdderElem *
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader { return TestAdderElemReadFrom_core(self, reader); }
@@ -99,7 +98,6 @@ extern void TestAdderContainerReadFrom_core(TestAdderContainer *self, PBDataRead
 
 - (void)writeTo:(PBDataWriter *)writer {
     for (id elem in _items) { PBWriteMessageField(writer, elem, 7); }
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {

@@ -1083,7 +1083,9 @@ two fixtures. Skipping any of them produces a fixture that silently degrades
 ## Adding a new fixture
 
 1. Write the `.m`/`.h` source in a new `fN_<name>/` directory, importing
-   `pbshim.h`.
+   `pbshim.h`.  `writeTo:` does not call `[super writeTo:]` (generated code has no such
+   call): a call handed self and the writer leaves the writer flow undecided, which no
+   class of a real image is (f16, f18 and f19, built with Xcode 11.1, still call it).
 2. Add a build target to `build_fixtures.sh`.
 3. Build it (`./build_fixtures.sh fN_<name>`) and disassemble the result to
    confirm it matches the intended instruction shape (gotcha 4) — iterate on

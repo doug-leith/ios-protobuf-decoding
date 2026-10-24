@@ -150,7 +150,6 @@
         PBWriteMessageField(writer, _pipelineDiagnosticReport, 29);
     if (_has.has_baroCalibrationIndication)
         PBWriteMessageField(writer, _baroCalibrationIndication, 30);
-    [super writeTo:writer];
 }
 
 @end

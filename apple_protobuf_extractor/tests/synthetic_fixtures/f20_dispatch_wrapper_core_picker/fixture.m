@@ -95,7 +95,6 @@ extern __attribute__((noinline)) BOOL TestPickerElemReadFrom_core(TestPickerElem
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_value) PBWriteStringField(writer, _value, 1);
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader { return TestPickerElemReadFrom_core(self, reader); }
@@ -127,7 +126,6 @@ extern __attribute__((noinline)) BOOL TestPickerContainerReadFrom_wrapper(TestPi
 
 - (void)writeTo:(PBDataWriter *)writer {
     for (id elem in _children) { PBWriteMessageField(writer, elem, 5); }
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader { return TestPickerContainerReadFrom_wrapper(self, reader); }

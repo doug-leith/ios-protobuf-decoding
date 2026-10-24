@@ -65,11 +65,11 @@ extern __attribute__((noinline)) BOOL TestNtElemAReadFrom_core(TestNtElemA *self
 extern __attribute__((noinline)) BOOL TestNtElemBReadFrom_core(TestNtElemB *self, PBDataReader *reader);
 
 @implementation TestNtElemA
-- (void)writeTo:(PBDataWriter *)w { if (_has.has_value) PBWriteStringField(w, _value, 1); [super writeTo:w]; }
+- (void)writeTo:(PBDataWriter *)w { if (_has.has_value) PBWriteStringField(w, _value, 1); }
 - (BOOL)readFrom:(PBDataReader *)r { return TestNtElemAReadFrom_core(self, r); }
 @end
 @implementation TestNtElemB
-- (void)writeTo:(PBDataWriter *)w { if (_has.has_label) PBWriteStringField(w, _label, 1); [super writeTo:w]; }
+- (void)writeTo:(PBDataWriter *)w { if (_has.has_label) PBWriteStringField(w, _label, 1); }
 - (BOOL)readFrom:(PBDataReader *)r { return TestNtElemBReadFrom_core(self, r); }
 @end
 
@@ -110,7 +110,6 @@ extern __attribute__((noinline)) void TestNtEngine(TestNtContainer *self, PBData
 - (void)writeTo:(PBDataWriter *)w {
     for (id e in _alphas) PBWriteMessageField(w, e, 5);
     for (id e in _betas) PBWriteMessageField(w, e, 6);
-    [super writeTo:w];
 }
 - (BOOL)readFrom:(PBDataReader *)r { return TestNtContainerReadFrom_wrapper(self, r); }
 @end

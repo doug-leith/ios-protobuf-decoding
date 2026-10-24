@@ -50,7 +50,6 @@
     PBWriteInt32Field(writer, _other, 11);
     PBWriteBytesField(writer, _num, 12);
     PBWriteBytesField(writer, _obj, 13);
-    [super writeTo:writer];
 }
 
 @end

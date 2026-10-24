@@ -31,7 +31,6 @@ extern void PBWritePackedInt32Field(PBDataWriter *writer, int32_t *list, uint32_
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_values) PBWritePackedInt32Field(writer, _values.list, 7);
-    [super writeTo:writer];
 }
 
 @end

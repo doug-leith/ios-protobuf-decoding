@@ -76,7 +76,6 @@ extern __attribute__((noinline)) id TestNewEnumsDictRep(TestNewEnums *self, id a
     if (_has.has_mode) PBWriteInt32Field(writer, _mode, 2);
     if (_has.has_tier) PBWriteInt32Field(writer, _tier, 3);
     if (_has.has_count) PBWriteInt32Field(writer, _count, 4);
-    [super writeTo:writer];
 }
 
 @end
@@ -147,7 +146,6 @@ id TestNewEnumsDictRep(TestNewEnums *self, id arg) {
 
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_level) PBWriteInt32Field(writer, _level, 1);
-    [super writeTo:writer];
 }
 
 @end

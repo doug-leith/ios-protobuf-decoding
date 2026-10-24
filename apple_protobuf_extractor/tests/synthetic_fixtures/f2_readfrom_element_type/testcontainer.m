@@ -27,7 +27,6 @@ extern void TestContainerReadFrom_core(TestContainer *self, PBDataReader *reader
     for (id elem in _testElements) {
         PBWriteMessageField(writer, elem, 5);
     }
-    [super writeTo:writer];
 }
 
 - (BOOL)readFrom:(PBDataReader *)reader {
