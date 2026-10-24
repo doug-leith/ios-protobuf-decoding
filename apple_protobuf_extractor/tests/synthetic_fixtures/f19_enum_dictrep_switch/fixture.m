@@ -212,7 +212,6 @@
 - (void)writeTo:(PBDataWriter *)writer {
     if (_has.has_category) PBWriteInt32Field(writer, _category, 5);
     if (_has.has_cacheControl) PBWriteInt32Field(writer, _cacheControl, 6);
-    [super writeTo:writer];
 }
 
 @end
