@@ -891,7 +891,8 @@ class DyldCacheReader:
         return list(memo)
 
     def _iter_images(self):
-        """Yield ``(load_vmaddr, path_str)`` for every imagesText entry."""
+        """Yield ``(load_vmaddr, path_str)`` for every imagesText entry.  ValueError for an
+        entry whose path does not lie in the main file (a malformed header)."""
         entries = self._read_array(self._main_path, self._img_text_off, self._img_text_cnt,
                                    _IMAGES_TEXT_STRIDE, "imagesText array")
         fh = self._fh(self._main_path)
@@ -901,11 +902,11 @@ class DyldCacheReader:
             off = i * _IMAGES_TEXT_STRIDE
             load_addr = struct.unpack_from('<Q', entries, off + 16)[0]
             path_off  = struct.unpack_from('<I', entries, off + 28)[0]
-            if path_off >= len(main_data):
-                continue
-            nul      = main_data.find(b'\x00', path_off)
-            img_path = (main_data[path_off:nul] if nul != -1
-                        else main_data[path_off:])
+            nul = main_data.find(b'\x00', path_off) if path_off < len(main_data) else -1
+            if nul == -1:
+                raise ValueError(f"{self._main_path}: imagesText entry {i}: no path at "
+                                 f"{path_off:#x} (the file ends at {len(main_data):#x})")
+            img_path = main_data[path_off:nul]
             try:
                 yield load_addr, img_path.decode('utf-8')
             except UnicodeDecodeError:
@@ -969,9 +970,8 @@ class DyldCacheReader:
 
         Thin wrapper over :meth:`resolve_image` for callers that pass an
         already-unambiguous name and want an ``Optional[int]`` rather than
-        typed exceptions.  Unlike the old substring-first-wins behaviour, an
-        ambiguous *name* now returns ``None`` instead of silently picking the
-        first array entry — use :meth:`resolve_image` to surface the collision.
+        typed exceptions: an ambiguous *name* is ``None`` too -- use
+        :meth:`resolve_image` to surface the collision.
         """
         try:
             return self.resolve_image(name)

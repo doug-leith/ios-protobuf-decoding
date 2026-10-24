@@ -10,8 +10,8 @@ as fields.
 
 Format (swift-protobuf ``NameMap.swift``, ``ProtoNameInstruction``).  The
 generator emits ``_NameMap(bytecode: "<string literal>")`` instead of a runtime
-dictionary literal, so the (number, name) table is a plain byte string in
-``__TEXT,__cstring``::
+dictionary literal, so the (number, name) table is a plain byte string in a section of
+``__TEXT`` (``__TEXT,__const``: it holds NULs)::
 
     00                      header byte
     <op> [delta] name 00 …  one instruction per field

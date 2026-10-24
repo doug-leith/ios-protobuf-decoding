@@ -71,14 +71,22 @@ class _SelrefCtx:
         return {0x3000: "count"}.get(va)
 
 
-def _ins(mnemonic, op_str):
-    return SimpleNamespace(mnemonic=mnemonic, op_str=op_str)
+def _ins(mnemonic, op_str, addr=0):
+    return SimpleNamespace(mnemonic=mnemonic, op_str=op_str, addr=addr)
 
 
 class TestStubSelector(unittest.TestCase):
-    def _sel(self, tail):
-        stub = [_ins('adrp', 'x1, #0x2000'), _ins('ldr', 'x1, [x1, #8]')] + tail
-        with mock.patch('proto.callees.disasm', return_value=stub):
+    """The first stub form: ``adrp x1 ; ldr x1`` (the selref), then an import stub whose
+    branch is a send only when it lands on ``_objc_msgSend`` by name."""
+
+    def _sel(self, tail, branches_to='_objc_msgSend'):
+        import proto.callees as C
+        stub = [_ins('adrp', 'x1, #0x2000', 0x1000), _ins('ldr', 'x1, [x1, #8]', 0x1004)] + [
+            SimpleNamespace(mnemonic=i.mnemonic, op_str=i.op_str, addr=0x1008 + 4 * n)
+            for n, i in enumerate(tail)]
+        with mock.patch('proto.callees.disasm', return_value=stub), \
+                mock.patch.object(C, 'callee_name',
+                                  lambda ctx, va: branches_to if va == 0x1008 else None):
             return stub_selector(_SelrefCtx(), 0x1000)
 
     def test_selref_stub(self):
@@ -91,7 +99,11 @@ class TestStubSelector(unittest.TestCase):
                          "count")
 
     def test_no_indirect_branch_is_not_a_stub(self):
-        self.assertIsNone(self._sel([_ins('ret', '')]))
+        self.assertIsNone(self._sel([_ins('ret', '')], branches_to=None))
+
+    def test_a_branch_to_another_function_is_not_a_send(self):
+        self.assertIsNone(self._sel([_ins('adrp', 'x16, #0x4000'), _ins('ldr', 'x16, [x16]'),
+                                     _ins('br', 'x16')], branches_to='_objc_retain'))
 
 
 class TestSentSelector(unittest.TestCase):

@@ -358,21 +358,9 @@ def build_class_list(
             if cls is not None:
                 raw_classes.append(cls)
 
-        # Follow isa → metaclass.
-        #
-        # Metaclasses live in __DATA_DIRTY at vmaddrs pointed to by class_t.isa
-        # (the first field of the class_t struct).  They are NOT listed in
-        # __objc_classlist, so without this step _find_metaclass() cannot
-        # resolve them via cl.by_vmaddr() and returns None.  That forces
-        # downstream code to use heuristic fallbacks (broad name-suffix
-        # matching) for repeated-field element-type resolution, which can pick
-        # the wrong class when the suffix is generic (e.g. "Value" matches
-        # both GEOPDComponentValue and GEODefaultsDBValue).
-        #
-        # Adding metaclasses here lets Strategy 1 of _repeated_element_type
-        # (the +[Cls xyzType] metaclass-method lookup) work correctly for
-        # shared-cache-extracted binaries where metaclasses previously went
-        # missing from the ClassList.
+        # Follow isa → metaclass: class_t.isa (its first field) points at it, and
+        # __objc_classlist does not list it.  Its class methods (+[Cls xyzType], a repeated
+        # field's element class) are read from it.
         try:
             meta_va = ctx.read_ptr(ptr)   # class_t.isa — offset 0
         except READ_ERRORS as exc:

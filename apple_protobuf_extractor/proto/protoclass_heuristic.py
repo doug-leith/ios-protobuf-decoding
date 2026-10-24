@@ -7,8 +7,7 @@ LC_DYLD_CHAINED_FIXUPS imports table in standalone-binary mode).  That walk —
 ``protoclass_set._proto_class_set`` anchor 1 — is ground truth and is the sole detector
 this tool relies on.
 
-This module holds the two things that used to detect proto classes and no longer
-should:
+This module holds the two non-structural detectors:
 
   * :func:`_is_proto_class` — the original per-class metadata heuristic (has-bits
     flags ivar / ``{_reader,_readerLock}`` proxy / ``readFrom:``+``writeTo:``
@@ -16,14 +15,13 @@ should:
   * :func:`va_cluster_closure` — the heuristic-SEEDED VA-cluster closure
     (``_proto_class_set`` anchor 2): treat the non-local superclass VAs shared by
     seeded classes as PB roots and sweep in everything transitively subclassing
-    one.  Written for standalone binaries back when cross-image names could not be
-    resolved there; the imports-table name anchor made it redundant.
+    one.  The imports-table name anchor makes it redundant in standalone binaries.
 
 WHY THEY ARE KEPT.  Neither has ever been the reason a real class was classified
 as proto.  Anchor 1 alone reproduces the full class set on both corpora ever
 measured — 391 classes across 258 standalone binaries in binary mode, and 1642
-classes in the GeoServices cache, including all 5 metadata-sparse subclasses that
-motivated adding the anchors in the first place.  Their measured contribution to date is exactly zero.  They remain
+classes in the GeoServices cache, including 5 metadata-sparse subclasses.  Their measured
+contribution is zero.  They remain
 here as an investigative safety net for a shape the corpora have not yet shown —
 e.g. a class whose superclass is an EXTERNAL non-root PBCodable subclass, which
 the binary-mode name anchor cannot walk into.

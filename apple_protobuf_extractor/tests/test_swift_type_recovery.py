@@ -55,8 +55,8 @@ class TestDemangleOffline(unittest.TestCase):
         self.assertIsNone(TR._type_from_bind(None))
 
     def test_idents(self):
-        self.assertEqual(TR._idents("5Int32"), ["Int32"])
-        self.assertEqual(TR._idents("3Foo3Bar"), ["Foo", "Bar"])
+        self.assertEqual(TR.demangle_idents("5Int32"), ["Int32"])
+        self.assertEqual(TR.demangle_idents("3Foo3Bar"), ["Foo", "Bar"])
 
     def test_runlength_standard_substitution(self):
         # S2S = run-length 2 copies of the String substitution: the body of a

@@ -1,11 +1,9 @@
 """macho/objc_abi — ObjC 64-bit runtime struct field offsets (single source of truth).
 
 These byte offsets into ``class_t`` and ``class_ro_t`` are part of the stable
-arm64 Objective-C ABI and were previously duplicated as inline literals in
-``classlist.py`` and as ad-hoc constants in ``cache_classlist.py``.  Centralising
-them here removes a real readability trap: ``class_t.data`` and
-``class_ro_t.baseMethods`` are BOTH at byte offset 32, so an inline ``+ 32`` was
-ambiguous — the named constants below make which-is-which explicit.
+arm64 Objective-C ABI.  They are named because ``class_t.data`` and
+``class_ro_t.baseMethods`` are BOTH at byte offset 32: an inline ``+ 32`` would not say
+which.
 
 Layouts (64-bit):
 

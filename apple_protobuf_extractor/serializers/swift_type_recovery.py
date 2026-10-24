@@ -248,10 +248,6 @@ def demangle_idents(s):
     return out
 
 
-# Back-compat shim: the old name, now word-substitution aware.
-_idents = demangle_idents
-
-
 def _type_from_bind(name):
     """``_$ss5Int32VMn`` -> 'int32'; ``_$s10Foundation4DataVMn`` -> 'bytes';
     a message/enum descriptor bind -> its (last) type identifier."""
@@ -266,7 +262,7 @@ def _type_from_bind(name):
     # leading 's' = Swift stdlib module (no length prefix)
     if s.startswith("s") and len(s) > 1 and s[1].isdigit():
         s = s[1:]
-    idents = _idents(s.rstrip("V"))
+    idents = demangle_idents(s.rstrip("V"))
     if not idents:
         return None
     last = idents[-1]

@@ -235,9 +235,9 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
     """Emit ONE consolidated note when an image carries protobuf messages from
     runtimes other than Apple ``PBCodable``.
 
-    The tool now *decodes* several of these in addition to PBCodable: C++
-    ``google::protobuf`` (full descriptors) and swift-protobuf (field names +
-    numbers) are emitted as additional, serializer-tagged ``.proto`` files (see
+    The tool *decodes* several of these in addition to PBCodable: C++
+    ``google::protobuf`` (full descriptors) and swift-protobuf (field names, numbers
+    and types) are emitted as additional, serializer-tagged ``.proto`` files (see
     :mod:`proto.foreign`).  Google's ObjC ``GPBMessage`` and the protobuf-c C runtime
     are detected but not decodable.  This distinguishes the two so the user knows
     what was emitted vs merely flagged.  The swift-protobuf conformance-symbol scan is
@@ -249,8 +249,7 @@ def _warn_if_foreign_protobuf(ctx: BinaryContext, cl: ClassList) -> None:
     sw_msgs, sw_enums, sw_modules = swift_protobuf_messages(ctx)
     if sw_msgs or sw_enums:
         decoded.append(
-            "swift-protobuf: %d Swift type(s)%s, e.g. %s (field names + numbers; "
-            "wire types not recoverable)" % (
+            "swift-protobuf: %d Swift type(s)%s, e.g. %s" % (
                 len(sw_msgs) + len(sw_enums),
                 " in module %s" % "/".join(sorted(sw_modules)) if sw_modules else "",
                 ", ".join((sw_msgs + sw_enums)[:5]),

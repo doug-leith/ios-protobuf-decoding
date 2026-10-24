@@ -100,10 +100,10 @@ _MAX_ELEMENT_STRIDE = 0x78
 class SwiftField:
     number: int
     name: str
-    # proto type recovered from Swift field metadata (swift_type_recovery), e.g.
-    # "int32", "string", "repeated Foo", "map<string, int32>", or None when not
-    # recovered (oneof members, stripped metadata).  The int varint/zigzag/fixed
-    # encoding nuance is NOT distinguished (base Swift type only).
+    # proto type, e.g. "sint32", "string", "repeated Foo", "map<string, int32>": from the
+    # message's code (the Decoder / Visitor method for the number, :func:`_attach_types`),
+    # else Swift reflection joined by name (the base type only: no sint / fixed); None when
+    # neither has it.
     proto_type: Optional[str] = None
     # False when the builder listing the number was read off stopped at the runaway guard
     # (it may be incomplete): rendered "number estimated" rather than laundered as confirmed.
@@ -788,8 +788,8 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
 # ── top-level ─────────────────────────────────────────────────────────────────
 
 def swift_messages(ctx: BinaryContext) -> List[SwiftMessage]:
-    """Recover every swift-protobuf MESSAGE's field names + numbers (and, from
-    reflection metadata, types).
+    """Recover every swift-protobuf MESSAGE's field names, numbers and types (from its code,
+    else from reflection metadata by name).
 
     Returns one :class:`SwiftMessage` per struct type with a recovered nameMap,
     sorted by qualified name.  Works both from a standalone binary (LC_SYMTAB /

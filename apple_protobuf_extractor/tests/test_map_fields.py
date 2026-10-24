@@ -68,8 +68,13 @@ class FakeCtx(NoImage):
 asm = layout
 
 
+_STUB_TAILS = set()       # the import stubs after each selector stub's ldr x1: to _objc_msgSend
+
+
 def selector_stub(base, sel_slot):
-    """The 5-insn objc selector-stub shape ``proto.callees.stub_selector`` recognises."""
+    """The 5-insn objc selector stub ``proto.callees.stub_selector`` recognises (its tail, an
+    import stub, named ``_objc_msgSend`` for :class:`_Patched`)."""
+    _STUB_TAILS.add(base + 8)
     return (base, [('adrp', f'x1, #{sel_slot & ~0xfff:#x}'),
                    ('ldr', f'x1, [x1, #{sel_slot & 0xfff:#x}]'),
                    ('adrp', 'x16, #0x1000'), ('ldr', 'x16, [x16, #0x10]'),
@@ -81,6 +86,9 @@ class _Patched(unittest.TestCase):
 
     def setUp(self):
         name_marks(self)
+        orig = C.callee_name
+        C.callee_name = lambda ctx, va: '_objc_msgSend' if va in _STUB_TAILS else orig(ctx, va)
+        self.addCleanup(setattr, C, 'callee_name', orig)
 
     def patch(self, fake):
         for mod in (FB, C):

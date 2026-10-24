@@ -4,14 +4,12 @@ The small predicate + encoding helpers the dispatch / repeated / enum modules al
 on.  Imports only ``proto.models`` + ``macho.classlist`` + stdlib -- never
 ``proto.extractor`` (a cycle); extractor re-imports the surface.
 
-NOTE the RETIRED proto-class DETECTORS (``_is_proto_class`` and the VA-cluster
-closure) moved out to ``proto.protoclass_heuristic`` — they are no longer part of
-the kernel and now fail the run if they ever claim a class. What stays here are the
-predicates that are still load-bearing for FIELD work regardless of how the class
-was detected: ``_is_proto_flags_ivar`` (also used by ``_is_real_field_ivar`` and
-``proto.write_helpers`` to EXCLUDE the has-bits struct from the field set) and
-``_REQUIRED_INSTANCE_METHODS`` (also used by extractor to decide whether a cache
-image's selector names resolved well enough to be trusted).
+The retired proto-class detectors (``_is_proto_class``, the VA-cluster closure) are in
+``proto.protoclass_heuristic`` and fail the run if they ever claim a class.  Here are the
+predicates FIELD work uses however the class was detected: ``_is_proto_flags_ivar`` (also
+used by ``_is_real_field_ivar`` and ``proto.write_helpers`` to EXCLUDE the has-bits struct from
+the field set) and ``_REQUIRED_INSTANCE_METHODS`` (the selectors gate,
+``proto.extractor._check_selectors_resolved``).
 """
 import re
 from typing import Dict, Optional, Set, Tuple
@@ -19,14 +17,10 @@ from typing import Dict, Optional, Set, Tuple
 from proto.models import FieldLabel
 from macho.classlist import ObjcIvar
 
-#: Instance methods that every Apple ObjC proto message class must have.
-#: Note ``mergeFrom:`` is deliberately NOT in this core set: oneof classes
-#: (e.g. ``GEOPDComponentValue``) and thin wrapper classes (e.g.
-#: ``GEOPDAddressObject``) do not implement ``mergeFrom:`` because their fields
-#: are mutually exclusive / there is nothing to merge.  They still serialise via
-#: ``readFrom:``/``writeTo:`` and score well on the broader set, so gating on
-#: ``mergeFrom:`` silently dropped them (→ referencing repeated fields fell back
-#: to ``repeated bytes``).
+#: Instance methods that every Apple ObjC proto message class has.  ``mergeFrom:`` is not
+#: one: oneof classes (``GEOPDComponentValue``) and thin wrapper classes
+#: (``GEOPDAddressObject``) do not implement it, and still serialise via
+#: ``readFrom:``/``writeTo:``.
 _REQUIRED_INSTANCE_METHODS: frozenset = frozenset({
     "readFrom:", "writeTo:",
 })

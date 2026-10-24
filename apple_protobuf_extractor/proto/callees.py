@@ -191,8 +191,9 @@ def stub_selector(ctx, va: Optional[int]) -> Optional[str]:
         add   x1, x1, #off        ; selector, x1 = the selector string itself
         b     _objc_msgSend
 
-    The second form is a send only if its branch lands on ``_objc_msgSend``, named by its
-    export or import (:func:`callee_name`), not by the shape.  Memoised on *ctx*."""
+    Either is a send only if its branch lands on ``_objc_msgSend``, named by its export or
+    import (:func:`callee_name`; the first form's instructions after the ``ldr x1`` are an
+    import stub), not by the shape.  Memoised on *ctx*."""
     if va is None:
         return None
     memo = _ctx_cache(ctx, "_stub_selectors", dict)
@@ -209,8 +210,8 @@ def stub_selector(ctx, va: Optional[int]) -> Optional[str]:
                     and ops[2].startswith('#')
                     and callee_name(ctx, _parse_imm(ins[2].op_str)) == '_objc_msgSend'):
                 sel = ctx.read_cstring(pa[1] + _parse_imm(ops[2]))
-        elif pa is not None and pa[0] == 'x1' and len(ins) >= 2 and ins[1].mnemonic == 'ldr' \
-                and any(i.mnemonic in INDIRECT_BRANCHES for i in ins[2:]):
+        elif pa is not None and pa[0] == 'x1' and len(ins) >= 3 and ins[1].mnemonic == 'ldr' \
+                and callee_name(ctx, ins[2].addr) == '_objc_msgSend':
             ops = split_ops(ins[1].op_str)
             pm = parse_mem(ops[1]) if len(ops) == 2 else None
             if (pm is not None and _norm_reg(ops[0]) == 'x1' and pm.base == 'x1'

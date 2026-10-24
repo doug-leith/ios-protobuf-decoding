@@ -43,9 +43,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
-# Direct internal dependencies.  proto.extractor is no longer a re-export facade:
-# each consumer imports the symbol it needs from the module that defines it
-# (proto.protocore / dispatch / repeated / enums / writeto / config, macho.*).
+# Direct internal dependencies: a consumer of any of these imports it from the module that
+# defines it (proto.protocore / dispatch / repeated / enums / writeto / config, macho.*).
 from macho.memory    import BinaryContext, _ctx_cache, _ctx_store, reset_ctx_caches, PROGRAM_ERRORS
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
@@ -772,8 +771,7 @@ def extract_proto_message(
         getattr(ctx, "_proto_class_cluster_only", None) or frozenset())
 
     # No writeTo: of its own: the ancestor's writeTo: serialises this class and cannot
-    # reach its own ivars, so none of them is a wire field (they used to be emitted with
-    # ivar-order "estimated" numbers that collide with the parent's real fields).
+    # reach its own ivars, so none of them is a wire field.
     _writer_owner = _inherited_writeto_owner(ctx, cl, cls)
     if _writer_owner is not None:
         return ProtoMessage(

@@ -128,22 +128,8 @@ def disasm(
             f"vmaddr 0x{vmaddr:x} is not 4-byte aligned (arm64 requires 4-byte)"
         )
 
-    # Validate that vmaddr is readable — raises ValueError for unmapped addresses.
-    # This is intentional: callers should not silently proceed with bad IMPs.
-    #
-    # Binary mode: vmaddr_to_offset validates against segment bounds and the
-    #   in-memory binary data.  Cheap (no data copy).
-    #
-    # Cache-native mode: ctx._data is empty (b'') so vmaddr_to_offset's final
-    #   guard ("off + length > len(self._data)") fires for EVERY non-zero
-    #   vmaddr — even fully valid ones — because len(b'') == 0.  In cache mode
-    #   we validate by attempting an actual 4-byte read through the cache
-    #   reader, which raises ValueError for truly unmapped addresses.
-    #
-    # getattr with a default of False makes this duck-type-safe: test stubs
-    # that implement the BinaryContext interface without inheriting from it
-    # (e.g. _FakeCtx in test_proto.py) fall through to vmaddr_to_offset as
-    # normal and continue working without needing to add is_cache_backed.
+    # An unreadable vmaddr is an error.  A cache image is read through the cache reader (its
+    # own bytes are empty, so vmaddr_to_offset would refuse every address).
     if getattr(ctx, "is_cache_backed", False):
         try:
             ctx.read_bytes(vmaddr, 4)

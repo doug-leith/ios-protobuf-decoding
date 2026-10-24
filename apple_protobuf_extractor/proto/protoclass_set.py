@@ -33,10 +33,8 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
     ``ctx._proto_class_heuristic_only`` = frozenset of class names whose proto-ness
     rests SOLELY on the heuristic seed (anchor 1's pure name/bind walk, re-run over
     every class regardless of prior seed membership, did NOT independently confirm
-    them) — measured empirically to be empty in every corpus tested so far (0/1642
-    GeoServices, 0/391 across a 258-binary corpus), but computed for real on every
-    run rather than assumed, so the emitter can flag it the day it isn't.  Memoised
-    on ctx."""
+    them) -- empty on every corpus measured (:mod:`proto.protoclass_heuristic`), but computed
+    on every run, so the emitter can flag it the day it isn't.  Memoised on ctx."""
     def _build() -> FrozenSet[str]:
         non_meta = [c for c in cl if not c.is_meta]
         by_va: Dict[int, ObjcClass] = {c.vmaddr: c for c in non_meta}
@@ -83,12 +81,10 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         _ctx_store(ctx, "_proto_class_rooted", frozenset(anchor1_names))
         # Classes the pure name/bind walk (anchor 1) did NOT independently reach,
         # split by WHICH non-structural path claimed them.  Both are ERRORS, not
-        # footnotes: anchor 1 alone reproduces the full set on every corpus ever
-        # measured (391 classes/258 binaries in binary mode, 1642/1 framework in
-        # cache mode), so either set being
-        # non-empty means the structural detector failed and the class's presence in
-        # the output rests on a guess.  Computed for real every run rather than
-        # assumed empty, so the day it fires the output says so.
+        # footnotes: anchor 1 alone reproduces the full set on every corpus measured
+        # (:mod:`proto.protoclass_heuristic`), so either set being non-empty means the
+        # structural detector failed and the class's presence in the output rests on a
+        # guess.
         #   * cluster-only — the heuristic-seeded VA-cluster closure (anchor 2)
         #     claimed it and the superclass chain never confirmed it.
         #   * heuristic-only — neither structural anchor claimed it; it is in the

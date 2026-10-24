@@ -315,10 +315,9 @@ class ProtoMessage:
     out_file: Optional[str] = None
     # True when this class's PROTO-NESS ITSELF (not any field) rests solely on the
     # per-class _is_proto_class heuristic (ivar/method scoring) — i.e. NEITHER
-    # structural anchor in _proto_class_set confirmed it.  Measured empirically to
-    # be extremely rare (0/1642 GeoServices, 0/391 across a 258-binary corpus); emitted as an ERROR whenever it does
-    # happen, because this message's presence in the output is then a guess rather
-    # than a structural fact.
+    # structural anchor in _proto_class_set confirmed it (never, on any corpus measured:
+    # proto.protoclass_heuristic); emitted as an ERROR whenever it does happen, because this
+    # message's presence in the output is then a guess rather than a structural fact.
     class_detected_by_heuristic: bool = False
     # As above, but for the OTHER non-structural path: the class was pulled in by
     # _proto_class_set's heuristic-seeded VA-cluster closure (anchor 2) and the

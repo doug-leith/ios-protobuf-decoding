@@ -78,8 +78,7 @@ def _cpp_field(f: "_cpp.Field", package: str,
         if entry is not None:
             ref_package, type_name, ref_file = entry  # (pkg, flat name, out file)
         else:
-            # Not an extracted type (external/unknown) — keep the old flatten
-            # behaviour and leave it unqualified; nothing better is available.
+            # Not an extracted type (external/unknown): flattened and left unqualified.
             type_name = _flat(_cpp._ref(f.type_name, package))
     else:
         type_name = _cpp._FTYPE.get(f.type, "bytes")
@@ -179,8 +178,8 @@ def _cpp_protos_to_messages(file_protos) -> List[ProtoMessage]:
     # The flat emitter collects enums only from ``msg.enums`` — it has no separate
     # file-scope enum slot — so carry each file's top-level enums on the first
     # message of the SAME output file (where the referencing fields live, so they
-    # land in the same .proto).  Dropping them (the old behaviour) made every
-    # field that referenced one fail protoc with "X is not defined".
+    # land in the same .proto); without them every field that referenced one would fail
+    # protoc with "X is not defined".
     file_enums_by_out: Dict[str, List[ProtoEnum]] = {}
     first_msg_by_out: Dict[str, ProtoMessage] = {}
     for fp in file_protos:

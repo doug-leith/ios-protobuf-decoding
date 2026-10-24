@@ -626,12 +626,8 @@ class ProtoFile:
         * **Class-qualified enums** (e.g. ``"PDPlaceResponseStatus"``) are
           unique by name and pass through unchanged.
 
-        The principled value-compatibility partitioning introduced earlier is
-        retained as a safety net: if two same-named enums ever have
-        *conflicting* values, they are split rather than silently merged.
-        In practice this should no longer happen with per-class naming in
-        place, but keeping the check costs nothing and prevents future
-        regressions.
+        Two same-named enums with *conflicting* values are split rather than
+        merged (per-class naming makes that rare).
         """
         # ── Step 1: group instances by name ──────────────────────────────────
         name_instances: Dict[str, List[Tuple[ProtoEnum, ProtoMessage]]] = {}
