@@ -270,17 +270,13 @@ class _Run:
 
 
 class WriterFlow:
-    """One analysis context per image: memoises callee entry scans and method summaries."""
+    """One analysis context per image: the function index, and each class's analysis
+    (:class:`_ClassFlow`), memoised."""
 
     def __init__(self, ctx: BinaryContext, cl: ClassList):
         self.ctx, self.cl = ctx, cl
         build_function_index(ctx, cl)
         self.entries = function_entries(ctx)
-        self._summary_memo: Dict[int, FrozenSet] = {}
-        self.cls: Optional[ObjcClass] = None
-        self.own_imps: Dict[int, str] = {}
-        self.slot_to_ivar: Dict[int, str] = {}
-        self.off_to_ivar: Dict[int, str] = {}
         self._analysed: Dict[int, tuple] = {}
 
     # ── public entry ─────────────────────────────────────────────────────────
@@ -315,14 +311,8 @@ class WriterFlow:
         m = cls.get_method("writeTo:")
         if m is None or not m.imp:
             return None, ["no writeTo:"], None, None
-        chain = self._chain(cls)
-        self.cls = cls
-        self.own_imps = {mm.imp: mm.name for c in chain for mm in c.methods if mm.imp and mm.name}
-        self.slot_to_ivar = {iv.offset_slot: iv.name for c in chain for iv in c.ivars
-                             if iv.offset_slot}
-        self.off_to_ivar = {iv.offset: iv.name for iv in cls.ivars if iv.offset}
-        self._summary_memo = {}
-        res = self._run(m.imp, {'x0': frozenset({_S}), 'x2': frozenset({_W})}, 0, m.imp)
+        res = _ClassFlow(self, cls)._run(m.imp, {'x0': frozenset({_S}), 'x2': frozenset({_W})},
+                                         0, m.imp)
         if res is None:
             return None, ["writeTo: body not decoded"], None, None
         if not res.complete:
@@ -334,6 +324,23 @@ class WriterFlow:
             return None, [f"self reaches the writer ({', '.join(bad)})"], sites, sends
         return (frozenset(x[1] for x in res.ser if isinstance(x, tuple) and x[0] == 'I'), [],
                 sites, sends)
+
+
+class _ClassFlow:
+    """One class's ``writeTo:`` analysis: its methods and ivars (through its ancestors) and the
+    summaries of the methods it calls, over the image's :class:`WriterFlow`."""
+
+    def __init__(self, wf: WriterFlow, cls: Optional[ObjcClass] = None):
+        self.ctx, self.cl, self.entries = wf.ctx, wf.cl, wf.entries
+        self.cls = cls
+        chain = self._chain(cls) if cls is not None else []
+        self.own_imps: Dict[int, str] = {mm.imp: mm.name for c in chain for mm in c.methods
+                                         if mm.imp and mm.name}
+        self.slot_to_ivar: Dict[int, str] = {iv.offset_slot: iv.name for c in chain
+                                             for iv in c.ivars if iv.offset_slot}
+        self.off_to_ivar: Dict[int, str] = {iv.offset: iv.name for iv in cls.ivars
+                                            if iv.offset} if cls is not None else {}
+        self._summary_memo: Dict[int, FrozenSet] = {}
 
     def _chain(self, cls: ObjcClass) -> List[ObjcClass]:
         return list(self.cl.ancestors(cls))

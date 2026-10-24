@@ -738,10 +738,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging(args.verbose)
 
     from macho.memory    import BinaryContext
-    from macho.load      import load_classes
-    from proto.extractor import extract_all, SelectorsUnresolvedError
-    from proto.protoclass_heuristic import ProtoClassDetectionError
-    from proto.emitter   import InputKind
 
     # ObjC class-name prefixes to strip → threaded into extract_all(prefixes=…);
     # None means use proto.defaults.DEFAULT_PREFIXES.  The emitter's package names take
@@ -758,14 +754,29 @@ def main(argv: Optional[List[str]] = None) -> int:
     mach_va = None         # cache-native only
     try:
         cache = _open_cache(args.cache, cache_native)
-        reader = cache     # kept past the post-extraction close (handles reopen lazily)
-
         if cache_native:
             ctx, mach_va = _load_cache_native_context(args, cache, BinaryContext)
         else:
             ctx, data = _load_binary_context(args, BinaryContext)
     except _CliAbort as abort:
+        if cache is not None:
+            cache.close()
         return abort.code
+    # cache-native, every read goes through the cache: open until the output is written
+    try:
+        return _extract_and_write(args, ctx, data, cache, cache_native, mach_va, source_name,
+                                  _prefixes)
+    finally:
+        if cache is not None:
+            cache.close()
+
+
+def _extract_and_write(args, ctx, data, cache, cache_native, mach_va, source_name, _prefixes):
+    """Classes, schemas and output files of the loaded input (:func:`main`); its exit status."""
+    from macho.load      import load_classes
+    from proto.extractor import extract_all, SelectorsUnresolvedError
+    from proto.protoclass_heuristic import ProtoClassDetectionError
+    from proto.emitter   import InputKind
 
     # The input kind decides what an ambiguous enum means (proto.emitter.InputKind): a
     # cache image or a standalone executable (MH_EXECUTE) is self-contained, so one is an
@@ -810,19 +821,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     finally:
         if _debug_fh is not None:
             _debug_fh.close()
-        # cache-native: close after extraction is complete.
-        if cache is not None and cache_native:
-            cache.close()
-            cache = None
     _done(t)
 
     messages = _merge_foreign_messages(ctx, data, messages)
     messages = _apply_prefix_filter(messages, args.prefixes)
     if cache_native and messages and not args.no_cross_image:
-        try:
-            messages = _add_cross_image_messages(reader, mach_va, messages, _prefixes, ctx)
-        finally:
-            reader.close()
+        messages = _add_cross_image_messages(cache, mach_va, messages, _prefixes, ctx)
 
     from proto.models import get_diagnostics
     if not messages:

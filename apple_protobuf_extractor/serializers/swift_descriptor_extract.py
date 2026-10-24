@@ -902,12 +902,28 @@ def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
     (a message's, an enum's, a map's key and value) -- checked against the Visitor method its
     ``traverse`` (*traverse_of*: by (module, name)) writes it with; where decodeMessage's calls
     cannot be named, traverse's type.  A number traverse visits that the name map does not list
-    is the message's analysis failure.  Only a field neither types takes the reflection type of the property of its name
-    (:func:`_attach_field_types`), reported (``swift-name-join``): an image whose
-    swift-protobuf calls carry no names (a stripped binary that links it in, a framework
-    extracted from the dyld cache)."""
+    is the message's analysis failure.  Only a field neither types takes the reflection type of
+    the property of its name (:func:`_attach_field_types`), reported (``swift-name-join``): an
+    image whose swift-protobuf calls carry no names (a stripped binary that links it in, a
+    framework extracted from the dyld cache)."""
+    decodes = _decoded_by_message(ctx, msgs)
+    joined = _attach_field_types(ctx, msgs, {k for k, v in decodes.items() if v is not None})
+    for m in msgs:
+        if not m.fields:
+            continue
+        decoded = decodes.get(id(m)) or {}
+        visits = _visited_types(ctx, m, traverse_of.get((m.module, m.name)))
+        for f in m.fields:
+            _type_field(ctx, m, f, decoded.get(f.number, ()), visits.get(f.number),
+                        joined.get((id(m), f.number)))
+
+
+def _decoded_by_message(ctx: BinaryContext, msgs: List[SwiftMessage]) -> Dict[int, Optional[dict]]:
+    """``{id(message): {number: [Decoded]} or None}``: what each message's ``decodeMessage``
+    decodes (None: its code is not read).  A one-entry reading whose number decodeMessage does not
+    decode is another type's (#130): the message is left with no fields."""
     witnesses = _witnesses(ctx)
-    decodes: Dict[int, Dict[int, list]] = {}
+    decodes: Dict[int, Optional[dict]] = {}
     for m in msgs:
         ws = witnesses.get(m.name, {})
         if m.fields and "decodeMessage" in ws:
@@ -915,41 +931,46 @@ def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
                                         ctx, ws["decodeMessage"], [f.number for f in m.fields])
             if _one_entry(m) and decodes[id(m)] is not None \
                     and m.fields[0].number not in decodes[id(m)]:
-                # a one-entry reading: the message's decodeMessage must decode that number (and
-                # reflection list that name), or the reading is another type's (#130)
                 m.fields, m.shape = [], "none"
-    joined = _attach_field_types(ctx, msgs, {k for k, v in decodes.items() if v is not None})
-    for m in msgs:
-        if not m.fields:
-            continue
-        decoded = decodes.get(id(m)) or {}
-        traverse = traverse_of.get((m.module, m.name))
-        visited = {} if traverse is None else \
-            _read_code(ctx, m.qualified, "swift traverse", MC.visited_fields, ctx, traverse) or {}
-        visits: Dict[int, str] = {}
-        for num, vs in visited.items():
-            types = {t for t in map(MC.decoded_type, vs) if t}
-            if len(types) == 1:
-                visits[num] = next(iter(types))
-        unlisted = sorted(set(visited) - {f.number for f in m.fields})
-        if unlisted:
-            record_analysis_failure(ctx, m.qualified, "swift name map",
-                                    f"traverse visits {unlisted}, the name map does not list them")
-        for f in m.fields:
-            types = {t for t in map(MC.decoded_type, decoded.get(f.number, ())) if t}
-            dt = next(iter(types)) if len(types) == 1 else None
-            vt = visits.get(f.number)
-            if dt is not None:
-                f.proto_type, f.type_note = dt, None
-                if vt is not None and vt != dt:
-                    record_analysis_failure(ctx, m.qualified, "swift field types",
-                                            f"#{f.number}: decodeMessage {dt}, traverse {vt}")
-            elif vt is not None:
-                f.proto_type, f.type_note = vt, None
-            elif (id(m), f.number) in joined:
-                f.proto_type, note = joined[(id(m), f.number)]
-                f.type_note = f"{_BY_NAME_NOTE}; {note}" if note else _BY_NAME_NOTE
-                record_heuristic_hit(ctx, "swift-name-join", f"{m.qualified} #{f.number} {f.name}")
+    return decodes
+
+
+def _visited_types(ctx: BinaryContext, m: SwiftMessage, traverse: Optional[MC.Code]
+                   ) -> Dict[int, str]:
+    """``{number: proto type}`` of the numbers *m*'s ``traverse`` visits with one type; a number
+    it visits that the name map does not list is the message's analysis failure."""
+    visited = {} if traverse is None else \
+        _read_code(ctx, m.qualified, "swift traverse", MC.visited_fields, ctx, traverse) or {}
+    unlisted = sorted(set(visited) - {f.number for f in m.fields})
+    if unlisted:
+        record_analysis_failure(ctx, m.qualified, "swift name map",
+                                f"traverse visits {unlisted}, the name map does not list them")
+    visits: Dict[int, str] = {}
+    for num, vs in visited.items():
+        types = {t for t in map(MC.decoded_type, vs) if t}
+        if len(types) == 1:
+            visits[num] = next(iter(types))
+    return visits
+
+
+def _type_field(ctx: BinaryContext, m: SwiftMessage, f: SwiftField, decoded, visited: Optional[str],
+                joined: Optional[Tuple[str, Optional[str]]]) -> None:
+    """*f*'s type: decodeMessage's (*decoded*: its calls for the number), checked against
+    traverse's (*visited*); else traverse's; else the reflection type joined by name (*joined*:
+    ``(type, note)``), reported."""
+    types = {t for t in map(MC.decoded_type, decoded) if t}
+    dt = next(iter(types)) if len(types) == 1 else None
+    if dt is not None:
+        f.proto_type, f.type_note = dt, None
+        if visited is not None and visited != dt:
+            record_analysis_failure(ctx, m.qualified, "swift field types",
+                                    f"#{f.number}: decodeMessage {dt}, traverse {visited}")
+    elif visited is not None:
+        f.proto_type, f.type_note = visited, None
+    elif joined is not None:
+        f.proto_type, note = joined
+        f.type_note = f"{_BY_NAME_NOTE}; {note}" if note else _BY_NAME_NOTE
+        record_heuristic_hit(ctx, "swift-name-join", f"{m.qualified} #{f.number} {f.name}")
 
 
 def _read_code(ctx: BinaryContext, owner: str, what: str, fn, *args):

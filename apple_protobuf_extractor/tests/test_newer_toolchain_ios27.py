@@ -50,7 +50,7 @@ def _flow(*blocks, names=None):
     fd, names = _asm(*blocks), names or {}
     # a fresh context per listing: the evaluator memoises a listing's Flow on its context by
     # address, and every listing here starts at 0x1000
-    wf = WF.WriterFlow(TextImage((0x1000, 0x2000)), [])
+    wf = WF._ClassFlow(WF.WriterFlow(TextImage((0x1000, 0x2000)), []))
     with mock.patch('proto.function_body.disasm', fd), \
             mock.patch.object(WF, 'callee_name', lambda ctx, va: names.get(va)), \
             mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):

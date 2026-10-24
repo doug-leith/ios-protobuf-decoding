@@ -12,7 +12,7 @@ import unittest
 
 import artifacts
 from macho.export_trie import decode_export_trie
-from proto.writer_flow import WriterFlow, writer_reachable_ivars
+from proto.writer_flow import WriterFlow, _ClassFlow, writer_reachable_ivars
 from tests._fakes import NoImage, TextImage
 
 
@@ -77,9 +77,9 @@ class TestZeroEdge(unittest.TestCase):
             self.mnemonic, self.op_str, self.addr = mn, op, addr
 
     def test_cbz_taken_edge_and_cbnz_fallthrough(self):
-        self.assertEqual(WriterFlow._zero_edge(self._I("cbz", "x0, #0x2000")), ("x0", 0x2000))
-        self.assertEqual(WriterFlow._zero_edge(self._I("cbnz", "w8, #0x2000")), ("x8", 0x1004))
-        self.assertIsNone(WriterFlow._zero_edge(self._I("tbz", "w8, #0, #0x2000")))
+        self.assertEqual(_ClassFlow._zero_edge(self._I("cbz", "x0, #0x2000")), ("x0", 0x2000))
+        self.assertEqual(_ClassFlow._zero_edge(self._I("cbnz", "w8, #0x2000")), ("x8", 0x1004))
+        self.assertIsNone(_ClassFlow._zero_edge(self._I("tbz", "w8, #0, #0x2000")))
 
 
 class TestFastEnumerationContract(unittest.TestCase):
@@ -90,7 +90,7 @@ class TestFastEnumerationContract(unittest.TestCase):
     def test_state_holds_only_the_receiver_after_the_call(self):
         from unittest import mock
         import proto.writer_flow as WF
-        wf = WF.WriterFlow(NoImage(segments=[]), [])
+        wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
         vals = {'sp': WF._STACK_TOP, 'x2': WF._STACK_TOP + 0x40}      # x2 = &state
         st = WF._St({'x0': frozenset({('I', '_b')})})
         st.frame_write(0x40, 64, frozenset({('I', '_a')}))      # an earlier loop's state
@@ -120,7 +120,7 @@ class TestFrameAddressesComeFromTheEvaluation(unittest.TestCase):
             ('stur', 'x8, [x29, #-8]'),
             ('ldr', 'x1, [sp, #0xff8]'),                     # sp + 0xff8 == x29 - 8
             ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
-        wf = WF.WriterFlow(NoImage(segments=[]), [])
+        wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
         wf.off_to_ivar = {8: '_a'}
         with mock.patch('proto.function_body.disasm', fd), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
@@ -144,7 +144,7 @@ class TestOutlinedFragments(unittest.TestCase):
         _order, fd = layout((0x1000, [
             ('mov', 'x19, x2'), *before, ('bl', '#0x2000'), *after,
             ('mov', 'x0, x19'), ('mov', 'w2, #1'), ('bl', '#0x9000'), ('ret', '')]))
-        wf = WF.WriterFlow(NoImage(segments=[]), [])
+        wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
         wf.off_to_ivar = {8: '_a'}
         with mock.patch('proto.function_body.disasm', fd), \
                 mock.patch('proto.arm64_eval.outlined_fragment',
@@ -183,7 +183,7 @@ class TestBoundsReachedAreReported(unittest.TestCase):
         import proto.writer_flow as WF
         from proto.models import get_diagnostics
         ctx = NoImage(segments=[])
-        wf = WF.WriterFlow(ctx, [])
+        wf = WF._ClassFlow(WF.WriterFlow(ctx, []))
         with self.assertLogs('proto.models', 'WARNING') as logs:
             self.assertEqual(wf._summary(0x1000, WF._MAX_SUMMARY_DEPTH), frozenset({WF._T}))
         self.assertIn('_MAX_SUMMARY_DEPTH hit', logs.output[0])
@@ -203,7 +203,7 @@ class TestTailCallToACFunction(unittest.TestCase):
 
         _order, fd = layout((0x1000, [('ldr', 'x0, [x0, #8]'), ('b', '#0x3000')]),
                             (0x3000, [('ldrb', 'w0, [x0, #4]'), ('ret', '')]))   # reads x0
-        wf = WF.WriterFlow(TextImage(starts=[0x1000, 0x3000], segments=[]), [])
+        wf = WF._ClassFlow(WF.WriterFlow(TextImage(starts=[0x1000, 0x3000], segments=[]), []))
         wf.off_to_ivar = {8: '_a'}
         with mock.patch('proto.function_body.disasm', fd), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
@@ -356,7 +356,7 @@ class TestReviewFixes(unittest.TestCase):
         import proto.writer_flow as WF
         from tests._listing import layout
         _order, fd = layout(*functions)
-        wf = WF.WriterFlow(NoImage(segments=[]), [])
+        wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
         wf.off_to_ivar = {8: '_a'}
         wf.own_imps = set(own)
         patches = [mock.patch('proto.function_body.disasm', fd),
