@@ -819,11 +819,19 @@ class TestAnIvarOffsetTheRuntimeSets:
 
             def is_variable(self, va):
                 return va == VAR
+
+            def segment_at(self, va):
+                from types import SimpleNamespace
+                return SimpleNamespace(vmaddr=0x4000, vmsize=len(self.list))
         ctx = Ctx()
         ctx.list = _s.pack("<II", 32, 1) + _s.pack("<QQQII", VAR, NAME, TYPE, 3, 8)
         ivars = _parse_ivars(ctx, 0x4000, StringTable())
         assert [(i.name, i.offset, i.offset_slot) for i in ivars] == [("count", None, VAR)]
         assert unread_input(ctx) == []
+        # a count running past the segment that holds the list: the list is misread
+        ctx.list = _s.pack("<II", 32, 2) + _s.pack("<QQQII", VAR, NAME, TYPE, 3, 8)
+        assert _parse_ivars(ctx, 0x4000, StringTable()) == []
+        assert [u[0] for u in unread_input(ctx)] == ["ivar list"]
 
 
 class TestSuperclassChain:

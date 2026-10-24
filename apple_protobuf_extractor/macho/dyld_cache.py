@@ -204,7 +204,6 @@ _HDR_READ_SIZE      = 0x1e0  # covers all fields we need (past _HDR_OBJC_OPTS_SI
 _OBJC_OPT_HEADER_V1_SIZE           = 56
 _OBJC_OPT_HEADER_REL_SEL_BASE_POS  = 48
 
-_MAX_MAPPINGS       = 64     # sanity cap per file
 # [cap:INPUT-SANITY — leave as-is] Guards against malformed cache headers; never the
 # operative limit on a real cache, so cannot affect the descriptor.
 #   _MAX_SUBCACHES — used as a *validity check, not a truncation*: `sub_cnt >
@@ -337,6 +336,17 @@ class DyldCacheReader:
             self._fhs[path] = open(path, 'rb')
         return self._fhs[path]
 
+    def _read_array(self, path: str, off: int, count: int, stride: int, what: str) -> bytes:
+        """The *count* entries of *stride* bytes at file offset *off* of *path*.  ValueError when
+        they do not lie within the file: the header that gave them is malformed."""
+        fh = self._fh(path)
+        size = os.fstat(fh.fileno()).st_size
+        if off + count * stride > size:
+            raise ValueError(f"{path}: {what} ({count} x {stride} bytes at {off:#x}) runs past "
+                             f"the end of the file ({size:#x})")
+        fh.seek(off)
+        return fh.read(count * stride)
+
     def _read_hdr_bytes(self, path: str) -> bytes:
         """Read the first _HDR_READ_SIZE bytes of *path* for header parsing."""
         fh = self._fh(path)
@@ -403,17 +413,12 @@ class DyldCacheReader:
         map_off = struct.unpack_from('<I', hdr, _HDR_MAPPING_OFF)[0]
         map_cnt = struct.unpack_from('<I', hdr, _HDR_MAPPING_CNT)[0]
 
-        if map_cnt == 0 or map_cnt > _MAX_MAPPINGS or map_off == 0:
+        if map_cnt == 0 or map_off == 0:
             return
 
-        fh = self._fh(path)
-        fh.seek(map_off)
-        raw = fh.read(map_cnt * _MAPPING_STRIDE)
-
+        raw = self._read_array(path, map_off, map_cnt, _MAPPING_STRIDE, "mapping array")
         for i in range(map_cnt):
             off = i * _MAPPING_STRIDE
-            if off + 24 > len(raw):
-                break
             # dyld_cache_mapping_info: address u64, size u64, fileOffset u64, …
             vmaddr, size, file_off = struct.unpack_from('<QQQ', raw, off)
             if size > 0:
@@ -437,14 +442,11 @@ class DyldCacheReader:
         if map_off >= _HDR_MAPPING_SLIDE_CNT + 4:
             ms_off = struct.unpack_from('<I', hdr, _HDR_MAPPING_SLIDE_OFF)[0]
             ms_cnt = struct.unpack_from('<I', hdr, _HDR_MAPPING_SLIDE_CNT)[0]
-            if ms_off and 0 < ms_cnt <= _MAX_MAPPINGS:
-                fh = self._fh(path)
-                fh.seek(ms_off)
-                raw = fh.read(ms_cnt * _MAPPING_SLIDE_STRIDE)
+            if ms_off and ms_cnt:
+                raw = self._read_array(path, ms_off, ms_cnt, _MAPPING_SLIDE_STRIDE,
+                                       "mapping-with-slide array")
                 for i in range(ms_cnt):
                     base = i * _MAPPING_SLIDE_STRIDE + _MAPPING_SLIDE_INFO_OFF
-                    if base + 16 > len(raw):
-                        break
                     slide_off, slide_size = struct.unpack_from('<QQ', raw, base)
                     if slide_off and slide_size:
                         offsets.append(slide_off)

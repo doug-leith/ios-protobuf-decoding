@@ -191,6 +191,21 @@ class TestDyldCacheReaderSynthetic(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r'Not a dyld shared cache'):
                 DyldCacheReader(p)
 
+    def test_a_mapping_array_past_the_end_of_the_file_raises(self):
+        # A mapping count of 65 (past the old 64 cap) is read when the array fits; one that runs
+        # past the file is a malformed header, not a cache with no mappings.
+        data = bytearray(_pack_cache(0x180000000, b'x\x00'))
+        for count, ok in ((65, True), (len(data), False)):
+            struct.pack_into('<I', data, _HDR_MAPPING_CNT, count)
+            with _TmpDir() as d:
+                p = d.write('dyld_shared_cache_arm64', bytes(data) + bytes(65 * 32))
+                if ok:
+                    with DyldCacheReader(p) as r:
+                        self.assertGreaterEqual(r.mapping_count(), 1)
+                else:
+                    with self.assertRaisesRegex(ValueError, r'mapping array .* runs past'):
+                        DyldCacheReader(p)
+
     # ── basic cstring reads ──────────────────────────────────────────────────
 
     def test_single_mapping_cstring(self):

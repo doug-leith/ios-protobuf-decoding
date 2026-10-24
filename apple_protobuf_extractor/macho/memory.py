@@ -585,11 +585,13 @@ class BinaryContext:
         except UnicodeDecodeError:
             return raw.decode('latin-1')
 
+    def segment_at(self, vmaddr: int) -> Optional[Segment]:
+        """The image's segment holding *vmaddr*, or None."""
+        return next((s for s in self._segments if s.vmaddr <= vmaddr < s.vmaddr + s.vmsize), None)
+
     def _segment_end_offset(self, vmaddr: int) -> int:
-        for seg in self._segments:
-            if seg.vmaddr <= vmaddr < seg.vmaddr + seg.vmsize:
-                return seg.fileoff + seg.filesize
-        return len(self._data)
+        seg = self.segment_at(vmaddr)
+        return len(self._data) if seg is None else seg.fileoff + seg.filesize
 
     def _decode_packed_ptr(self, raw: int) -> int:
         """Decode a single raw u64 pointer value (binary mode only).

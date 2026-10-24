@@ -1669,6 +1669,6 @@ class Flow:
             sec = self.ctx.section("__TEXT", "__cstring")
             if not sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
                 return None
-            return self.ctx.read_cstring(va, max_len=128)
+            return self.ctx.read_cstring(va, max_len=sec.vmaddr + sec.vmsize - va)
         except READ_ERRORS:
             return None

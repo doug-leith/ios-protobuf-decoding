@@ -234,10 +234,12 @@ class TestReadCfstringTextLayouts(unittest.TestCase):
     """
 
     STRUCT_VA = 0x101bfbcf8     # the CFStringRef struct
-    CHAR_VA   = 0x1017ba8ca     # the UTF-8 bytes the struct +16 points to
+    CHAR_VA   = 0x1017ba8ca     # the characters the struct +16 points to
 
-    def _fake_ctx(self, *, cfstring_seg, plus16_raw):
+    def _fake_ctx(self, *, cfstring_seg, plus16_raw, chars=b"kRadioAccessTechnologyGSM",
+                  flags=0x7c8, count=None):
         struct_va, char_va = self.STRUCT_VA, self.CHAR_VA
+        count = len(chars) if count is None else count
 
         class _Sec:
             vmaddr = struct_va
@@ -250,10 +252,17 @@ class TestReadCfstringTextLayouts(unittest.TestCase):
             def section(self, seg, name):
                 return _Sec()
 
-            def read_cstring(self, va, max_len=128):
-                if va == char_va:
-                    return "kRadioAccessTechnologyGSM"
-                # The struct head (isa/flags) is not a valid C string.
+            def read_cstring(self, va, max_len=4096):
+                raise ValueError(va)             # a CFString is read by its count
+
+            def read_bytes(self, va, n):
+                if va == char_va and n <= len(chars):
+                    return chars[:n]
+                raise ValueError(va)
+
+            def read_u32(self, va):
+                if va == struct_va + 8:
+                    return flags
                 raise ValueError(va)
 
             def is_variable(self, vmaddr):        # no program data, no binds
@@ -269,6 +278,8 @@ class TestReadCfstringTextLayouts(unittest.TestCase):
             def read_u64(self, va):
                 if va == struct_va + 16:
                     return plus16_raw
+                if va == struct_va + 24:
+                    return count
                 raise ValueError(va)
 
         return _Ctx()
@@ -287,6 +298,24 @@ class TestReadCfstringTextLayouts(unittest.TestCase):
     def test_pointer_outside_cfstring_section_returns_none(self):
         ctx = self._fake_ctx(cfstring_seg="__DATA", plus16_raw=0x200000017ba8ca)
         self.assertIsNone(read_cfstring_text(ctx, 0x900000))
+
+    def test_the_count_is_read_not_a_terminator_within_128_bytes(self):
+        # (An SQL statement of AppPredictionInternal's, 227 bytes, read as None.)
+        text = "INSERT INTO t (" + "c, " * 80 + "d) VALUES (?)"
+        ctx = self._fake_ctx(cfstring_seg="__DATA", plus16_raw=0, chars=text.encode(),
+                             count=len(text))
+        self.assertEqual(read_cfstring_text(ctx, self.STRUCT_VA), text)
+
+    def test_a_unicode_cfstring_is_utf16(self):
+        # (flags 0x7d0: GeoServices' "p:[%u:%u] (%f,%f)±(%f,%f)", read as "p" as a C string)
+        text = "p:[%u:%u] (%f,%f)±(%f,%f)"
+        ctx = self._fake_ctx(cfstring_seg="__DATA", plus16_raw=0, flags=0x7d0,
+                             chars=text.encode("utf-16-le"), count=len(text))
+        self.assertEqual(read_cfstring_text(ctx, self.STRUCT_VA), text)
+
+    def test_an_empty_cfstring_is_empty(self):
+        ctx = self._fake_ctx(cfstring_seg="__DATA", plus16_raw=0, chars=b"", count=0)
+        self.assertEqual(read_cfstring_text(ctx, self.STRUCT_VA), "")
 
 
 # ── TestProtoEnumModel ────────────────────────────────────────────────────────

@@ -74,8 +74,6 @@ _MIN_IVAR_ENTSIZE   = 32
 _MAX_METHODS        = 10_000
 log = logging.getLogger(__name__)
 
-_MAX_IVARS          = 1_000
-_MAX_CLASSES        = 100_000
 
 # class_ro_t.baseMethods, when dyld's shared-cache builder has PRE-ATTACHED one
 # or more categories to a class (a launch-time optimisation: the ObjC runtime
@@ -338,10 +336,6 @@ def build_class_list(
         return ClassList([])
 
     count = sect.vmsize // 8
-    if count > _MAX_CLASSES:
-        log.warning("__objc_classlist holds %d classes; only the first %d are read "
-                    "(_MAX_CLASSES) -- the rest are MISSING from the output", count, _MAX_CLASSES)
-    count = min(count, _MAX_CLASSES)
 
     # Resolve the cache-wide relative-method-selector base BEFORE parsing
     # methods, so preoptimized "direct selector" names decode from the binary
@@ -715,12 +709,14 @@ def _parse_ivars(
     if entsize == 0:
         return []
 
-    if count > _MAX_IVARS:
-        log.warning("an ivar list declares %d ivars; only the first %d are read "
-                    "(_MAX_IVARS) -- the rest are MISSING from the output", count, _MAX_IVARS)
-    count    = min(count, _MAX_IVARS)
-    ivars: List[ObjcIvar] = []
     entry_va = list_va + 8
+    # the list lies in one segment of the image: a count that runs past it is misread
+    seg = ctx.segment_at(list_va)
+    if seg is None or entry_va + count * entsize > seg.vmaddr + seg.vmsize:
+        record_unread(ctx, "ivar list", f"{list_va:#x}", ValueError(
+            f"{count} ivars of {entsize} bytes run past the segment holding the list"))
+        return []
+    ivars: List[ObjcIvar] = []
 
     for _ in range(count):
         try:
