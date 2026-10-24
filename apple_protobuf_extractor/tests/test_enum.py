@@ -199,8 +199,11 @@ class TestIsValidEnumString(unittest.TestCase):
     def test_none_like_empty(self):
         self.assertFalse(_is_valid_enum_string(""))
 
-    def test_too_long(self):
-        self.assertFalse(_is_valid_enum_string("A" * 129))
+    def test_long_identifier_ok(self):
+        # (iOS 27 GeoServices: 98 characters; the identifier is the test, not a length)
+        self.assertTrue(_is_valid_enum_string(
+            "ALERT_TYPE_LAST_CHANCE_TO_SUGGEST_DIFFERENT_ROUTE_WITH_SAME_NUM_STOPS_FOR_EV_"
+            "INFEASIBLE_US" + "E" * 60))
 
     def test_starts_with_digit(self):
         self.assertFalse(_is_valid_enum_string("1INVALID"))

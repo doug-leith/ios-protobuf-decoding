@@ -1427,6 +1427,15 @@ class TestListImages(unittest.TestCase):
         data = _pack_images_cache(entries)
         return self.tmpdir.write('dyld_shared_cache_arm64', data)
 
+    def test_an_images_array_past_the_end_of_the_file_raises(self):
+        # (a count over 65536 had been taken for "no images", silently)
+        data = bytearray(_pack_images_cache([(0x100000000, '/a')]))
+        struct.pack_into('<Q', data, 0x90, 70000)
+        p = self.tmpdir.write('dyld_shared_cache_arm64', bytes(data))
+        with DyldCacheReader(p) as r:
+            with self.assertRaisesRegex(ValueError, r'imagesText array .* runs past'):
+                r.list_images()
+
     # ── basic behaviour ───────────────────────────────────────────────────────
 
     def test_returns_all_entries(self):

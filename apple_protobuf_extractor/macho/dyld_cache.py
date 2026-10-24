@@ -225,7 +225,6 @@ _IMAGES_TEXT_STRIDE = 32
 # imagesTextOffset/Count header field offsets (u64 each)
 _HDR_IMG_TEXT_OFF   = 0x88
 _HDR_IMG_TEXT_CNT   = 0x90
-_MAX_IMAGES         = 65536    # sanity cap on imagesTextCount
 
 # [cap:INPUT-SANITY — leave as-is] A header's sizeofcmds above this is taken for corrupt (an
 # error), not read: real images have a few KB of load commands.
@@ -368,8 +367,8 @@ class DyldCacheReader:
         cache header bytes.  Both are ``u64`` fields introduced in the iOS 14 /
         macOS Big Sur cache format.
 
-        Returns ``(offset, count)`` or ``(0, 0)`` when the header is too short,
-        the fields are absent, or the count exceeds the sanity cap.
+        Returns ``(offset, count)`` or ``(0, 0)`` when the header is too short or the fields
+        are absent.  (The array must lie in the file: :meth:`_iter_images`.)
         """
         # imagesTextOffset u64 at 0x88, imagesTextCount u64 at 0x90.
         # _HDR_READ_SIZE = 0x1a0 > 0x98, so the header bytes we already read
@@ -378,7 +377,7 @@ class DyldCacheReader:
             return 0, 0
         img_off = struct.unpack_from('<Q', hdr, _HDR_IMG_TEXT_OFF)[0]
         img_cnt = struct.unpack_from('<Q', hdr, _HDR_IMG_TEXT_CNT)[0]
-        if img_off == 0 or img_cnt == 0 or img_cnt > _MAX_IMAGES:
+        if img_off == 0 or img_cnt == 0:
             return 0, 0
         return img_off, img_cnt
 
@@ -893,15 +892,15 @@ class DyldCacheReader:
 
     def _iter_images(self):
         """Yield ``(load_vmaddr, path_str)`` for every imagesText entry."""
+        entries = self._read_array(self._main_path, self._img_text_off, self._img_text_cnt,
+                                   _IMAGES_TEXT_STRIDE, "imagesText array")
         fh = self._fh(self._main_path)
         fh.seek(0)
         main_data = fh.read()
-        for i in range(min(self._img_text_cnt, _MAX_IMAGES)):
-            off = self._img_text_off + i * _IMAGES_TEXT_STRIDE
-            if off + _IMAGES_TEXT_STRIDE > len(main_data):
-                break
-            load_addr = struct.unpack_from('<Q', main_data, off + 16)[0]
-            path_off  = struct.unpack_from('<I', main_data, off + 28)[0]
+        for i in range(self._img_text_cnt):
+            off = i * _IMAGES_TEXT_STRIDE
+            load_addr = struct.unpack_from('<Q', entries, off + 16)[0]
+            path_off  = struct.unpack_from('<I', entries, off + 28)[0]
             if path_off >= len(main_data):
                 continue
             nul      = main_data.find(b'\x00', path_off)

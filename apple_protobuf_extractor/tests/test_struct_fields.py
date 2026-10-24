@@ -296,6 +296,18 @@ def _keys(members):
     return {off: md.key for off, md in members.items() if md.key}
 
 
+class TestAKeyIsAnyIdentifier(unittest.TestCase):
+    """A dictionary-representation key is an identifier of any length (iPhone 8 GeoServices
+    holds 28 identifier CFStrings longer than 64 characters)."""
+
+    def test_long_key_read(self):
+        from unittest import mock
+        key = "place_card_place_action_details_transit_place_card_transit_departure_sequence_usage_direct"
+        with mock.patch.object(SF, "read_cfstring_text", lambda ctx, va: {1: key, 2: "a b"}[va]):
+            self.assertEqual(SF._cfstring(None, 1), key)
+            self.assertIsNone(SF._cfstring(None, 2))
+
+
 class TestDecodeDictrepKeys(_SelectorsPatched):
     def setUp(self):
         self.patch_selectors(_GEO_SELECTORS)

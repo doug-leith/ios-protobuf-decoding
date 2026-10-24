@@ -50,8 +50,7 @@ def _is_valid_enum_string(s: str) -> bool:
     therefore means "this candidate isn't a string", never "decode it a different
     way".
     """
-    return bool(s and len(s) <= 128
-                and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', s))
+    return bool(s and re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', s))
 
 
 def _normalize_enum_value_name(enum_name: str, raw: str, camel: Optional[bool] = None) -> str:

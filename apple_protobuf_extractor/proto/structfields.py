@@ -398,7 +398,7 @@ def decode_inline_writes(ctx, insns: Sequence, bracket: Bracket, is_ivar_offset,
 
 # ── member names: the struct's dictionary-representation function ─────────────
 
-_IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
+_IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 _DICTREP_SELECTOR = "_dictionaryRepresentation:"
 
 

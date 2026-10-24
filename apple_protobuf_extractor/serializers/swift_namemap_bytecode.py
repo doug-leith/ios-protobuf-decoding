@@ -129,9 +129,7 @@ def decode_namemap_bytecode(raw: bytes, enum: bool = False) -> Optional[List[Tup
                 _, i = _cstr(raw, i)            # JSON name
             elif op in (_ALIAS_NEXT, _ALIAS_DELTA):
                 count, i = _varint(raw, i)
-                if count > 64:
-                    return None
-                for _ in range(count):
+                for _ in range(count):              # (a count past the data: unterminated)
                     alias, i = _cstr(raw, i)
                     names.append(alias)
             lo = -(1 << 31) if enum else 1
@@ -145,7 +143,6 @@ def decode_namemap_bytecode(raw: bytes, enum: bool = False) -> Optional[List[Tup
     return out
 
 
-_MAX_LITERAL_LEN = 4096
 _W = 0xFFFFFFFF
 
 
@@ -197,21 +194,17 @@ def bytecode_literal_from_getter(ctx, insns, enum: bool = False,
     return None
 
 
-def _in_cstrings(ctx, va) -> bool:
-    """*va* lies in the image's ``__TEXT,__cstring`` (where a literal lives: a length read off
-    a pair of registers that hold something else is not one)."""
-    if not ctx.has_section("__TEXT", "__cstring"):
-        return False
-    sec = ctx.section("__TEXT", "__cstring")
-    return sec.vmaddr <= va < sec.vmaddr + sec.vmsize
+def _in_text(ctx, va, length) -> bool:
+    """The *length* bytes at *va* lie in one section of the image's ``__TEXT`` segment, where a
+    StaticString literal lives (``__TEXT,__const`` for one holding NULs, as a bytecode does).  A
+    length read off a pair of registers that hold something else is not one."""
+    seg = ctx.segment_at(va)
+    return seg is not None and seg.name == "__TEXT" and any(
+        s.vmaddr <= va and va + length <= s.vmaddr + s.vmsize for s in seg.sections)
 
 
 def _read(ctx, va, length) -> Optional[bytes]:
-    if length > _MAX_LITERAL_LEN and _in_cstrings(ctx, va):
-        from proto.models import record_heuristic_hit
-        record_heuristic_hit(ctx, "_MAX_LITERAL_LEN",
-                             f"the name-map literal at {va:#x} ({length} bytes) is refused")
-    if not 1 <= length <= _MAX_LITERAL_LEN:
+    if length < 1 or not _in_text(ctx, va, length):
         return None
     try:
         return ctx.read_bytes(va, length)

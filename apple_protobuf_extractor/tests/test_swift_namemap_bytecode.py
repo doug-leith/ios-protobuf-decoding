@@ -12,8 +12,17 @@ from tests._fakes import NoImage
 
 
 class _Ctx(NoImage):
+    """*data* at *base*: one section of ``__TEXT``."""
     def __init__(self, data, base):
+        from types import SimpleNamespace
         self._d, self._b = data, base
+        self._sections = [SimpleNamespace(vmaddr=base, vmsize=len(data))]
+
+    def segment_at(self, va):
+        from types import SimpleNamespace
+        if self._b <= va < self._b + len(self._d):
+            return SimpleNamespace(name="__TEXT", sections=self._sections)
+        return None
 
     def is_variable(self, vmaddr):        # no program data, no binds
         return False
@@ -25,33 +34,21 @@ class _Ctx(NoImage):
         return self._d[off:off + n]
 
 
-class TestLiteralLengthBound(unittest.TestCase):
-    """A literal longer than _MAX_LITERAL_LEN is refused, and reported when it lies in
-    __cstring (a "length" read off registers that hold something else is not remarked)."""
+class TestTheLiteralLiesInText(unittest.TestCase):
+    """A literal is read only when all of it lies in one section of ``__TEXT`` (iOS 27: every
+    name-map literal is in ``__TEXT,__const``; a "length" read off registers holding something
+    else points into ``__DATA`` with a length of some 3e9).  No length limit besides."""
 
-    def _ctx(self):
+    def test_any_length_in_text(self):
+        ctx = _Ctx(b"\0" * 0x2000, 0x4000)
+        self.assertEqual(len(B._read(ctx, 0x4000, 0x1800)), 0x1800)      # past the old 4096
+
+    def test_not_past_its_section_nor_outside_text(self):
         from types import SimpleNamespace
-
-        class Strings(_Ctx):
-            def has_section(self, seg, sect):
-                return (seg, sect) == ('__TEXT', '__cstring')
-
-            def section(self, seg, sect):
-                return SimpleNamespace(vmaddr=0x4000, vmsize=0x10000)
-        return Strings(b"\0" * 0x10000, 0x4000)
-
-    def test_reported_in_cstrings(self):
-        from proto.models import get_diagnostics
-        ctx = self._ctx()
-        with self.assertLogs('proto.models', 'WARNING'):
-            self.assertIsNone(B._read(ctx, 0x4000, B._MAX_LITERAL_LEN + 1))
-        self.assertEqual([n for n, _w in get_diagnostics(ctx).heuristics_hit], ['_MAX_LITERAL_LEN'])
-
-    def test_not_remarked_elsewhere(self):
-        from proto.models import get_diagnostics
-        ctx = self._ctx()
-        self.assertIsNone(B._read(ctx, 0x90000, B._MAX_LITERAL_LEN + 1))
-        self.assertEqual(get_diagnostics(ctx).heuristics_hit, [])
+        ctx = _Ctx(b"\0" * 0x2000, 0x4000)
+        self.assertIsNone(B._read(ctx, 0x4000, 0x2001))
+        ctx.segment_at = lambda va: SimpleNamespace(name="__DATA", sections=ctx._sections)
+        self.assertIsNone(B._read(ctx, 0x4000, 0x10))
 
 
 class TestDecode(unittest.TestCase):
@@ -170,6 +167,14 @@ class TestEnumBytecode(unittest.TestCase):
     def test_alias_entries_share_the_primary_number(self):
         self.assertEqual(B.decode_namemap_bytecode(self.ALIASED, enum=True),
                          [(0, "AL_X"), (1, "AL_Y"), (1, "AL_Y2"), (2, "AL_Z")])
+
+    def test_any_number_of_aliases(self):
+        # 65 aliases (one past the old limit of 64); a count past the data is unterminated
+        names = [f"AL_{i}" for i in range(65)]
+        raw = b"\x00\x02\x00AL_X\x00\tAL_Y\x00\x41\x01" + b"".join(n.encode() + b"\x00" for n in names)
+        self.assertEqual(B.decode_namemap_bytecode(raw, enum=True),
+                         [(0, "AL_X"), (1, "AL_Y")] + [(1, n) for n in names])
+        self.assertIsNone(B.decode_namemap_bytecode(raw[:-4], enum=True))
 
     def test_zero_first_value(self):
         self.assertEqual(B.decode_namemap_bytecode(self.INNER, enum=True), [(0, "I_A"), (3, "I_B")])
