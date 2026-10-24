@@ -197,7 +197,28 @@ class TestCandidateIntervals(unittest.TestCase):
                              'ldrsw x16, [x17, x16, lsl #2]', 'out:', 'ret')
         scan = Flow(None, insns).candidates(0, 'x1', (1, 1 << 29))
         self.assertIn((1, 10), scan.intervals)
-        self.assertNotIn(5, scan.values)      # the values hold only the gate's end points
+        self.assertTrue(set(range(1, 11)) <= scan.values)   # the clamped index reaches the table
+
+    def test_the_gate_is_where_the_flags_are_read(self):
+        # (iOS 27 GeoServices: 368 compares read by a csel, 2 by a b.cond further on)
+        insns, _ = listing('lsr x1, x22, #3', 'cmp w1, #5', 'mov x9, x1', 'b.hi @out',
+                           'ldrb w9, [x17, x9]', 'out:', 'ret')
+        scan = Flow(None, insns).candidates(0, 'x1', (0, 1 << 29))
+        self.assertIn((0, 5), scan.intervals)
+        self.assertTrue(set(range(6)) <= scan.values)
+
+    def test_a_flag_setter_between_ends_the_gate(self):
+        insns, _ = listing('lsr x1, x22, #3', 'cmp w1, #5', 'tst w2, #1', 'b.hi @out',
+                           'ldrb w9, [x17, x1]', 'out:', 'ret')
+        scan = Flow(None, insns).candidates(0, 'x1', (0, 1 << 29))
+        self.assertEqual(scan.intervals, [])
+        self.assertNotIn(3, scan.values)
+
+    def test_a_csel_that_keeps_the_value_out_of_range_is_no_clamp(self):
+        insns, _ = listing('lsr x1, x22, #3', 'cmp x1, #9', 'csel x1, x1, xzr, hi',
+                           'ldrsw x16, [x17, x1, lsl #2]', 'ret')
+        scan = Flow(None, insns).candidates(0, 'x1', (0, 1 << 29))
+        self.assertEqual(scan.intervals, [])
 
 
 class TestSelectorStubForms(unittest.TestCase):

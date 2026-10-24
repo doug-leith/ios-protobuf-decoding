@@ -967,7 +967,10 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
     """iOS 27 GEOPDSUserActionMetadataElement's dictRep switches through `br` jump tables
     some of whose arms only Flow's evaluation resolves.  Pruning the body to a static CFG
     lost 6 uiAction values (1065 TAP_GEO, 2200, 3088, 5039, 7030, 11029) and 2 uiTarget
-    values (1313, 1810); the whole range to the next method keeps all 46 / 31."""
+    values (1313, 1810); the whole range to the next method keeps them.  The tables' indices
+    are clamped by ``cmp; csel`` (TODO #156): followed to the load, every value is read --
+    1368 / 527, a superset of iPhone 8's 1171 / 436 for the same enums, every shared value
+    with the same name (46 / 31 before)."""
 
     @classmethod
     def setUpClass(cls):
@@ -1008,8 +1011,8 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
         if self.res is None:
             self.skipTest('GEOPDSUserActionMetadataElement not in this cache')
         values, incomplete = self.res
-        self.assertEqual(len(values['uiAction']), 46)
-        self.assertEqual(len(values['uiTarget']), 31)
+        self.assertEqual(len(values['uiAction']), 1368)
+        self.assertEqual(len(values['uiTarget']), 527)
         for v in (1065, 2200, 3088, 5039, 7030, 11029):
             self.assertIn(v, values['uiAction'])
         for v in (1313, 1810):

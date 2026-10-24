@@ -46,6 +46,9 @@ _REGS = tuple(f"x{n}" for n in range(0, 31)) + tuple(f"v{n}" for n in range(0, 3
 _ORDERED_CONDS = ('hi', 'hs', 'cs', 'lo', 'cc', 'ls', 'gt', 'ge', 'lt', 'le')
 # The ordered conditions whose bound belongs to the upper side (``cmp w8, #3 ; b.hs`` admits 0..2).
 _STRICT_CONDS = frozenset(('hs', 'cs', 'lo', 'cc', 'ge', 'lt'))
+#: The ordered conditions that hold when ``cmp V, #c`` finds V in ``0..c`` (``csel``'s first
+#: source is then the in-range one).
+_IN_RANGE_CONDS = frozenset(('ls', 'lo', 'cc', 'le', 'lt'))
 
 # [cap:INPUT-SANITY] An ordered gate (`cmp w, #imm12; b.hi`) spans at most 2^12 values by the
 # encoding of the immediate; a wider span cannot come from one unshifted compare.  Only a gate
@@ -800,13 +803,13 @@ class Flow:
         in.  Registers are tracked as ``V + b`` through ``mov`` / ``add|sub`` of an immediate
         or of a constant register; comparing such a register with *c* gives the point
         ``c - b``, and an ordered gate (``b.hi`` / ``b.hs`` / ...) gives the whole interval it
-        guards (``sub w9,w8,#35; cmp w9,#30; b.hi`` -> V in 35..65).  The scan follows the CFG
+        guards (``sub w9,w8,#35; cmp w9,#30; b.hi`` -> V in 35..65), wherever the instruction
+        that reads the flags is (:meth:`_candidate_step`).  The scan follows the CFG
         from the load and stops each path at its first call (where the name is consumed).
         *domain* is ``hi`` (values ``0 <= v < hi``) or ``(lo, hi)``: a 4-byte value is a signed
         int32, so an enum may start below zero (``add w8, w2, #1; cmp w8, #10`` is -1..8).
         The result also lists the ``(lo, hi)`` of EVERY ordered gate met, whether or not a
-        table load then uses it (a gate whose index is clamped by a ``csel`` before the load is
-        not followed to the load), and whether a table gate was too wide to expand."""
+        table load then uses it, and whether a table gate was too wide to expand."""
         scan = Candidates({0})
         cands = scan.values
         root_blk = self._block_of.get(root) if root >= 0 else self.cfg.entry
@@ -834,10 +837,34 @@ class Flow:
         """One instruction of the candidate scan.  *st* maps a register to its offset ``b`` in
         ``V + b``; it ALSO carries, per path, the interval of the last ordered gate on each
         offset (keys ``gate_lo:<b>`` / ``gate_hi:<b>``), so a table is expanded by ITS OWN
-        gate and not by an unrelated compare of the same value met on another path."""
+        gate and not by an unrelated compare of the same value met on another path, and the
+        comparison the flags hold (keys ``flags_b`` / ``flags_point``) until the instruction
+        that reads them: an ordered ``b.cond`` gates the value; a ``csel`` that keeps it on the
+        side the gate admits and zero on the other (an index clamped for a table) gates its
+        destination."""
         cands = scan.values
         ins = self.insns[k]
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
+        new: Optional[Tuple[str, int]] = None
+        cond = mn[2:] if mn.startswith('b.') else (ops[3] if mn == 'csel' and len(ops) == 4 else '')
+        if cond in _ORDERED_CONDS and "flags_b" in st:
+            b, point = st["flags_b"], st["flags_point"]
+            lo, hi = sorted((-b, point))
+            if cond in _STRICT_CONDS and hi == point:
+                hi -= 1
+            if mn == 'csel':
+                # the side the gate admits: the first source when the condition holds in range
+                kept, other = (ops[1], ops[2]) if cond in _IN_RANGE_CONDS else (ops[2], ops[1])
+                if not (st.get(_norm_reg(kept)) == b and _norm_reg(other) in ('xzr', 'wzr')):
+                    lo = None
+                else:
+                    new = (_norm_reg(ops[0]), b)
+            if lo is not None:
+                st[f"gate_lo:{b}"], st[f"gate_hi:{b}"] = lo, hi   # keyed by the VALUE's offset: a register copy keeps it
+                scan.intervals.append((lo, hi))
+        if mn in _FLAG_SETTERS:
+            st.pop("flags_b", None)
+            st.pop("flags_point", None)
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):
             r = _norm_reg(ops[0])
             if r in st:
@@ -845,16 +872,9 @@ class Flow:
                 if c is not None and mn == 'cmn':     # `cmn w2, #1` compares with -1
                     c = -c
                 if c is not None:
-                    nxt = self.insns[k + 1].mnemonic if k + 1 < len(self.insns) else ''
-                    cond = nxt[2:] if nxt.startswith('b.') else ''
                     point = c - st[r]
                     cands.add(point)
-                    if cond in _ORDERED_CONDS:
-                        lo, hi = sorted((-st[r], point))
-                        if cond in _STRICT_CONDS and hi == point:
-                            hi -= 1
-                        st[f"gate_lo:{st[r]}"], st[f"gate_hi:{st[r]}"] = lo, hi   # keyed by the VALUE's offset: a register copy keeps it
-                        scan.intervals.append((lo, hi))
+                    st["flags_b"], st["flags_point"] = st[r], point
         elif mn in ('cbz', 'cbnz') and ops:
             r = _norm_reg(ops[0])
             if r in st:
@@ -869,7 +889,6 @@ class Flow:
                     cands.update(range(lo, hi + 1))
                 else:
                     scan.gate_capped = True
-        new: Optional[Tuple[str, int]] = None
         if mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
             rs, rd = _norm_reg(ops[1]), _norm_reg(ops[0])
             if rs in st and rd:
