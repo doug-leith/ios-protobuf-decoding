@@ -524,6 +524,30 @@ class TestEvaluateClassMemo(unittest.TestCase):
 
 
 
+class TestAppendedIvar(unittest.TestCase):
+    """A function handed self and the element is read with what it is handed: the array ivar is
+    the ``self->ivar`` it sends the element to (f25's PBAppendMessageAtOffset(self, 8, e)), not
+    an argument that equals an array ivar's offset."""
+    ELEM = T.ret_value(99)
+    OBJECTS = Objects(opaque=T.opaque, field_value=T.field_value,
+                      call_result=lambda k, target, x0: T.ret_value(k))
+
+    def appended(self, *body):
+        from unittest import mock
+        insns, _ = listing(*body)
+        with mock.patch.object(E, "_function_insns", lambda ctx, va, entries=None: insns), \
+                mock.patch.object(E.D, "decoded_flow", lambda ctx, ins: Flow(None, ins)):
+            return E._appended_ivar(None, 0x1000, {'x0': SELF, 'x1': 8, 'x2': self.ELEM},
+                                    {self.ELEM}, frozenset({8, 16}), self.OBJECTS, None)
+
+    def test_the_ivar_at_the_offset_it_is_handed(self):
+        self.assertEqual(self.appended('ldr x0, [x0, x1]', f'bl {CALL}', 'ret'), 8)
+
+    def test_a_function_that_appends_to_no_ivar_of_self_names_none(self):
+        # handed (self, 8, element) as well, but it sends the element elsewhere
+        self.assertIsNone(self.appended('mov x0, x2', 'mov x2, x1', f'bl {CALL}', 'ret'))
+
+
 class TestInitFamily(unittest.TestCase):
     """An element is the result of an init-family method sent to one (it returns its receiver):
     clang's ARC family, ``init`` then anything but a lowercase letter."""

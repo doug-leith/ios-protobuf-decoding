@@ -408,21 +408,38 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                         continue
                     if recv != SELF:
                         continue
-                    # x1 for an objc_direct C function, x2 for a method IMP or a message send
-                    # (x1 = _cmd)
-                    lit = [v for a, v in c.args.items() if a != 'x0' and v in array_offsets]
-                    if len(lit) == 1:
-                        # a generic helper handed (self, offset, element): the array ivar
-                        # at that byte offset (f25's PBAppendMessageAtOffset)
-                        fd.adder_ivar = off_to_ivar.get(lit[0])
-                        break
                     sel = sent_selector(ctx, c.target, c.args.get('x1'))
+                    # a function handed self and the element, run with what it is handed: the
+                    # array ivar it sends the element to (f25's generic
+                    # PBAppendMessageAtOffset(self, offset, element))
+                    off = (_appended_ivar(ctx, c.target, c.args, elems, array_offsets, objs, entries)
+                           if sel is None and c.target else None)
+                    if off is not None:
+                        fd.adder_ivar = off_to_ivar.get(off)
+                        break
                     tgt = sel_to_imp.get(sel, c.target) if sel is not None else c.target
                     off = _adder_array_ivar(ctx, tgt, array_offsets) if tgt else None
                     if off is not None:
                         fd.adder_ivar = off_to_ivar.get(off)
                         break
             out.fields[n] = fd
+
+
+def _appended_ivar(ctx, va: int, args: Dict[str, object], elems: Set[object],
+                   array_offsets: FrozenSet[int], objs, entries) -> Optional[int]:
+    """The byte offset of the array ivar the function at *va*, run from its entry with the
+    arguments *args* it is handed (self among them), appends an element of *elems* to: a call
+    in it whose receiver is ``self->ivar`` of an array ivar and that is handed the element
+    (``[self->_xs addObject:element]``).  None when it makes none."""
+    insns = _function_insns(ctx, va, entries=entries)
+    if not insns:
+        return None
+    region = D.decoded_flow(ctx, insns).run_from(0, dict(args), objects=objs)
+    for c in region.calls:
+        off = field_offset(c.args.get('x0'))
+        if off in array_offsets and elems & {c.args.get(r) for r in ('x1', 'x2', 'x3')}:
+            return off
+    return None
 
 
 def _init_family(sel: Optional[str]) -> bool:
