@@ -44,6 +44,12 @@ extern void PBWriteBytesField(PBDataWriter *writer, id value, uint32_t tag);
 extern void PBWritePackedInt64Field(PBDataWriter *writer, int64_t *list, uint32_t tag);
 extern void PBWritePackedFloatField(PBDataWriter *writer, float *list, uint32_t tag);
 
+// ProtocolBuffer.framework's length-delimited marks, under their real names (f22): a
+// sub-message's begin mark (a frame scratch and the field number) and end mark (the same
+// scratch).
+extern void PBDataWriterPlaceMark(PBDataWriter *writer, void *mark, uint32_t tag);
+extern void PBDataWriterRecallMark(PBDataWriter *writer, const void *mark);
+
 // ProtocolBuffer.framework's own field writers, under their real names (f29): a standalone
 // binary imports them by name, and the name is the wire encoding.
 extern void PBDataWriterWriteInt32Field(PBDataWriter *writer, int32_t value, uint32_t tag);

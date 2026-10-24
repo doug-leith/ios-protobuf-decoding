@@ -523,5 +523,17 @@ class TestEvaluateClassMemo(unittest.TestCase):
         self.assertEqual(self.calls, [1, 1, 1])
 
 
+
+class TestInitFamily(unittest.TestCase):
+    """An element is the result of an init-family method sent to one (it returns its receiver):
+    clang's ARC family, ``init`` then anything but a lowercase letter."""
+
+    def test_family(self):
+        for sel in ("init", "initWithData:", "init:", "initWithDictionary:error:"):
+            self.assertTrue(E._init_family(sel), sel)
+        for sel in ("initialize", "initiate", "_init", "copy", None):
+            self.assertFalse(E._init_family(sel), sel)
+
+
 if __name__ == '__main__':
     unittest.main()

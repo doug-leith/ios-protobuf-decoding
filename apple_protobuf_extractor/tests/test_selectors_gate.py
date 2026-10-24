@@ -9,7 +9,10 @@ resolved, the run is treated by input kind:
   * standalone executable (`ctx.is_executable`) → SelectorsUnresolvedError
   * standalone shared library (`ctx.is_dylib`)  → warning, no raise
 
-When at least one proto class IS resolved, the gate is a no-op in every mode.
+When at least one proto class IS resolved, the gate is a no-op in every mode.  The proto
+classes are those whose superclass chain names a PB root
+(`proto.protoclass_set.rooted_proto_classes`); here a class whose superclass is named
+``PBCodable``.
 These replace the old silent "no-symbols" fallbacks (find-readFrom/writeTo/enum
 by pattern), which were removed.
 """
@@ -37,8 +40,7 @@ class _FakeCtx:
 
 
 def _proto_class(name="GEOThing", *, resolved: bool, vmaddr=0x1000):
-    """A class that `_is_proto_class` accepts (via the _reader/_readerLock
-    structural proxy).  ``resolved`` controls whether readFrom:/writeTo: appear
+    """A PBCodable subclass.  ``resolved`` controls whether readFrom:/writeTo: appear
     as resolved method names."""
     ivars = [
         ObjcIvar(name="_reader", type_enc='@"PBDataReader"', offset=8, size=8),
@@ -59,16 +61,16 @@ def _proto_class(name="GEOThing", *, resolved: bool, vmaddr=0x1000):
         ]
     return ObjcClass(
         vmaddr=vmaddr, name=name, is_meta=False, superclass_vmaddr=0,
-        superclass_name=None, ro_flags=0, instance_size=32,
+        superclass_name="PBCodable", ro_flags=0, instance_size=32,
         methods=methods, ivars=ivars,
     )
 
 
-def _proto_shaped_no_pb(name="NWUsageSnapshot", vmaddr=0x5000):
-    """A class `_is_proto_class` accepts by ivar shape whose method names RESOLVE
-    but are NOT readFrom:/writeTo: — the SymptomNetworkUsage case (#51).  Names are
-    available (so .symbols is fine / binary not stripped); the image simply has no
-    protobuf messages."""
+def _proto_shaped_no_pb(name="NWUsageSnapshot", vmaddr=0x5000, superclass="NSObject"):
+    """A class with a PB-like ivar shape whose method names RESOLVE but are NOT
+    readFrom:/writeTo: — the SymptomNetworkUsage case (#51: an NSObject subclass).
+    Names are available (so .symbols is fine / binary not stripped); the image simply
+    has no protobuf messages."""
     ivars = [
         ObjcIvar(name="_reader", type_enc='@"PBDataReader"', offset=8, size=8),
         ObjcIvar(name="_readerLock", type_enc='^{os_unfair_lock_s}', offset=16,
@@ -81,7 +83,7 @@ def _proto_shaped_no_pb(name="NWUsageSnapshot", vmaddr=0x5000):
     ]
     return ObjcClass(
         vmaddr=vmaddr, name=name, is_meta=False, superclass_vmaddr=0,
-        superclass_name=None, ro_flags=0, instance_size=32,
+        superclass_name=superclass, ro_flags=0, instance_size=32,
         methods=methods, ivars=ivars,
     )
 
@@ -91,6 +93,13 @@ def _cl(*classes):
 
 
 class TestSelectorsGate(unittest.TestCase):
+
+    def setUp(self):
+        patcher = mock.patch(
+            "proto.extractor.rooted_proto_classes",
+            lambda ctx, cl: frozenset(c.name for c in cl if c.superclass_name == "PBCodable"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     # ── Unresolved → error for cache and executable ───────────────────────────
     def test_cache_native_unresolved_raises(self):
@@ -131,11 +140,18 @@ class TestSelectorsGate(unittest.TestCase):
         _check_selectors_resolved(_FakeCtx(cache=True, dylib=True), cl)
 
     # ── Names resolve but no writeTo:/readFrom: → "no PB messages", not .symbols ─
+    def test_a_pb_shaped_class_not_rooted_in_pb_is_not_a_proto_class(self):
+        # #51's SymptomNetworkUsage classes subclass NSObject: no proto class, no-op.
+        logger = logging.getLogger("proto.extractor")
+        with mock.patch.object(logger, "warning") as warn:
+            _check_selectors_resolved(_FakeCtx(cache=True, dylib=True), _cl(_proto_shaped_no_pb()))
+        warn.assert_not_called()
+
     def test_names_resolve_but_no_pb_selectors_warns_not_raises(self):
-        # #51: proto-SHAPED classes whose selector names resolve but none implement
+        # #51: proto classes whose selector names resolve but none implement
         # writeTo:/readFrom: → "no decodable protobuf messages" warning, no raise,
-        # even in cache mode (the SymptomNetworkUsage false-positive case).
-        cl = _cl(_proto_shaped_no_pb())
+        # even in cache mode.
+        cl = _cl(_proto_shaped_no_pb(superclass="PBCodable"))
         with self.assertLogs("proto.extractor", level="WARNING") as cm:
             _check_selectors_resolved(_FakeCtx(cache=True, dylib=True), cl)  # no raise
         self.assertTrue(
@@ -149,7 +165,7 @@ class TestSelectorsGate(unittest.TestCase):
     def test_names_resolve_but_no_pb_selectors_no_raise_executable(self):
         # Same discriminator in standalone-executable mode: names present →
         # genuinely no PB messages → warn, don't raise the "stripped metadata" error.
-        cl = _cl(_proto_shaped_no_pb())
+        cl = _cl(_proto_shaped_no_pb(superclass="PBCodable"))
         with self.assertLogs("proto.extractor", level="WARNING"):
             _check_selectors_resolved(_FakeCtx(executable=True), cl)  # no raise
 

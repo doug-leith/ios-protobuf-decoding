@@ -259,12 +259,11 @@ f22_writeto_forward_array_load/ writeto.py's `_forward_self_load_off` (the
                              `f4_packed_repeated` uses for a packed scalar
                              list — tried that first and found it produces
                              offset-only loads the function's own
-                             `pl[2] is not None` check rejects). Helper
-                             calls live in a separate translation unit
-                             (helpers.m) so the compiler can't see they're
-                             no-ops and drop the call-site argument setup —
-                             confirmed by trying a same-file body first and
-                             watching the real shape vanish
+                             `pl[2] is not None` check rejects). The marks
+                             are the shim's PBDataWriterPlaceMark /
+                             PBDataWriterRecallMark, named as extraction
+                             names them (imports, so the compiler keeps the
+                             call-site argument setup)
 f23_writeto_hoisted_value/  writeto.py's `_trace_hoisted_self_value` ("S1"
                              hoisted value-load). Zero prior synthetic
                              coverage — confirmed real via the same corpus

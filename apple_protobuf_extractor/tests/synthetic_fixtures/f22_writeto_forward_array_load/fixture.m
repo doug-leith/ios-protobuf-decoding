@@ -50,13 +50,17 @@
 // would wrongly attribute the write to (Issue B: count-vs-array, see the
 // function's own docstring).
 //
-// The begin/end helper functions below are plain, locally-declared C
-// externs with made-up names/signatures -- their REAL names in GeoServices
-// are unexported local symbols (no `; symbol stub for:` annotation on their
-// `bl` in the real disassembly), so extraction never inspects the callee by
-// name, only the calling shape (stack-scratch x1, tag in w2 before the
-// call). Confirmed via `otool -tV` on the real GEOFlyoverRegionVersions
-// binary before writing this fixture, not assumed.
+// The begin/end marks are ProtocolBuffer.framework's PBDataWriterPlaceMark /
+// PBDataWriterRecallMark (the shim's, imported by name as a standalone binary
+// imports them; in a cache image the `bl` reaches the framework's export).
+// Extraction names them (proto/submessage_marks.py): every call of the mark
+// shape in iPhone 8 and iOS 27 GeoServices resolves to one of the two
+// (measured 2026-10-24; `otool -tV` on an extracted dylib shows no name for
+// a `bl` into another image of the cache).
+//
+// writeTo: does not call [super writeTo:] (generated code has no such call): a call handed
+// self and the writer leaves the writer flow undecided, and the _itemsCount / _itemsSpace
+// ivars, which writeTo: never serialises, are dropped only by a decided class.
 //
 // TestForwardElem's own field (`a`) is a PLAIN C STRUCT here, not a
 // PBCodable ObjC object (matching the real inline-array-of-structs storage
@@ -74,11 +78,6 @@ struct TestForwardElem {
     struct { unsigned has_a:1; } has;
 };
 
-// Defined opaquely in helpers.m (a separate translation unit) -- see that
-// file's header for why a same-file empty body doesn't work here.
-extern void TestBeginNestedField(PBDataWriter *writer, void *scratch, uint32_t tag);
-extern void TestEndNestedField(PBDataWriter *writer, void *scratch);
-
 @interface TestForwardContainer : PBCodable {
   @public
     struct TestForwardElem *_items;
@@ -94,13 +93,12 @@ extern void TestEndNestedField(PBDataWriter *writer, void *scratch);
     if (_items) {
         for (unsigned long long i = 0; i < _itemsCount; i++) {
             uint64_t scratch = 0;
-            TestBeginNestedField(writer, &scratch, 1);
+            PBDataWriterPlaceMark(writer, &scratch, 1);
             struct TestForwardElem *e = &_items[i];
             if (e->has.has_a) PBWriteInt32Field(writer, e->a, 1);
-            TestEndNestedField(writer, &scratch);
+            PBDataWriterRecallMark(writer, &scratch);
         }
     }
-    [super writeTo:writer];
 }
 
 @end

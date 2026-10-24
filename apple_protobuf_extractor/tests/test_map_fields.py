@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import unittest
 from tests._listing import layout
-from tests._fakes import NoImage
+from tests._fakes import NoImage, name_marks
 from pathlib import Path
 
 import proto.mapfields as M
@@ -77,7 +77,10 @@ def selector_stub(base, sel_slot):
 
 
 class _Patched(unittest.TestCase):
-    """Route ``disasm`` in the modules that read memory to a fake."""
+    """Route ``disasm`` in the modules that read memory to a fake (the marks named)."""
+
+    def setUp(self):
+        name_marks(self)
 
     def patch(self, fake):
         for mod in (FB, C):

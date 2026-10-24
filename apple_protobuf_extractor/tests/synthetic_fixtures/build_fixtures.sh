@@ -326,13 +326,12 @@ if want f22_writeto_forward_array_load; then
     # proto/writeto.py's _forward_self_load_off (the inline-repeated-message
     # container-array forwarder). Confirmed real via a corpus trace
     # (GeoServices' GEOFlyoverRegionVersions._regions) before writing this
-    # fixture -- zero prior synthetic coverage. Needs the helper calls in a
-    # SEPARATE translation unit (see helpers.m's header) so the compiler
-    # can't see they're no-ops and drop the call-site argument setup.
+    # fixture -- zero prior synthetic coverage. The marks are the shim's
+    # PBDataWriterPlaceMark / PBDataWriterRecallMark (imports: the compiler
+    # cannot see their bodies, so the call-site argument setup stays).
     build_fixture f22_writeto_forward_array_load \
         -o f22_writeto_forward_array_load/testfwd \
-        f22_writeto_forward_array_load/fixture.m \
-        f22_writeto_forward_array_load/helpers.m
+        f22_writeto_forward_array_load/fixture.m
 fi
 
 if want f23_writeto_hoisted_value; then
@@ -359,7 +358,7 @@ if want f25_newer_dispatch_engine; then
     # Newer-toolchain readFrom: dispatch engine: multi-jump-table table-base
     # aliasing, the classref fallback + ownership gate, and
     # _find_dispatch_cluster's function-boundary bound. Opaque helpers live
-    # in a separate translation unit (helpers.m) as in f22.
+    # in a separate translation unit (helpers.m), so the call-site setup stays.
     build_fixture f25_newer_dispatch_engine \
         -o f25_newer_dispatch_engine/testnde \
         f25_newer_dispatch_engine/fixture.m \

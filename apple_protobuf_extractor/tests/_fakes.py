@@ -76,3 +76,19 @@ def load_commands_of(sec_map, flags=None):
             segs[seg].sections.append(Section(name, seg, start, end - start, 0,
                                               (flags or {}).get(key, 0)))
     return LoadCommands(segments=list(segs.values()))
+
+
+#: The ProtocolBuffer runtime's begin / end marks at the addresses the real listings in the tests
+#: call (iPhone 8, iOS 27 and macOS 27 GeoServices)
+MARKS = {0x18dbdab88: "_PBDataWriterPlaceMark", 0x18dbdab94: "_PBDataWriterRecallMark",
+         0x1a0103d00: "_PBDataWriterPlaceMark", 0x1a0103d10: "_PBDataWriterRecallMark",
+         0x1a2582db4: "_PBDataWriterPlaceMark", 0x1a2582dc0: "_PBDataWriterRecallMark"}
+
+
+def name_marks(test):
+    """Name :data:`MARKS` for proto.submessage_marks for the life of *test* (a TestCase)."""
+    from unittest import mock
+    import proto.submessage_marks as SM
+    patcher = mock.patch.object(SM, "callee_name", lambda ctx, va: MARKS.get(va))
+    patcher.start()
+    test.addCleanup(patcher.stop)

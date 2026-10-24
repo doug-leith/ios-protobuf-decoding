@@ -80,6 +80,7 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
             if parent and parent not in _PB_ROOT_NAMES:
                 inherits[c.name] = parent
         _ctx_store(ctx, "_proto_inherits", inherits)
+        _ctx_store(ctx, "_proto_class_rooted", frozenset(anchor1_names))
         # Classes the pure name/bind walk (anchor 1) did NOT independently reach,
         # split by WHICH non-structural path claimed them.  Both are ERRORS, not
         # footnotes: anchor 1 alone reproduces the full set on every corpus ever
@@ -102,3 +103,10 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         return frozenset(proto)
 
     return _ctx_cache(ctx, "_proto_class_names_cache", _build)
+
+
+def rooted_proto_classes(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
+    """The names of the classes whose superclass chain names a PB root (anchor 1): the
+    proto classes by structure alone."""
+    _proto_class_set(ctx, cl)
+    return ctx._proto_class_rooted

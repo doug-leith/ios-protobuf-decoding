@@ -55,6 +55,7 @@ from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes,
                                   split_ops)
 
 from proto.models import record_heuristic_hit
+from proto.submessage_marks import PLACE_MARK, RECALL_MARK
 
 log = logging.getLogger(__name__)
 
@@ -80,8 +81,8 @@ _PB_WRITE: Dict[str, Tuple[Tuple[str, ...], Optional[str]]] = {
     "_PBDataWriterWriteDoubleField": (("x0", "v0", "x1"), "v0"),
     "_PBDataWriterWriteFloatField": (("x0", "v0", "x1"), "v0"),
     "_PBDataWriterWriteBareVarint": (("x0", "x1"), "x1"),
-    "_PBDataWriterPlaceMark": (("x0", "x1", "x2"), None),
-    "_PBDataWriterRecallMark": (("x0", "x1"), None),
+    PLACE_MARK: (("x0", "x1", "x2"), None),
+    RECALL_MARK: (("x0", "x1"), None),
 }
 for _t in ("BOOL", "Int32", "Int64", "Uint32", "Uint64", "Sint32", "Sint64", "Fixed32",
            "Fixed64", "Sfixed32", "Sfixed64", "String", "Data"):
@@ -212,14 +213,14 @@ class WriteSite:
     def number(self) -> Optional[int]:
         """The field number the call is handed: w1 when the value travels in v0, none for a
         recall mark, else w2."""
-        if self.name == "_PBDataWriterRecallMark":
+        if self.name == RECALL_MARK:
             return None
         return self.x1 if self._value_reg == "v0" else self.x2
 
     @property
     def is_mark(self) -> bool:
-        """A begin / end mark: handed the writer in x0 and a frame scratch in x1."""
-        return self.writer_reg == "x0" and self.slot is not None
+        """A begin / end mark."""
+        return self.name in (PLACE_MARK, RECALL_MARK)
 
     @property
     def value_origins(self) -> FrozenSet:
@@ -512,13 +513,12 @@ class WriterFlow:
                 addr, tgt, name, wreg, self._int32(vals, 'x1'), self._int32(vals, 'x2'),
                 tuple((r, st.p(r)) for r in ARG_GPRS if st.p(r)), st.p('v0'), slot, st.om,
                 st.fv)
-        if wreg == 'x0':
+        if wreg == 'x0' and name in (PLACE_MARK, RECALL_MARK):
+            # A length-delimited mark, handed the writer and a frame scratch: the begin mark
+            # opens one, the end mark closes the one open on that scratch.
             slot = self._frame(vals, 'x1')
-            # A length-delimited mark is handed the writer and a frame scratch: with a field
-            # number it opens one (PlaceMark), without one it closes the one open on that
-            # scratch (RecallMark).
             if slot is not None:
-                if self._int32(vals, 'x2') is not None:
+                if name == PLACE_MARK:
                     st.om = frozenset(stk + ((slot, addr),) for stk in st.om)
                 else:
                     st.om = frozenset(stk[:-1] if stk and stk[-1][0] == slot else stk

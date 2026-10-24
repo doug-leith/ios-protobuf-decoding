@@ -78,7 +78,7 @@ from proto.mapfields import (
     MAP_OBJC_CLASSES, MAP_IVAR_ENCS, MapEntryWriter, find_map_writers,
     record_helper_votes, _finalize_map_fields, _MAP_FIELD_NOTE,
 )
-from proto.protoclass_set import _proto_class_set
+from proto.protoclass_set import _proto_class_set, rooted_proto_classes
 from proto.foreign_detect import (   # noqa: F401  (public API re-exports)
     _warn_if_foreign_protobuf, google_protobuf_classes, swift_protobuf_messages,
     cpp_protobuf_namespaces, cpp_protobuf_symbol_count, protobufc_descriptors)
@@ -358,47 +358,6 @@ def _resolve_dispatch_context(
     _n_real_fields = sum(1 for _iv in field_ivars if _proto_name(_iv.name))
     unambiguous = (_n_real_fields == 1 and len(dispatch_elements) == 1)
     return _DispatchContext(dispatch_elements, dispatch_ivars, unambiguous)
-
-
-def _is_backing_store_phantom(
-    fld: "ProtoField", ivar_enc_by_pname: Dict[str, str]
-) -> bool:
-    """True if *fld* is a manual-array backing-store ivar that ``writeTo:`` never
-    serializes, so it is **not** a protobuf field and must not be emitted.
-
-    Apple's generated PB classes store an inline-C-struct *array* as three ivars::
-
-        _xs       ^{StructName=...}   the data pointer        (the real field)
-        _xsCount  Q (uint64)          element count           (loop bound only)
-        _xsSpace  Q (uint64)          allocated capacity       (never referenced)
-
-    Only ``_xs`` is on the wire.  ``_xsCount`` appears in ``writeTo:`` solely as
-    the iteration bound (``while i < _xsCount``) and ``_xsSpace`` not at all —
-    verified in Hopper on GEOTileGroup, GEOTileSetVersion, GEOCoarseLocationRing.
-    Without this filter the extractor turns every ivar into a field and emits the
-    two companions with a bogus ivar-declaration-order number (the "// number
-    estimated" phantoms, e.g. GEOTileGroup ``tileSetsCount = 17``).
-
-    The rule is structural and guarded so it can never drop a real field:
-      * the field number is UNCONFIRMED — a serialized field carries a real
-        ``writeTo:`` number; these never do (so a genuine ``fooCount`` field that
-        *is* serialized is protected by ``number_confirmed``), AND
-      * the type is ``uint64`` (the C count/capacity type), AND
-      * the name is ``<base>Count`` / ``<base>Space`` where ``<base>`` is itself
-        an ivar whose type is a C-struct-array pointer (``^{...}``) — the data
-        ivar of the triplet.
-
-    Selectivity verified binary-wide on GeoServices: matches exactly the 85
-    Count/Space phantoms, with zero false positives and zero misses.
-    """
-    if fld.number_confirmed or fld.type_name != "uint64":
-        return False
-    for suffix in ("Count", "Space"):
-        if fld.name.endswith(suffix) and len(fld.name) > len(suffix):
-            base_enc = ivar_enc_by_pname.get(fld.name[: -len(suffix)])
-            if base_enc and base_enc.startswith("^{"):
-                return True
-    return False
 
 
 _UNRESOLVED_OBJECT_NOTE = (
@@ -991,14 +950,8 @@ def extract_proto_message(
             repeated_encoding=_repeated_encoding(ivar, _bound_writes, type_name, type_class),
         ))
 
-    # Drop manual-array backing-store ivars (``_xCount``/``_xSpace``) that ObjC
-    # keeps for an inline-C-struct array but ``writeTo:`` never serializes — they
-    # are not proto fields and would otherwise emit with a bogus ivar-order number
-    # (see :func:`_is_backing_store_phantom`; Hopper-verified).
     _ivar_enc_by_pname = {
         _proto_name(iv.name): iv.type_enc for iv in cls.ivars if iv.name}
-    fields = [f for f in fields
-              if not _is_backing_store_phantom(f, _ivar_enc_by_pname)]
 
     # Drop estimated fields whose ivar the class's own writeTo: provably never serialises:
     # no value derived from it can reach the PBDataWriter (:mod:`proto.writer_flow`).  Only
@@ -1089,18 +1042,16 @@ def _check_selectors_resolved(ctx: BinaryContext, cl: ClassList) -> None:
         stripped dylib may legitimately defer to the cache; emit a warning and
         continue with degraded (best-effort) output.
 
-    The trigger is conservative — ``resolved == 0`` — so a fully- or
-    partially-resolved binary is never affected (its resolved classes use the
-    normal path; any stray unresolved class degrades per-class as before).
-
-    When ``resolved == 0``, a prior check distinguishes a THIRD case from the
-    symbol problems above: if the image's selector NAMES resolve fine but no
-    proto-shaped class implements ``writeTo:``/``readFrom:``, the image simply
-    has no decodable protobuf messages (the detectors over-include NSObject
-    classes with a PB-like ivar shape).  That is warned, not raised — a
-    missing-``.symbols`` error would mislead the user (#51).
+    The proto classes are those whose superclass chain names a PB root
+    (:func:`proto.protoclass_set.rooted_proto_classes`): class names, which the
+    ``.symbols`` sub-cache does not hold, so they are known when selectors are not.
+    The trigger is ``resolved == 0``, so a fully- or partially-resolved binary is never
+    affected.  When every method of those classes is named and still none implements
+    ``writeTo:`` / ``readFrom:``, the names resolve and the image has no decodable
+    messages: warned, not raised (a missing-``.symbols`` error would mislead, #51).
     """
-    proto_classes = [c for c in cl if not c.is_meta and _is_proto_class(c)]
+    rooted = rooted_proto_classes(ctx, cl)
+    proto_classes = [c for c in cl if not c.is_meta and c.name in rooted]
     if not proto_classes:
         return  # nothing proto-shaped to extract — not a symbol problem
     resolved = sum(
@@ -1110,24 +1061,9 @@ def _check_selectors_resolved(ctx: BinaryContext, cl: ClassList) -> None:
     )
     if resolved > 0:
         return  # selectors resolve (fully or partially) — normal path
-
-    # resolved == 0.  Two very different causes share this symptom; distinguish
-    # them by IMAGE-WIDE selector-name availability rather than by proto-class
-    # detection (which over-includes NSObject classes that merely have a
-    # PB-like ivar shape — e.g. SymptomNetworkUsage's NWUsage* carry
-    # `_extensionDictionaries` but subclass NSObject and implement no
-    # writeTo:/readFrom: anywhere):
-    #   * names DO resolve (cache .symbols present / binary not stripped) but no
-    #     proto-shaped class implements writeTo:/readFrom: → the image genuinely
-    #     has no decodable protobuf messages.  Output is correctly empty; warn,
-    #     don't raise (a missing-.symbols error here would mislead the user).
-    #   * names DON'T resolve → the real symbol problem (.symbols missing in
-    #     cache mode / stripped executable) → raise per input kind, as before.
-    total_methods = sum(1 for c in cl for _m in c.methods)
-    named_methods = sum(1 for c in cl for m in c.methods if m.name is not None)
-    if total_methods > 0 and named_methods * 2 >= total_methods:
+    if all(m.name is not None for c in proto_classes for m in c.methods):
         log.warning(
-            "%d protobuf-shaped class(es) found but none implement "
+            "%d protobuf class(es) found but none implement "
             "writeTo:/readFrom: — this image has no decodable protobuf messages. "
             "(ObjC selector names resolve, so this is NOT a missing .symbols / "
             "stripped-binary problem.)", len(proto_classes))

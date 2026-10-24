@@ -116,3 +116,11 @@ void PBDataWriterWriteInt64Field(PBDataWriter *writer, int64_t value, uint32_t t
 void PBDataWriterWriteUint64Field(PBDataWriter *writer, uint64_t value, uint32_t tag) {
     (void)writer; (void)value; (void)tag;
 }
+
+void PBDataWriterPlaceMark(PBDataWriter *writer, void *mark, uint32_t tag) {
+    (void)writer; (void)mark; (void)tag;
+}
+
+void PBDataWriterRecallMark(PBDataWriter *writer, const void *mark) {
+    (void)writer; (void)mark;
+}

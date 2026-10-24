@@ -15,7 +15,7 @@ extractor on the dyld cache.
 import os
 import unittest
 from tests._listing import layout
-from tests._fakes import NoImage, TextImage
+from tests._fakes import NoImage, TextImage, name_marks
 
 import artifacts
 import proto.extractor as E
@@ -54,6 +54,9 @@ _PD_TIMERANGE_WRITER_TAIL = (0x18c241b90, [
 
 
 class _Patched(unittest.TestCase):
+    def setUp(self):
+        name_marks(self)
+
     def patch(self, fake):
         orig = FB.disasm
         FB.disasm = fake
@@ -222,6 +225,15 @@ class TestAnalyzeBracket(_Patched):
     def test_not_a_begin_mark_is_rejected(self):
         insns, _ = self._insns()
         self.assertIsNone(SF.analyze_bracket(None, insns, 0))
+
+    def test_a_mark_is_the_runtime_s_by_name_not_a_call_of_its_shape(self):
+        # (the same call, a frame scratch in x1 and a field number, to a function not named
+        # _PBDataWriterPlaceMark)
+        from unittest import mock
+        import proto.submessage_marks as SM
+        insns, begin = self._insns()
+        with mock.patch.object(SM, "callee_name", lambda ctx, va: None):
+            self.assertIsNone(SF.analyze_bracket(None, insns, begin))
 
 
 # Real listing: the dictionary-representation function of GEOWiFiQualityTimeRange — per member

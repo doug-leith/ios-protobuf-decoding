@@ -13,8 +13,12 @@ from typing import List, Optional, Sequence, Tuple
 
 from macho.disasm import _parse_imm
 from proto.arm64_operands import RETURNS, branch_target, is_conditional, split_ops
+from proto.callees import callee_name
 from proto.dispatch import listing_flow
 from proto.writeto import field_number_at
+
+#: The ProtocolBuffer runtime's begin and end marks
+PLACE_MARK, RECALL_MARK = "_PBDataWriterPlaceMark", "_PBDataWriterRecallMark"
 
 
 def _sp_offset(ins) -> Optional[int]:
@@ -56,10 +60,10 @@ class Bracket:
 
 
 def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
-    """Analyse the sub-message write whose BEGIN mark (``bl`` with a stack-scratch ``x1`` and a
-    literal field number) is at ``insns[begin_idx]`` in the owner's linear ``writeTo:``
-    listing.  The body is every instruction reachable from the mark WITHOUT passing the
-    matching END mark (same scratch slot, no field number): the branches an inlined struct's
+    """Analyse the sub-message write whose BEGIN mark (a ``bl`` to :data:`PLACE_MARK` with a
+    stack-scratch ``x1`` and a literal field number) is at ``insns[begin_idx]`` in the owner's
+    linear ``writeTo:`` listing.  The body is every instruction reachable from the mark WITHOUT
+    passing the matching END mark (:data:`RECALL_MARK`, same scratch slot): the branches an inlined struct's
     has-bit tests compile to put some members out of line, past the loop's back-edge, so a
     straight read to the end mark would miss them.
 
@@ -69,8 +73,10 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
     ``ret`` before an end mark, or a nested/foreign mark appears (an unmodelled shape)."""
     flow = listing_flow(ctx, insns)
     begin = insns[begin_idx]
+    if begin.mnemonic != 'bl' or callee_name(ctx, branch_target(begin)) != PLACE_MARK:
+        return None
     slot = scratch_slot_of(flow, begin_idx)
-    if begin.mnemonic != 'bl' or slot is None:
+    if slot is None:
         return None
     number = field_number_at(flow, begin_idx)
     if number is None or number < 1:
@@ -88,14 +94,14 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
             if mn in RETURNS:
                 return None                          # a path with no end mark
             if mn in ('bl', 'b'):
-                j_slot = scratch_slot_of(flow, k) if mn == 'bl' else None
                 fn = field_number_at(flow, k)
                 target = branch_target(ins)
-                if j_slot is not None:
-                    if fn is None and j_slot == slot:
-                        ended = True
-                        break                        # END mark: this path is complete
-                    return None                      # nested begin / foreign scratch
+                mark = callee_name(ctx, target) if mn == 'bl' else None
+                if mark == RECALL_MARK and scratch_slot_of(flow, k) == slot:
+                    ended = True
+                    break                            # END mark: this path is complete
+                if mark in (PLACE_MARK, RECALL_MARK):
+                    return None                      # nested begin / another bracket's end
                 if fn is not None and target is not None:
                     writes.append((k, fn, target))
                 elif mn == 'bl' and target is not None:

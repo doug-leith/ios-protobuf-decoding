@@ -382,14 +382,17 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             fd.element_classes = tuple(classes)
             # The element object(s): the one handed to the ReadAllFrom core, the result of a
             # call handed the element class (objc_alloc / objc_opt_new / [Cls alloc]), and the
-            # result of an init... sent to one of those (by convention -init returns it).
+            # result of an init-family method sent to one of those (it returns its receiver),
+            # until none is added.
             elems: Set[int] = {elem_obj} if elem_obj is not None else set()
-            for _pass in range(2):
+            size = -1
+            while len(elems) != size:
+                size = len(elems)
                 for c in calls:
                     x0 = c.args.get('x0')
                     if _class_name_at(ctx, x0) in known:
                         elems.add(ret_value(c.k))
-                    elif x0 in elems and (sent_selector(ctx, c.target, c.args.get('x1')) or '').startswith('init'):
+                    elif x0 in elems and _init_family(sent_selector(ctx, c.target, c.args.get('x1'))):
                         elems.add(ret_value(c.k))
             if elems and fd.adder_ivar is None:
                 for c in calls:
@@ -420,6 +423,12 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                         fd.adder_ivar = off_to_ivar.get(off)
                         break
             out.fields[n] = fd
+
+
+def _init_family(sel: Optional[str]) -> bool:
+    """*sel* is in the ARC ``init`` method family (clang: ``init``, then anything but a
+    lowercase letter -- ``initWithData:``, not ``initialize``)."""
+    return sel is not None and sel.startswith("init") and not sel[4:5].islower()
 
 
 def _slots_loaded(ctx, va: Optional[int]) -> FrozenSet[int]:
