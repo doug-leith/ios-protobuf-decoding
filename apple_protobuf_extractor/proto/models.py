@@ -80,6 +80,10 @@ class ProtoEnum:
                                             # missing, when it is not the disassembly
                                             # budget (e.g. a value of the inlined
                                             # converter could not be evaluated).
+    closed:           bool = False          # A closed enum (proto2's): an unknown value
+                                            # is no value of the field; emitted with
+                                            # ``features.enum_type = CLOSED``, and no
+                                            # zero value is synthesized for it.
     collision_origin: Optional[str] = None  # When the RECONSTRUCTED type name
                                             # collided with a message (or other
                                             # enum) of the same name in the
@@ -90,13 +94,17 @@ class ProtoEnum:
                                             # enum type names never hit the wire.
 
     def to_proto(self) -> str:
-        """Emit an enum block (proto3 syntax)."""
+        """Emit an enum block (edition 2023)."""
         lines: List[str] = []
         if self.values_truncated:
             lines.append(
                 f"// WARNING: values may be INCOMPLETE — {self.incomplete_reason}"
                 if self.incomplete_reason else _ENUM_TRUNCATED_COMMENT)
         lines.append(f"enum {self.name} {{")
+        if self.closed:
+            lines.append("  option features.enum_type = CLOSED;")
+        if len({v.number for v in self.values}) < len(self.values):
+            lines.append("  option allow_alias = true;")
         if not self.values:
             placeholder = f"{_enum_prefix(self.name)}_UNKNOWN"
             lines.append(f"  {placeholder} = 0;  // values not recovered from binary")
@@ -208,6 +216,10 @@ class ProtoField:
     # write binding it (proto.extractor._repeated_encoding); "UNSEEN" when no write binds
     # it; None when not a C-list.  The emitter declares EXPANDED explicitly (edition 2023
     # defaults to PACKED) and notes an UNSEEN one.
+
+    delimited: bool = False
+    # A message written as a group (start / end tags, not length-delimited): the emitter
+    # declares ``features.message_encoding = DELIMITED``.
 
     def __repr__(self) -> str:
         conf = "✓" if self.number_confirmed else "~"

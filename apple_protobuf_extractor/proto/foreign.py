@@ -29,6 +29,7 @@ from macho.memory import PROGRAM_ERRORS
 
 import logging
 import re
+from collections import Counter
 from typing import Dict, List, Optional
 
 from serializers import cpp_descriptor_extract as _cpp
@@ -63,7 +64,10 @@ def _flat(qualified: str) -> str:
 # ── C++ libprotobuf ───────────────────────────────────────────────────────────
 
 def _cpp_field(f: "_cpp.Field", package: str,
-               registry: "Dict[str, tuple]") -> ProtoField:
+               registry: "Dict[str, tuple]", syntax: str = "proto2") -> ProtoField:
+    """*f* in edition 2023, with what its file's *syntax* implied: a proto2 repeated scalar is
+    EXPANDED unless declared packed, a proto3 one PACKED unless declared not; ``required`` is
+    LEGACY_REQUIRED presence; a group is a DELIMITED message."""
     ref_package = ref_file = None
     if f.type in (11, 14, 10):                       # message / enum / group
         # Resolve the (absolute) descriptor type name through the global
@@ -72,7 +76,7 @@ def _cpp_field(f: "_cpp.Field", package: str,
         # The flat emitter has one package per file; flattening a cross-package
         # ref with ``_`` produced a name no file defines, so protoc rejected it
         # ("X is not defined").  Qualification is by package, imports by file —
-        # a package may span several source files (see _cpp_out_filename).
+        # a package may span several source files (see _cpp_out_filenames).
         fqn = f.type_name[1:] if f.type_name.startswith(".") else f.type_name
         entry = registry.get(fqn)
         if entry is not None:
@@ -82,14 +86,17 @@ def _cpp_field(f: "_cpp.Field", package: str,
             type_name = _flat(_cpp._ref(f.type_name, package))
     else:
         type_name = _cpp._FTYPE.get(f.type, "bytes")
-    label = FieldLabel.REPEATED if f.label == 3 else FieldLabel.OPTIONAL
+    label = {3: FieldLabel.REPEATED, 2: FieldLabel.REQUIRED}.get(f.label, FieldLabel.OPTIONAL)
     note = "oneof member (flattened)" if f.oneof_index >= 0 else None
+    packed = f.packed if f.has_packed else syntax == "proto3"
     return ProtoField(name=f.name, number=f.number, type_name=type_name,
                       label=label, number_confirmed=True, type_inference_note=note,
-                      ref_package=ref_package, ref_file=ref_file)
+                      ref_package=ref_package, ref_file=ref_file,
+                      repeated_encoding=("PACKED" if packed else "EXPANDED") if f.label == 3 else None,
+                      delimited=f.type == 10)
 
 
-def _cpp_enum(e: "_cpp.EnumType", name_prefix: str = "") -> ProtoEnum:
+def _cpp_enum(e: "_cpp.EnumType", name_prefix: str = "", syntax: str = "proto2") -> ProtoEnum:
     # The flat emitter has no nested-enum syntax, so a nested enum is emitted at
     # file scope under the SAME parent-flattened name its field references use
     # (``Outer_Inner``).  ``name_prefix`` is the flattened owner-message name plus
@@ -98,11 +105,13 @@ def _cpp_enum(e: "_cpp.EnumType", name_prefix: str = "") -> ProtoEnum:
     # qualified name → protoc "X is not defined".
     return ProtoEnum(name=f"{name_prefix}{e.name}",
                      values=[ProtoEnumValue(name=n, number=num) for n, num in e.values],
-                     values_confirmed=True)
+                     values_confirmed=True, closed=syntax == "proto2")
 
 
-def _cpp_out_filename(name: str) -> str:
-    """Output ``.proto`` filename for an ORIGINAL C++ source file.
+def _cpp_out_filenames(names) -> Dict[str, str]:
+    """Output ``.proto`` filename for each ORIGINAL C++ source file *names* holds: its
+    basename, or, for sources that share one, its whole path -- so no two sources (each with
+    its own package) are merged into one file.
 
     Emitting one file per original ``FileDescriptorProto`` preserves that
     schema's (acyclic) import structure.  Merging a package's several source
@@ -113,15 +122,20 @@ def _cpp_out_filename(name: str) -> str:
     boundaries breaks the cycle; no symbol collides because every ``pkg.Type`` is
     still defined exactly once (a package legitimately spans files, like
     ``google.protobuf``)."""
-    base = name.rsplit("/", 1)[-1]
-    if base.endswith(".proto"):
-        base = base[:-len(".proto")]
-    base = re.sub(r"[^a-z0-9_]", "_", base.lower()) or "cpp_protobuf"
-    return f"{base}.proto"
+    def stem(path: str) -> str:
+        return path[:-len(".proto")] if path.endswith(".proto") else path
+
+    def clean(path: str) -> str:
+        return (re.sub(r"[^a-z0-9_]", "_", stem(path).lower()) or "cpp_protobuf") + ".proto"
+
+    names = set(names)
+    bases = Counter(n.rsplit("/", 1)[-1] for n in names)
+    return {n: clean(n.rsplit("/", 1)[-1] if bases[n.rsplit("/", 1)[-1]] == 1 else n)
+            for n in names}
 
 
 def _cpp_message(m: "_cpp.Message", package: str, registry: "Dict[str, tuple]",
-                 out_file: str, prefix: str = "") -> List[ProtoMessage]:
+                 out_file: str, prefix: str = "", syntax: str = "proto2") -> List[ProtoMessage]:
     """Flatten a C++ message (and its nested messages) to ProtoMessage objects."""
     qual = f"{prefix}{m.name}"
     flat_qual = _flat(qual)
@@ -129,13 +143,13 @@ def _cpp_message(m: "_cpp.Message", package: str, registry: "Dict[str, tuple]",
     out = [ProtoMessage(
         name=flat_qual, class_name=flat_qual, package=pkg,
         serializer=CPP_SERIALIZER, out_file=out_file,
-        fields=[_cpp_field(f, package, registry) for f in m.fields],
+        fields=[_cpp_field(f, package, registry, syntax) for f in m.fields],
         # Nested enums carry the flattened owner name so their emitted type name
         # matches the ``Outer_Inner`` reference produced by _cpp_field.
-        enums=[_cpp_enum(e, name_prefix=f"{flat_qual}_") for e in m.enums],
+        enums=[_cpp_enum(e, name_prefix=f"{flat_qual}_", syntax=syntax) for e in m.enums],
     )]
     for n in m.nested:
-        out += _cpp_message(n, package, registry, out_file, prefix=qual + ".")
+        out += _cpp_message(n, package, registry, out_file, prefix=qual + ".", syntax=syntax)
     return out
 
 
@@ -154,6 +168,7 @@ def _cpp_type_registry(file_protos) -> "Dict[str, tuple]":
     first so a field can resolve a reference into another package/file — the
     per-file flat emitter cannot express that without knowing both up front."""
     reg: Dict[str, tuple] = {}
+    out_names = _cpp_out_filenames(fp.name for fp in file_protos)
 
     def walk(m, package: str, prefix: str, out_file: str, flatten: bool) -> None:
         qual = f"{prefix}{m.name}"
@@ -168,7 +183,7 @@ def _cpp_type_registry(file_protos) -> "Dict[str, tuple]":
 
     for fp in file_protos:
         known = _well_known(fp.name)
-        out_file = fp.name if known else _cpp_out_filename(fp.name)
+        out_file = fp.name if known else out_names[fp.name]
         spkg = _sanitize_pkg(fp.package) if fp.package else "cpp_protobuf"
         for e in fp.enums:                           # file-scope enum: bare name
             key = f"{fp.package}.{e.name}" if fp.package else e.name
@@ -191,16 +206,17 @@ def _cpp_protos_to_messages(file_protos) -> List[ProtoMessage]:
     # protoc with "X is not defined".
     file_enums_by_out: Dict[str, List[ProtoEnum]] = {}
     first_msg_by_out: Dict[str, ProtoMessage] = {}
+    out_names = _cpp_out_filenames(fp.name for fp in file_protos)
     for fp in file_protos:
         if _well_known(fp.name):
             continue
-        out_file = _cpp_out_filename(fp.name)
+        out_file = out_names[fp.name]
         for m in fp.messages:
-            built = _cpp_message(m, fp.package, registry, out_file)
+            built = _cpp_message(m, fp.package, registry, out_file, syntax=fp.syntax)
             out += built
             first_msg_by_out.setdefault(out_file, built[0])
         for e in fp.enums:                       # file-scope: no parent prefix
-            file_enums_by_out.setdefault(out_file, []).append(_cpp_enum(e))
+            file_enums_by_out.setdefault(out_file, []).append(_cpp_enum(e, syntax=fp.syntax))
 
     for out_file, enums in file_enums_by_out.items():
         holder = first_msg_by_out.get(out_file)

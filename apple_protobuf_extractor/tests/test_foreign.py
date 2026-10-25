@@ -195,6 +195,68 @@ class TestWellKnownSchemas(unittest.TestCase):
         self.assertIn("google.protobuf.FieldDescriptorProto.Type t = 2;", text)
 
 
+class TestCppWireFacts(unittest.TestCase):
+    """What a proto2 / proto3 file implied, said in edition 2023: a repeated scalar's encoding
+    (locationd: 32 proto2 repeated scalars, unpacked), required presence (GeoServices: 4), a
+    group, a closed enum, aliases; and two sources sharing a basename kept apart."""
+
+    def _file(self, syntax, name="w.proto", package="w"):
+        return C.FileProto(name=name, package=package, syntax=syntax,
+                           enums=[C.EnumType(name="Kind", values=[("K_ONE", 1), ("K_UNO", 1)])],
+                           messages=[C.Message(name="M", fields=[
+                               C.Field(name="plain", number=1, label=3, type=5),
+                               C.Field(name="packed", number=2, label=3, type=5,
+                                       packed=True, has_packed=True),
+                               C.Field(name="unpacked", number=3, label=3, type=5,
+                                       packed=False, has_packed=True),
+                               C.Field(name="req", number=4, label=2, type=9),
+                               C.Field(name="grp", number=5, label=1, type=10,
+                                       type_name=f".{package}.M.Grp"),
+                               C.Field(name="kind", number=6, label=1, type=14,
+                                       type_name=f".{package}.Kind")],
+                               nested=[C.Message(name="Grp", fields=[C.Field(name="x", number=1, type=5)])])])
+
+    def _text(self, *fps):
+        files = build_proto_files(F._cpp_protos_to_messages(list(fps)), source_name="x")
+        return {pf.filename: pf.emit() for pf in files}
+
+    def test_proto2(self):
+        text = self._text(self._file("proto2"))["w.proto"]
+        self.assertIn("repeated int32 plain = 1 [features.repeated_field_encoding = EXPANDED];", text)
+        self.assertIn("repeated int32 packed = 2;", text)
+        self.assertIn("repeated int32 unpacked = 3 [features.repeated_field_encoding = EXPANDED];", text)
+        self.assertIn("string req = 4 [features.field_presence = LEGACY_REQUIRED];", text)
+        self.assertIn("M_Grp grp = 5 [features.message_encoding = DELIMITED];", text)
+        self.assertIn("option features.enum_type = CLOSED;", text)
+        self.assertIn("option allow_alias = true;", text)
+        self.assertNotIn("UNSPECIFIED", text)             # a closed enum needs no zero value
+
+    def test_proto3(self):
+        text = self._text(self._file("proto3"))["w.proto"]
+        self.assertIn("repeated int32 plain = 1;", text)
+        self.assertIn("repeated int32 unpacked = 3 [features.repeated_field_encoding = EXPANDED];", text)
+        self.assertNotIn("enum_type = CLOSED", text)
+
+    def test_sources_sharing_a_basename_stay_apart(self):
+        texts = self._text(self._file("proto2", "a/common.proto", "pkga"),
+                           self._file("proto2", "b/common.proto", "pkgb"))
+        self.assertEqual(sorted(texts), ["a_common.proto", "b_common.proto"])
+
+    def test_protoc_accepts_them(self):
+        import shutil, subprocess, tempfile
+        if shutil.which("protoc") is None:
+            self.skipTest("protoc not on PATH")
+        texts = self._text(self._file("proto2", "a/common.proto", "pkga"),
+                           self._file("proto3", "b/common.proto", "pkgb"))
+        with tempfile.TemporaryDirectory() as d:
+            for name, text in texts.items():
+                with open(os.path.join(d, name), "w") as fh:
+                    fh.write(text)
+            r = subprocess.run(["protoc", "-I", d, "--descriptor_set_out=" + os.devnull]
+                               + sorted(texts), cwd=d, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+
 class TestCppByFileGrouping(unittest.TestCase):
 
     def _same_pkg_two_files(self):

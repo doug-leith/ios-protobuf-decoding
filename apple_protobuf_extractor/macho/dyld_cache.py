@@ -204,12 +204,6 @@ _HDR_READ_SIZE      = 0x1e0  # covers all fields we need (past _HDR_OBJC_OPTS_SI
 _OBJC_OPT_HEADER_V1_SIZE           = 56
 _OBJC_OPT_HEADER_REL_SEL_BASE_POS  = 48
 
-# [cap:INPUT-SANITY — leave as-is] Guards against malformed cache headers; never the
-# operative limit on a real cache, so cannot affect the descriptor.
-#   _MAX_SUBCACHES — used as a *validity check, not a truncation*: `sub_cnt >
-#     _MAX_SUBCACHES` REJECTS the header rather than silently capping.  Real caches
-#     have a few dozen subcaches; it can only reject absurd input.
-_MAX_SUBCACHES      = 256    # sanity cap for total sub-cache count
 # [cap:INPUT-SANITY — leave as-is] _MAX_CSTRING_LEN caps the NUL-scan when reading a
 # string.  The strings that reach the descriptor (selectors, class/enum names) top out
 # around ~100 chars, so this 1024 ceiling never truncates a real one — it only stops a
@@ -483,7 +477,7 @@ class DyldCacheReader:
         sub_off = struct.unpack_from('<I', main_hdr, _HDR_SUBCACHE_OFF)[0]
         sub_cnt = struct.unpack_from('<I', main_hdr, _HDR_SUBCACHE_CNT)[0]
 
-        if sub_cnt == 0 or sub_cnt > _MAX_SUBCACHES or sub_off == 0:
+        if sub_cnt == 0 or sub_off == 0:
             if self._verbose:
                 print(
                     f"dyld_cache: {main_path!r}  "
@@ -495,9 +489,8 @@ class DyldCacheReader:
 
         fh = self._fh(main_path)
         fh.seek(sub_off)
-        raw = fh.read(sub_cnt * _SUBCACHE_STRIDE_V2)  # read enough for v2; v1 uses less
-
-        stride = _detect_subcache_stride(raw)
+        stride = _detect_subcache_stride(fh.read(sub_cnt * _SUBCACHE_STRIDE_V2))
+        raw = self._read_array(main_path, sub_off, sub_cnt, stride, "sub-cache array")
         stride_label = 'v2/56' if stride == _SUBCACHE_STRIDE_V2 else 'v1/24'
 
         if self._verbose:
@@ -508,9 +501,6 @@ class DyldCacheReader:
 
         for i in range(sub_cnt):
             off = i * stride
-            if off + stride > len(raw):
-                break
-
             # Layout (v2, 56 bytes): uuid[16], cacheVMOffset u64, fileExtension[32]
             # Layout (v1, 24 bytes): uuid[16], cacheVMOffset u64  (no extension)
             ext_bytes = raw[off + 24 : off + 56] if stride == _SUBCACHE_STRIDE_V2 else b''

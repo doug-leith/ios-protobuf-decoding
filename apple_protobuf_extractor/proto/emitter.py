@@ -553,12 +553,17 @@ class ProtoFile:
             parts.append(f"unresolved: {fld.unresolved_type_class}")
         if fld.type_inference_note:
             parts.append(fld.type_inference_note)
-        options = ""
+        features: List[str] = []
         if fld.label is FieldLabel.REPEATED and _is_packable(fld, type_str):
             if fld.repeated_encoding == "EXPANDED":
-                options = " [features.repeated_field_encoding = EXPANDED]"
+                features.append("features.repeated_field_encoding = EXPANDED")
             elif fld.repeated_encoding == "UNSEEN":
                 parts.append(_REPEATED_ENCODING_UNSEEN_NOTE)
+        if fld.label is FieldLabel.REQUIRED:
+            features.append("features.field_presence = LEGACY_REQUIRED")
+        if fld.delimited:
+            features.append("features.message_encoding = DELIMITED")
+        options = f" [{', '.join(features)}]" if features else ""
         comment = f"  // {'; '.join(parts)}" if parts else ""
 
         return f"{label_prefix}{type_str} {fld.name} = {fld.number}{options};{comment}"
@@ -794,7 +799,7 @@ class ProtoFile:
             new_values: List[ProtoEnumValue] = []
 
             # (1) Synthesize a zero value (open enums need one) when the enum starts above 0.
-            if not any(v.number == 0 for v in enum.values):
+            if not enum.closed and not any(v.number == 0 for v in enum.values):
                 zero_name = self._unique_value_name(
                     f"{_enum_prefix(enum.name)}_UNSPECIFIED", taken
                 )
@@ -803,9 +808,9 @@ class ProtoFile:
                 new_values.append(ProtoEnumValue(
                     name=zero_name, number=0,
                     comment="synthesized zero value: an open enum requires a 0 value but this "
-                            + ("PBCodable enum starts at 1; 0 never appears on the wire"
+                            + ("enum starts at 1; 0 never appears on the wire"
                                if lowest == 1 else
-                               f"PBCodable enum names no value 0 (lowest value {lowest})"),
+                               f"enum names no value 0 (lowest value {lowest})"),
                 ))
 
             # (2) De-collide every real value name against the package scope.

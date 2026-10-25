@@ -191,6 +191,15 @@ class TestDyldCacheReaderSynthetic(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, r'Not a dyld shared cache'):
                 DyldCacheReader(p)
 
+    def test_a_sub_cache_array_past_the_end_of_the_file_raises(self):
+        # (a count over 256 had been taken for "no sub-caches", silently)
+        data = bytearray(_pack_cache(0x180000000, b'x\x00', subcaches=[('.01', 0x1000)]))
+        struct.pack_into('<I', data, _HDR_SUBCACHE_CNT, 300)
+        with _TmpDir() as d:
+            p = d.write('dyld_shared_cache_arm64', bytes(data))
+            with self.assertRaisesRegex(ValueError, r'sub-cache array .* runs past'):
+                DyldCacheReader(p)
+
     def test_a_mapping_array_past_the_end_of_the_file_raises(self):
         # A mapping count of 65 (past the old 64 cap) is read when the array fits; one that runs
         # past the file is a malformed header, not a cache with no mappings.

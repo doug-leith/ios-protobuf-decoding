@@ -123,6 +123,7 @@ class TestAOneEntryReadingIsChecked(unittest.TestCase):
                                   lambda ctx: ({}, {}, set(), {"M": set(stored)})):
             S._attach_types(ctx, [m], {})
         hits = [h for h in get_diagnostics(ctx).heuristics_hit if h[0] == "swift-reflection-confirm"]
+        self.failures = get_diagnostics(ctx).analysis_failures
         return [(f.number, f.proto_type) for f in m.fields], len(hits)
 
     def test_decoded_and_listed(self):
@@ -136,6 +137,14 @@ class TestAOneEntryReadingIsChecked(unittest.TestCase):
 
     def test_not_decoded(self):
         self.assertEqual(self._run({}), ([], 0))
+
+    def test_a_dropped_reading_is_recorded(self):
+        import serializers.swift_message_code as MC
+        self._run({1: [MC.Decoded("Singular", "Bool")]})
+        self.assertEqual(self.failures, [])
+        for decoded, stored in (({}, ("value",)), ({1: [MC.Decoded("Singular", "Bool")]}, ("other",))):
+            self._run(decoded, stored)
+            self.assertEqual(len(self.failures), 1, (decoded, stored))
 
     def test_unreadable_reflection_decides(self):
         self.assertEqual(self._run(None), ([(1, None)], 1))

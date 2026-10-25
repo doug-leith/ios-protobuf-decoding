@@ -573,6 +573,16 @@ def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
     return out
 
 
+def _unconfirmed_if_cut(fields: List[SwiftField], cut: bool) -> List[SwiftField]:
+    """*fields*, their numbers estimated when the listing they were read off was *cut* short
+    (the runaway guard: its (number, name) table may be incomplete) -- rendered "number
+    estimated" rather than laundered as confirmed."""
+    if cut:
+        for f in fields:
+            f.number_confirmed = False
+    return fields
+
+
 def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
                             enum: bool = False) -> List[SwiftField]:
     """The once-initialised ``_NameMap`` lowering: the getter fast-path loads a
@@ -598,13 +608,7 @@ def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
     for got, trunc in readings:
         if len(got) > len(best):
             best, best_truncated = got, trunc
-    # CAUTIOUS: if the builder's listing ran into the runaway guard, its (number, name) store
-    # table may be incomplete.  Rather than launder a partial read as ground truth, flag the
-    # recovered numbers as estimated (renders "// number estimated").
-    if best_truncated:
-        for f in best:
-            f.number_confirmed = False
-    return best
+    return _unconfirmed_if_cut(best, best_truncated)
 
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
@@ -703,11 +707,13 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
 
     # A — inline, directly in this function, or in the function it tail-calls with its
     # registers (CreateML getters: `adrp; add; b <the closure placed next>`).
-    got = _walk_inline_closure(ctx, insns, enum)
+    got = _unconfirmed_if_cut(_walk_inline_closure(ctx, insns, enum), insns.truncated)
     callee = None if got else _tail_callee(ctx, insns)
     if callee is not None:
         try:
-            got = _walk_inline_closure(ctx, function_body(ctx, callee[0]), enum, entry=callee[1])
+            body = function_body(ctx, callee[0])
+            got = _unconfirmed_if_cut(_walk_inline_closure(ctx, body, enum, entry=callee[1]),
+                                      body.truncated)
         except READ_ERRORS:
             got = []
     if got:
@@ -735,7 +741,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     for t in _shared_once_init_targets(insns):
         if t == init_va or text_holding(ctx, t) is None:
             continue
-        got = _builder_entries(ctx, t, enum)[0]
+        got = _unconfirmed_if_cut(*_builder_entries(ctx, t, enum))
         packed = False
         if not got:
             # iOS 27: the builder is a stub passing the packed bytecode literal (x2) and its
@@ -775,7 +781,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             cl = function_body(ctx, t)
         except READ_ERRORS:
             continue
-        got = _walk_inline_closure(ctx, cl, enum)
+        got = _unconfirmed_if_cut(_walk_inline_closure(ctx, cl, enum), cl.truncated)
         if got:
             return got, "inline-closure"
 
@@ -931,6 +937,9 @@ def _decoded_by_message(ctx: BinaryContext, msgs: List[SwiftMessage]) -> Dict[in
                                         ctx, ws["decodeMessage"], [f.number for f in m.fields])
             if _one_entry(m) and decodes[id(m)] is not None \
                     and m.fields[0].number not in decodes[id(m)]:
+                record_analysis_failure(ctx, m.qualified, "swift name map",
+                                        f"the one-entry reading #{m.fields[0].number} is not "
+                                        f"decoded by decodeMessage: another type's; no fields")
                 m.fields, m.shape = [], "none"
     return decodes
 
@@ -993,9 +1002,9 @@ _BY_NAME_NOTE = ("swift-protobuf: type from Swift reflection by field name, not 
 def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage], decoded=frozenset()
                         ) -> Dict[Tuple[int, int], Tuple[str, Optional[str]]]:
     """From Swift field metadata (``swift_type_recovery.collect_field_types``: the message
-    struct, its COW ``_StorageClass`` and its oneofs' enums): the reflection checks below (a
-    one-entry reading's: reported where it is the only check, its message not in *decoded*,
-    the ``id`` of those whose decodeMessage was read), and
+    struct, its COW ``_StorageClass`` and its oneofs' enums): the reflection check of a
+    one-entry reading (reported where it is the only check, its message not in *decoded*, the
+    ``id`` of those whose decodeMessage was read), and
     ``{(id(message), field number): (type, note)}`` -- the type of the property of each field's
     name (normalised), :func:`_attach_types`' last resort."""
     joined: Dict[Tuple[int, int], Tuple[str, Optional[str]]] = {}
@@ -1014,12 +1023,17 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage], decoded=fr
     for m in msgs:
         if _one_entry(m):
             # the struct's reflection must list that field, or the reading is another type's
-            # (e.g. an empty message whose getter reaches a sibling's closure).  Any stored
-            # field record counts, whether or not its type decodes.
+            # (e.g. an empty message whose getter reaches a sibling's closure: its number,
+            # often 1, may well be one decodeMessage decodes).  Any stored field record counts,
+            # whether or not its type decodes.
             refl = {_norm_property(k) for k in stored.get(m.name, ())}
             if id(m) not in decoded:
                 record_heuristic_hit(ctx, "swift-reflection-confirm", m.qualified)
             if _norm(m.fields[0].name) not in refl:
+                record_analysis_failure(ctx, m.qualified, "swift name map",
+                                        f"the one-entry reading #{m.fields[0].number} "
+                                        f"{m.fields[0].name!r} is no property of the struct: "
+                                        f"another type's; no fields")
                 m.fields, m.shape = [], "none"
         if not m.fields and m.name in fieldless:
             m.fieldless = True
