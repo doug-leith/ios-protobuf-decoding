@@ -19,7 +19,7 @@
 
 # --- runtime ---
 capstone>=5.0.9        # arm64 disassembly for the Mach-O / dyld-cache extractor
-mitmproxy>=12.2.3      # read .mitm captures (FlowReader); also pulls in cryptography + hpack/h2
+mitmproxy>=12.3.0      # read .mitm captures (FlowReader); also pulls in cryptography + hpack/h2
 lz4>=4.4.5             # ios_decoder.arpc: Apple bvx/LZ4 payload decompression
 protobuf>=7.35.1       # schema decoding via google.protobuf (protoc = compile-only)
 dnspython>=2.8.0       # ios_decoder: DNS-over-HTTPS (application/dns-message) decoding
