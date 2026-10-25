@@ -594,33 +594,12 @@ class BinaryContext:
         return len(self._data) if seg is None else seg.fileoff + seg.filesize
 
     def _decode_packed_ptr(self, raw: int) -> int:
-        """Decode a single raw u64 pointer value (binary mode only).
-
-        Two modes are supported transparently:
-
-        1. **Chained-fixup decoded** — the address was registered in
-           ``_fixup_map`` during ``_parse_chained_fixups_lc``; the stored value
-           is the fully decoded vmaddr (caller must check fixup_map first).
-        2. **Shared-cache packed pointer (binary-local)** — binaries extracted
-           from the dyld shared cache encode the absolute vmaddr in the low 36
-           bits of each pointer word; the upper bits carry chain/authentication
-           metadata that must be stripped.  Accepted only when the raw value
-           exceeds the 36-bit range and its low 36 bits fall within a mapped
-           segment of this binary (i.e. the decoded address is verifiable).
-
-        Returns the raw value unchanged when neither decoding applies.  A
-        low-36-bit target outside this binary's own segments is NOT decoded — a
-        standalone binary can't resolve an address that lives only in the shared
-        cache.  (Cache-native contexts never reach this method; they decode via
-        :meth:`DyldCacheReader.decode_ptr` instead.)
-
-        This path is specific to a **binary-only ex-cache dylib** read via
-        ``--binary`` (e.g. GeoServices): cache-native contexts never reach it,
-        and a standalone executable (e.g. locationd) hits it only as a no-op
-        (measured: 0/1687 strips for locationd vs. 76535/85519 ≈ 90% for an
-        ex-cache dylib) — itself the explicitly-degraded mode; prefer
-        ``--framework`` + the cache.
-        """
+        """*raw*, a pointer word of a binary extracted from a dyld shared cache, decoded: such a
+        binary keeps the cache's packed form, the vmaddr in the low 36 bits and chain /
+        authentication metadata above.  Decoded only when bits above 35 are set and the low 36
+        bits fall in one of this binary's own segments (an address only the cache maps is not
+        resolvable here); else *raw*.  Only for a binary without chained fixups, whose pointers
+        :attr:`_fixup_map` holds (:meth:`read_ptr`)."""
         if raw > 0xFFFFFFFFF:          # bits set above bit 35 → possible metadata
             low36 = raw & 0xFFFFFFFFF
             if low36:
@@ -641,8 +620,8 @@ class BinaryContext:
           1. ``_fixup_map`` (populated from LC_DYLD_CHAINED_FIXUPS).
           2. A chained-fixup bind: its raw value, which is no address of this file (the
              import it binds, :meth:`bind_name_for`, names it).
-          3. Packed-pointer stripping for shared-cache-extracted binaries.
-          4. Raw u64 as a fallback.
+          3. In a binary with chained fixups, any other word is no pointer: its raw value.
+          4. Without them (a binary extracted from a cache): the packed-pointer decode.
 
         In cache mode: :meth:`DyldCacheReader.read_ptr`.
         """
@@ -652,7 +631,7 @@ class BinaryContext:
         if decoded is not None:
             return decoded
         raw = self.read_u64(vmaddr)
-        return raw if vmaddr in self._bind_slots else self._decode_packed_ptr(raw)
+        return raw if self._chained else self._decode_packed_ptr(raw)
 
     def is_variable(self, vmaddr: int) -> bool:
         """Whether the file does not give *vmaddr*'s run-time value: it lies in a section the
@@ -681,8 +660,8 @@ class BinaryContext:
     def iter_ptrs(self, vmaddr: int, count: int) -> Iterator[int]:
         """Iterate over *count* consecutive pointer values starting at vmaddr.
 
-        Binary mode: fixup-map entries are returned decoded, binds raw (:meth:`read_ptr`);
-        others go through ``_decode_packed_ptr``.  Cache mode: each slot is decoded via
+        Binary mode: as :meth:`read_ptr` -- fixup-map entries decoded, any other word raw with
+        chained fixups, else the packed-pointer decode.  Cache mode: each slot is decoded via
         :meth:`DyldCacheReader.decode_ptr`.
         """
         if self._cache_reader is not None:
@@ -697,7 +676,7 @@ class BinaryContext:
             slot = vmaddr + i * 8
             decoded = self._fixup_map.get(slot)
             if decoded is None:
-                decoded = raw if slot in self._bind_slots else self._decode_packed_ptr(raw)
+                decoded = raw if self._chained else self._decode_packed_ptr(raw)
             yield decoded
 
     def bind_name_for(self, vmaddr: int) -> Optional[str]:

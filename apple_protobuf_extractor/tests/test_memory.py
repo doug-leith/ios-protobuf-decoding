@@ -689,7 +689,8 @@ class TestBindSlots:
 
     def test_a_bind_slot_reads_as_its_raw_value(self):
         c, raw = self._base0_ctx()
-        assert c.read_ptr(0) == 2           # (not a bind: the packed-pointer reading)
+        assert c.read_ptr(0) == 2           # (no chained fixups: the packed-pointer reading)
+        c._chained = True                   # (a bind is one the chain walk found)
         c._bind_slots.add(0)
         c._bind_name_map[0] = '_OBJC_CLASS_$_NSObject'
         assert c.read_ptr(0) == raw

@@ -184,6 +184,20 @@ class TestArm64eBinaryAgainstDyldInfo(unittest.TestCase):
             cls.ctx = BinaryContext(load_macho_slice(fh.read()))
         cls.exp = _load_expected()
 
+    def test_a_word_no_fixup_lists_is_read_as_it_is(self):
+        # Every pointer of a chained-fixup binary is a fixup: another word whose low 36 bits
+        # happen to land in the image is data (locationd __TEXT,__const 0x1013e67c0 holds
+        # 0x4c43333100000000, once read as 0x100000000).  Only a binary without chained
+        # fixups (extracted from a cache) keeps the packed form.
+        from unittest import mock
+        slot = next(va for va in range(self.ctx.image_base + 0x4000, self.ctx.image_base + 0x8000, 8)
+                    if va not in self.ctx._fixup_map)
+        word = (0x4c43 << 48) | self.ctx.image_base
+        with mock.patch.object(self.ctx, "read_u64", lambda va: word):
+            self.assertEqual(self.ctx.read_ptr(slot), word)
+            with mock.patch.object(self.ctx, "_chained", False):
+                self.assertEqual(self.ctx.read_ptr(slot), self.ctx.image_base)
+
     def test_image_base(self):
         self.assertEqual(self.ctx.image_base, self.exp.IMAGE_BASE)
 
