@@ -52,7 +52,7 @@ from proto.callees import (callee_name, sent_selector, stub_selector, call_reads
 from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, CALLER_SAVED, CALLS,
                                   AUTHENTICATED_BRANCHES, ARG_GPRS, branch_target, is_conditional,
-                                  split_ops)
+                                  imm_operand, split_ops)
 
 from proto.models import record_heuristic_hit
 from proto.submessage_marks import PLACE_MARK, RECALL_MARK
@@ -107,6 +107,11 @@ _FAST_ENUMERATION_STATE_BYTES = 64
 _FRAME_OBJECTS = Objects(object_escape=True)
 
 
+def _is_object(o) -> bool:
+    """*o* names an object: a call's result or an ivar's value."""
+    return isinstance(o, tuple) and o[0] in ('R', 'I')
+
+
 class _St:
     """May-state at a program point: origin sets per register / stack slot, whether the writer
     has escaped into a call with no contract, the length-delimited marks open at the point
@@ -114,7 +119,8 @@ class _St:
     whether every path sets v0 by an instruction other than a call since its last call (``fv``:
     a floating-point argument is being passed).  The values registers hold -- frame
     addresses, constant addresses, immediates -- are not here: they are the function's
-    :meth:`proto.arm64_eval.Flow.propagate` run (:class:`_Run`)."""
+    :meth:`proto.arm64_eval.Flow.propagate` run (:class:`_Run`); nor is what was put into an
+    object (:class:`_Result`)."""
     __slots__ = ('r', 'sl', 'esc', 'fl', 'om', 'fv')
 
     def __init__(self, r=None, sl=None, esc=False, fl=None, om=frozenset({()}), fv=False):
@@ -234,10 +240,21 @@ class WriteSite:
 
 
 class _Result:
-    __slots__ = ('ser', 'ret', 'complete', 'why', 'sites', 'sends', 'indirect_calls')
+    """What a function body serialises, returns and calls, read from its settled states.  What
+    may be put into an object (an object being a call's result ``('R', addr)`` or an ivar
+    ``('I', name)``) is not part of a state, which it does not change: ``puts`` holds
+    ``(where, objects, origins)`` for each call handed them all and each store through one, and
+    ``ser_in`` each serialisation's ``(where, origins)``; :meth:`expand` adds to what a
+    serialisation reaches what was put, at a place with a path to it, into an object among its
+    origins.  ``where`` is the index of the function's instruction being run (``at``)."""
+    __slots__ = ('ser', 'ser_in', 'puts', 'at', 'ret', 'complete', 'why', 'sites', 'sends',
+                 'indirect_calls')
 
     def __init__(self):
         self.ser: Set = set()
+        self.ser_in: List[Tuple[int, FrozenSet]] = []
+        self.puts: List[Tuple[int, FrozenSet, FrozenSet]] = []
+        self.at = -1
         self.ret: Set = set()
         self.sites: Dict[int, WriteSite] = {}
         self.sends: Set[str] = set()         # selectors the body's own calls send
@@ -249,6 +266,73 @@ class _Result:
         self.complete = False
         if len(self.why) < 8:
             self.why.append(why)
+
+    def serialise(self, v) -> None:
+        """*v*'s origins reach the writer here."""
+        self.ser |= v
+        self.ser_in.append((self.at, frozenset(v)))
+
+    def put_into(self, objs, v: FrozenSet) -> None:
+        """What *v* derives from may be inside every object among the origins *objs* from here."""
+        objs = frozenset(o for o in objs if _is_object(o))
+        if objs and v:
+            self.puts.append((self.at, objs, v))
+
+    def expand(self, flow: Flow) -> None:
+        if not self.puts:
+            return
+        cfg = flow.cfg
+        block = [cfg.addr_to_block[i.addr] for i in flow.insns]
+        preds: Dict[int, Set[int]] = {}
+        for b, ss in cfg.succ.items():
+            for t in ss:
+                preds.setdefault(t, set()).add(b)
+        before: Dict[int, Set[int]] = {}             # block -> the blocks with a path to it
+        for k, v in self.ser_in:
+            if not any(_is_object(o) for o in v):
+                continue
+            b = block[k]
+            if b not in before:
+                seen, work = set(), list(preds.get(b, ()))
+                while work:
+                    x = work.pop()
+                    if x not in seen:
+                        seen.add(x)
+                        work.extend(preds.get(x, ()))
+                before[b] = seen
+            self.ser |= _contents(_held((objs, put) for pk, objs, put in self.puts
+                                        if block[pk] in before[b]
+                                        or (block[pk] == b and pk < k)), v)
+
+
+def _held(puts) -> Dict:
+    """Object -> the origin sets put into it, from ``(objects, origins)`` pairs."""
+    into: Dict = {}
+    for objs, put in puts:
+        for t in objs:
+            into.setdefault(t, set()).add(put)
+    return into
+
+
+def _contents(into: Dict, v: FrozenSet) -> FrozenSet:
+    """*v*'s origins and, transitively, those of what was put into an object among them
+    (:func:`_held`; the writer excepted: it is never inside an object)."""
+    out = set(v)
+    work = [t for t in out if t in into]
+    seen, done = set(work), set()
+    while work:
+        for put in into[work.pop()]:
+            if put in done:
+                continue
+            done.add(put)
+            for o in put:
+                if o == _W or o in out:
+                    continue
+                out.add(o)
+                if o in into and o not in seen:
+                    seen.add(o)
+                    work.append(o)
+    return frozenset(out)
 
 
 @dataclass(frozen=True)
@@ -392,12 +476,14 @@ class _ClassFlow:
             return res
         for b, st in states.items():
             self._block(st.copy(), b, res, run)
+        res.expand(flow)
         return res
 
     def _block(self, st: _St, b: int, res: _Result, run: _Run) -> bool:
         """Run block *b*; True when the path ends (return, tail call, no-return call)."""
         flow = run.flow
         for k in flow.block_range(b):
+            res.at = k
             ins = flow.insns[k]
             vals = run.values.get(k, {})
             mn = ins.mnemonic
@@ -479,7 +565,7 @@ class _ClassFlow:
         self._site(st, tgt, None, res, depth, addr, vals)
         argp = self._read_origins(st, call_reads(self.ctx, tgt), vals)[0]
         if _W in argp or st.esc:
-            res.ser |= argp - {_W}
+            res.serialise(frozenset(argp) - {_W})
         for fi, fv in zip(frag, frag_vals):
             self._exec(st, fi, fi.mnemonic, split_ops(fi.op_str), fv, res)
         st.kill('x30')
@@ -569,13 +655,13 @@ class _ClassFlow:
         if has_w:
             if pb is not None:
                 if value is not None:
-                    res.ser |= st.p(value)
+                    res.serialise(st.p(value))
             elif contract is not None:
                 pass                                 # ARC: reads it, writes nothing out
             elif sel in _SEND_SERIALISES and _W in (st.p('x2') if sel == 'writeTo:' else st.p('x0')):
-                res.ser |= st.p(_SEND_SERIALISES[sel]) - {_W}
+                res.serialise(st.p(_SEND_SERIALISES[sel]) - {_W})
             else:
-                res.ser |= argp - {_W}
+                res.serialise(frozenset(argp) - {_W})
                 if _W in argp:
                     st.esc = True                    # the callee may keep the writer
         # result
@@ -584,7 +670,17 @@ class _ClassFlow:
         elif pb is not None:
             rp = E
         else:
-            rp = self._call_result(st, tgt, sel, argp, depth, top)
+            rp = self._call_result(st, tgt, sel, argp, depth, top, addr)
+            # a callee may put what it is handed into any object it is handed
+            handed = frozenset(argp)
+            res.put_into(handed, handed)
+            own = ('R', addr)
+            objs = frozenset(o for o in handed if _is_object(o))
+            if own in rp and objs:
+                # and its result may be one of those objects: it holds what they hold, and
+                # what is put into it they hold
+                res.put_into({own}, objs)
+                res.put_into(objs, frozenset({own}))
         if frames and contract is None and pb is None:
             m = min(frames.values())                 # the callee may write the frame upward
             st.fl[m] = st.fl.get(m, E) | frozenset(argp)
@@ -595,7 +691,7 @@ class _ClassFlow:
         st.fv = False
         return False
 
-    def _call_result(self, st: _St, tgt, sel, argp, depth, top) -> FrozenSet:
+    def _call_result(self, st: _St, tgt, sel, argp, depth, top, addr: int) -> FrozenSet:
         imp = None
         if st.p('x0') == frozenset({_S}):
             if sel is not None and self.cls is not None:
@@ -615,10 +711,14 @@ class _ClassFlow:
             for o in self._summary(imp, depth):     # each argument it is derived from
                 out |= st.p(o[1]) if isinstance(o, tuple) and o[0] == _P else {o}
             return frozenset(out)
-        r = set(argp)
+        # an object of its own; the objects it was handed are not carried (what they hold and
+        # what it holds are the same, through the caller's heap), so a chain of calls does not
+        # pile up the objects of every call before it
+        r = {o for o in argp if not (isinstance(o, tuple) and o[0] == 'R')}
         if _S in r:
             r.discard(_S)
             r.add(_T)
+        r.add(('R', addr))
         return frozenset(r)
 
     def _summary(self, imp: int, depth: int) -> FrozenSet:
@@ -633,7 +733,9 @@ class _ClassFlow:
                      **{r: frozenset({(_P, r)}) for r in ARG_GPRS if r != 'x0'}}
             res = self._run(imp, entry, depth + 1, imp)
             if res is not None and res.complete:
-                out = frozenset(res.ret)
+                # (the objects of its own calls are no objects of the caller's: the call that
+                # returns one is, ``('R', addr)``)
+                out = frozenset(o for o in res.ret if not (isinstance(o, tuple) and o[0] == 'R'))
         else:
             record_heuristic_hit(self.ctx, "_MAX_SUMMARY_DEPTH",
                                f"{self.cls.name if self.cls else '?'}: the method at {imp:#x}")
@@ -705,6 +807,14 @@ class _ClassFlow:
             if names:
                 src = {x for x in src if x != _S and not (isinstance(x, tuple) and x[0] == 'O')}
                 src |= {('I', n) for n in names}
+        if mn in ('add', 'sub') and _S in src and len(ops) in (3, 4) \
+                and ops[2].strip().startswith('#'):
+            # self plus a constant: a load through it reads the ivar at that offset plus its own
+            c = imm_operand(ops, 2)
+            offs = {x[1] for x in src if isinstance(x, tuple) and x[0] == 'OFF'}
+            src = {x for x in src if not (isinstance(x, tuple) and x[0] == 'OFF')}
+            if c is not None and len(offs) <= 1:
+                src.add(('OFF', (offs.pop() if offs else 0) + (c if mn == 'add' else -c)))
         for d in dsts:
             st.kill(d, frozenset(src))
 
@@ -752,14 +862,16 @@ class _ClassFlow:
         out: Set = set()
         if _S in bp:
             names = [x[1] for x in bp if isinstance(x, tuple) and x[0] == 'O']
+            offs = [x[1] for x in bp if isinstance(x, tuple) and x[0] == 'OFF']
+            at = disp + (offs[0] if offs else 0) if len(offs) <= 1 else None
             if names:
                 out |= {('I', n) for n in names}
-            elif idx is None and disp in self.off_to_ivar:
-                out.add(('I', self.off_to_ivar[disp]))
+            elif idx is None and at in self.off_to_ivar:
+                out.add(('I', self.off_to_ivar[at]))
             else:
                 out.add(_T)
         out |= {x for x in bp if x != _S and x != 'STK'
-                and not (isinstance(x, tuple) and x[0] == 'O')}
+                and not (isinstance(x, tuple) and x[0] in ('O', 'OFF'))}
         for d in dsts:
             st.kill(d)
         for d in outs:
@@ -796,10 +908,15 @@ class _ClassFlow:
                     v |= st.p(r) | ({'STK'} if self._frame(vals, r) is not None else set())
             st.fl[fa + pm[2]] = st.fl.get(fa + pm[2], E) | frozenset(v)
             return
+        v: Set = set()
         for tok in srcs:
             r = reg_name(tok.strip())
             if r and _W in st.p(r):
                 res.fail(f"writer stored outside the frame at {ins.addr:#x}")
+            if r:
+                v |= st.p(r)
+        if base:
+            res.put_into(st.p(base), frozenset(v))
 
 
 def writer_flow_for(ctx: BinaryContext, cl: ClassList) -> "WriterFlow":

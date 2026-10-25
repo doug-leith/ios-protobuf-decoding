@@ -405,3 +405,71 @@ class TestReviewFixes(unittest.TestCase):
                       ('bl', '#0x9000'), ('ret', '')]),
             (0x3000, [('mov', 'x0, x2'), ('ret', '')]), own=(0x3000,))
         self.assertEqual(set(res.sites[0x1018].value_origins), {('I', '_a')})
+
+
+class TestReview20261025(unittest.TestCase):
+    """The writer-flow findings of the 2026-10-25 review (notes/code_review_2026-10-25.md)."""
+
+    NAMES = {0x9000: '_PBDataWriterWriteDataField', 0xd000: '_PBDataWriterWriteInt32Field',
+             0xe000: '_PBDataWriterWriteInt64Field'}
+
+    def _run(self, lines, ivars):
+        from unittest import mock
+        import proto.writer_flow as WF
+        from tests._listing import layout
+        _o, fd = layout((0x1000, lines))
+        wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
+        wf.off_to_ivar = ivars
+        with mock.patch('proto.function_body.disasm', fd), \
+                mock.patch.object(WF, 'callee_name', lambda ctx, va: self.NAMES.get(va)), \
+                mock.patch.object(WF, 'stub_selector', lambda ctx, va: None), \
+                mock.patch.object(WF, 'sent_selector', lambda ctx, va, x1: None), \
+                mock.patch.object(WF._ClassFlow, '_is_function', lambda self, va: True):
+            return wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)
+
+    def test_an_ivar_put_into_an_object_the_writer_gets_reaches_it(self):
+        # buf = make(); append(buf, self->_a); WriteDataField(writer, buf, 5)
+        res = self._run([
+            ('stp', 'x29, x30, [sp, #-0x30]!'), ('mov', 'x29, sp'), ('mov', 'x20, x0'),
+            ('mov', 'x19, x2'), ('mov', 'x0, #0'), ('mov', 'x2, #0'), ('bl', '#0xa000'),
+            ('mov', 'x21, x0'), ('ldr', 'x1, [x20, #8]'), ('bl', '#0xb000'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x21'), ('mov', 'w2, #5'), ('bl', '#0x9000'),
+            ('ldp', 'x29, x30, [sp], #0x30'), ('ret', '')], {8: '_a'})
+        self.assertIn(('I', '_a'), res.ser)
+
+    def test_a_store_into_such_an_object_too(self):
+        res = self._run([
+            ('stp', 'x29, x30, [sp, #-0x30]!'), ('mov', 'x29, sp'), ('mov', 'x20, x0'),
+            ('mov', 'x19, x2'), ('mov', 'x0, #0'), ('bl', '#0xa000'), ('mov', 'x21, x0'),
+            ('ldr', 'x8, [x20, #8]'), ('str', 'x8, [x21, #0x10]'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x21'), ('mov', 'w2, #5'), ('bl', '#0x9000'),
+            ('ldp', 'x29, x30, [sp], #0x30'), ('ret', '')], {8: '_a'})
+        self.assertIn(('I', '_a'), res.ser)
+
+    def test_a_put_after_the_write_does_not_reach_it(self):
+        # buf = make(); WriteDataField(writer, buf, 5); append(buf, self->_a)
+        res = self._run([
+            ('stp', 'x29, x30, [sp, #-0x30]!'), ('mov', 'x29, sp'), ('mov', 'x20, x0'),
+            ('mov', 'x19, x2'), ('mov', 'x0, #0'), ('mov', 'x2, #0'), ('bl', '#0xa000'),
+            ('mov', 'x21, x0'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x21'), ('mov', 'w2, #5'), ('bl', '#0x9000'),
+            ('mov', 'x0, x21'), ('ldr', 'x1, [x20, #8]'), ('bl', '#0xb000'),
+            ('ldp', 'x29, x30, [sp], #0x30'), ('ret', '')], {8: '_a'})
+        self.assertNotIn(('I', '_a'), res.ser)
+
+    def test_a_put_into_a_call_s_result_reaches_the_object_it_was_handed(self):
+        # buf = make(); same = retain(buf); append(same, self->_a); WriteDataField(writer, buf, 5)
+        res = self._run([
+            ('stp', 'x29, x30, [sp, #-0x30]!'), ('mov', 'x29, sp'), ('mov', 'x20, x0'),
+            ('mov', 'x19, x2'), ('mov', 'x0, #0'), ('mov', 'x2, #0'), ('bl', '#0xa000'),
+            ('mov', 'x21, x0'), ('bl', '#0xc000'), ('mov', 'x22, x0'),
+            ('mov', 'x0, x22'), ('ldr', 'x1, [x20, #8]'), ('bl', '#0xb000'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x21'), ('mov', 'w2, #5'), ('bl', '#0x9000'),
+            ('ldp', 'x29, x30, [sp], #0x30'), ('ret', '')], {8: '_a'})
+        self.assertIn(('I', '_a'), res.ser)
+
+    def test_self_plus_a_constant_keeps_its_offset(self):
+        # x8 = self + 0x10; [x8, #8] is the ivar at 0x18, not the one at 8
+        res = self._run([('add', 'x8, x0, #0x10'), ('ldr', 'x1, [x8, #8]'), ('mov', 'x0, x2'),
+                         ('mov', 'w2, #7'), ('b', '#0xe000')], {8: '_a', 0x18: '_b'})
+        self.assertEqual(res.ser, {('I', '_b')})
