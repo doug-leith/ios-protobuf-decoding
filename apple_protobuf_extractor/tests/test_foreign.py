@@ -167,6 +167,34 @@ class TestCppAdapter(unittest.TestCase):
 # references then import by FILE (not qualified by package), and the original
 # acyclic import graph is preserved.
 
+class TestWellKnownSchemas(unittest.TestCase):
+    """A C++ image embeds the protobuf runtime's own ``google/protobuf/descriptor.proto``:
+    not emitted (a copy among the output files shadows protoc's, and every
+    ``features.`` option then fails), and a reference to one of its types imports protoc's
+    file under the real nested name."""
+
+    def test_not_emitted_and_imported_by_its_real_name(self):
+        wk = C.FileProto(name="google/protobuf/descriptor.proto", package="google.protobuf",
+                         messages=[C.Message(name="FieldDescriptorProto",
+                                             enums=[C.EnumType(name="Type", values=[("TYPE_X", 1)])],
+                                             fields=[C.Field(name="t", number=1, type=14,
+                                                             type_name=".google.protobuf.FieldDescriptorProto.Type")])])
+        own = C.FileProto(name="own.proto", package="own",
+                          messages=[C.Message(name="M", fields=[
+                              C.Field(name="d", number=1, type=11,
+                                      type_name=".google.protobuf.FieldDescriptorProto"),
+                              C.Field(name="t", number=2, type=14,
+                                      type_name=".google.protobuf.FieldDescriptorProto.Type")])])
+        msgs = F._cpp_protos_to_messages([wk, own])
+        self.assertEqual([m.package for m in msgs], ["own"])
+        files = build_proto_files(msgs, source_name="x")
+        self.assertEqual([pf.filename for pf in files], ["own.proto"])
+        text = files[0].emit()
+        self.assertIn('import "google/protobuf/descriptor.proto";', text)
+        self.assertIn("google.protobuf.FieldDescriptorProto d = 1;", text)
+        self.assertIn("google.protobuf.FieldDescriptorProto.Type t = 2;", text)
+
+
 class TestCppByFileGrouping(unittest.TestCase):
 
     def _same_pkg_two_files(self):

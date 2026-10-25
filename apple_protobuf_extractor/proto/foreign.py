@@ -139,6 +139,14 @@ def _cpp_message(m: "_cpp.Message", package: str, registry: "Dict[str, tuple]",
     return out
 
 
+def _well_known(name: str) -> bool:
+    """*name* is one of the schemas protoc provides (``google/protobuf/*.proto``): a C++ image
+    embeds those its runtime uses (``descriptor.proto``).  They are not emitted -- a copy among
+    the output files would shadow protoc's own -- and a reference to one of their types imports
+    protoc's file under its real (nested, dotted) name."""
+    return name.startswith("google/protobuf/")
+
+
 def _cpp_type_registry(file_protos) -> "Dict[str, tuple]":
     """Map every message/enum's ABSOLUTE descriptor name (``pkg.Outer.Inner``,
     as it appears in a field's ``type_name``) to ``(sanitised_package,
@@ -147,25 +155,26 @@ def _cpp_type_registry(file_protos) -> "Dict[str, tuple]":
     per-file flat emitter cannot express that without knowing both up front."""
     reg: Dict[str, tuple] = {}
 
-    def walk(m, package: str, prefix: str, out_file: str) -> None:
+    def walk(m, package: str, prefix: str, out_file: str, flatten: bool) -> None:
         qual = f"{prefix}{m.name}"
-        flat = _flat(qual)
+        name = _flat(qual) if flatten else qual
         spkg = _sanitize_pkg(package) if package else "cpp_protobuf"
-        reg[f"{package}.{qual}" if package else qual] = (spkg, flat, out_file)
+        reg[f"{package}.{qual}" if package else qual] = (spkg, name, out_file)
         for e in m.enums:                            # nested enum: parent-flattened
             key = f"{package}.{qual}.{e.name}" if package else f"{qual}.{e.name}"
-            reg[key] = (spkg, f"{flat}_{e.name}", out_file)
+            reg[key] = (spkg, f"{name}_{e.name}" if flatten else f"{name}.{e.name}", out_file)
         for n in m.nested:
-            walk(n, package, qual + ".", out_file)
+            walk(n, package, qual + ".", out_file, flatten)
 
     for fp in file_protos:
-        out_file = _cpp_out_filename(fp.name)
+        known = _well_known(fp.name)
+        out_file = fp.name if known else _cpp_out_filename(fp.name)
         spkg = _sanitize_pkg(fp.package) if fp.package else "cpp_protobuf"
         for e in fp.enums:                           # file-scope enum: bare name
             key = f"{fp.package}.{e.name}" if fp.package else e.name
             reg[key] = (spkg, e.name, out_file)
         for m in fp.messages:
-            walk(m, fp.package, "", out_file)
+            walk(m, fp.package, "", out_file, flatten=not known)
     return reg
 
 
@@ -183,6 +192,8 @@ def _cpp_protos_to_messages(file_protos) -> List[ProtoMessage]:
     file_enums_by_out: Dict[str, List[ProtoEnum]] = {}
     first_msg_by_out: Dict[str, ProtoMessage] = {}
     for fp in file_protos:
+        if _well_known(fp.name):
+            continue
         out_file = _cpp_out_filename(fp.name)
         for m in fp.messages:
             built = _cpp_message(m, fp.package, registry, out_file)
@@ -208,9 +219,8 @@ def _cpp_protos_to_messages(file_protos) -> List[ProtoMessage]:
 def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
     """Drop duplicate ``(package, name)`` messages, keeping the one with MORE fields.
 
-    The well-known ``descriptor.proto`` (package ``google.protobuf``) is embedded
-    by — and so decoded once per — every C++ image that registers a descriptor,
-    so the same messages can appear several times.  proto3 rejects a redefinition
+    A schema embedded by more than one image is decoded once per image, so the same
+    messages can appear several times.  protoc rejects a redefinition
     ("X is already defined"), so collapse exact-name duplicates within a package.
     A duplicate that DIFFERS in field count (different protobuf versions of the same
     well-known message) keeps the larger field set, so no field is lost, and the message
