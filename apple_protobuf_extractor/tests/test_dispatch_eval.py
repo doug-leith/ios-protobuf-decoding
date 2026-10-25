@@ -28,7 +28,7 @@ from proto import eval_tokens as T
 
 CALL, CALL2 = '#0x9000', '#0x9100'           # callees outside the listing
 SELF = T.SELF
-_RETURNS = Objects(opaque=T.opaque, call_result=lambda k, target, x0: T.ret_value(k))
+_RETURNS = Objects(opaque=T.opaque, call_result=lambda addr, target, x0: T.ret_value(addr))
 
 
 listing = text_listing
@@ -52,7 +52,7 @@ class TestRunFromThroughCalls(unittest.TestCase):
         got = calls_by_target(r)
         self.assertEqual(got[0x9000].args['x0'], SELF)
         self.assertEqual(got[0x9100].args['x0'], SELF)            # callee-saved copy survived
-        self.assertEqual(got[0x9100].args['x1'], T.ret_value(1))   # the first call's result
+        self.assertEqual(got[0x9100].args['x1'], T.ret_value(insns[1].addr))   # the first call's result
 
     def test_a_call_clobbers_the_caller_saved_registers(self):
         insns, _ = listing('mov x3, #7', 'mov x20, #9', f'bl {CALL}', f'bl {CALL2}', 'ret')
@@ -122,7 +122,7 @@ class TestObjectEscape(unittest.TestCase):
         return calls_by_target(r)[0x9100].args
 
     def test_a_slot_below_the_escaped_address_survives(self):
-        self.assertEqual(self.x1_at_adder(True), T.ret_value(1))
+        self.assertEqual(self.x1_at_adder(True), T.ret_value(0x1004))   # the first bl's result
         self.assertEqual(self.args_after_a_spill_at(0x58).get('x1'), 5)   # ends at sp+0x60
 
     def test_the_default_rule_clears_every_slot(self):
@@ -549,9 +549,9 @@ class TestAppendedIvar(unittest.TestCase):
     """A function handed self and the element is read with what it is handed: the array ivar is
     the ``self->ivar`` it sends the element to (f25's PBAppendMessageAtOffset(self, 8, e)), not
     an argument that equals an array ivar's offset."""
-    ELEM = T.ret_value(99)
+    ELEM = T.ret_value(0x2008)              # (the caller's call at 0x2008 made it)
     OBJECTS = Objects(opaque=T.opaque, field_value=T.field_value,
-                      call_result=lambda k, target, x0: T.ret_value(k))
+                      call_result=lambda addr, target, x0: T.ret_value(addr))
 
     def appended(self, *body):
         from unittest import mock
@@ -567,6 +567,11 @@ class TestAppendedIvar(unittest.TestCase):
     def test_a_function_that_appends_to_no_ivar_of_self_names_none(self):
         # handed (self, 8, element) as well, but it sends the element elsewhere
         self.assertIsNone(self.appended('mov x0, x2', 'mov x2, x1', f'bl {CALL}', 'ret'))
+
+    def test_its_own_call_s_result_is_not_the_element(self):
+        # it appends what its own call (at 0x1008: the same index as the caller's) returned
+        self.assertIsNone(self.appended('mov x19, x0', 'mov x20, x1', f'bl {CALL}', 'mov x2, x0',
+                                        'ldr x0, [x19, x20]', f'bl {CALL2}', 'ret'))
 
 
 class TestInitFamily(unittest.TestCase):

@@ -309,6 +309,17 @@ class _Machine:
         self.handed = True
         self.handed_lo = v if self.handed_lo is None else min(self.handed_lo, v)
 
+    def _reach(self, lo: int) -> int:
+        """The lowest frame address a callee handed the object at *lo* can reach: *lo*, or a
+        frame address stored in a slot it can read (at or above *lo*), transitively."""
+        changed = True
+        while changed:
+            changed = False
+            for a, (s, v) in self.slots.items():
+                if a + s > lo and _is_stack(v) and v < lo:
+                    lo, changed = v, True
+        return lo
+
     def join(self, other: "_Machine") -> "_Machine":
         """What holds on both paths (for :meth:`Flow.propagate`, whose machines have no
         fallback: an absent register is unknown)."""
@@ -412,6 +423,8 @@ class _Machine:
             regs.pop(r, None)
         top.update(CALLER_SAVED_GPRS)
         self.flags = None
+        if self.handed and self.object_escape:
+            self.handed_lo = self._reach(self.handed_lo)
         self._clobber_slots(self.handed, self.handed_lo)
 
     def store(self, addr: Optional[int], size: int, v: Optional[int],
@@ -419,12 +432,14 @@ class _Machine:
         """A store of *v* at *addr*; *in_frame*: its base is a frame address (an unknown index
         or an unmodelled form leaves *addr* None: any slot may be written)."""
         if not _is_stack(addr):
+            if _is_stack(v):
+                self._hand(v)                   # stored where a callee may find it
             if addr is None and in_frame:
                 self.slots.clear()
             elif addr is None:
+                if self.escaped and self.object_escape:
+                    self.escape_lo = self._reach(self.escape_lo)
                 self._clobber_slots(self.escaped, self.escape_lo)
-            elif _is_stack(v):
-                self._hand(v)                   # stored where a callee may find it
             return                              # memory outside the frame is not modelled
         for a in [a for a, (s, _v) in self.slots.items() if a < addr + size and addr < a + s]:
             del self.slots[a]
@@ -436,8 +451,8 @@ class _Machine:
 class Objects:
     """How a run (:meth:`Flow.run_from`, :meth:`Flow.propagate`) treats the objects it cannot
     see into -- all optional: *opaque*, *field_value*, *pointer* and *object_escape* as in
-    :class:`_Machine`; *call_result(k, target, x0_before)*, the value of x0 after the call at
-    ``insns[k]`` (None: unknown) -- e.g. *x0_before* for a runtime function that returns its
+    :class:`_Machine`; *call_result(addr, target, x0_before)*, the value of x0 after the call
+    at address *addr* (None: unknown) -- e.g. *x0_before* for a runtime function that returns its
     argument (``objc_retain``), or an opaque token naming that call's result, so it can be
     followed to later arguments; *bound* as in :class:`_Machine`."""
     opaque: Optional[Callable[[Optional[int]], bool]] = None
@@ -868,7 +883,11 @@ class Flow:
         if mn in ('cmp', 'cmn') and len(ops) in (2, 3):
             r = _norm_reg(ops[0])
             if r in st:
-                c = imm_operand(ops, 1) if ops[1].startswith('#') else self._const_reg(k, ops[1])
+                if ops[1].startswith('#'):
+                    c = imm_operand(ops, 1)
+                else:                                 # a register, shifted / extended
+                    raw = operand2(ops, 1, lambda tok: self._const_reg(k, tok))
+                    c = None if raw is None else as_signed(raw & reg_mask(ops[0]), ops[0])
                 if c is not None and mn == 'cmn':     # `cmn w2, #1` compares with -1
                     c = -c
                 if c is not None:
@@ -1509,7 +1528,7 @@ class Flow:
             return
         target_of, x0 = site if site is not None else (target, m.copy_of('x0'))
         m.call(self._call_reads(target))
-        v = call_result(k, target_of, x0) if call_result is not None else None
+        v = call_result(self.insns[k].addr, target_of, x0) if call_result is not None else None
         if v is not None:
             m.put('x0', v)
 
@@ -1669,7 +1688,7 @@ class Flow:
         out: Dict[str, str] = {}
         for reg in ARG_GPRS:
             va = get(reg)
-            if va is None:
+            if type(va) is not int:                 # (a frame address or an object: no string)
                 continue
             text = self._text_at(va, direct)
             if text:

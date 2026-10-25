@@ -7,6 +7,7 @@ from macho.disasm import Insn
 import proto.arm64_eval as E
 from proto.arm64_eval import Flow, Objects, Sym
 from tests._fakes import NoImage
+from tests._listing import text_listing
 
 B = 0x1000
 
@@ -184,3 +185,46 @@ class TestOnePath(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReview20261025(unittest.TestCase):
+    """The evaluator findings of the 2026-10-25 review (notes/code_review_2026-10-25.md)."""
+
+    def test_a_frame_address_stored_through_an_unknown_pointer_is_handed(self):
+        # with x19 unknown the stored sp+0x10 may be anyone's: the call may write the slot
+        ins, _ = text_listing('add x20, sp, #0x10', 'str x20, [x19]', 'mov w9, #5',
+                              'str w9, [sp, #0x10]', 'mov x0, #0', 'bl #0x9000',
+                              'ldr w0, [sp, #0x10]', 'ret')
+        k = len(ins) - 1
+        self.assertIsNone(E.Flow(None, ins).propagate({}, [k])[k].get('x0'))
+
+    def test_a_handed_object_reaches_a_lower_slot_it_holds_the_address_of(self):
+        # a block literal at sp+0x20 holding &var (sp+0): the callee may write var
+        ins, _ = text_listing('mov w9, #5', 'str w9, [sp]', 'mov x8, sp', 'str x8, [sp, #0x20]',
+                              'add x0, sp, #0x20', 'mov x8, #0', 'bl #0x9000', 'ldr w0, [sp]',
+                              'ret')
+        k = len(ins) - 1
+        got = E.Flow(None, ins).propagate({}, [k], E.Objects(object_escape=True))[k]
+        self.assertIsNone(got.get('x0'))
+
+    def test_no_string_is_read_at_a_frame_address(self):
+        from types import SimpleNamespace
+        from tests._fakes import NoImage
+
+        class CFStrings(NoImage):
+            def has_section(self, seg, sect):
+                return (seg, sect) == ("__DATA_CONST", "__cfstring")
+
+            def section(self, seg, sect):
+                return SimpleNamespace(vmaddr=0x50000, vmsize=0x1000)
+        ins, _ = text_listing('cmp w2, #1', 'b.ne @x', 'sub sp, sp, #0x20', 'mov x0, sp',
+                              'bl #0x9000', 'ret', 'x:', 'ret')
+        self.assertEqual(E.Flow(CFStrings(), ins).evaluate(-1, 'x2', 1), {})   # (was TypeError)
+
+    def test_a_compare_with_a_register_takes_its_sign_and_shift(self):
+        ins, _ = text_listing('ldr w8, [x0]', 'mov w9, #-50000', 'cmp w8, w9', 'b.eq @a', 'ret',
+                              'a:', 'ret')
+        self.assertIn(-50000, E.Flow(None, ins).candidates(0, 'x8', (-(1 << 31), 1 << 31)).values)
+        ins, _ = text_listing('ldr w8, [x0]', 'mov w9, #3', 'cmp w8, w9, lsl #4', 'b.eq @a',
+                              'ret', 'a:', 'ret')
+        self.assertIn(48, E.Flow(None, ins).candidates(0, 'x8', (0, 1000)).values)

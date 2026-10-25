@@ -125,9 +125,10 @@ class TestFlowThroughAThunk(unittest.TestCase):
         # call_result is told the bl's target and x0, not the tail callee's (a named function
         # of this shape, a metadata accessor, is known by its own name)
         told = []
-        objects = Objects(call_result=lambda k, t, x0: told.append((k, t, x0)) or 0x99)
-        regs = self._flow().propagate({'x0': 0x77}, [self.AFTER], objects)[self.AFTER]
-        self.assertEqual(set(told), {(self.BL, FRAG, 0x77)})       # (fixpoint, then replay)
+        objects = Objects(call_result=lambda addr, t, x0: told.append((addr, t, x0)) or 0x99)
+        flow = self._flow()
+        regs = flow.propagate({'x0': 0x77}, [self.AFTER], objects)[self.AFTER]
+        self.assertEqual(set(told), {(flow.insns[self.BL].addr, FRAG, 0x77)})   # (fixpoint, then replay)
         self.assertEqual(regs.get('x0'), 0x99)
 
     def test_the_registers_inside_it_and_at_its_tail_call(self):

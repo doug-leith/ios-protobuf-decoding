@@ -391,9 +391,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                 for c in calls:
                     x0 = c.args.get('x0')
                     if _class_name_at(ctx, x0) in known:
-                        elems.add(ret_value(c.k))
+                        elems.add(ret_value(c.addr))
                     elif x0 in elems and _init_family(sent_selector(ctx, c.target, c.args.get('x1'))):
-                        elems.add(ret_value(c.k))
+                        elems.add(ret_value(c.addr))
             if elems and fd.adder_ivar is None:
                 for c in calls:
                     recv = c.args.get('x0')

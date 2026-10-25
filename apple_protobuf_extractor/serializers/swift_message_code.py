@@ -75,7 +75,7 @@ def split(v: Sym) -> Tuple[int, int]:
 class _Objects:
     """The objects of one message's runs: self, the decoder, its type and witness table, then
     each value loaded from one (*origin*: ``("load", object, offset)``), each call's result
-    (``("call", function, index)``) and each import loaded from the slot dyld binds to it
+    (``("call", address, target, x0)``) and each import loaded from the slot dyld binds to it
     (``("import", slot)``: a standalone binary's)."""
 
     def __init__(self, ctx: BinaryContext):
@@ -96,13 +96,13 @@ class _Objects:
             k, off = split(v)
             return self._object(("load", k, off + disp))
 
-        def call_result(k, target, x0):
+        def call_result(addr, target, x0):
             name = callee_name(self.ctx, target)
             if is_pointer(x0) and name in _RETURNS_ARGUMENT:
                 return x0
             if name in _UNIQUELY_REFERENCED:
                 return 1
-            return self._object(("call", function, k, target, x0))
+            return self._object(("call", addr, target, x0))
         return Objects(pointer=is_pointer, field_value=field_value, call_result=call_result,
                        object_escape=True, bound=self.imported)
 
@@ -505,7 +505,7 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         origin = objs.origin.get(split(v)[0], ())
         if origin[:1] != ("call",) or split(v)[1]:
             return None
-        _c, _fn, _k, target, x0 = origin
+        _c, _addr, target, x0 = origin
         if target is None:
             return None
         desc = _accessors(ctx).get(target)

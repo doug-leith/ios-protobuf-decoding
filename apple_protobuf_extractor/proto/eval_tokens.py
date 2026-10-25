@@ -34,19 +34,19 @@ def field_offset(v) -> Optional[int]:
         else None
 
 
-def ret_value(k: int) -> Sym:
-    """The result of the call at instruction index *k*."""
-    return Sym("token", ("ret", k))
+def ret_value(addr: int) -> Sym:
+    """The result of the call at address *addr*."""
+    return Sym("token", ("ret", addr))
 
 
 def call_result(ctx):
     """``call_result`` for :meth:`proto.arm64_eval.Flow.run_from` / ``propagate``: a call to a
     runtime function that returns its argument keeps x0; any other call's result is a fresh
     token."""
-    def result(k: int, target: Optional[int], x0: Optional[int]) -> Optional[int]:
+    def result(addr: int, target: Optional[int], x0: Optional[int]) -> Optional[int]:
         if x0 is not None and opaque(x0) and callee_name(ctx, target) in RETURNS_ARGUMENT:
             return x0
-        return ret_value(k)
+        return ret_value(addr)
     return result
 
 
