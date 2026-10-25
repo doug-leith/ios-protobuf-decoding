@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 import artifacts
+import pytest
 
 FULL = os.environ.get("MACHO_TEST_ORACLE_FULL", "").strip() == "1"
 
@@ -40,6 +41,7 @@ def _report(diffs, examples):
                      for k, n in diffs.most_common(20))
 
 
+@pytest.mark.slow
 class TestOperandsAgainstCapstone(unittest.TestCase):
     """``reads()`` / ``writes()`` against capstone's register-access lists (TODO #123)."""
 
@@ -96,6 +98,7 @@ _VALUES = ("a known value that does not hold", "a known stack address that does 
            "a constant Flow takes for a stack address")
 
 
+@pytest.mark.slow
 @unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
 class TestFlowAgainstEmulation(unittest.TestCase):
     """:class:`proto.arm64_eval.Flow`'s CFG, reaching definitions and known values against
@@ -186,6 +189,7 @@ class TestFlowAgainstEmulation(unittest.TestCase):
         self.assertGreater(rep.stats["a register written that writes() does not list"], 0)
 
 
+@pytest.mark.slow
 @unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
 class TestCallReadsAgainstEmulation(unittest.TestCase):
     """:func:`proto.callees.call_reads` against concrete runs of each function, its callees
@@ -324,6 +328,7 @@ class TestObjcMessagesAgainstEmulation(unittest.TestCase):
                             rep.findings["a field with an AsString: not emitted as an enum"]))
 
 
+@pytest.mark.slow
 @unittest.skipUnless(IPHONE8_CACHE and _unicorn(), "iPhone 8 cache or unicorn not available")
 class TestCacheImagesAgainstEmulation(unittest.TestCase):
     """The oracles on images of the iPhone 8 dyld cache (:class:`oracles.flow_emulation.CacheMachine`:
@@ -417,6 +422,7 @@ class TestCacheImagesAgainstEmulation(unittest.TestCase):
         self.assertEqual(dict(rep.findings), {})
 
 
+@pytest.mark.slow
 @unittest.skipUnless(IPHONE8_CACHE, "iPhone 8 cache not available")
 class TestMethodNamesAgainstSymbols(unittest.TestCase):
     """The class-list parser's method names against ``.symbols`` (TODO #123): none unnamed, none
@@ -514,6 +520,7 @@ def _remote_mirror():
 
 @unittest.skipUnless(IOS27_CACHE and _remote_mirror(),
                      "iOS 27 cache or libswiftRemoteMirror (MACHO_REMOTE_MIRROR) not available")
+@pytest.mark.slow
 class TestSwiftAgainstRemoteMirror(unittest.TestCase):
     """Every emitted Swift message's stored fields and their types, and the types of the fields
     it emits (paired with its property by offset where static: #130), against Remote Mirror (TODO

@@ -16,6 +16,7 @@ from macho.disasm import disasm
 from tests._fakes import NoImage
 import proto.extractor as E
 import proto.write_helpers as WH   # _classify_write_helper now lives here
+import pytest
 
 
 # ── arm64 encoders (only what this test needs) ────────────────────────────────
@@ -246,13 +247,15 @@ except Exception:
     _HAVE = False
 
 
+@pytest.mark.slow
+@pytest.mark.xdist_group("geoservices_iphone8")
 @unittest.skipUnless(_HAVE, 'GeoServices cache not available')
 class TestSintRecoveryLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import live_artifacts as V
-        cls.ctx, cls.st, cls.cl = V.load_cache('GeoServices')
-        cls.msgs = {m.class_name: m for m in E.extract_all(cls.ctx, cls.st, cls.cl)}
+        from tests._live import extracted
+        cls.ctx, cls.st, cls.cl, msgs = extracted('GeoServices')
+        cls.msgs = {m.class_name: m for m in msgs}
 
     def _field(self, cn, fn):
         m = self.msgs.get(cn)

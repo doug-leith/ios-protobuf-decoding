@@ -18,25 +18,28 @@ if ROOT not in sys.path:
 
 import artifacts
 import proto.extractor as E
+import pytest
 
 
 def _cache_present():
     return artifacts.cache_file() is not None
 
 
+@pytest.mark.slow
+@pytest.mark.xdist_group("geoservices_iphone8")
 @unittest.skipUnless(_cache_present(), 'dyld shared cache not available')
 class TestOpaquePassthroughLive(unittest.TestCase):
     """Detector behaviour against the real GeoServices cache image."""
 
     @classmethod
     def setUpClass(cls):
-        import live_artifacts as V
-        loaded = V.load_cache('GeoServices')
+        from tests._live import extracted
+        loaded = extracted('GeoServices')
         if loaded is None:
             cls.ctx = cls.cl = cls.msgs = None
             return
-        cls.ctx, cls.st, cls.cl = loaded
-        cls.msgs = {m.class_name: m for m in E.extract_all(cls.ctx, cls.st, cls.cl)}
+        cls.ctx, cls.st, cls.cl, msgs = loaded
+        cls.msgs = {m.class_name: m for m in msgs}
 
     def setUp(self):
         if not getattr(self, 'msgs', None):

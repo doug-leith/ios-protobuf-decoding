@@ -44,6 +44,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from macho.dyld_cache     import DyldCacheReader
 from macho.cache_classlist import iter_class_names
 from macho.classlist import class_name_at
+import pytest
 
 
 # ── Synthetic cache builder (reused from test_dyld_cache.py pattern) ──────────
@@ -871,6 +872,7 @@ class TestEnumStringsFromCacheLive(unittest.TestCase):
 
 # ─── TestCacheNativePipelineLive ──────────────────────────────────────────────
 
+@pytest.mark.slow
 @unittest.skipUnless(_HAS_CACHE, _SKIP_MSG)
 class TestCacheNativePipelineLive(unittest.TestCase):
     """

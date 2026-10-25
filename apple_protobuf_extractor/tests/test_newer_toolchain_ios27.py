@@ -28,6 +28,7 @@ from tests._fakes import NoImage, TextImage
 
 import artifacts
 from proto.callees import text_holding
+import pytest
 
 
 # ── offline: the writer flow on hand-built code ──────────────────────────────
@@ -147,6 +148,7 @@ def _ios27_cache_dir():
     return d if os.path.isfile(os.path.join(d, "dyld_shared_cache_arm64e")) else None
 
 
+@pytest.mark.slow
 @unittest.skipUnless(_ios27_cache_dir(), "iOS 27 cache not present")
 class TestIos27Live(unittest.TestCase):
     """Facts about iOS 27's GeoServices that the iPhone 8 golden schema also states."""

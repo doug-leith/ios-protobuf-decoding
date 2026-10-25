@@ -35,6 +35,7 @@ wheel
 # --- development / test ---
 pytest>=9.0.3
 pytest-cov>=7.1.0
+pytest-xdist>=3.8.0   # parallel workers: pytest -n 4 --dist loadgroup
 coverage>=7.14.1
 unicorn>=2.1.4         # the emulation oracles (tests/test_oracles.py; they skip without it)
 pyflakes>=4.0.3       # tests/test_static_checks.py: no undefined name, unused import, ...

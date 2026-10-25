@@ -11,8 +11,7 @@ Live-gated on GeoServices.  Two guards:
     9/23/24, now sit at their true biased values 10110/10124/10125 (bias 10101).
 """
 import unittest
-
-import proto.extractor as E
+import pytest
 
 try:
     import live_artifacts as _V
@@ -21,14 +20,15 @@ except Exception:
     _HAVE = False
 
 
+@pytest.mark.slow
+@pytest.mark.xdist_group("geoservices_iphone8")
 @unittest.skipUnless(_HAVE, 'GeoServices cache not available')
 class TestNegAddBiasLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import live_artifacts as V
-        ctx, st, cl = V.load_cache('GeoServices')
+        from tests._live import extracted
         cls.enums = {}
-        for m in E.extract_all(ctx, st, cl):
+        for m in extracted('GeoServices').messages:
             for e in getattr(m, 'enums', []) or []:
                 cls.enums.setdefault(e.name, {}).update(
                     {v.number: v.name for v in e.values})

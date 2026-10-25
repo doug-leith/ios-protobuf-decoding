@@ -16,6 +16,7 @@ from tests._fakes import NoImage
 from macho.classlist import ObjcClass, ObjcIvar, ClassList
 import proto.extractor as E
 import proto.protoclass_set as PS
+import pytest
 
 
 def _ivar(name):
@@ -332,13 +333,15 @@ except Exception:
     _HAVE = False
 
 
+@pytest.mark.slow
+@pytest.mark.xdist_group("geoservices_iphone8")
 @unittest.skipUnless(_HAVE, "GeoServices cache not available")
 class TestProtoClassSetLive(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import live_artifacts as V
-        cls.ctx, cls.st, cls.cl = V.load_cache("GeoServices")
-        cls.msgs = {m.class_name: m for m in E.extract_all(cls.ctx, cls.st, cls.cl)}
+        from tests._live import extracted
+        cls.ctx, cls.st, cls.cl, msgs = extracted("GeoServices")
+        cls.msgs = {m.class_name: m for m in msgs}
 
     def test_recovered_subclasses_emitted_with_inheritance(self):
         expected = {

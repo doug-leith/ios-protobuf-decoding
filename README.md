@@ -430,8 +430,12 @@ logMessages {
 ## Tests
 
 ```sh
-./venv/bin/python3 -m pytest
+./venv/bin/python3 -m pytest -n 4 --dist loadgroup
 ```
+
+`-n 4 --dist loadgroup` spreads the suite over four pytest-xdist workers, each test class on
+one (plain `pytest` runs it in one process).  With the artifacts it takes some 12 minutes; adding
+`-m "not slow"` leaves out the whole-image extractions and oracles, and takes under 2.
 
 Without Apple artifacts or captures, a large part of the suite skips by design (344 tests in
 a clean checkout: 343 in the extractor suite, and one `ios_decoder` test that reads iPhone 8 captures). The summary says so, and a green run in that state does **not**

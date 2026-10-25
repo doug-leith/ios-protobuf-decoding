@@ -149,7 +149,7 @@ These artifacts are gitignored (multi-GB).
 
 ```sh
 # from the repo root; live tests auto-skip if the artifacts are absent
-./venv/bin/python3 -m pytest
+./venv/bin/python3 -m pytest -n 4 --dist loadgroup      # add -m "not slow" for a quick run
 ```
 
 Live tests load the real cache / binaries and gate on artifact presence (the

@@ -25,6 +25,7 @@ from proto.protoclass_heuristic import _is_proto_class
 import proto.writeto as W
 from proto.write_helpers import _ensure_writeto_prepass
 import live_artifacts as V
+import pytest
 
 _GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "golden")
 _UPDATE = os.environ.get("MACHO_UPDATE_GOLDEN") == "1"
@@ -62,6 +63,7 @@ def _golden_path(label):
     return os.path.join(_GOLDEN_DIR, f"writeto_bindings_{label}.json")
 
 
+@pytest.mark.slow
 class TestWriteToBindingsGolden(unittest.TestCase):
     def _check(self, label, loader):
         loaded = loader()

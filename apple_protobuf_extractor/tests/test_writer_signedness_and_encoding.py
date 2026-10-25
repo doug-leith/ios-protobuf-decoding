@@ -13,6 +13,8 @@ tests read the iPhone 8 cache.
 import struct
 import unittest
 
+import pytest
+
 from macho.disasm import disasm
 import proto.write_helpers as WH
 from proto.extractor import _repeated_encoding
@@ -147,14 +149,14 @@ except Exception:
     _HAVE = False
 
 
+@pytest.mark.slow
+@pytest.mark.xdist_group("geoservices_iphone8")
 @unittest.skipUnless(_HAVE, 'GeoServices cache not available')
 class TestLiveGeoServices(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        import live_artifacts as V
-        import proto.extractor as E
-        ctx, st, cl = V.load_cache('GeoServices')
-        cls.msgs = {m.class_name: m for m in E.extract_all(ctx, st, cl)}
+        from tests._live import extracted
+        cls.msgs = {m.class_name: m for m in extracted('GeoServices').messages}
 
     def _f(self, cn, fn):
         return next(f for f in self.msgs[cn].fields if f.name == fn)

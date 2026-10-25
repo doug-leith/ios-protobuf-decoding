@@ -9,6 +9,7 @@ from tests import _traverse_oracle as O
 from tests.test_newer_toolchain_ios27 import _ios27_cache_dir
 from tests.test_swift_descriptor_extract import _data_path, _load_ctx
 from serializers import swift_descriptor_extract as S
+import pytest
 
 _IPHONE8_STANDALONE = (("DPSubmissionService",), ("libexec", "nptocompaniond"))
 _IOS27_IMAGES = ("AONSense.dylib", "/BiomeStreams")
@@ -66,6 +67,7 @@ class TestTraverseOracleStandalone(unittest.TestCase):
         self.assertEqual(problems, [])
 
 
+@pytest.mark.slow
 @unittest.skipUnless(_ios27_cache_dir(), "iOS 27 cache not present")
 class TestTraverseOracleIos27(unittest.TestCase):
     def test_cache_images(self):

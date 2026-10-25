@@ -31,6 +31,7 @@ import artifacts
 from macho.disasm import Insn
 from macho.classlist import ObjcIvar
 from tests._fakes import NoImage
+import pytest
 
 
 # ── tiny fakes ────────────────────────────────────────────────────────────────
@@ -212,24 +213,16 @@ _CACHE_MAIN = artifacts.cache_file()
 _LOCATIOND = os.environ.get('MACHO_TEST_LOCATIOND', '').strip() or artifacts.locationd_path()
 
 
+@pytest.mark.slow
+@pytest.mark.xdist_group("geoservices_iphone8")
 @unittest.skipUnless(_CACHE_MAIN, 'dyld shared cache not found (see artifacts.py)')
 class TestGeoServicesRepeatedElementTypes(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from macho.dyld_cache import DyldCacheReader
-        from macho.memory import BinaryContext
-        from macho.strings import build_string_table
-        from macho import classlist as CL
-        from macho.local_symbols import apply_to_classes
-        from proto.extractor import extract_all
-        reader = DyldCacheReader(_CACHE_MAIN)
-        mach_va = reader.find_image_header('GeoServices')
-        cls.ctx = BinaryContext.from_cache(reader, mach_va)
-        st = build_string_table(cls.ctx)
-        cls.cl = CL.build_class_list(cls.ctx, st)
-        apply_to_classes(cls.cl, reader.image_local_symbols(mach_va))
-        cls.msgs = {m.class_name: m for m in extract_all(cls.ctx, st, cls.cl)}
+        from tests._live import extracted
+        cls.ctx, _st, cls.cl, msgs = extracted('GeoServices')
+        cls.msgs = {m.class_name: m for m in msgs}
 
     def _field(self, cls_name, fname):
         return next(f for f in self.msgs[cls_name].fields if f.name == fname)

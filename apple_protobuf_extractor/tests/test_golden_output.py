@@ -36,6 +36,7 @@ import unittest
 import proto.extractor as E
 import live_artifacts as V
 from snapshot_output import _snap_messages
+import pytest
 
 _GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "golden")
 _UPDATE = os.environ.get("MACHO_UPDATE_GOLDEN") == "1"
@@ -63,6 +64,7 @@ def _golden_path(label):
     return os.path.join(_GOLDEN_DIR, f"{label}.json")
 
 
+@pytest.mark.slow
 class TestGoldenOutput(unittest.TestCase):
     """One generated test method per artifact (see bottom of module)."""
 
