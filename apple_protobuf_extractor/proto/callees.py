@@ -481,7 +481,9 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
             return before
     frame = _Open(len(open_))
     frame.reads = before                     # (read in an earlier round: answers only grow)
+    outermost = not open_
     open_[target] = frame
+    too_deep = False
     try:
         while True:
             frame.round += 1
@@ -494,8 +496,23 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
             frame.reads = res
             if not ((frame.cyclic and grew or frame.stale) and frame.low == frame.index):
                 break
+    except RecursionError:
+        # a chain of calls deeper than the interpreter's stack: the reads of every function
+        # left open are unknown -- the outermost one answers every register (what settled
+        # inside stays memoised), and the run goes on
+        if not outermost:
+            raise
+        too_deep = True
     finally:
         del open_[target]
+    if too_deep:
+        held.clear()
+        from proto.models import record_heuristic_hit
+        record_heuristic_hit(ctx, "call chain deeper than the stack",
+                             f"the function at {target:#x}: every register taken as read")
+        memo[target] = _ALL_REGS
+        recheck_provisional_decodes(ctx)
+        return _ALL_REGS
     if frame.low < frame.index:
         # settled only once the outermost function it depended on is: held for that one's
         # round, and what was held on it moves there
@@ -558,7 +575,8 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     reads; a return hands back :data:`_RETURN_REGS`; a trap or a call that does not return
     ends the path.  A call to a thunk runs its prefix, then reads what its tail target reads
     (:func:`outlined_code`).  A prologue spill of a callee-saved register is not a read.  An
-    authenticated branch with no successor is a tail call through a signed pointer: it reads
+    authenticated branch with no successor is a tail call through a signed pointer, a ``br`` to a
+    pointer loaded from memory one through a plain pointer (:func:`_loaded_pointer`): each reads
     what an unknown callee reads.  Every register when the body is read only in part or a
     ``br`` goes somewhere unknown."""
     from proto.dispatch import decoded_flow, function_entries
@@ -573,8 +591,11 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     frame = any(_moves_sp(i) or any(_moves_sp(fi) for fi in _outlined_body(ctx, i))
                 for i in flow.insns)
     live_in: Dict[int, frozenset] = {b: frozenset() for b in cfg.order}
-    unresolved = [cfg.blocks[b][-1].addr for b in cfg.order
-                  if cfg.blocks[b][-1].mnemonic == 'br' and not cfg.succ.get(b)]
+    unresolved, pointer_calls = [], set()
+    for b in cfg.order:
+        last = cfg.blocks[b][-1]
+        if last.mnemonic == 'br' and not cfg.succ.get(b):
+            (pointer_calls.add if _loaded_pointer(flow, last) else unresolved.append)(last.addr)
     changed = True
     while changed:
         changed = False
@@ -583,7 +604,8 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
             last = cfg.blocks[b][-1]
             if last.addr in unresolved:
                 live = set(_ALL_REGS)                   # a jump nothing resolved
-            elif not succ and last.mnemonic in AUTHENTICATED_BRANCHES:
+            elif not succ and (last.mnemonic in AUTHENTICATED_BRANCHES
+                               or last.addr in pointer_calls):
                 live = set(call_reads(ctx, None))       # a tail call through a pointer
             else:
                 live = set().union(*(live_in[x] for x in succ)) if succ else set()
@@ -607,6 +629,21 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
         record_heuristic_hit(ctx, "callee-saved spill test",
                              f"the function at {target:#x} reads {', '.join(saved)}")
     return tuple(r for r in _ALL_REGS if r in entry)
+
+
+def _loaded_pointer(flow, br) -> bool:
+    """The ``br`` *br* jumps to a pointer loaded from memory (its register's one definition an
+    8-byte load from a base and a constant offset: ``ldr x2, [x8, #8] ; br x2``, a Swift value
+    witness): a tail call, not a jump table (a code base plus an offset read from a table at an
+    index, or a pointer read at one)."""
+    reg = split_ops(br.op_str)[0] if br.op_str else None
+    d = flow.only_def(flow.addr_idx[br.addr], reg) if reg else None
+    if d is None:
+        return False
+    ins = flow.insns[d]
+    ops = split_ops(ins.op_str)
+    pm = parse_mem(ops[1]) if ins.mnemonic in ("ldr", "ldur") and len(ops) == 2 else None
+    return pm is not None and ops[0].startswith("x") and pm[1] is None
 
 
 def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) -> set:

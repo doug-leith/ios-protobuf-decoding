@@ -181,6 +181,20 @@ class TestCallReads(unittest.TestCase):
         got = self._reads(blocks=[(0x9000, [('mov', 'x0, x21'), ('add', 'x1, x22, #8'), ('ret', '')])])
         self.assertEqual(got, {'x21', 'x22'})            # x0 written before it returns
 
+    def test_a_br_to_a_loaded_pointer_is_a_tail_call_not_a_jump_table(self):
+        # a Swift value witness: x8 = the type's witness table, br to the function at x8 + 8 --
+        # it reads the arguments an unknown callee does, not every register (v8-v15 among them)
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('ldr', 'x1, [x0, #0x18]'), ('ldur', 'x8, [x1, #-8]'),
+                                            ('ldr', 'x2, [x8, #8]'), ('br', 'x2')])])
+        self.assertEqual(got, set(ABI_ARGS) - {'x1', 'x2', 'x8'})   # (written before the br)
+
+    def test_a_br_to_a_pointer_read_at_an_index_is_not(self):
+        # ldr x2, [x8, x1, lsl #3]: a table of code pointers -- undecoded, every register
+        from proto.callees import _ALL_REGS
+        got = self._reads(blocks=[(0x9000, [('ldr', 'x2, [x8, x1, lsl #3]'), ('br', 'x2')])])
+        self.assertEqual(got, set(_ALL_REGS) - {'x2'})
+
     def test_a_thunk_runs_its_prefix_then_reads_what_its_tail_target_reads(self):
         # x21 set by the thunk's prefix is not the caller's x21
         check = [('eor', 'x16, x30, x30, lsl #1'), ('tbz', 'x16, #62, #0xa010'), ('brk', '#0xc471')]
@@ -353,3 +367,26 @@ class TestCallReads(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCallReadsDeepChain(unittest.TestCase):
+    def test_a_chain_deeper_than_the_stack_answers_every_register_not_raises(self):
+        # 100,000 unnamed functions, each calling the next: deeper than Python's stack
+        from types import SimpleNamespace
+        from unittest import mock
+        import proto.callees as C
+        import proto.dispatch as D
+        from proto.models import get_diagnostics
+        text = SimpleNamespace(vmaddr=0x1000, vmsize=0x100000)
+        ctx = SimpleNamespace(has_section=lambda *a: True, section=lambda *a: text)
+
+        def live_in(ctx_, target):
+            return () if target >= 0x1000 + 4 * 100_000 else C.call_reads(ctx_, target + 4)
+        with mock.patch.object(C, "callee_name", lambda c, t: None), \
+                mock.patch.object(C, "stub_selector", lambda c, t: None), \
+                mock.patch.object(C, "_live_in", live_in), \
+                mock.patch.object(D, "function_entries", lambda c: []), \
+                mock.patch.object(D, "recheck_provisional_decodes", lambda c: None):
+            self.assertEqual(C.call_reads(ctx, 0x1000), C._ALL_REGS)
+        self.assertIn("call chain deeper than the stack",
+                      [h[0] for h in get_diagnostics(ctx).heuristics_hit])
