@@ -189,6 +189,12 @@ class TestCallReads(unittest.TestCase):
                                             ('ldr', 'x2, [x8, #8]'), ('br', 'x2')])])
         self.assertEqual(got, set(ABI_ARGS) - {'x1', 'x2', 'x8'})   # (written before the br)
 
+    def test_a_br_to_a_pointer_it_was_handed_is_a_tail_call_not_a_jump_table(self):
+        # an outlined tail: the caller's x24 and x19 become the callee's arguments, x8 the callee
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('mov', 'x0, x24'), ('mov', 'x1, x19'), ('br', 'x8')])])
+        self.assertEqual(got, set(ABI_ARGS) - {'x0', 'x1'} | {'x19', 'x24'})
+
     def test_a_br_to_a_pointer_read_at_an_index_is_not(self):
         # ldr x2, [x8, x1, lsl #3]: a table of code pointers -- undecoded, every register
         from proto.callees import _ALL_REGS
@@ -279,9 +285,11 @@ class TestCallReads(unittest.TestCase):
 
     def test_an_undecoded_jump_table_is_reported(self):
         with self.assertLogs('proto.models', 'WARNING') as logs:
-            got = self._reads(blocks=[(0x9000, [('br', 'x9')])])
+            # a code base plus a byte read from a table at an index (x8): no bound, undecoded
+            got = self._reads(blocks=[(0x9000, [('adr', 'x9, #0x9010'), ('ldrb', 'w10, [x28, x8]'),
+                                                ('add', 'x9, x9, x10, lsl #2'), ('br', 'x9')])])
         from proto.callees import _ALL_REGS
-        self.assertEqual(got, set(_ALL_REGS))
+        self.assertEqual(got, set(_ALL_REGS) - {'x9', 'x10'})
         self.assertIn('undecoded jump table hit', logs.output[0])
 
     def test_an_authenticated_tail_call_reads_what_an_unknown_callee_reads(self):

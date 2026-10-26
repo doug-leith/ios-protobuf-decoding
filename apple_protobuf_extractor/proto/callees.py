@@ -576,8 +576,8 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     ends the path.  A call to a thunk runs its prefix, then reads what its tail target reads
     (:func:`outlined_code`).  A prologue spill of a callee-saved register is not a read.  An
     authenticated branch with no successor is a tail call through a signed pointer, a ``br`` to a
-    pointer loaded from memory one through a plain pointer (:func:`_loaded_pointer`): each reads
-    what an unknown callee reads.  Every register when the body is read only in part or a
+    pointer handed in or loaded from memory one through a plain pointer
+    (:func:`_pointer_tail_call`): each reads what an unknown callee reads.  Every register when the body is read only in part or a
     ``br`` goes somewhere unknown."""
     from proto.dispatch import decoded_flow, function_entries
     from proto.function_body import function_body
@@ -595,7 +595,7 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     for b in cfg.order:
         last = cfg.blocks[b][-1]
         if last.mnemonic == 'br' and not cfg.succ.get(b):
-            (pointer_calls.add if _loaded_pointer(flow, last) else unresolved.append)(last.addr)
+            (pointer_calls.add if _pointer_tail_call(flow, last) else unresolved.append)(last.addr)
     changed = True
     while changed:
         changed = False
@@ -631,13 +631,20 @@ def _live_in(ctx, target: int) -> Tuple[str, ...]:
     return tuple(r for r in _ALL_REGS if r in entry)
 
 
-def _loaded_pointer(flow, br) -> bool:
-    """The ``br`` *br* jumps to a pointer loaded from memory (its register's one definition an
-    8-byte load from a base and a constant offset: ``ldr x2, [x8, #8] ; br x2``, a Swift value
-    witness): a tail call, not a jump table (a code base plus an offset read from a table at an
-    index, or a pointer read at one)."""
-    reg = split_ops(br.op_str)[0] if br.op_str else None
-    d = flow.only_def(flow.addr_idx[br.addr], reg) if reg else None
+def _pointer_tail_call(flow, br) -> bool:
+    """The ``br`` *br* jumps to a pointer: one the function was handed (its register holds its
+    value on entry on every path: ``mov x0, x24 ; mov x1, x19 ; br x8``, an outlined tail, or
+    ``mov x20, x0 ; br x2``, a partial-apply forwarder) or one loaded from memory (the register's
+    one definition an 8-byte load from a base and a constant offset: ``ldr x2, [x8, #8] ; br x2``,
+    a Swift value witness): a tail call, not a jump table (a code base plus an offset read from a
+    table at an index, or a pointer read at one -- computed in the function)."""
+    reg = _norm_reg(split_ops(br.op_str)[0]) if br.op_str else None
+    if reg is None:
+        return False
+    k = flow.addr_idx[br.addr]
+    if flow.from_entry(k, reg):
+        return True
+    d = flow.only_def(k, reg)
     if d is None:
         return False
     ins = flow.insns[d]
