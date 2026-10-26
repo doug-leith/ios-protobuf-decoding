@@ -50,7 +50,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterator, List, Optional, Set, Tuple
 
-from .memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread
+from .memory import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store, record_unread
 from .objc_model import ObjcClass, ObjcIvar, ObjcMethod   # re-exported; see below
 from .strings import StringTable
 from .objc_abi import (CLASS_T_SUPERCLASS, CLASS_T_DATA, CLASS_RO_FLAGS,
@@ -571,6 +571,15 @@ def _parse_traditional_method(
     return ObjcMethod(name=name, types=types, imp=imp, is_relative=False)
 
 
+def _starts_a_string(ctx: BinaryContext, va: int) -> bool:
+    """A selector reference points at the start of a C string: the byte before it ends
+    another (a NUL).  A reading that lands inside one gives its tail (``on:``)."""
+    try:
+        return ctx.read_bytes(va - 1, 1) == b'\x00'
+    except READ_ERRORS:
+        return False
+
+
 def _parse_relative_method(
     ctx: BinaryContext, va: int, strings: StringTable,
     *,
@@ -613,6 +622,11 @@ def _parse_relative_method(
     # selector address, and reading a string there picks up the tail of another (iPhone 8
     # GeoServices: 'te', 'on:', 'precated' for long initialiser selectors).
     from_base = has_direct and rel_sel_base is not None
+    if has_direct and rel_sel_base is None:
+        # read self-relatively (below): a guess when the list is the cache's -- taken only
+        # where it lands on the start of a string (not the tail of another), and reported
+        # (proto.extractor.extract_all)
+        _ctx_store(ctx, "_self_relative_selectors", True)
     if from_base:
         try:
             candidate = ctx.read_cstring(rel_sel_base + name_rel)
@@ -628,7 +642,8 @@ def _parse_relative_method(
         # string has been inlined into the binary's own methname section).
         if name is None and not from_base and ctx.has_section('__TEXT', '__objc_methname'):
             mn = ctx.section('__TEXT', '__objc_methname')
-            if mn.vmaddr <= sel_ref_va < mn.vmaddr + mn.vmsize:
+            if mn.vmaddr <= sel_ref_va < mn.vmaddr + mn.vmsize and (
+                    not has_direct or sel_ref_va == mn.vmaddr or _starts_a_string(ctx, sel_ref_va)):
                 candidate = ctx.read_cstring(sel_ref_va)
                 if _is_valid_selector(candidate):
                     name = candidate
@@ -642,7 +657,7 @@ def _parse_relative_method(
         # routes through the cache reader and can reach the unified selector
         # pool.  For a plain binary context, addresses outside mapped segments
         # raise ValueError, which the outer except catches (leaving name=None).
-        if name is None and has_direct and not from_base:
+        if name is None and has_direct and not from_base and _starts_a_string(ctx, sel_ref_va):
             candidate = ctx.read_cstring(sel_ref_va)
             if _is_valid_selector(candidate):
                 name = candidate

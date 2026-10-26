@@ -260,3 +260,42 @@ class TestDirectSelectorReadFromTheBaseOnly(unittest.TestCase):
 
         m = _parse_relative_method(Ctx(), 0x1000, None, has_direct=True)
         self.assertIsNone(m.name)                 # left for .symbols, not named 'te'
+
+
+class TestSelfRelativeDirectSelector(unittest.TestCase):
+    """With the cache's relative selector base unresolved, a direct selector is read
+    self-relatively: taken only where that lands on the start of a string, and marked."""
+
+    class _Ctx:
+        # one relative method_t at 0x1000; the selector "initWithFoo:on:" at 0x2000
+        POOL = b"initWithFoo:on:\x00"
+
+        def __init__(self, name_at):
+            self.words = {0x1000: name_at - 0x1000, 0x1004: 0, 0x1008: 0x100}
+
+        def read_s32(self, va):
+            return self.words[va]
+
+        def read_bytes(self, va, n):
+            return self.POOL[va - 0x2000:va - 0x2000 + n] if 0x2000 <= va else b"\x00"
+
+        def read_cstring(self, va, max_len=None):
+            return self.POOL[va - 0x2000:].split(b"\x00")[0].decode()
+
+        def has_section(self, seg, sect):
+            return False
+
+    def test_a_tail_is_not_taken_for_a_name(self):
+        from macho.classlist import _parse_relative_method
+        from macho.strings import StringTable
+        ctx = self._Ctx(0x200c)                      # inside "initWithFoo:on:": "on:"
+        m = _parse_relative_method(ctx, 0x1000, StringTable(), has_direct=True)
+        self.assertIsNone(m.name)
+        self.assertTrue(ctx._self_relative_selectors)
+
+    def test_a_string_s_start_is(self):
+        from macho.classlist import _parse_relative_method
+        from macho.strings import StringTable
+        ctx = self._Ctx(0x2000)
+        m = _parse_relative_method(ctx, 0x1000, StringTable(), has_direct=True)
+        self.assertEqual(m.name, "initWithFoo:on:")

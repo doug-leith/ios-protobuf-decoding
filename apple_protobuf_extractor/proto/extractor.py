@@ -1118,8 +1118,13 @@ def extract_all(
     # created: macho.memory._ctx_cache / _ctx_store), so a BinaryContext reused across two
     # extractions cannot serve stale results -- first, so what the checks below record (the
     # diagnostics are such a cache) reaches the run's summary.
+    self_relative = getattr(ctx, "_self_relative_selectors", False)   # (the class list's)
     reset_ctx_caches(ctx)
     _check_selectors_resolved(ctx, cl)
+    if self_relative:
+        record_heuristic_hit(ctx, "self-relative direct selectors",
+                             "the cache's relative selector base is unresolved: direct selector "
+                             "names read self-relatively, where that lands on a string's start")
     _warn_if_foreign_protobuf(ctx, cl)
 
     # Resolve the proto-class set ONCE, up front (memoised on ctx, so the per-class

@@ -279,18 +279,27 @@ def _best_in_compat_group(
     group: List[Tuple[ProtoEnum, ProtoMessage]],
 ) -> ProtoEnum:
     """
-    Pick the most informative enum representative from a *compatible* group.
-
-    Priority:
-      1. ``values_confirmed=True``   (extracted from a clean pointer table)
-      2. Most enum values            (richer definition)
-      3. First occurrence            (messages are sorted alphabetically;
-                                      order is therefore deterministic)
+    The one definition of a *compatible* group: every value any member has (they agree at
+    every number they share), on the most informative member (confirmed, then most values,
+    then first: messages are sorted alphabetically).  The union is confirmed when every member
+    is, and may be missing values only when every member may (one complete member has them
+    all).
     """
-    return max(
-        (e for e, _ in group),
-        key=lambda e: (e.values_confirmed, len(e.values)),
-    )
+    members = [e for e, _ in group]
+    best = max(members, key=lambda e: (e.values_confirmed, len(e.values)))
+    values, numbers = list(best.values), {v.number for v in best.values}
+    for e in members:
+        if e is not best:
+            more = [v for v in e.values if v.number not in numbers]   # (aliases included)
+            values += more
+            numbers |= {v.number for v in more}
+    if len(values) == len(best.values):
+        return best
+    truncated = all(e.values_truncated for e in members)
+    return replace(best, values=sorted(values, key=lambda v: v.number),
+                   values_confirmed=all(e.values_confirmed for e in members),
+                   values_truncated=truncated,
+                   incomplete_reason=best.incomplete_reason if truncated else None)
 
 
 
@@ -624,9 +633,9 @@ class ProtoFile:
 
         * **Binary-level enums** (e.g. ``"RequestType"``, ``"MapsResultType"``)
           may appear in several classes when multiple classes share the same
-          runtime enum type.  These are always *compatible* (same values at
-          the same numeric indices) so we pick the most informative
-          representative and emit it once.
+          runtime enum type.  These are *compatible* (same names at the numbers
+          they share), each with the values its class's code shows, so their
+          union is emitted once (:func:`_best_in_compat_group`).
 
         * **Class-qualified enums** (e.g. ``"PDPlaceResponseStatus"``) are
           unique by name and pass through unchanged.
@@ -646,15 +655,15 @@ class ProtoFile:
         # ── Step 2: process each name group ──────────────────────────────────
         for enum_name, instances in name_instances.items():
 
+            # a group's members agree at every number any two of them share: an enum joins
+            # the first group compatible with EVERY member (with their union)
             compat_groups: List[List[Tuple[ProtoEnum, ProtoMessage]]] = []
             for enum, msg in instances:
-                placed = False
                 for group in compat_groups:
-                    if _enums_compatible(group[0][0], enum):
+                    if all(_enums_compatible(e, enum) for e, _ in group):
                         group.append((enum, msg))
-                        placed = True
                         break
-                if not placed:
+                else:
                     compat_groups.append([(enum, msg)])
 
             if len(compat_groups) == 1:

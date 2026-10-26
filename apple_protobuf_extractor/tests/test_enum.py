@@ -1194,6 +1194,26 @@ class TestCollectEnumsPrincipled(unittest.TestCase):
         self.assertEqual(len(enums), 1)
         self.assertTrue(enums[0].values_confirmed)
 
+    def test_compatible_enums_emit_the_union_of_their_values(self):
+        # each class's code shows some of the values: none may be lost
+        a = _proto_enum("Status", [(0, "STATUS_OK"), (1, "STATUS_FAILED")])
+        b = _proto_enum("Status", [(0, "STATUS_OK"), (7, "STATUS_RETRY")])
+        enums = self._pf([_msg("A", enums=[a]), _msg("B", enums=[b])])._collect_enums()
+        self.assertEqual([(v.number, v.name) for v in enums[0].values],
+                         [(0, "STATUS_OK"), (1, "STATUS_FAILED"), (7, "STATUS_RETRY")])
+
+    def test_an_enum_joins_a_group_only_if_it_agrees_with_every_member(self):
+        # {0} and {1: B} agree; {0, 1: X} agrees with the first but not the second
+        e1 = _proto_enum("Kind", [(0, "KIND_A")])
+        e2 = _proto_enum("Kind", [(1, "KIND_B")])
+        e3 = _proto_enum("Kind", [(0, "KIND_A"), (1, "KIND_X")])
+        enums = self._pf([_msg("A", enums=[e1]), _msg("B", enums=[e2]),
+                          _msg("C", enums=[e3])])._collect_enums()
+        # two enums, each with a 0 and its own 1 (value names are de-collided package-wide)
+        self.assertEqual(sorted((sorted(v.number for v in e.values),
+                                 {v.number: v.name for v in e.values}[1]) for e in enums),
+                         [([0, 1], "KIND_B"), ([0, 1], "KIND_X")])
+
     # ── Incompatible cases (split with qualified names) ────────────────────────
 
     def test_incompatible_enums_produce_two_entries(self):
