@@ -173,6 +173,16 @@ class TestFlowThroughARegisterThunk(unittest.TestCase):
         self.assertIsNone(flow.propagate({}, [self.AFTER])[self.AFTER].get('x0'))
         self.assertIn('x0', flow.call_writes(self.BL))
 
+    def test_its_result_is_its_tail_calls(self):
+        # call_result is told the register's target and x0 after the prefix: the thunk only
+        # calls what it is handed (an accessor in x1, with request 0)
+        told = []
+        objects = Objects(call_result=lambda addr, t, x0: told.append((addr, t, x0)) or 0x99)
+        flow = self._flow()
+        regs = flow.propagate({}, [self.AFTER], objects)[self.AFTER]
+        self.assertEqual(set(told), {(flow.insns[self.BL].addr, 0x7000, 0)})
+        self.assertEqual(regs.get('x0'), 0x99)
+
     def test_its_tail_call_goes_where_the_register_points(self):
         flow = self._flow()
         self.assertEqual(flow.thunk_target(self.BL, {'x1': 0x7000}), 0x7000)

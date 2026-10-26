@@ -151,6 +151,37 @@ class TestAOneEntryReadingIsChecked(unittest.TestCase):
         self.assertEqual(self._run(None, stored=("other",)), ([], 1))
 
 
+class TestMetadataThroughAnOutlinedThunk(unittest.TestCase):
+    """A call to an unnamed outlined thunk with a fixed tail (``mov x0, #0 ; b <accessor>``) is
+    its tail call: the metadata it returns is the accessor's type."""
+
+    THUNK, ACCESSOR, DESC = 0x4000, 0x5000, 0xD0
+
+    def _type(self, names_of_thunk=()):
+        from unittest import mock
+        import serializers.swift_message_code as MC
+        import serializers.swift_type_recovery as TR
+        from proto.callees import Outlined
+        from tests._listing import insns
+        objs = MC._Objects(None)
+        v = objs._object(("call", 0x1000, self.THUNK, None))
+        body = tuple(insns([('mov', 'x0, #0')], self.THUNK))
+        with mock.patch.object(MC, "_accessors", lambda ctx: {self.ACCESSOR: self.DESC}), \
+                mock.patch.object(MC.SY, "function_names",
+                                  lambda ctx, t: set(names_of_thunk) if t == self.THUNK else set()), \
+                mock.patch.object(MC, "outlined_code",
+                                  lambda ctx, t: Outlined(body, self.ACCESSOR) if t == self.THUNK else None), \
+                mock.patch.object(TR, "_qualified_name",
+                                  lambda ctx, d: "PegasusAPI.M" if d == self.DESC else None):
+            return MC.metadata_type(None, objs, v)
+
+    def test_the_tail_accessor_names_the_type(self):
+        self.assertEqual(self._type(), "PegasusAPI.M")
+
+    def test_a_named_function_of_that_shape_is_known_by_its_own_name(self):
+        self.assertIsNone(self._type(names_of_thunk={"_someRuntimeFunction"}))
+
+
 class TestOneMessageFailingIsItsOwn(unittest.TestCase):
     """A message whose decodeMessage reading raises is recorded as its analysis failure; the
     image's other messages are typed as before."""

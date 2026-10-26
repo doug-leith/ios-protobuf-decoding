@@ -34,8 +34,8 @@ from typing import Dict, List, NamedTuple, Optional, Tuple
 
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache
 from proto.arm64_eval import Flow, Objects, Sym
-from proto.arm64_operands import CALLS, CALLER_SAVED
-from proto.callees import callee_name, text_holding
+from proto.arm64_operands import CALLS, CALLER_SAVED, writes
+from proto.callees import callee_name, outlined_code, text_holding
 from proto.function_body import function_body
 from proto.models import MAX_FIELD_NUMBER
 from serializers import swift_symbols as SY
@@ -506,19 +506,7 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         if origin[:1] != ("call",) or split(v)[1]:
             return None
         _c, _addr, target, x0 = origin
-        if target is None:
-            return None
-        desc = _accessors(ctx).get(target)
-        if desc:
-            return TR._qualified_name(ctx, desc)
-        names = SY.function_names(ctx, target)
-        if any(n in _INSTANTIATE for n in names) and x0 is not None and not isinstance(x0, Sym):
-            try:
-                ptype, label = TR.decode_mangled(ctx, rel(ctx, x0))
-            except READ_ERRORS:
-                return None
-            return ("repeated " + ptype if label == "repeated" else ptype) if ptype else None
-        return next(filter(None, map(_type_of_accessor_symbol, names)), None)
+        return _call_result_type(ctx, target, x0)
     if isinstance(v, Sym):                       # (a frame address)
         return None
     try:
@@ -526,6 +514,32 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         return TR._qualified_name(ctx, desc) if TR._desc_kind(ctx, desc) in (17, 18) else None
     except READ_ERRORS:
         return None
+
+
+def _call_result_type(ctx, target: Optional[int], x0) -> Optional[str]:
+    """The type the metadata a call to *target* (handed *x0*) returns stands for
+    (:func:`metadata_type`).  A call to an unnamed outlined thunk with a fixed tail
+    (``mov x0, #0 ; b <accessor>``) is its tail call: x0 is the caller's unless its prefix
+    writes it."""
+    import serializers.swift_type_recovery as TR
+    if target is None:
+        return None
+    desc = _accessors(ctx).get(target)
+    if desc:
+        return TR._qualified_name(ctx, desc)
+    names = SY.function_names(ctx, target)
+    if any(n in _INSTANTIATE for n in names) and x0 is not None and not isinstance(x0, Sym):
+        try:
+            ptype, label = TR.decode_mangled(ctx, rel(ctx, x0))
+        except READ_ERRORS:
+            return None
+        return ("repeated " + ptype if label == "repeated" else ptype) if ptype else None
+    if not names:
+        o = outlined_code(ctx, target)
+        if o is not None and o.tail is not None and o.tail != target:
+            prefix_x0 = any("x0" in writes(i) for i in o.body)
+            return _call_result_type(ctx, o.tail, None if prefix_x0 else x0)
+    return next(filter(None, map(_type_of_accessor_symbol, names)), None)
 
 
 # ── traverse ──────────────────────────────────────────────────────────────────

@@ -1523,18 +1523,26 @@ class Flow:
         the call site, with the registers at it (a consumer that follows the call runs the
         prefix itself), and its result is that call's: *call_result* is told the ``bl``'s
         target and x0 (a named function of this shape, a metadata accessor say, is known by
-        its own name, not its tail callee's)."""
+        its own name, not its tail callee's) -- but of a thunk through a register, the
+        register's target and x0 after its prefix (``mov x0, #0 ; br x22``: outlined code that
+        calls the accessor it is handed)."""
         ins = self.insns[k]
         mn = ins.mnemonic
         if self.fragment(k) is not None:
             if not self.fragment_calls(k):
                 self._run_fragment(m, k, trace)
                 return
-            site = (self._call_target(m, ins), m.copy_of('x0'))
-            if on_call is not None:
-                on_call(site[0])
+            through_reg = self.fragment_tail_reg(k) is not None
+            if not through_reg:
+                site = (self._call_target(m, ins), m.copy_of('x0'))
+                if on_call is not None:
+                    on_call(site[0])
             self._run_fragment(m, k, trace)
             tail = self.thunk_target(k, m.regs)
+            if through_reg:
+                site = (tail, m.copy_of('x0'))
+                if on_call is not None:
+                    on_call(tail)
             self._call(m, k, tail, self.tail_clobbers(k), call_result, site)
             return
         if mn in CALLS:
