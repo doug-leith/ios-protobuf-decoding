@@ -448,12 +448,12 @@ class TestReadCstringBoundary:
         assert s == 'hello'
 
     def test_uncapped_read_goes_to_the_terminator(self):
-        """max_len=None: clamped by the segment only (a Swift name is read so)."""
+        """No *max_len* (the default): clamped by the segment only."""
         name = b'n' * 5000
         ctx  = BinaryContext(build_text_binary(name + b'\x00', vmaddr=TEXT_VA))
-        assert ctx.read_cstring(TEXT_VA, None) == name.decode()
+        assert ctx.read_cstring(TEXT_VA) == name.decode()
         with pytest.raises(ValueError):
-            ctx.read_cstring(TEXT_VA)
+            ctx.read_cstring(TEXT_VA, max_len=4096)
         with pytest.raises(ValueError):     # the segment's end, not the file's
             two_segments().read_cstring(TWO_CSTR, None)
 

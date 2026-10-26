@@ -242,14 +242,14 @@ class TestDyldCacheReaderSynthetic(unittest.TestCase):
             self.assertEqual(r.read_cstring(vmaddr + 1), 'next')
 
     def test_long_cstring_read_in_chunks(self):
-        # longer than a read chunk and than the default cap: read to its terminator when
-        # uncapped, refused at the cap otherwise
+        # longer than a read chunk: read to its terminator (no *max_len*, the default), refused
+        # past a *max_len* given
         vmaddr = 0x180000000
         long = b'x' * 3000
         path = self._single(vmaddr, long + b'\x00tail\x00')
         with DyldCacheReader(path) as r:
-            self.assertEqual(r.read_cstring(vmaddr, None), long.decode())
-            self.assertIsNone(r.read_cstring(vmaddr))
+            self.assertEqual(r.read_cstring(vmaddr), long.decode())
+            self.assertIsNone(r.read_cstring(vmaddr, max_len=1024))
             self.assertEqual(r.read_cstring(vmaddr + 3001, None), 'tail')
 
     def test_uncapped_cstring_stops_at_the_mapping_end(self):

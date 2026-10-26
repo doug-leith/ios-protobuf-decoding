@@ -516,10 +516,11 @@ def _parse_methods(
 
     # A real class has far fewer than _MAX_METHODS methods ([cap:INPUT-SANITY]): a count past
     # it is a misdecoded ``baseMethods`` pointer landing on unrelated mapped memory, whose
-    # entries would be thousands of garbage methods -- the class gets none, warned.
+    # entries would be thousands of garbage methods -- the class gets none, recorded unread.
     if count >= _MAX_METHODS:
-        log.warning("method list at %#x claims %d methods (more than %d): taken as a misdecoded "
-                    "pointer, the class gets no methods", list_va, count, _MAX_METHODS)
+        record_unread(ctx, "method list", f"{list_va:#x}",
+                      ValueError(f"claims {count} methods (more than {_MAX_METHODS}): taken "
+                                 f"for a misdecoded pointer, the class gets no methods"))
         return []
     methods: List[ObjcMethod] = []
 
@@ -710,15 +711,10 @@ def _parse_ivars(
                 type_enc = strings.get(type_ptr) or ''
                 if not type_enc:
                     try:
-                        # ivar @encode strings are usually short, but a proto class's
-                        # has-bits ivar is one anonymous bitfield per field
-                        # (`{?="read_a"b1"read_b"b1…}`) and grows with the field count
-                        # — GEOAnalyticsPipelineStateData's (138 fields) is ~4140 bytes,
-                        # past the 4096 default, so a truncated read returned '' and the
-                        # has-bits ivar leaked into the output as a phantom `bytes`
-                        # field.  Read generously so the struct is captured whole and
-                        # _is_proto_flags_ivar can recognise it.
-                        type_enc = ctx.read_cstring(type_ptr, max_len=65536)   # [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26]
+                        # a proto class's has-bits ivar is one anonymous bitfield per field
+                        # (`{?="read_a"b1"read_b"b1…}`): GEOAnalyticsPipelineStateData's
+                        # (138 fields) is ~4140 bytes
+                        type_enc = ctx.read_cstring(type_ptr)
                     except READ_ERRORS as exc:
                         record_unread(ctx, "ivar type", f"{entry_va:#x} ({name})", exc)
 

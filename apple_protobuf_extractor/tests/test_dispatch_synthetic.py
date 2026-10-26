@@ -181,6 +181,16 @@ class TestJumpTablesDecodedByEvaluation(unittest.TestCase):
         self.assertEqual(_jump_table_arm_addrs(self._Mem(0, b''), insns),
                          {0x1010, 0x1018, 0x1020, 0x1028})
 
+    def test_a_mask_wider_than_the_gate_span_is_reported(self):
+        # and w8, w0, #0x1fff: 8,192 values, each a run -- not enumerated, and in the summary
+        from proto.models import get_diagnostics
+        insns = self._listing([
+            'and w8, w0, #0x1fff', 'adr x9, #0x1010', 'add x9, x9, x8, lsl #3', 'br x9',
+            'ret', 'nop', 'ret'])
+        mem = self._Mem(0, b'')
+        self.assertEqual(_jump_table_arm_addrs(mem, insns), set())
+        self.assertIn(("_MAX_GATE_SPAN", "0x1000"), get_diagnostics(mem).heuristics_hit)
+
     def test_a_shift_bounded_index(self):
         # lsr x8, x1, #62: a value's two tag bits (Foundation.Data's representation in
         # swift-protobuf's BytesValue.traverse), every value 0..3 an entry of a byte table

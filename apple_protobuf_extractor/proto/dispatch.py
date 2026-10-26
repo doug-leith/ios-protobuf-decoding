@@ -107,14 +107,18 @@ def _index_bound(flow, k: int):
     if ins.mnemonic == 'cmp' and len(ops) in (2, 3) and ops[1].startswith('#'):
         n = imm_operand(ops, 1)
         r = _norm_reg(ops[0])
-        if n is None or r is None or n > _MAX_GATE_SPAN or _guarding_cond(flow, k) not in _RANGE_CONDS:
+        if n is None or r is None or _guarding_cond(flow, k) not in _RANGE_CONDS:
             return None
+        if n > _MAX_GATE_SPAN:
+            return _gate_span_hit(flow, ins)
         return k, r, n + 2
     if ins.mnemonic == 'and' and len(ops) == 3 and ops[2].startswith('#'):
         mask = _parse_imm(ops[2])
         r = _norm_reg(ops[0])
-        if mask is None or r is None or mask <= 0 or mask & (mask + 1) or mask >= _MAX_GATE_SPAN:
+        if mask is None or r is None or mask <= 0 or mask & (mask + 1):
             return None
+        if mask >= _MAX_GATE_SPAN:
+            return _gate_span_hit(flow, ins)
         return k + 1, r, mask + 1
     if ins.mnemonic in ('lsr', 'ubfx') and len(ops) == (3 if ins.mnemonic == 'lsr' else 4) \
             and all(o.startswith('#') for o in ops[2:]):
@@ -124,8 +128,16 @@ def _index_bound(flow, k: int):
             return None
         bits = (64 if ops[0].startswith('x') else 32) - imm if ins.mnemonic == 'lsr' else imm
         if not 0 < bits or 1 << bits > _MAX_GATE_SPAN:
-            return None
+            return None                  # (a wide shift is arithmetic, not a gate: no report)
         return k + 1, r, 1 << bits
+    return None
+
+
+def _gate_span_hit(flow, ins) -> None:
+    """A gate (or a set of values) wider than :data:`proto.arm64_eval._MAX_GATE_SPAN`, the
+    values evaluated one by one: not enumerated, and reported."""
+    if flow.ctx is not None:
+        record_heuristic_hit(flow.ctx, "_MAX_GATE_SPAN", f"{ins.addr:#x}")
     return None
 
 
@@ -247,7 +259,7 @@ def _value_set(flow, k: int, reg: str, memo: dict) -> Optional[frozenset]:
             return None
         out |= vs
         if len(out) > _MAX_GATE_SPAN:
-            return None
+            return _gate_span_hit(flow, flow.insns[k])
     memo[key] = frozenset(out)
     return memo[key]
 

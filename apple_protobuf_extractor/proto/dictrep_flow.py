@@ -117,7 +117,7 @@ class Flow(_EvalFlow):
                      if v in cands and reg in obs and _is_enum_name(obs[reg])}
             if len(set(names.values())) > len(set(best.values())):
                 best, best_reg = names, reg
-        return RootResult(best, problems, len(cands), best_reg,
+        return RootResult(best, problems, best_reg,
                           {v: stops[v] for v in best if v in stops})
 
     def enum_of_load(self, k: int, stop: FrozenSet[int] = frozenset()) -> Optional["RootResult"]:
@@ -144,8 +144,8 @@ class Flow(_EvalFlow):
         #   incomplete:  a field that WAS recovered as an enum but some value could not be
         #                evaluated (or a table gate was too wide to enumerate): values may be
         #                missing from it
-        #   unevaluated: an enum-like switch (two or more compare constants / table indices)
-        #                that yielded nothing: the field may be an enum that stays untyped
+        #   unevaluated: a field whose value the code compares or indexes with, whose
+        #                evaluation yielded nothing: it may be an enum that stays untyped
         self.incomplete: Dict[int, str] = {}
         self.unevaluated: Dict[int, str] = {}
         roots = self.value_loads()
@@ -166,7 +166,7 @@ class Flow(_EvalFlow):
                     tgt.setdefault(v, nm)
                 if res.problems:
                     self.incomplete.setdefault(off, "; ".join(res.problems[:3]))
-            elif res.problems and res.n_candidates >= 3:     # [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26, at >= 1]
+            elif res.problems:
                 self.unevaluated.setdefault(off, "; ".join(res.problems[:3]))
         for off in out:
             self.unevaluated.pop(off, None)
@@ -178,7 +178,6 @@ class RootResult:
     """What :meth:`Flow.analyse_root` found for one integer value."""
     pairs: Dict[int, str]          # value -> name; empty: not an enum (or not evaluable)
     problems: List[str]            # values/gates the evaluation could not settle
-    n_candidates: int              # how many distinct values the code compares / indexes with
     name_reg: Optional[str] = None  # the argument register that carries the name
     stops: Dict[int, int] = field(default_factory=dict)   # value -> index of the call its run reached
 

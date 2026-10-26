@@ -290,6 +290,16 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
         self.assertEqual(out, {})
         self.assertIn('untracked', flow.unevaluated[24])
 
+    def test_one_compare_that_cannot_be_evaluated_is_listed_too(self):
+        # a single `cmp w8, #1` (no zero test, no second compare): every path aborts
+        flow, _ = self._flow(guard='cbz x5, merge')
+        flow.insns = [i for i in flow.insns
+                      if not (i.mnemonic == 'cbz' and i.op_str.startswith('w8'))
+                      and not (i.mnemonic == 'cmp' and i.op_str.endswith('#2'))]
+        flow = Flow(flow.ctx, flow.insns)
+        self.assertEqual(flow.enum_maps({24}), {})
+        self.assertIn('untracked', flow.unevaluated[24])
+
     def test_harvest_reports_all_three_results(self):
         from proto.enums import _harvest_dictrep
         code = [c.replace('{guard}', 'nop').replace('{two_guard}', 'cbz x5, merge')

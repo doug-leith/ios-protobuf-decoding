@@ -223,9 +223,29 @@ def decode_file_descriptor(blob: bytes) -> FileProto:
 # ── blob finder ──────────────────────────────────────────────────────────────
 
 # Field 1 (name) of a FileDescriptorProto: 0x0a <len:varint> <"....proto">.
-# len is a single byte for any real path (< 128).  [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] a path of 3 to 120
-# characters from that set: a longer one, or one with a space, is not found.
-_SIG = re.compile(rb"\x0a([\x01-\x7f])([0-9A-Za-z_./+-]{3,120}\.proto)")
+_PROTO_SUFFIX = re.compile(rb"\.proto")
+
+
+def _name_fields(data: bytes):
+    """``(start, length)`` of every byte run that can be a FileDescriptorProto's name field
+    ending at a ``.proto`` in *data*: the name's length, as a one- or two-byte varint, stands
+    just before it, and the field's tag (0x0a) before that.  The name is any text without a
+    control character; :func:`decode_file_descriptor` decides."""
+    for m in _PROTO_SUFFIX.finditer(data):
+        end = run = m.end()
+        while run > 0 and data[run - 1] >= 0x20 and end - run < 1 << 14:
+            run -= 1                     # the name lies in the text run ending here
+        for ln in range(len(".proto") + 1, end - run + 1):
+            name = end - ln
+            if ln < 0x80:
+                head = name - 2
+                ok = head >= 0 and data[name - 1] == ln
+            else:
+                head = name - 3
+                ok = (head >= 0 and data[name - 2] == (ln & 0x7f) | 0x80
+                      and data[name - 1] == ln >> 7)
+            if ok and data[head] == 0x0a:
+                yield head, ln
 _FDP_TOP_FIELDS = frozenset(range(1, 13))   # FileDescriptorProto fields 1..12
 
 
@@ -274,11 +294,7 @@ def find_descriptor_blobs(data: bytes) -> List[Tuple[int, bytes]]:
     blob is validated by a successful decode that recovers a ``.proto`` name."""
     out: List[Tuple[int, bytes]] = []
     seen: set = set()
-    for m in _SIG.finditer(data):
-        ln = m.group(1)[0]
-        if ln != len(m.group(2)):
-            continue
-        start = m.start()
+    for start, ln in _name_fields(data):
         end = _blob_end(data, start)
         blob = data[start:end]
         if len(blob) < ln + 2:

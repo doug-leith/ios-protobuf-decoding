@@ -70,6 +70,14 @@ class TestCppDecodeMinimal(unittest.TestCase):
         self.assertEqual(len(found), 1)                     # dedup by (name, len)
         self.assertEqual(C.decode_file_descriptor(found[0][1]).name, "test.proto")
 
+    def test_a_long_name_or_one_with_a_space_is_found(self):
+        # the name's length a two-byte varint (over 127 characters), or a space in it
+        for name in (b"a/" + b"deep/" * 40 + b"x.proto", b"My Folder/x y.proto"):
+            blob = self._blob().replace(_ld(1, b"test.proto"), _ld(1, name), 1)
+            found = C.find_descriptor_blobs(b"\x00junk" + blob + b"\xff")
+            self.assertEqual([C.decode_file_descriptor(b).name for _o, b in found],
+                             [name.decode()])
+
 
 class TestCppOneofAndProto3(unittest.TestCase):
     def _blob(self):

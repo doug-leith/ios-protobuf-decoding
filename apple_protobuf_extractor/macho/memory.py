@@ -235,6 +235,10 @@ def reset_ctx_caches(ctx) -> None:
 
 # ─── BinaryContext ────────────────────────────────────────────────────────────
 
+def _within(max_len: Optional[int]) -> str:
+    return f"within {max_len} bytes" if max_len is not None else "before the end of its segment"
+
+
 class BinaryContext:
     """
     Random-access reader over a single-arch arm64 Mach-O binary.
@@ -546,25 +550,21 @@ class BinaryContext:
             return struct.unpack_from('<q', raw)[0]
         return struct.unpack_from('<q', self._data, self.vmaddr_to_offset(vmaddr, 8))[0]
 
-    def read_cstring(self, vmaddr: int, max_len: Optional[int] = 4096) -> str:
-        """Read a null-terminated C string, clamped to the segment boundary (and to *max_len*
-        bytes unless it is None).  [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] *max_len*'s default: a longer string
-        is not returned (a method's types string over it reads as '')."""
+    def read_cstring(self, vmaddr: int, max_len: Optional[int] = None) -> str:
+        """Read a null-terminated C string, clamped to the segment boundary (in a cache, the
+        mapping's end), and to *max_len* bytes when given."""
         if self._cache_reader is not None:
             s = self._cache_reader.read_cstring(vmaddr, max_len=max_len)
             if s is None:
-                raise ValueError(
-                    f"No null terminator within {max_len} bytes of 0x{vmaddr:x}"
-                )
+                raise ValueError(f"no string at 0x{vmaddr:x}: unmapped, undecodable, or no null "
+                                 f"terminator {_within(max_len)}")
             return s
         off     = self.vmaddr_to_offset(vmaddr, 1)
         seg_end = self._segment_end_offset(vmaddr)
         cap     = seg_end if max_len is None else min(off + max_len, seg_end)
         null    = self._data.find(b'\x00', off, cap)
         if null < 0:
-            raise ValueError(
-                f"No null terminator within {max_len} bytes of 0x{vmaddr:x}"
-            )
+            raise ValueError(f"no null terminator {_within(max_len)} of 0x{vmaddr:x}")
         raw = self._data[off:null]
         try:
             return raw.decode('utf-8')

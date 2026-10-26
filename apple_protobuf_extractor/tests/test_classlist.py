@@ -834,6 +834,22 @@ class TestAnIvarOffsetTheRuntimeSets:
         assert [u[0] for u in unread_input(ctx)] == ["ivar list"]
 
 
+class TestMethodListCount:
+    def test_a_count_past_the_bound_is_recorded_unread(self):
+        # a method list claiming more methods than any class has: a misdecoded pointer, so
+        # the class gets none -- in the run summary, not only a log line
+        import struct as _s
+        from macho.classlist import _MAX_METHODS, _parse_methods
+        from macho.memory import unread_input
+
+        class Ctx:
+            def read_u32(self, va):
+                return _s.unpack_from("<I", _s.pack("<II", 24, _MAX_METHODS), va - 0x4000)[0]
+        ctx = Ctx()
+        assert _parse_methods(ctx, 0x4000, StringTable()) == []
+        assert [u[:2] for u in unread_input(ctx)] == [("method list", "0x4000")]
+
+
 class TestSuperclassChain:
     """macho.classlist.superclass_chain: a class of the image read from the class list,
     another image's through its class_t (+8 its superclass), a bound slot by its import."""

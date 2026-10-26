@@ -304,8 +304,10 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             scan = flow.candidates(k, dest, (1, MAX_FIELD_NUMBER + 1))
             cands = scan.values
             for lo, hi in scan.intervals:
-                if hi - lo <= _MAX_GATE_SPAN:      # one imm12 gate's reach
+                if hi - lo <= _MAX_GATE_SPAN:
                     cands.update(v for v in range(max(lo, 1), hi + 1) if v <= MAX_FIELD_NUMBER)
+                else:                              # (field numbers evaluated one by one)
+                    record_heuristic_hit(ctx, "_MAX_GATE_SPAN", f"{cls.name}: {lo}..{hi}")
             if not cands:
                 continue
             default_n = max(cands) + 1

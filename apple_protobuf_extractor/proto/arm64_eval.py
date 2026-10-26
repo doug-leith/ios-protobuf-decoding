@@ -50,10 +50,11 @@ _STRICT_CONDS = frozenset(('hs', 'cs', 'lo', 'cc', 'ge', 'lt'))
 #: source is then the in-range one).
 _IN_RANGE_CONDS = frozenset(('ls', 'lo', 'cc', 'le', 'lt'))
 
-# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] the widest ordered gate (`cmp w, #imm; b.hi`) expanded to its whole
-# interval: an unshifted immediate spans at most 2^12 values, but a register or `lsl #12` compare
-# can span more, and a wider gate is not expanded (its values are not candidates).  Only a gate
-# whose register then indexes a table is expanded.
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] the widest ordered gate
+# (`cmp w, #imm; b.hi`), mask or value set whose values are evaluated one by one (each a run):
+# an unshifted immediate spans at most 2^12 values, a register or `lsl #12` compare more, and
+# nothing else in the code bounds a table it indexes.  A wider one is not enumerated, and is
+# reported (Candidates.gate_capped; record_heuristic_hit).
 _MAX_GATE_SPAN = 1 << 12
 
 

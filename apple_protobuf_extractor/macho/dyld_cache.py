@@ -204,10 +204,6 @@ _HDR_READ_SIZE      = 0x1e0  # covers all fields we need (past _HDR_OBJC_OPTS_SI
 _OBJC_OPT_HEADER_V1_SIZE           = 56
 _OBJC_OPT_HEADER_REL_SEL_BASE_POS  = 48
 
-# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] _MAX_CSTRING_LEN: the default NUL-scan of a cache string (a selector,
-# a class or enum name; the longest selector in iPhone 8 GeoServices is over 600 characters).  A
-# longer one is not returned (None).
-_MAX_CSTRING_LEN    = 1024   # max selector string length we'll return
 _CSTRING_CHUNK      = 256    # bytes read at a time looking for a terminator [cap:COSMETIC]
 
 # ── Image-discovery constants (find_image_header / image_sections) ────────────
@@ -672,7 +668,7 @@ class DyldCacheReader:
             raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
         return self.decode_ptr(raw)
 
-    def read_cstring(self, vmaddr: int, max_len: int = _MAX_CSTRING_LEN) -> Optional[str]:
+    def read_cstring(self, vmaddr: int, max_len: Optional[int] = None) -> Optional[str]:
         """
         Return the null-terminated UTF-8 string at *vmaddr* in the cache, or
         ``None`` if the address is not mapped or the string is not decodable.
