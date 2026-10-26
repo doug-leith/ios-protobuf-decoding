@@ -6,7 +6,8 @@ caller's registers survive it except the ones it writes, and its stores are the 
 (PegasusAPI's name-map builders, TODO #97).  A fragment may set up the caller's frame (``sub
 sp, sp, #0x80 ; stp ... ; ret``), and a thunk ends in a tail call instead of a return (``stp
 x2, x3, [sp, #0x10] ; ... ; b T``): its prefix runs in the caller, then the ``bl`` is a call to T
-(iOS 27 PromptKit's name-map builders).  :func:`proto.callees.outlined_code` recognises both;
+(iOS 27 PromptKit's name-map builders), or through a register (``mov x19, x0 ; mov x0, #0 ; br
+x1``, Swift's outlined metadata-accessor call).  :func:`proto.callees.outlined_code` recognises them;
 :class:`proto.arm64_eval.Flow` runs them in place of the call.
 """
 import os
@@ -24,18 +25,21 @@ from tests._fakes import NoImage
 FRAG, TAIL = 0x2000, 0x5000
 
 
-def _flow(frag_lines, *caller, tail=None):
+def _flow(frag_lines, *caller, tail=None, tail_reg=None):
     """Flow over *caller* (at 0x1000) where ``bl #0x2000`` runs *frag_lines* (with *tail*: a
-    thunk's prefix, then a call to *tail*)."""
+    thunk's prefix, then a call to *tail*; with *tail_reg*, through that register)."""
     frag = tuple(insns(frag_lines, FRAG))
     with mock.patch('proto.arm64_eval.outlined_fragment',
                     lambda ctx, t: frag if t == FRAG else None), \
             mock.patch('proto.arm64_eval.outlined_tail',
-                       lambda ctx, t: tail if t == FRAG else None):
+                       lambda ctx, t: tail if t == FRAG else None), \
+            mock.patch('proto.arm64_eval.outlined_tail_reg',
+                       lambda ctx, t: tail_reg if t == FRAG else None):
         flow = Flow(NoImage(), insns(caller))
         k = next(k for k, i in enumerate(flow.insns) if i.mnemonic == 'bl')
         flow.fragment(k)
         flow.fragment_tail(k)
+        flow.fragment_tail_reg(k)
     return flow
 
 
@@ -146,6 +150,35 @@ class TestFlowThroughAThunk(unittest.TestCase):
         self.assertEqual((got.get('x0'), got.get('x1')), ('S0x0', 'S0x9'))
 
 
+class TestFlowThroughARegisterThunk(unittest.TestCase):
+    """``bl`` to ``mov x19, x0 ; mov x0, #0 ; br x1``: the caller's x19 is the prefix's, then a
+    call through x1."""
+
+    PREFIX = [('mov', 'x19, x0'), ('mov', 'x0, #0')]
+    CALLER = [('add', 'x19, sp, #0x10'), ('mov', 'x0, #0x40'), ('mov', 'x1, #0x7000'),
+              ('bl', '#0x2000'), ('mov', 'x2, x19'), ('ret', '')]
+    BL, AFTER = 3, 4
+
+    def _flow(self):
+        return _flow(self.PREFIX, *self.CALLER, tail_reg='x1')
+
+    def test_the_callee_saved_register_it_sets_is_its_value_not_the_callers(self):
+        flow = self._flow()
+        self.assertEqual(flow.propagate({}, [self.AFTER])[self.AFTER].get('x19'), 0x40)
+        self.assertEqual(flow.const_before(self.AFTER, 'x19'), 0x40)
+
+    def test_its_tail_call_takes_the_caller_saved_registers(self):
+        flow = self._flow()
+        self.assertTrue(flow.fragment_calls(self.BL))
+        self.assertIsNone(flow.propagate({}, [self.AFTER])[self.AFTER].get('x0'))
+        self.assertIn('x0', flow.call_writes(self.BL))
+
+    def test_its_tail_call_goes_where_the_register_points(self):
+        flow = self._flow()
+        self.assertEqual(flow.thunk_target(self.BL, {'x1': 0x7000}), 0x7000)
+        self.assertIsNone(flow.thunk_target(self.BL, {}))
+
+
 class _TextCtx:
     """A ctx with a ``__text`` section and a function index."""
     class _Sec:
@@ -175,8 +208,12 @@ class TestRecognise(unittest.TestCase):
         got = self._frag([('ldrsw', 'x9, [x23, #0x30]'), ('add', 'x0, x8, x9'), ('ret', '')])
         self.assertEqual([i.mnemonic for i in got], ['ldrsw', 'add'])
 
-    def test_a_tail_call_through_a_register_is_a_call(self):
-        self.assertIsNone(self._frag([('mov', 'x1, x25'), ('br', 'x21')]))
+    def test_a_tail_call_through_a_register_ends_a_thunk(self):
+        _order, fake = layout((FRAG, [('mov', 'x1, x25'), ('br', 'x21')]))
+        with mock.patch('proto.callees.disasm', fake):
+            got = callees.outlined_code(_TextCtx([0x1000, FRAG, 0x2100]), FRAG)
+        self.assertEqual(([i.mnemonic for i in got.body], got.tail, got.tail_reg),
+                         (['mov'], None, 'x21'))
 
     def test_a_call_or_a_branch_inside_is_not_a_fragment(self):
         self.assertIsNone(self._frag([('bl', '#0x3000'), ('ret', '')]))

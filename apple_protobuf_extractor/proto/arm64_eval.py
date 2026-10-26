@@ -28,7 +28,7 @@ from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_
                             predecessors, reverse_postorder)
 from macho.strings import read_cfstring_text
 from proto.callees import (call_reads, call_clobbers as callee_clobbers, outlined_fragment,
-                           outlined_tail)
+                           outlined_tail, outlined_tail_reg)
 from proto.arm64_operands import (
     ARG_GPRS, AUTHENTICATED_BRANCHES, CALL_ARG_GPRS, CALLER_SAVED, CALLER_SAVED_GPRS, CALLS,
     INDIRECT_BRANCHES, POINTER_AUTH, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES, TRAPS,
@@ -594,6 +594,7 @@ class Flow:
         self._reg_targets: Optional[Dict[int, int]] = None   # :meth:`_register_call_targets`
         self._fragments: Dict[int, Optional[Tuple[Insn, ...]]] = {}   # :meth:`fragment`
         self._tails: Dict[int, Optional[int]] = {}                    # :meth:`fragment_tail`
+        self._tail_regs: Dict[int, Optional[str]] = {}                # :meth:`fragment_tail_reg`
         self._known: Dict[int, Dict[str, int]] = {}                   # :meth:`known_before`
         self._entry_states: Optional[Dict[int, "_Machine"]] = None    # :meth:`known_before`
 
@@ -698,7 +699,7 @@ class Flow:
     def _const_of_def(self, d: int, reg: str) -> Optional[int]:
         frag = self.fragment(d)
         if frag is not None:                             # *reg* as the fragment leaves it
-            if self.fragment_tail(d) is not None and reg in self.tail_writes(d):
+            if self.fragment_calls(d) and reg in self.tail_writes(d):
                 return None                              # set by a thunk's tail call
             m = _Machine({}, fallback=lambda r: self.const_before(d, r))
             for fi in frag:
@@ -840,7 +841,7 @@ class Flow:
             for k in range(lo, self.block_range(blk).stop):
                 if self.insns[k].mnemonic in CALLS:
                     clobbers = self.call_writes(k)
-                    if clobbers is None or self.fragment_tail(k) is not None:
+                    if clobbers is None or self.fragment_calls(k):
                         return []                      # the path ends at its first call
                     for r in clobbers:
                         st.pop(r, None)
@@ -1009,7 +1010,7 @@ class Flow:
             nxt = k + 1
             if self.fragment(k) is not None:
                 self._run_fragment(m, k)
-                if self.fragment_tail(k) is not None:
+                if self.fragment_calls(k):
                     return 'call', k              # a thunk's tail call, after its prefix
             elif mn in CALLS and (clobbers := self.call_clobbers(
                     k, self._call_target(m, ins), evaluated=True)) is not None:
@@ -1422,12 +1423,36 @@ class Flow:
 
     def fragment_tail(self, k: int) -> Optional[int]:
         """The target of the tail call the thunk the ``bl`` ``insns[k]`` runs ends in: after
-        its prefix (:meth:`fragment`) the ``bl`` is a call to it.  None for a fragment or a
-        call."""
+        its prefix (:meth:`fragment`) the ``bl`` is a call to it.  None for a fragment, a
+        call, or a tail call through a register (:meth:`fragment_tail_reg`)."""
         if k not in self._tails:
             self._tails[k] = (outlined_tail(self.ctx, _parse_imm(self.insns[k].op_str))
                               if self.fragment(k) is not None else None)
         return self._tails[k]
+
+    def fragment_tail_reg(self, k: int) -> Optional[str]:
+        """The register the tail call of the thunk the ``bl`` ``insns[k]`` runs goes through
+        (``mov x19, x0 ; mov x0, #0 ; br x1``), else None."""
+        if k not in self._tail_regs:
+            self._tail_regs[k] = (outlined_tail_reg(self.ctx, _parse_imm(self.insns[k].op_str))
+                                  if self.fragment(k) is not None else None)
+        return self._tail_regs[k]
+
+    def fragment_calls(self, k: int) -> bool:
+        """The ``bl`` ``insns[k]`` runs a thunk: its prefix, then a tail call (to
+        :meth:`fragment_tail` or through :meth:`fragment_tail_reg`)."""
+        return self.fragment_tail(k) is not None or self.fragment_tail_reg(k) is not None
+
+    def thunk_target(self, k: int, regs) -> Optional[int]:
+        """Where the tail call of the thunk at ``insns[k]`` goes, *regs* the registers after its
+        prefix: :meth:`fragment_tail`, or the register's value when it is an address (not a
+        frame address, which is no code)."""
+        tail = self.fragment_tail(k)
+        if tail is not None:
+            return tail
+        reg = self.fragment_tail_reg(k)
+        v = regs.get(reg) if reg is not None else None
+        return v if type(v) is int else None
 
     def tail_clobbers(self, k: int) -> Optional[Tuple[str, ...]]:
         """The registers the tail call of the thunk at ``insns[k]`` (:meth:`fragment_tail`)
@@ -1449,7 +1474,7 @@ class Flow:
         frag = self.fragment(k)
         if frag is not None:
             w = {r for fi in frag for r in writes(fi)} | {'x30'}
-            if self.fragment_tail(k) is not None:
+            if self.fragment_calls(k):
                 w.update(self.tail_writes(k))
             return tuple(sorted(w))
         return self.call_clobbers(k)
@@ -1464,7 +1489,7 @@ class Flow:
             if trace is not None:
                 trace.append(dict(m.regs))
             self._exec(m, fi)
-        if trace is not None and self.fragment_tail(k) is not None:
+        if trace is not None and self.fragment_calls(k):
             trace.append(dict(m.regs))
 
     def _register_call_targets(self) -> Dict[int, int]:
@@ -1502,14 +1527,14 @@ class Flow:
         ins = self.insns[k]
         mn = ins.mnemonic
         if self.fragment(k) is not None:
-            tail = self.fragment_tail(k)
-            if tail is None:
+            if not self.fragment_calls(k):
                 self._run_fragment(m, k, trace)
                 return
             site = (self._call_target(m, ins), m.copy_of('x0'))
             if on_call is not None:
                 on_call(site[0])
             self._run_fragment(m, k, trace)
+            tail = self.thunk_target(k, m.regs)
             self._call(m, k, tail, self.tail_clobbers(k), call_result, site)
             return
         if mn in CALLS:

@@ -116,7 +116,7 @@ def _loc(flow, k, reg, kind, memo, depth=0, entry=None):
         i = int(m.group(2)) - (1 if kind == "traverse" and m.group(1) == "x" else 0)
         return ("val", ("gpr" if m.group(1) == "x" else "fpr", i), ()) if 0 <= i <= 7 else None
     if flow.fragment(d) is not None and not (
-            flow.fragment_tail(d) is not None and reg in flow.tail_writes(d)):
+            flow.fragment_calls(d) and reg in flow.tail_writes(d)):
         return None         # set by outlined code; one a thunk's tail call sets is the bl's (below)
     key = (d, reg)
     if key in memo:
@@ -301,10 +301,10 @@ class _Frame:
             if any("[" in fi.op_str and fi.mnemonic not in LOAD_BYTES and
                    fi.mnemonic not in PAIR_LOADS and fi.mnemonic != "prfm" for fi in frag):
                 st.slots.clear()                    # an outlined fragment that writes memory
-            tail = flow.fragment_tail(k)
-            if tail is not None:                    # a thunk: then its tail call
+            if flow.fragment_calls(k):              # a thunk: then its tail call
                 inside = self._inside.get(k)
-                self._call(st, k, tail, inside[-1] if inside else {})
+                regs = inside[-1] if inside else {}
+                self._call(st, k, flow.thunk_target(k, regs), regs)
             return
         if mn in CALLS:
             self._call(st, k, _call_target(flow, k, None), self.regs.get(k, {}))

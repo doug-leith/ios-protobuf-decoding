@@ -358,7 +358,7 @@ def _sym_fragment(flow: Flow, d: int, j: int, reg: Optional[str], memo: Dict) ->
     instruction of it, or the value the register has at the call.  After a thunk, a register its
     tail call writes (:meth:`Flow.tail_writes`) is that call's: an atom of its own."""
     frag = flow.fragment(d)
-    if j == len(frag) and flow.fragment_tail(d) is not None and reg in flow.tail_writes(d):
+    if j == len(frag) and flow.fragment_calls(d) and reg in flow.tail_writes(d):
         return (("def", d, ""),), 0
     w = next((i for i in range(j - 1, -1, -1) if reg in writes(frag[i])), None)
     if w is None:

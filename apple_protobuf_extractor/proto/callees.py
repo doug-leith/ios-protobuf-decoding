@@ -319,6 +319,7 @@ class Outlined(NamedTuple):
     """Code a ``bl`` runs as part of its caller (:func:`outlined_code`)."""
     body: Tuple             # the instructions the caller runs (a thunk's prefix)
     tail: Optional[int]     # a thunk's tail-call target; None for a fragment
+    tail_reg: Optional[str] = None   # the register a thunk's tail call goes through
 
 
 def outlined_code(ctx, target: Optional[int]) -> Optional[Outlined]:
@@ -331,12 +332,15 @@ def outlined_code(ctx, target: Optional[int]) -> Optional[Outlined]:
       prologue ``sub sp, sp, #0x80 ; stp x28, x27, [sp, #0x20] ; ... ; ret``), ``tail`` None;
     * the last instruction of its extent, a ``b`` out of it, after an optional arm64e
       return-address check (``eor x16, x30, x30, lsl #1 ; tbz x16, #62, L ; brk ; L: b T``): a
-      *thunk*, its prefix run in the caller and then a call to ``tail`` = T.
+      *thunk*, its prefix run in the caller and then a call to ``tail`` = T;
+    * the last instruction of its extent, a ``br`` (or an authenticated one) through a register:
+      a thunk whose tail call goes through ``tail_reg`` (``mov x19, x0 ; mov x0, #0 ; br x1``,
+      Swift's outlined call of a metadata accessor, which sets the caller's x19).
 
     The machine outliner's helpers keep no calling convention: running them in the caller's
     state is what the call does, so a caller evaluates through them rather than assume the
-    AAPCS64 clobber.  None for any other callee (a tail call through a register is a call), or
-    without a function index to bound it.  Memoised on *ctx*."""
+    AAPCS64 clobber.  None for any other callee, or without a function index to bound it.
+    Memoised on *ctx*."""
     if target is None or ctx is None:
         return None
     memo = _ctx_cache(ctx, "_outlined_code", dict)
@@ -357,6 +361,10 @@ def outlined_code(ctx, target: Optional[int]) -> Optional[Outlined]:
                     t = branch_target(body[last])
                     if t is not None and not target <= t < end:
                         res = Outlined(tuple(body[:prefix]), t)
+                elif last == len(body) - 1 and body[last].mnemonic in INDIRECT_BRANCHES:
+                    reg = _norm_reg(split_ops(body[last].op_str)[0])
+                    if reg is not None:
+                        res = Outlined(tuple(body[:prefix]), None, reg)
     except READ_ERRORS:                               # unreadable bytes: an ordinary call
         res = None
     memo[target] = res
@@ -372,9 +380,16 @@ def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
 
 def outlined_tail(ctx, target: Optional[int]) -> Optional[int]:
     """The target of the tail call a thunk at *target* ends in (:func:`outlined_code`), else
-    None."""
+    None (a fragment, or a tail call through a register: :func:`outlined_tail_reg`)."""
     o = outlined_code(ctx, target)
     return None if o is None else o.tail
+
+
+def outlined_tail_reg(ctx, target: Optional[int]) -> Optional[str]:
+    """The register the tail call a thunk at *target* ends in goes through
+    (:func:`outlined_code`), else None."""
+    o = outlined_code(ctx, target)
+    return None if o is None else o.tail_reg
 
 
 def _return_address_check(body, i: int) -> bool:
@@ -674,6 +689,8 @@ def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) 
             live = set(live_after)
             if code.tail is not None:                    # a thunk's tail call
                 live = _live_before_call(ctx, code.tail, live)
+            elif code.tail_reg is not None:              # through a register
+                live = _live_before_call(ctx, None, live) | {code.tail_reg}
             for fi in reversed(code.body):
                 live = _live_before(ctx, fi, live, own, frame)
             live.discard("x30")

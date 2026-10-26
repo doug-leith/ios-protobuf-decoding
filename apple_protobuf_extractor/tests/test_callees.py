@@ -210,6 +210,14 @@ class TestCallReads(unittest.TestCase):
                           names={0xb000: '_f'})
         self.assertEqual(got, set(ABI_ARGS))
 
+    def test_a_thunk_through_a_register_sets_the_callers_callee_saved_register(self):
+        # mov x19, x0 ; mov x0, #0 ; br x1 (an outlined metadata-accessor call): the x19 read
+        # after the bl is the thunk's, not the caller's
+        from proto.callees import ABI_ARGS
+        got = self._reads(blocks=[(0x9000, [('bl', '#0xa000'), ('mov', 'x0, x19'), ('ret', '')]),
+                                  (0xa000, [('mov', 'x19, x0'), ('mov', 'x0, #0'), ('br', 'x1')])])
+        self.assertEqual(got, set(ABI_ARGS))
+
     def test_an_outlined_prologue_gives_the_caller_a_frame(self):
         # the spills after its `sub sp` are saves, not reads
         got = self._reads(blocks=[(0x9000, [('bl', '#0xa000'), ('mov', 'x0, #0'), ('ret', '')]),

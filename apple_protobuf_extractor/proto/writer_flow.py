@@ -502,7 +502,7 @@ class _ClassFlow:
             if frag is not None:
                 frag_vals = run.fragments.get(k, ())
                 self._run_in_place(st, frag, frag_vals, tgt, res, run.depth, ins.addr, vals)
-                if flow.fragment_tail(k) is not None and self._tail_call(
+                if flow.fragment_calls(k) and self._tail_call(
                         st, k, res, run, frag_vals[-1] if len(frag_vals) > len(frag) else {}):
                     return True                      # no-return callee
                 continue
@@ -579,7 +579,7 @@ class _ClassFlow:
     def _tail_call(self, st: _St, k: int, res: _Result, run: _Run,
                    vals: Dict[str, int]) -> bool:
         """The tail call the thunk the ``bl`` ``insns[k]`` runs makes after its prefix
-        (:meth:`proto.arm64_eval.Flow.fragment_tail`), the registers there *vals*: a call
+        (:meth:`proto.arm64_eval.Flow.thunk_target`), the registers there *vals*: a call
         whose site is the ``bl``'s (:meth:`_run_in_place` records it); True when it does not
         return."""
         clobbers = run.flow.tail_clobbers(k)
@@ -587,7 +587,7 @@ class _ClassFlow:
             for r in clobbers:
                 st.r.pop(r, None)
             return False
-        return self._call(st, run.flow.fragment_tail(k), res, run.depth, run.top,
+        return self._call(st, run.flow.thunk_target(k, vals), res, run.depth, run.top,
                           run.flow.insns[k].addr, vals, site=False)
 
     def _read_origins(self, st: _St, reads, vals: Dict[str, int]):
