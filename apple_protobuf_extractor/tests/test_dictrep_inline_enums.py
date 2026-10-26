@@ -76,10 +76,13 @@ def _enum_ctx(code, *, strings=None, slots=None, ptrs=None, tables=None, base=0x
     return ctx, labels
 
 
+SLOT = 0x5040          # the ivar-offset variable of each test's field
+
+
 def _harvest(ctx, base, ivars):
     from proto.enums import _harvest_dictrep
     return _harvest_dictrep(
-        ctx, _FakeCls(base, [_FakeIvar(n, o) for n, o in ivars]))[0]
+        ctx, _FakeCls(base, [_FakeIvar(n, o, SLOT) for n, o in ivars]))[0]
 
 
 # CFString / table addresses used by the synthetic code below
@@ -125,7 +128,7 @@ class TestRepeatedFieldPointerTableLoop(unittest.TestCase):
         insns = disasm(ctx, 0x1000, max_insns=200, stop_at_ret=False)
         flow = Flow(ctx, insns)
         offs = {insns[k].addr: off for k, off in flow.value_loads()}
-        self.assertEqual(set(offs.values()), {16})
+        self.assertEqual(set(offs.values()), {SLOT})
         element = next(i for i in insns if i.mnemonic == 'ldrsw' and 'x27' in i.op_str)
         self.assertIn(element.addr, offs)
 
@@ -279,14 +282,14 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
 
     def test_one_value_that_cannot_be_evaluated_makes_the_enum_incomplete_not_absent(self):
         flow, _ = self._flow(two_guard='cbz x5, merge')          # x5: not tracked
-        out = flow.enum_maps({24})
+        out = flow.enum_maps({SLOT: 24})
         self.assertEqual(out, {24: [(0, 'K_ZERO'), (1, 'K_ONE')]})
         self.assertIn('value 2', flow.incomplete[24])
         self.assertEqual(flow.unevaluated, {})
 
     def test_a_switch_nothing_could_be_evaluated_for_is_listed_as_unevaluated(self):
         flow, _ = self._flow(guard='cbz x5, merge')              # every path aborts
-        out = flow.enum_maps({24})
+        out = flow.enum_maps({SLOT: 24})
         self.assertEqual(out, {})
         self.assertIn('untracked', flow.unevaluated[24])
 
@@ -297,7 +300,7 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
                       if not (i.mnemonic == 'cbz' and i.op_str.startswith('w8'))
                       and not (i.mnemonic == 'cmp' and i.op_str.endswith('#2'))]
         flow = Flow(flow.ctx, flow.insns)
-        self.assertEqual(flow.enum_maps({24}), {})
+        self.assertEqual(flow.enum_maps({SLOT: 24}), {})
         self.assertIn('untracked', flow.unevaluated[24])
 
     def test_harvest_reports_all_three_results(self):
@@ -306,14 +309,14 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
                 for c in self.CHAIN]
         ctx, _ = _enum_ctx(code, strings=self.NAMES, slots={0x5040: 24})
         enums, incomplete, unevaluated = _harvest_dictrep(
-            ctx, _FakeCls(0x1000, [_FakeIvar('_kind', 24)]))
+            ctx, _FakeCls(0x1000, [_FakeIvar('_kind', 24, SLOT)]))
         self.assertEqual(sorted(enums), [24])
         self.assertEqual(list(incomplete), [24])
         self.assertEqual(unevaluated, {})
 
     def test_clean_enum_is_not_flagged(self):
         flow, _ = self._flow()
-        flow.enum_maps({24})
+        flow.enum_maps({SLOT: 24})
         self.assertEqual((flow.incomplete, flow.unevaluated), ({}, {}))
 
 

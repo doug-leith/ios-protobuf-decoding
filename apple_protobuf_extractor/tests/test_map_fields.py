@@ -282,14 +282,15 @@ class TestAnalyzeEntry(_Patched):
 
 class TestScanBlockEnumeratedMaps(_Patched):
 
-    def _scan(self, writeto=_MANIFEST_WRITETO, offset_to_name=None):
+    def _scan(self, writeto=_MANIFEST_WRITETO, names=None):
         insns, fd = asm(writeto, _MANIFEST_INVOKE,
                         selector_stub(0x18dae11e0, 0x18d100000))
         self.patch(fd)
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8                      # ivar-offset variable -> offset 8
-        name = {8: '_publisherAttributionSources'} if offset_to_name is None else offset_to_name
-        return M.scan_block_enumerated_maps(ctx, writeto[0], FunctionEntries([0x18ce417e8]), name)
+        if names is None:
+            names = M._IvarNames({0x1dcfb30e4: '_publisherAttributionSources'}, {})
+        return M.scan_block_enumerated_maps(ctx, writeto[0], FunctionEntries([0x18ce417e8]), names)
 
     def test_block_map_is_found_and_bound_to_its_ivar(self):
         got = self._scan()
@@ -308,8 +309,14 @@ class TestScanBlockEnumeratedMaps(_Patched):
         got = self._scan((_MANIFEST_WRITETO[0], lines))
         self.assertEqual(got['_publisherAttributionSources'].number, 1)
 
-    def test_unknown_ivar_offset_is_not_bound(self):
-        self.assertEqual(self._scan(offset_to_name={999: '_other'}), {})
+    def test_unknown_ivar_offset_variable_is_not_bound(self):
+        self.assertEqual(self._scan(names=M._IvarNames({0x1dcfb30e8: '_other'}, {})), {})
+
+    def test_another_classes_variable_holding_the_same_offset_is_not_this_ivar(self):
+        # The variable read holds 8, as the class's own ivar's offset does, but it is not
+        # that ivar's variable (another class has an ivar at offset 8).
+        self.assertEqual(self._scan(names=M._IvarNames(
+            {0x1dcfb30e8: '_publisherAttributionSources'}, {8: '_publisherAttributionSources'})), {})
 
     def test_other_selector_is_not_a_map_write(self):
         insns, fd = asm(_MANIFEST_WRITETO, _MANIFEST_INVOKE,
@@ -318,7 +325,8 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000='enumerateObjectsUsingBlock:')
         ctx.u32[0x1dcfb30e4] = 8
         self.assertEqual(M.scan_block_enumerated_maps(
-            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]), {8: '_x'}), {})
+            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]),
+            M._IvarNames({0x1dcfb30e4: '_x'}, {})), {})
 
     def test_invoke_without_ret_is_never_analysed(self):
         lines = [x for x in _MANIFEST_INVOKE[1] if x[0] != 'ret']
@@ -328,7 +336,8 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8
         self.assertEqual(M.scan_block_enumerated_maps(
-            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]), {8: '_x'}), {})
+            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]),
+            M._IvarNames({0x1dcfb30e4: '_x'}, {})), {})
 
 
 # Newer (arm64e, macOS 27) toolchain: the invoke pointer is PAC-signed in place, the
@@ -402,7 +411,7 @@ class TestNewerToolchainBlockShape(_Patched):
         insns, fd = asm(_ARM64E_WRITETO, _ARM64E_INVOKE, self._stub())
         self.patch(fd)
         got = M.scan_block_enumerated_maps(self._ctx(), _ARM64E_WRITETO[0], FunctionEntries([0x199a3000]),
-                                           {8: '_vehicles'})
+                                           M._IvarNames({0x1e4941dcc: '_vehicles'}, {}))
         e = got['_vehicles']
         self.assertEqual((e.number, e.key_helper, e.value_helper),
                          (1, 0x1a0103dc0, 0x1a0103dd0))
@@ -425,7 +434,7 @@ class TestNewerToolchainBlockShape(_Patched):
             ('bl', '#0x9000')]))
         ctx = FakeCtx(u32={0x1e493efa8: 32})
         self.assertEqual(M._trace_ivar(ctx, listing_flow(ctx, insns), len(insns) - 1, 'x0',
-                                       {32: '_vehicleTypes'}),
+                                       M._IvarNames({0x1e493efa8: '_vehicleTypes'}, {})),
                          '_vehicleTypes')
 
 
@@ -449,10 +458,11 @@ class TestFindMapWriters(_Patched):
 
         class _Iv:
             name, offset, type_enc = '_publisherAttributionSources', 8, '@"NSMutableDictionary"'
+            offset_slot = 0x1dcfb30e4
 
-        ok = M.find_map_writers(ctx, _Cls(), [_Iv()], {}, {8: _Iv.name}, {})
+        ok = M.find_map_writers(ctx, _Cls(), [_Iv()], {}, [_Iv()], {})
         self.assertEqual(ok[_Iv.name].number, 1)
-        clash = M.find_map_writers(ctx, _Cls(), [_Iv()], {}, {8: _Iv.name}, {'_other': 1})
+        clash = M.find_map_writers(ctx, _Cls(), [_Iv()], {}, [_Iv()], {'_other': 1})
         self.assertEqual(clash, {})
 
 
@@ -657,14 +667,17 @@ class TestMapEmission(unittest.TestCase):
 
     def test_map_value_that_would_close_an_import_cycle_degrades_to_bytes(self):
         msgs, m = self._cyclic_pair()
+        pfs = build_proto_files(msgs)
         files = {pf.filename: pf.emit({x.class_name: E_pkg(x.class_name) for x in msgs})
-                 for pf in build_proto_files(msgs)}
+                 for pf in pfs}
         self.assertIn('map<string, bytes> fields = 1;  // map value is message CLPValue',
                       files['geo.proto'])
         self.assertIn('import each other', files['geo.proto'])
         self.assertNotIn('import "clp.proto"', files['geo.proto'])
         self.assertIn('import "geo.proto";', files['clp.proto'])   # the other edge is kept
-        self.assertIsNone(m.map_value_class)
+        built = next(f for pf in pfs for x in pf.messages for f in x.fields if f.name == m.name)
+        self.assertIsNone(built.map_value_class)
+        self.assertEqual(m.map_value_class, 'CLPValue')                # (the input is not changed)
 
     def test_cycle_breaking_is_stable_across_rebuilds(self):
         msgs, m = self._cyclic_pair()
@@ -700,11 +713,12 @@ class TestMapEmission(unittest.TestCase):
         self.assertIn('map-entry message', out)
 
     def test_resolve_type_refs_is_idempotent_for_maps(self):
+        from proto.emitter import resolve_type_refs
         f = _field(map_key_type='string', map_value_class='GEOSource', type_inference_note=None)
         msgs = [_msg('GEOManifest', f), _msg('GEOSource')]
-        build_proto_files(msgs)
+        resolve_type_refs(msgs)
         first = (f.map_value_type, f.unresolved_type_class)
-        build_proto_files(msgs)
+        resolve_type_refs(msgs)
         self.assertEqual((f.map_value_type, f.unresolved_type_class), first)
         self.assertEqual(first, ('Source', None))
 

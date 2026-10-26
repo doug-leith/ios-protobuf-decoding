@@ -9,7 +9,7 @@ extractor re-imports the surface.
 from __future__ import annotations
 import logging
 from dataclasses import dataclass
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
@@ -67,10 +67,10 @@ def _repeated_element_type(ivar: ObjcIvar, metaclass: Optional[ObjcClass]) -> st
 
 
 def _adder_array_ivar(
-    ctx: BinaryContext, imp_va: int, array_offsets: "FrozenSet[int]"
-) -> Optional[int]:
-    """Return the instance-ivar byte offset that the add-accessor at *imp_va*
-    appends to, identified **by the ivar-offset variable it loads** — not by name.
+    ctx: BinaryContext, imp_va: int, array_slots: Dict[int, str]
+) -> Optional[str]:
+    """Return the array ivar that the add-accessor at *imp_va* appends to, identified
+    **by the ivar-offset variable it loads** — not by name.
 
     A generated ``-_addNoFlags<X>:`` accessor reads its backing array through the
     runtime ivar-offset table::
@@ -79,17 +79,15 @@ def _adder_array_ivar(
         ldrsw x8,  [x20, #off]     ; x8 = OBJC_IVAR_$_Cls._xs  (the byte offset)
         ldr   x9,  [x19, x8]       ; x9 = self->_xs            (register-offset)
 
-    The constant at the ``adrp+ldrsw`` slot **is** the ivar's byte offset, so we
-    read that 4-byte slot and match it against *array_offsets* (the class's
-    NSArray/NSMutableArray field-ivar offsets).  Matching against array offsets
-    excludes the flags/has-bits ivar the accessor also stores into (a struct
-    ivar, never in *array_offsets*) and any singular message ivar.
+    The variable's address is matched against *array_slots* (the class's
+    NSArray/NSMutableArray field ivars by their offset variable's address), not the
+    offset it holds: another class's ivar at the same offset has its own variable.
+    This excludes the flags/has-bits ivar the accessor also stores into (a struct
+    ivar) and any singular message ivar.
 
-    Returns the **first** array-ivar offset the accessor loads — structurally that
-    is its OWN backing array (an ``-_addNoFlags<X>:`` accessor loads the array it
-    appends to before any other ivar), so taking the first match binds the right
-    ivar and stops before any later confounding array-offset load.  ``None`` if the
-    accessor references no array offset.
+    Returns the **first** array ivar the accessor loads — structurally that is its
+    OWN backing array (an ``-_addNoFlags<X>:`` accessor loads the array it appends
+    to before any other ivar of its class).  ``None`` if it loads none.
 
     The accessor is what its entry reaches inside its extent
     (:func:`proto.function_body.function_body`): a setter that ends in a tail branch rather
@@ -99,7 +97,7 @@ def _adder_array_ivar(
     """
     from proto.dispatch import function_entries, listing_flow
     from proto.function_body import function_body
-    if imp_va == 0 or not array_offsets:
+    if imp_va == 0 or not array_slots:
         return None
     try:
         insns = function_body(ctx, imp_va, function_entries(ctx))
@@ -109,15 +107,9 @@ def _adder_array_ivar(
         return None
     flow = listing_flow(ctx, list(insns))
     for k in range(len(flow.insns)):
-        slot_va = flow.slot_load_address(k)
-        if slot_va is None:
-            continue
-        try:
-            val = int.from_bytes(ctx.read_bytes(slot_va, 4), 'little')
-        except READ_ERRORS:
-            continue
-        if val in array_offsets:
-            return val          # first array-offset load = the accessor's own ivar
+        name = array_slots.get(flow.slot_load_address(k))
+        if name is not None:
+            return name         # first array-ivar load = the accessor's own ivar
     return None
 
 

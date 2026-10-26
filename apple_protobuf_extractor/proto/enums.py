@@ -251,7 +251,8 @@ def _harvest_dictrep(
     # The field's int is driven through the function's own code, value by value, to the
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.
     flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
-    enums = flow.enum_maps({iv.offset for iv in cls.ivars if iv.offset is not None}, wanted)
+    enums = flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
+                            if iv.offset is not None and iv.offset_slot}, wanted)
     return enums, flow.incomplete, flow.unevaluated
 
 

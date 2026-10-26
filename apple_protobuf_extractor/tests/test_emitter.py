@@ -330,15 +330,19 @@ class TestBuildProtoFiles(unittest.TestCase):
         pfs = build_proto_files([])
         self.assertEqual(pfs, [])
 
-    def test_resolve_called_side_effect(self):
-        """build_proto_files calls resolve_type_refs; cross-refs should be resolved."""
+    def test_cross_refs_are_resolved_in_the_files_and_the_input_is_left_alone(self):
+        """build_proto_files resolves references (resolve_type_refs) in the messages it builds,
+        which are copies: a second build from the same input is the same."""
         location = _clp_msg("Location")
         req = _geo_msg("Request", [
             _field("loc", 1, "CLPLocation", type_class="CLPLocation"),
         ])
-        build_proto_files([location, req])
-        # After build_proto_files, type_name should be resolved
-        self.assertEqual(req.fields[0].type_name, "Location")
+        pfs = build_proto_files([location, req])
+        built = next(m for pf in pfs for m in pf.messages if m.class_name == req.class_name)
+        self.assertEqual(built.fields[0].type_name, "Location")
+        self.assertEqual(req.fields[0].type_name, "CLPLocation")
+        self.assertEqual([pf.emit() for pf in build_proto_files([location, req])],
+                         [pf.emit() for pf in pfs])
 
 
 # ── TestComputeImports ────────────────────────────────────────────────────────
@@ -1433,10 +1437,11 @@ class TestEmitIsPure(unittest.TestCase):
     def test_emit_changes_no_message_and_repeats_exactly(self):
         msgs = self._split_run()
         (pf,) = build_proto_files(msgs)
-        planned = [f.type_class for m in msgs for f in m.fields]
+        planned = [f.type_class for m in pf.messages for f in m.fields]
         self.assertIn("ENUM:BKind", planned)        # the split was made at build time
+        self.assertEqual([f.type_class for m in msgs for f in m.fields], ["ENUM:Kind"] * 2)
         first = pf.emit()
-        self.assertEqual([f.type_class for m in msgs for f in m.fields], planned)
+        self.assertEqual([f.type_class for m in pf.messages for f in m.fields], planned)
         self.assertEqual(pf.emit(), first)
 
     def test_input_kind_is_per_run(self):

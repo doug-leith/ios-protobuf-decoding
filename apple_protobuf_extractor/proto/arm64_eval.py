@@ -743,19 +743,29 @@ class Flow:
 
     # ── which ivar a load reads ─────────────────────────────────────────────
 
-    def ivar_of_reg(self, k: int, reg: str) -> Optional[int]:
-        """Ivar byte offset that the ADDRESS held in *reg* before ``insns[k]`` was computed
-        from, by use-def chain; None if it is not derived from exactly one ivar-offset slot."""
+    def ivar_slot_of_reg(self, k: int, reg: str) -> Optional[int]:
+        """Address of the ivar-offset variable that the ADDRESS held in *reg* before
+        ``insns[k]`` was computed from, by use-def chain; None if it is not derived from
+        exactly one.  The variable, not the offset it holds, identifies the ivar: another
+        class's ivar at the same offset has its own."""
         found: Set[int] = set()
         for d in self.defs_before(k, reg):
             if d < 0:
                 continue
-            off = self._ivar_of_def(d)
-            if off is not None:
-                found.add(off)
+            slot = self._ivar_slot_of_def(d)
+            if slot is not None:
+                found.add(slot)
         return next(iter(found)) if len(found) == 1 else None
 
-    def _ivar_of_def(self, d: int) -> Optional[int]:
+    def ivar_of_reg(self, k: int, reg: str) -> Optional[int]:
+        """The byte offset held by :meth:`ivar_slot_of_reg`'s variable."""
+        slot = self.ivar_slot_of_reg(k, reg)
+        try:
+            return None if slot is None else self.ctx.read_s32(slot)
+        except READ_ERRORS:
+            return None
+
+    def _ivar_slot_of_def(self, d: int) -> Optional[int]:
         if d in self._ivar_memo:
             return self._ivar_memo[d]
         self._ivar_memo[d] = None                        # break cycles (loop counters)
@@ -763,25 +773,20 @@ class Flow:
         mn, ops = ins.mnemonic, split_ops(ins.op_str)
         res: Optional[int] = None
         if mn == 'ldrsw':                                # the ivar-offset slot itself
-            addr = self.slot_load_address(d)
-            if addr is not None:
-                try:
-                    res = self.ctx.read_s32(addr)
-                except READ_ERRORS:
-                    res = None
+            res = self.slot_load_address(d)
         elif mn == 'add' and len(ops) >= 3:              # obj + offset  /  array + index
-            cands = {self.ivar_of_reg(d, r) for r in (_norm_reg(ops[1]),
+            cands = {self.ivar_slot_of_reg(d, r) for r in (_norm_reg(ops[1]),
                      _norm_reg(ops[2]) if not ops[2].startswith('#') else None) if r}
             cands.discard(None)
             res = next(iter(cands)) if len(cands) == 1 else None
         elif mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
             r = _norm_reg(ops[1])
-            res = self.ivar_of_reg(d, r) if r else None
+            res = self.ivar_slot_of_reg(d, r) if r else None
         elif mn == 'ldr' and len(ops) == 2 and ops[0].startswith('x'):
             # container deref (PBRepeated.list): a POINTER loaded from the ivar's own
             # storage, no index -- a value read out of an array is not an address
             m = mem_regs(ops[1])
-            res = self.ivar_of_reg(d, m[0]) if m and m[0] and m[1] is None else None
+            res = self.ivar_slot_of_reg(d, m[0]) if m and m[0] and m[1] is None else None
         self._ivar_memo[d] = res
         return res
 

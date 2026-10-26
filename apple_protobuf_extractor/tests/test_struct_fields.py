@@ -451,6 +451,16 @@ class TestInlineStructWrites(_Patched):
         self.assertEqual(
             SF.decode_inline_writes(None, insns, br, lambda a: a == 0xdead0000, layout), [])
 
+    def test_a_site_s_ivar_is_its_offset_variable_not_the_offset_it_holds(self):
+        # another class's ivar at the same offset has its own variable (0x1e1dd6330)
+        enc = '{GEOSessionID="_high"Q"_low"Q}'
+        insns, br, layout, _ = self._bracket(_SESSIONID_WRITETO, enc, 0x1e1dd6328)
+        own, other = (SF._ivar_slot_test(SF.StructSite(0, slot, 10, enc))
+                      for slot in (0x1e1dd6328, 0x1e1dd6330))
+        self.assertEqual(SF.match_layout(layout, SF.decode_inline_writes(None, insns, br, own, layout)),
+                         {8: 1, 0: 2})
+        self.assertEqual(SF.decode_inline_writes(None, insns, br, other, layout), [])
+
 
 # Real listing: the loop in -[GEOCoarseLocationRing _dictionaryRepresentation:] that builds one
 # {lat, lng} dictionary per element of the GEOCoarseLocationPoint array — the compiler inlined the

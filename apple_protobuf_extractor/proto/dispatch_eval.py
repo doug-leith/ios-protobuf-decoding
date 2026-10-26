@@ -27,7 +27,7 @@ to.  Answered by running the reader:
    ``objc_opt_new``, however the address was formed); the adder is a call handed x0 = SELF
    and that element object (in x2 for a method IMP, x1 = ``_cmd``; in x1 for an
    ``objc_direct`` C function), and its ivar is the array ivar whose offset variable it loads
-   (:func:`proto.repeated._adder_array_ivar`).
+   (by the variable's address, :func:`proto.repeated._adder_array_ivar`).
 
 Stack slots use the object-escape rule (:class:`proto.arm64_eval._Machine`): a callee handed
 a frame address may write from it upward only, and does not keep it past its return.  An
@@ -255,6 +255,8 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
     """Run *cls*'s dispatch core at *core_va* for each field number into *out*.  *first* is
     :func:`find_cores`' ``(insns, br_arms, Flow)`` for the core (round 0 needs exactly that)."""
     array_offsets = frozenset(iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_ENCS)
+    array_slots = {iv.offset_slot: iv.name for iv in cls.ivars
+                   if iv.type_enc in _ARRAY_ENCS and iv.offset_slot}
     own_slots = frozenset(iv.offset_slot for iv in cls.ivars if iv.offset_slot)
     own_imps = frozenset(mm.imp for mm in cls.methods if mm.imp)
     off_to_ivar = {iv.offset: iv.name for iv in cls.ivars}
@@ -422,9 +424,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
                         fd.adder_ivar = off_to_ivar.get(off)
                         break
                     tgt = sel_to_imp.get(sel, c.target) if sel is not None else c.target
-                    off = _adder_array_ivar(ctx, tgt, array_offsets) if tgt else None
-                    if off is not None:
-                        fd.adder_ivar = off_to_ivar.get(off)
+                    name = _adder_array_ivar(ctx, tgt, array_slots) if tgt else None
+                    if name is not None:
+                        fd.adder_ivar = name
                         break
             out.fields[n] = fd
 

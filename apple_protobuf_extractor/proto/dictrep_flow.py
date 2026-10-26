@@ -46,8 +46,9 @@ class Flow(_EvalFlow):
     loads (:meth:`value_loads`) and the value -> name map each one is run through."""
 
     def value_loads(self) -> List[Tuple[int, int]]:
-        """``[(insn index, ivar offset)]`` for every load whose address derives from an
-        ivar-offset slot (the field-value loads, and the container derefs/counts behind them)."""
+        """``[(insn index, ivar-offset variable address)]`` for every load whose address derives
+        from an ivar-offset variable (the field-value loads, and the container derefs/counts
+        behind them)."""
         out = []
         for k, ins in enumerate(self.insns):
             if ins.mnemonic not in LOAD_BYTES or k not in self._block_of:
@@ -58,10 +59,10 @@ class Flow(_EvalFlow):
             m = mem_regs(ops[1])
             if not m or m[0] is None:
                 continue
-            offs = {o for o in (self.ivar_of_reg(k, m[0]),
-                                self.ivar_of_reg(k, m[1]) if m[1] else None) if o is not None}
-            if len(offs) == 1:
-                out.append((k, next(iter(offs))))
+            slots = {o for o in (self.ivar_slot_of_reg(k, m[0]),
+                                 self.ivar_slot_of_reg(k, m[1]) if m[1] else None) if o is not None}
+            if len(slots) == 1:
+                out.append((k, next(iter(slots))))
         return out
 
     def analyse_root(self, k: int, dest: str, size: int, stop: FrozenSet[int],
@@ -134,11 +135,12 @@ class Flow(_EvalFlow):
             return None
         return self.analyse_root(k, dest, size, stop)
 
-    def enum_maps(self, valid_offsets: Set[int], wanted: Optional[Set[int]] = None
+    def enum_maps(self, slot_offsets: Dict[int, int], wanted: Optional[Set[int]] = None
                   ) -> Dict[int, List[Tuple[int, str]]]:
         """``{ivar offset: [(value, name), ...]}`` for every field of the function that is an
-        enum (see :meth:`analyse_root` for the decision).  *wanted* only limits the work to
-        those ivars; it never changes a result."""
+        enum (see :meth:`analyse_root` for the decision).  *slot_offsets* is the class's ivars,
+        ``{offset variable address: offset}``.  *wanted* only limits the work to those ivars
+        (by offset); it never changes a result."""
         out: Dict[int, Dict[int, str]] = {}
         # What the evaluation could NOT settle, by ivar offset -- reported, never silent:
         #   incomplete:  a field that WAS recovered as an enum but some value could not be
@@ -150,8 +152,9 @@ class Flow(_EvalFlow):
         self.unevaluated: Dict[int, str] = {}
         roots = self.value_loads()
         every_root = frozenset(k for k, _ in roots)
-        for k, off in roots:
-            if off not in valid_offsets or (wanted is not None and off not in wanted):
+        for k, slot in roots:
+            off = slot_offsets.get(slot)
+            if off is None or (wanted is not None and off not in wanted):
                 continue
             ins = self.insns[k]
             ops = split_ops(ins.op_str)

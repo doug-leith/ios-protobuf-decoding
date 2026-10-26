@@ -254,10 +254,8 @@ def _confirm_field_numbers(
     map_writers: Dict[str, MapEntryWriter] = {}
     map_ivars = [iv for iv in field_ivars if iv.type_enc in MAP_IVAR_ENCS]
     if map_ivars:
-        offset_to_name = {iv.offset: iv.name for iv in field_ivars
-                          if iv.offset and iv.name}
         map_writers = find_map_writers(ctx, cls, map_ivars, wt_writes,
-                                       offset_to_name, confirmed_numbers)
+                                       field_ivars, confirmed_numbers)
         for _name, _w in map_writers.items():
             confirmed_numbers.setdefault(_name, _w.number)
 
@@ -929,7 +927,7 @@ def extract_proto_message(
         # struct's serialiser once the whole image is extracted (#37).  Fields it cannot
         # resolve keep the flagged `bytes` fallback set above.
         if type_name == "bytes":
-            record_struct_site(ctx, cls.name, pname, ivar.offset, ivar.type_enc,
+            record_struct_site(ctx, cls.name, pname, ivar.offset_slot, ivar.type_enc,
                                _bound_writes.get(ivar.name))
 
         fields.append(ProtoField(

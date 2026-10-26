@@ -37,6 +37,7 @@ class) generate import statements and are qualified in the emitted proto
 
 from __future__ import annotations
 
+import copy
 import re
 import sys
 from dataclasses import dataclass, field, replace
@@ -1085,9 +1086,11 @@ def build_proto_files(
 
     Returns
     -------
-    List of ProtoFile objects sorted by filename, ready to call ``.emit()``.
+    List of ProtoFile objects sorted by filename, ready to call ``.emit()``.  *messages* are
+    left as they are (the files hold copies), so a second build from them is the same.
     """
-    # 1. Resolve type_name → proto message names (mutates fields in-place)
+    messages = copy.deepcopy(messages)
+    # 1. Resolve type_name → proto message names (in the copies)
     resolve_type_refs(messages)
 
     # 2. Build class_name → package map (covers ALL extracted classes).  A

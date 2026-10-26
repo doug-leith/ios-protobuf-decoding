@@ -545,6 +545,31 @@ class TestEvaluateClassMemo(unittest.TestCase):
 
 
 
+class TestAdderArrayIvar(unittest.TestCase):
+    """The adder's array ivar is the one whose offset variable it loads, by the variable's
+    address: another class's variable can hold the same offset."""
+
+    def test_another_classes_variable_at_an_array_offset_is_not_the_ivar(self):
+        from unittest import mock
+        from proto import dispatch, function_body
+        from proto.repeated import _adder_array_ivar
+        # the element's ivar at offset 16 (another class's variable) is read first, then
+        # this class's _ys (offset 24); this class's _xs is also at 16
+        insns, _ = text_listing('adrp x8, #0x5000', 'ldrsw x9, [x8, #8]', 'ldr x0, [x2, x9]',
+                                'ldrsw x9, [x8, #0x18]', 'ldr x0, [x0, x9]', 'ret')
+        held = {0x5008: 16, 0x5010: 16, 0x5018: 24}
+
+        class _Ctx:
+            def read_bytes(self, va, n):
+                return held[va].to_bytes(n, 'little')
+
+        with mock.patch.object(function_body, "function_body", lambda ctx, va, entries: insns), \
+                mock.patch.object(dispatch, "function_entries", lambda ctx: None), \
+                mock.patch.object(dispatch, "listing_flow", lambda ctx, ins: Flow(None, ins)):
+            self.assertEqual(_adder_array_ivar(_Ctx(), 0x1000, {0x5010: '_xs', 0x5018: '_ys'}),
+                             '_ys')
+
+
 class TestAppendedIvar(unittest.TestCase):
     """A function handed self and the element is read with what it is handed: the array ivar is
     the ``self->ivar`` it sends the element to (f25's PBAppendMessageAtOffset(self, 8, e)), not

@@ -30,6 +30,12 @@ _SKIP_MSG = ('dyld shared cache not found — place the full cache in '
              '<repo>/iphone8_data/dylib/ (or set MACHO_DATA_DIR)')
 
 
+def _array_slots(cls):
+    """*cls*'s array ivars by their offset variable's address."""
+    return {iv.offset_slot: iv.name for iv in cls.ivars
+            if iv.type_enc in ('@"NSArray"', '@"NSMutableArray"') and iv.offset_slot}
+
+
 @unittest.skipUnless(_CACHE_MAIN is not None, _SKIP_MSG)
 class TestReadFromDispatchLive(unittest.TestCase):
     """Resolve GEOPDComponent's repeated-message element types from the cache."""
@@ -190,23 +196,19 @@ class TestReadFromDispatchLive(unittest.TestCase):
 
     def test_adder_array_ivar_pins_exact_offset(self):
         # The _addNoFlagsDeparture: accessor loads the _departures ivar-offset
-        # variable; the lever reads that slot and returns the backing array
-        # ivar's byte offset — even though the accessor also touches the _flags
-        # struct ivar (which is excluded by the array-encoding filter).
+        # variable; the lever returns that backing array ivar — even though the
+        # accessor also touches the _flags struct ivar (which is excluded by the
+        # array-encoding filter).
         from proto.repeated import _adder_array_ivar
         cls = self.cl.find('GEOPDDepartureSequence')
         adder = next((m.imp for m in cls.methods
                       if m.name == '_addNoFlagsDeparture:'), None)
         self.assertIsNotNone(adder)
-        dep_off = next(iv.offset for iv in cls.ivars if iv.name == '_departures')
-        array_offs = frozenset(
-            iv.offset for iv in cls.ivars
-            if iv.type_enc in ('@"NSArray"', '@"NSMutableArray"'))
-        self.assertEqual(_adder_array_ivar(self.ctx, adder, array_offs), dep_off)
+        self.assertEqual(_adder_array_ivar(self.ctx, adder, _array_slots(cls)), '_departures')
 
     def test_adder_array_ivar_rejects_singular_message_ivar_offset(self):
         # test_lever_never_binds_singular_message_field (below) can't discriminate
-        # the array_offsets type-check on its own: GEOETARequest's singular
+        # the array-ivar check on its own: GEOETARequest's singular
         # `_origin` (GEOWaypoint) field has no _addNoFlags<X>: adder at all, so the
         # jump-table arm walk's OTHER gate (the arm's second `bl` must land in
         # `own_imps` AND be treated as an adder) already excludes it before
@@ -214,19 +216,16 @@ class TestReadFromDispatchLive(unittest.TestCase):
         # would not move that test.  Here we call `_adder_array_ivar` directly on
         # `setOrigin:`, which IS in `own_imps` and loads the ivar-offset-table slot
         # with the exact same `adrp+add+ldrsw` pattern a real adder uses — so the
-        # "found via own_imps" gate is satisfied and only the array_offsets
+        # "found via own_imps" gate is satisfied and only the array-ivar
         # type-check can still reject binding to this singular, non-array ivar.
         from proto.repeated import _adder_array_ivar
         cls = self.cl.find('GEOETARequest')
         self.assertIsNotNone(cls)
         setter = next((m.imp for m in cls.methods if m.name == 'setOrigin:'), None)
         self.assertIsNotNone(setter)
-        origin_off = next(iv.offset for iv in cls.ivars if iv.name == '_origin')
-        array_offs = frozenset(
-            iv.offset for iv in cls.ivars
-            if iv.type_enc in ('@"NSArray"', '@"NSMutableArray"'))
-        self.assertNotIn(origin_off, array_offs)   # _origin is GEOWaypoint, not an array
-        self.assertIsNone(_adder_array_ivar(self.ctx, setter, array_offs))
+        slots = _array_slots(cls)
+        self.assertNotIn('_origin', slots.values())   # _origin is GEOWaypoint, not an array
+        self.assertIsNone(_adder_array_ivar(self.ctx, setter, slots))
 
     def test_dispatch_ivars_jumptable_binds_by_ivar_with_number(self):
         # The jump-table lever returns {ivar_name: (element_class, field_number)}.

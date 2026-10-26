@@ -36,9 +36,10 @@ class _FakeMethod:
 
 
 class _FakeIvar:
-    def __init__(self, name, offset):
+    def __init__(self, name, offset, offset_slot=None):
         self.name = name
         self.offset = offset
+        self.offset_slot = offset_slot
 
 
 class _FakeCls:
@@ -96,7 +97,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
     def test_recovers_both_values_from_the_compare_chain(self):
         from proto.enums import _harvest_dictrep
         ctx = self._build_ctx()
-        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET, self.IVAR_OFFSET_TABLE)])
         result = _harvest_dictrep(ctx, cls)[0]
         self.assertEqual(result, {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')],
@@ -104,10 +105,19 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
 
     def test_not_attributed_to_an_unrelated_ivar_offset(self):
         # If the field's REAL offset isn't in the class's own ivar list, the chain must
-        # not be attributed to it -- valid_offsets is exactly cls.ivars's own offsets.
+        # not be attributed to it -- only the class's own ivars' variables count.
         from proto.enums import _harvest_dictrep
         ctx = self._build_ctx()
         cls = _FakeCls(self.BASE, [_FakeIvar('_otherField', 999)])
+        self.assertEqual(_harvest_dictrep(ctx, cls)[0], {})
+
+    def test_not_attributed_to_an_ivar_at_the_same_offset_through_another_variable(self):
+        # The variable read holds 16, this class's ivar's offset, but is not its variable
+        # (another class has an ivar at offset 16).
+        from proto.enums import _harvest_dictrep
+        ctx = self._build_ctx()
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET,
+                                             self.IVAR_OFFSET_TABLE + 8)])
         self.assertEqual(_harvest_dictrep(ctx, cls)[0], {})
 
     def _ctx_without(self, drop_prefixes, strings):
@@ -125,7 +135,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         from proto.enums import _harvest_dictrep
         ctx = self._ctx_without(('adrp x2,', 'add x2, x2,'),
                                 {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'})
-        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET, self.IVAR_OFFSET_TABLE)])
         self.assertEqual(_harvest_dictrep(ctx, cls)[0], {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')]})
 
@@ -141,7 +151,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         ctx = FlowCtx(self.BASE, words)
         ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
         ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO'}
-        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET, self.IVAR_OFFSET_TABLE)])
         self.assertNotIn(self.IVAR_OFFSET, _harvest_dictrep(ctx, cls)[0])
 
     def test_values_without_a_name_may_simply_skip_the_dictionary_call(self):
@@ -154,7 +164,7 @@ class TestHarvestDictrepEnumsCompareChain(unittest.TestCase):
         ctx = FlowCtx(self.BASE, words)
         ctx._m[self.IVAR_OFFSET_TABLE] = self.IVAR_OFFSET
         ctx._strings = {self.STR0_ADDR: 'MY_VALUE_ZERO', self.STR1_ADDR: 'MY_VALUE_ONE'}
-        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET)])
+        cls = _FakeCls(self.BASE, [_FakeIvar('_myField', self.IVAR_OFFSET, self.IVAR_OFFSET_TABLE)])
         self.assertEqual(_harvest_dictrep(ctx, cls)[0], {
             self.IVAR_OFFSET: [(0, 'MY_VALUE_ZERO'), (1, 'MY_VALUE_ONE')]})
 
@@ -210,8 +220,10 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
 
     def _cls(self):
         return _FakeCls(self.BASE, [
-            _FakeIvar('_has', self.OFF_FLAGS), _FakeIvar('_statusCode', self.OFF_STATUS),
-            _FakeIvar('_mode', self.OFF_MODE), _FakeIvar('_count', self.OFF_COUNT)])
+            _FakeIvar('_has', self.OFF_FLAGS, self.SLOT_FLAGS),
+            _FakeIvar('_statusCode', self.OFF_STATUS, self.SLOT_STATUS),
+            _FakeIvar('_mode', self.OFF_MODE, self.SLOT_MODE),
+            _FakeIvar('_count', self.OFF_COUNT, self.SLOT_COUNT)])
 
     def test_each_out_of_line_chain_goes_to_its_own_field(self):
         from proto.enums import _harvest_dictrep
@@ -230,18 +242,18 @@ class TestHarvestDictrepEnumsOutOfLineChains(unittest.TestCase):
         self.assertNotIn(self.OFF_FLAGS, result)
 
     def test_value_loads_found_by_use_def_chain_in_instruction_order(self):
-        """Every load whose address derives from an ivar-offset slot (the has-bits byte via
-        the hoisted x22 page, the plain int, and the two out-of-line chains)."""
+        """Every load whose address derives from an ivar-offset variable (the has-bits byte via
+        the hoisted x22 page, the plain int, and the two out-of-line chains), by the variable."""
         from proto.dictrep_flow import Flow
         ctx = self._ctx()
         insns = disasm(ctx, self.BASE, max_insns=200, stop_at_ret=False)
         flow = Flow(ctx, insns)
         got = [(insns[k].addr, off) for k, off in flow.value_loads()]
         self.assertEqual(got, [
-            (0x1008, self.OFF_FLAGS),    # ldrb w8, [x19, x8]
-            (0x101c, self.OFF_COUNT),    # ldr w2, [x19, x8]
-            (0x1030, self.OFF_STATUS),   # out of line (after the epilogue)
-            (0x1090, self.OFF_MODE),     # out of line
+            (0x1008, self.SLOT_FLAGS),    # ldrb w8, [x19, x8]
+            (0x101c, self.SLOT_COUNT),    # ldr w2, [x19, x8]
+            (0x1030, self.SLOT_STATUS),   # out of line (after the epilogue)
+            (0x1090, self.SLOT_MODE),     # out of line
         ])
 
 

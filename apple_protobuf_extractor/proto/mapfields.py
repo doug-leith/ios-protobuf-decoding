@@ -65,16 +65,18 @@ from proto.arm64_eval import Objects
 from proto.dispatch_eval import evaluate_class
 
 
-def _addr_to_name(ctx, addr, offset_to_name):
-    """Read the u32 ivar byte-offset at *addr* and map to an ivar name.  The
-    map-membership check IS the validator (a stray read almost never equals a byte
-    offset this class declares), so no hard section gate is needed."""
-    if addr is None:
-        return None
-    try:
-        return offset_to_name.get(ctx.read_u32(addr))
-    except READ_ERRORS:
-        return None
+@dataclass(frozen=True)
+class _IvarNames:
+    """A class's field ivars by the address of their offset variable (an ivar_t's ``offset``:
+    the code loads it to reach the ivar; another class's ivar at the same offset has its own
+    variable), and by the offset itself (a literal displacement, with no variable)."""
+    by_slot: Dict[int, str]
+    by_offset: Dict[int, str]
+
+    @staticmethod
+    def of(ivars: Sequence[ObjcIvar]) -> "_IvarNames":
+        return _IvarNames({iv.offset_slot: iv.name for iv in ivars if iv.offset_slot and iv.name},
+                          {iv.offset: iv.name for iv in ivars if iv.offset and iv.name})
 
 #: ObjC ivar classes a protobuf ``map<>`` field compiles to.
 MAP_OBJC_CLASSES = frozenset({"NSDictionary", "NSMutableDictionary"})
@@ -156,11 +158,10 @@ def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
 
 
 def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
-                offset_to_name: Dict[int, str]) -> Optional[str]:
+                names: _IvarNames) -> Optional[str]:
     """Name of the ivar whose value is in *reg* at ``insns[i]``: follow ``mov`` chains
     back to the defining ``ldr xD,[Xself, Xoff]`` (``Xoff`` = a loaded ivar-offset
-    variable → resolved to the ivar by :func:`_addr_to_name`) or the
-    immediate-offset form.  The declared-offset membership test IS the validator."""
+    variable, the ivar by its address) or the immediate-offset form."""
     insns, seen = flow.insns, set()
     while (i, reg) not in seen:
         seen.add((i, reg))
@@ -177,18 +178,15 @@ def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
             if mem is None:
                 return None
             if mem[2] is not None:                      # [base, Xoff]
-                return _addr_to_name(
-                    ctx, _offset_var_address(flow, d, mem[2]), offset_to_name)
+                return names.by_slot.get(_offset_var_address(flow, d, mem[2]))
             if mem[3] == 0:                             # [Xb] with Xb = add Xself, Xoff
                 a = flow.only_def(d, mem[1])
                 aops = split_ops(insns[a].op_str) if a is not None else []
                 if (a is not None and insns[a].mnemonic == 'add' and len(aops) == 3
                         and not aops[2].startswith('#') and _norm_reg(aops[2])):
-                    return _addr_to_name(
-                        ctx, _offset_var_address(flow, a, _norm_reg(aops[2])),
-                        offset_to_name)
+                    return names.by_slot.get(_offset_var_address(flow, a, _norm_reg(aops[2])))
                 return None
-            return offset_to_name.get(mem[3])           # [base, #off]
+            return names.by_offset.get(mem[3])          # [base, #off]
         return None
     return None
 
@@ -248,7 +246,7 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Option
 
 def scan_block_enumerated_maps(
     ctx: BinaryContext, imp: int, entries: FunctionEntries,
-    offset_to_name: Dict[int, str],
+    names: _IvarNames,
 ) -> Dict[str, MapEntryWriter]:
     """``{ivar_name: MapEntryWriter}`` for every ``[self->_dict
     enumerateKeysAndObjectsUsingBlock:&block]`` in the ``writeTo:`` at *imp*.
@@ -278,7 +276,7 @@ def scan_block_enumerated_maps(
     # that object and upward, never the slots below it (Objects.object_escape)
     regs = flow.propagate({}, calls, Objects(object_escape=True), slots_out=slots)
     for i in calls:
-        ivar = _trace_ivar(ctx, flow, i, 'x0', offset_to_name)
+        ivar = _trace_ivar(ctx, flow, i, 'x0', names)
         blk = regs.get(i, {}).get('x2')
         slot = slots.get(i, {}).get(blk + _BLOCK_INVOKE_OFFSET) if blk is not None else None
         invoke = slot[1] if slot is not None and slot[0] == 8 else None
@@ -332,7 +330,7 @@ def entry_from_bound_write(ctx: BinaryContext, imp: int, entries: FunctionEntrie
 
 def find_map_writers(
     ctx: BinaryContext, cls: ObjcClass, map_ivars: Sequence[ObjcIvar],
-    bound_writes: Dict[str, BoundWrite], offset_to_name: Dict[int, str],
+    bound_writes: Dict[str, BoundWrite], field_ivars: Sequence[ObjcIvar],
     confirmed_numbers: Dict[str, int],
 ) -> Dict[str, MapEntryWriter]:
     """Map-entry writers for *cls*'s dictionary ivars: the inline-loop shape from the
@@ -353,7 +351,7 @@ def find_map_writers(
     pending = [iv for iv in map_ivars if iv.name not in writers]
     if pending:
         for name, e in scan_block_enumerated_maps(
-                ctx, m.imp, entries, offset_to_name).items():
+                ctx, m.imp, entries, _IvarNames.of(field_ivars)).items():
             if any(iv.name == name for iv in pending):
                 writers[name] = e
     taken: Dict[int, str] = {}
