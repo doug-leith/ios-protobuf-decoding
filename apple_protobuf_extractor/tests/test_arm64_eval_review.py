@@ -217,6 +217,9 @@ class TestReview20261025(unittest.TestCase):
 
             def section(self, seg, sect):
                 return SimpleNamespace(vmaddr=0x50000, vmsize=0x1000)
+
+            def sections_named(self, *names):
+                return [self.section("__DATA_CONST", "__cfstring")] if "__cfstring" in names else []
         ins, _ = text_listing('cmp w2, #1', 'b.ne @x', 'sub sp, sp, #0x20', 'mov x0, sp',
                               'bl #0x9000', 'ret', 'x:', 'ret')
         self.assertEqual(E.Flow(CFStrings(), ins).evaluate(-1, 'x2', 1), {})   # (was TypeError)

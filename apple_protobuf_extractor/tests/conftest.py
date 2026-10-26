@@ -221,6 +221,9 @@ class WordCtx:
         cfstring/direct-C-string dispatch to the direct-pointer branch unconditionally."""
         return (segname, sectname) == ('__TEXT', '__text')
 
+    def sections_named(self, *sectnames):
+        return []                         # (``__text`` is never asked for by name)
+
     def section(self, segname, sectname):
         from types import SimpleNamespace
         return SimpleNamespace(vmaddr=self._text[0], vmsize=self._text[1])

@@ -22,6 +22,9 @@ class NoImage:
     def has_section(self, segname, sectname):
         return False
 
+    def sections_named(self, *sectnames):
+        return []
+
     def is_variable(self, vmaddr):
         return False
 

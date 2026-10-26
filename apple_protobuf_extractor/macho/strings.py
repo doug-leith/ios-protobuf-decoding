@@ -144,27 +144,24 @@ def read_cfstring_text(ctx: BinaryContext, va: int) -> Optional[str]:
     or UTF-16 units when the flags say Unicode) or, in a binary with no ``__cfstring`` section,
     a direct C string, read to its NUL.  It does NOT require an identifier-shaped string, so it
     can read format strings such as ``"(unknown: %i)"``.  None if *va* holds neither."""
-    has_cfstrings = False
-    for seg in ("__DATA_CONST", "__DATA", "__AUTH_CONST"):
-        if ctx.has_section(seg, "__cfstring"):
-            has_cfstrings = True
-            sec = ctx.section(seg, "__cfstring")
-            if sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
-                try:
-                    flags = ctx.read_u32(va + 8)
-                    chars, count = ctx.read_ptr(va + 16), ctx.read_u64(va + 24)
-                    if count == 0:
-                        return ''
-                    if flags & _CF_IS_UNICODE:
-                        return ctx.read_bytes(chars, 2 * count).decode('utf-16-le')
-                    raw = ctx.read_bytes(chars, count)
-                except READ_ERRORS:
-                    return None
-                try:
-                    return raw.decode('utf-8')
-                except UnicodeDecodeError:
-                    return raw.decode('latin-1')
-    if has_cfstrings:
+    cfstrings = ctx.sections_named("__cfstring")
+    for sec in cfstrings:
+        if sec.vmaddr <= va < sec.vmaddr + sec.vmsize:
+            try:
+                flags = ctx.read_u32(va + 8)
+                chars, count = ctx.read_ptr(va + 16), ctx.read_u64(va + 24)
+                if count == 0:
+                    return ''
+                if flags & _CF_IS_UNICODE:
+                    return ctx.read_bytes(chars, 2 * count).decode('utf-16-le')
+                raw = ctx.read_bytes(chars, count)
+            except READ_ERRORS:
+                return None
+            try:
+                return raw.decode('utf-8')
+            except UnicodeDecodeError:
+                return raw.decode('latin-1')
+    if cfstrings:
         return None                  # a binary with CFStrings: a pointer elsewhere is not one
     try:
         return ctx.read_cstring(va, max_len=None)

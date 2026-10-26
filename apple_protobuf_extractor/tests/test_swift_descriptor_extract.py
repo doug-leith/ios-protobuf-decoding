@@ -921,7 +921,7 @@ class TestLiveTrustedPeersHelper(unittest.TestCase):
                 t = f.type_name
                 if t.startswith("map<"):
                     t = t[4:-1].partition(", ")[2]
-                if t in F._PROTO_SCALARS:
+                if t in F.SCALAR_TYPES:
                     continue
                 self.assertIn(t, defined, f"{m.name}.{f.name}: {t}")
         # the references that used to be undefined

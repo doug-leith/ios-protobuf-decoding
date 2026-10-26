@@ -343,6 +343,8 @@ def _cpp_file_blob(name):
 class _SectionCtx(NoImage):
     """ctx exposing one __TEXT,__const section of bytes (for the cache C++ path)."""
     class _Sec:
+        segname, name = "__TEXT", "__const"
+
         def __init__(self, va, size):
             self.vmaddr, self.vmsize = va, size
 
@@ -351,6 +353,9 @@ class _SectionCtx(NoImage):
 
     def has_section(self, seg, sec):
         return (seg, sec) == ("__TEXT", "__const")
+
+    def sections_named(self, *sectnames):
+        return [self._Sec(self._va, len(self._data))] if "__const" in sectnames else []
 
     def section(self, seg, sec):
         return self._Sec(self._va, len(self._data))
@@ -413,6 +418,8 @@ class TestCollectForeignMessages(unittest.TestCase):
             def has_section(self, *_):
                 return True
             def section(self, *_):
+                raise RuntimeError("boom")
+            def sections_named(self, *_):
                 raise RuntimeError("boom")
         orig = SW.swift_messages
         SW.swift_messages = lambda c: []

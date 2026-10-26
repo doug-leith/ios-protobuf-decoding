@@ -40,7 +40,7 @@ import warnings
 from typing import Dict, List, Optional, Set, Tuple
 
 from .load_commands import LoadCommands, parse_load_commands
-from .memory import MH_MAGIC_64, PROGRAM_DATA_SECTIONS, decode_function_starts
+from .memory import MH_MAGIC_64, PROGRAM_DATA_SECTIONS, decode_function_starts, packed_vmaddr
 from .local_symbols import (
     load_image_local_symbols,
     load_image_symbol_addrs,
@@ -1255,10 +1255,9 @@ class DyldCacheReader:
             return candidate if self.has_vmaddr(candidate) else 0
         if self.has_vmaddr(raw):
             return raw
-        if raw > 0xFFFFFFFFF:
-            low36 = raw & 0xFFFFFFFFF
-            if low36 and self.has_vmaddr(low36):
-                return low36
+        low36 = packed_vmaddr(raw)
+        if low36 and self.has_vmaddr(low36):
+            return low36
         target_off = raw & self._runtime_offset_mask
         if target_off:
             candidate = self.cache_base + target_off

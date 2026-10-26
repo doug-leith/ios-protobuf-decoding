@@ -50,6 +50,7 @@ import struct
 from dataclasses import dataclass, field
 from typing import Dict, Optional
 
+from .nlist import iter_nlist
 from .objc_model import ObjcMethod
 
 # Header field offsets within the .symbols dyld_cache_header.
@@ -58,8 +59,6 @@ _HDR_LOCAL_SYMS_SIZE = 0x50  # u64 – size of the local-symbols region
 
 _INFO_STRUCT = struct.Struct('<6I')   # nlist/strings/entries offsets + counts
 _ENTRY_STRUCT = struct.Struct('<QII')  # dylibOffset, nlistStartIndex, nlistCount
-_NLIST_STRUCT = struct.Struct('<IBBHQ')  # n_strx, n_type, n_sect, n_desc, n_value
-_NLIST_SIZE = _NLIST_STRUCT.size         # 16
 
 # Matches an Objective-C method symbol, instance ('-') or class ('+'), with an
 # optional category:
@@ -166,23 +165,12 @@ def load_image_symbol_addrs(
                 return {}
             nlist_base, strings_base, strtab_limit, start_idx, end_idx = loc
             out: Dict[str, int] = {}
-            for i in range(start_idx, end_idx):
-                no = nlist_base + i * _NLIST_SIZE
-                if no + _NLIST_SIZE > len(mm):
-                    break
-                n_strx, _t, _s, _d, n_value = _NLIST_STRUCT.unpack_from(mm, no)
-                if n_value == 0:
+            for e in iter_nlist(mm, nlist_base, start_idx, end_idx, strings_base, strtab_limit):
+                if e.n_value == 0 or not e.name:
                     continue
-                sp = strings_base + n_strx
-                if sp >= strtab_limit:
+                if want and not any(w in e.name for w in want):
                     continue
-                end = mm.find(b'\x00', sp, strtab_limit)
-                if end == -1:
-                    continue
-                raw = mm[sp:end]
-                if want and not any(w in raw for w in want):
-                    continue
-                out.setdefault(raw.decode('utf-8', 'replace'), n_value)
+                out.setdefault(e.name.decode('utf-8', 'replace'), e.n_value)
             return out
         finally:
             mm.close()
@@ -230,20 +218,11 @@ def _parse(
     nlist_base, strings_base, strtab_limit, start_idx, end_idx = loc
     syms = ImageLocalSymbols()
 
-    for i in range(start_idx, end_idx):
-        no = nlist_base + i * _NLIST_SIZE
-        if no + _NLIST_SIZE > len(mm):
-            break
-        n_strx, _n_type, _n_sect, _n_desc, n_value = _NLIST_STRUCT.unpack_from(mm, no)
-        if n_value == 0:
+    for e in iter_nlist(mm, nlist_base, start_idx, end_idx, strings_base, strtab_limit):
+        n_value = e.n_value
+        if n_value == 0 or not e.name:
             continue
-        sp = strings_base + n_strx
-        if sp >= strtab_limit:
-            continue
-        end = mm.find(b'\x00', sp, strtab_limit)
-        if end == -1:
-            continue
-        m = _METHOD_RE.match(mm[sp:end])
+        m = _METHOD_RE.match(e.name)
         if m is None:
             continue
         kind = m.group(1)            # b'-' (instance) or b'+' (class)

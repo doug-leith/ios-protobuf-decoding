@@ -142,6 +142,8 @@ MAX_FIELD_NUMBER = (1 << 29) - 1
 PACKABLE_SCALARS = frozenset((
     "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
     "sfixed32", "sfixed64", "float", "double", "bool"))
+# Every scalar type name: the packable ones, string and bytes.
+SCALAR_TYPES = PACKABLE_SCALARS | {"string", "bytes"}
 
 
 @dataclass

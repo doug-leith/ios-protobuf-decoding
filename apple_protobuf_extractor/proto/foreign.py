@@ -36,7 +36,7 @@ from typing import Dict, List, Optional
 from serializers import cpp_descriptor_extract as _cpp
 from serializers import swift_descriptor_extract as _swift
 
-from .models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage
+from .models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage, SCALAR_TYPES
 from .protoclass_set import _proto_class_set
 from .foreign_detect import (google_protobuf_classes, swift_protobuf_messages,
                              cpp_file_protos, cpp_protobuf_namespaces, protobufc_descriptors)
@@ -269,11 +269,6 @@ def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
 
 # ── swift-protobuf ────────────────────────────────────────────────────────────
 
-_PROTO_SCALARS = frozenset({
-    "int32", "int64", "uint32", "uint64", "sint32", "sint64", "fixed32", "fixed64",
-    "sfixed32", "sfixed64", "bool", "string", "bytes", "float", "double"})
-
-
 class _SwiftTypes:
     """Resolves swift-protobuf field type names (as recovered from reflection
     metadata) to something the emitted ``.proto`` can reference.
@@ -310,7 +305,7 @@ class _SwiftTypes:
 
     def resolve(self, t: str, module: str):
         """-> (type_name, ref_package|None, unresolved_name|None, note|None)."""
-        if t in _PROTO_SCALARS:
+        if t in SCALAR_TYPES:
             return t, None, None, None
         if (module, t) in self.known or (module, t) in self.defined_enums:
             return _flat(t), None, None, None

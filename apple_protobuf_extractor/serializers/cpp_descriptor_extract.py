@@ -318,18 +318,11 @@ def extract_cpp_protos(data: bytes) -> List[FileProto]:
     return [decode_file_descriptor(blob) for _, blob in find_descriptor_blobs(data)]
 
 
-# The generated ``descriptor_table_protodef_*`` arrays are ``const char[]`` and
-# land in __TEXT,__const (primary) or __TEXT,__cstring; a few toolchains use a
-# __DATA*,__const.  A whole-file regex sweep (binary mode) needs no allowlist,
-# but cache-native there is no contiguous on-disk image, so we read these
-# specific sections through the cache reader instead.
-_DESC_SECTIONS = (
-    ("__TEXT", "__const"),
-    ("__TEXT", "__cstring"),
-    ("__DATA", "__const"),
-    ("__DATA_CONST", "__const"),
-    ("__DATA", "__data"),
-)
+# The generated ``descriptor_table_protodef_*`` arrays are ``const char[]``: in a ``__const``
+# (``__TEXT``'s, or a data segment's), ``__cstring`` or ``__data`` section, whichever segment
+# holds it.  A whole-file regex sweep (binary mode) needs no section list, but cache-native
+# there is no contiguous on-disk image, so these sections are read through the cache reader.
+_DESC_SECTIONS = ("__const", "__cstring", "__data")
 
 
 def extract_cpp_protos_from_ctx(ctx) -> List[FileProto]:
@@ -342,14 +335,11 @@ def extract_cpp_protos_from_ctx(ctx) -> List[FileProto]:
     de-duplicated by ``(name, length)`` exactly as the whole-file finder."""
     out: List[FileProto] = []
     seen: set = set()
-    for seg, sec in _DESC_SECTIONS:
-        if not ctx.has_section(seg, sec):
-            continue
-        s = ctx.section(seg, sec)
+    for s in ctx.sections_named(*_DESC_SECTIONS):
         try:
             data = ctx.read_bytes(s.vmaddr, s.vmsize)
         except READ_ERRORS as exc:
-            record_unread(ctx, "descriptor section", f"{seg},{sec}", exc)
+            record_unread(ctx, "descriptor section", f"{s.segname},{s.name}", exc)
             continue
         for _off, blob in find_descriptor_blobs(data):
             try:

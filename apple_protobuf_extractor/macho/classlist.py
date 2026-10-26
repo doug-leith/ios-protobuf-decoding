@@ -64,12 +64,6 @@ from .relative_selector_base import _resolve_relative_selector_base
 
 RO_META   = 0x0001
 
-_CLASSLIST_SECTIONS = (
-    ('__DATA_CONST', '__objc_classlist'),
-    ('__DATA',       '__objc_classlist'),
-    ('__DATA_DIRTY', '__objc_classlist'),
-)
-
 _MIN_IVAR_ENTSIZE   = 32
 _MAX_METHODS        = 10_000
 log = logging.getLogger(__name__)
@@ -320,12 +314,7 @@ def build_class_list(
       are resolved entirely from the binary's own ``__objc_selrefs`` /
       ``__objc_methname`` sections.
     """
-    # Find classlist section
-    sect = None
-    for segname, sectname in _CLASSLIST_SECTIONS:
-        if ctx.has_section(segname, sectname):
-            sect = ctx.section(segname, sectname)
-            break
+    sect = next(iter(ctx.sections_named('__objc_classlist')), None)
     if sect is None or sect.vmsize == 0:
         return ClassList([])
 

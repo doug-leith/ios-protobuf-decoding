@@ -52,7 +52,7 @@ from proto.models import (
     FieldLabel, ProtoField, ProtoMessage, ProtoEnum, ProtoEnumValue,
     OPAQUE_PASSTHROUGH_COMMENT, HEURISTIC_CLASS_DETECTION_COMMENT,
     VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix, PACKABLE_SCALARS as _PACKABLE_SCALARS,
-    retag_enums,
+    SCALAR_TYPES, retag_enums,
 )
 
 _GENERATOR = "apple_protobuf_extractor (ios_protobuf_decoding)"
@@ -104,14 +104,6 @@ _PACKAGE_RECON_NOTE: str = (
 )
 
 
-#: All proto3 scalar / built-in type names.
-_KNOWN_SCALAR_TYPES: frozenset = frozenset({
-    "int32", "int64", "uint32", "uint64",
-    "sint32", "sint64", "bool",
-    "fixed64", "sfixed64", "double",
-    "fixed32", "sfixed32", "float",
-    "string", "bytes",
-})
 
 #: ObjC Foundation container / root classes whose proto equivalent is "bytes": converted
 #: without an unresolved_type_class annotation (the fields that need one -- an unresolved
@@ -198,7 +190,7 @@ def resolve_type_refs(messages: List[ProtoMessage]) -> None:
                 continue
             if fld.type_class is None:
                 continue  # scalar field — nothing to resolve
-            if fld.type_name in _KNOWN_SCALAR_TYPES:
+            if fld.type_name in SCALAR_TYPES:
                 continue  # already a valid proto scalar
             if fld.unresolved_type_class is not None:
                 continue  # already processed (idempotent guard)
@@ -232,7 +224,7 @@ def referenced_message_class(fld: ProtoField) -> Optional[str]:
         return None
     if fld.type_class in _OBJC_BUILTINS:
         return None
-    if fld.type_name in _KNOWN_SCALAR_TYPES and fld.unresolved_type_class is None:
+    if fld.type_name in SCALAR_TYPES and fld.unresolved_type_class is None:
         return None                     # a scalar the class maps to (NSString → string)
     return fld.type_class
 

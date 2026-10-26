@@ -255,6 +255,9 @@ class TestReadCfstringTextLayouts(unittest.TestCase):
             def section(self, seg, name):
                 return _Sec()
 
+            def sections_named(self, *names):
+                return [_Sec()] if "__cfstring" in names else []
+
             def read_cstring(self, va, max_len=4096):
                 raise ValueError(va)             # a CFString is read by its count
 

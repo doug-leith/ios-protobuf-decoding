@@ -9,6 +9,7 @@ recovers them, cross-validated field-for-field against descriptor_pb2 when avail
 """
 import os
 import unittest
+from types import SimpleNamespace
 
 from serializers import cpp_descriptor_extract as C
 
@@ -379,6 +380,10 @@ class _FakeSectionCtx:
         va, b = self._s[(seg, sec)]
         return _FakeSec(va, len(b))
 
+    def sections_named(self, *names):
+        return [SimpleNamespace(segname=seg, name=sec, vmaddr=va, vmsize=len(b))
+                for (seg, sec), (va, b) in self._s.items() if sec in names]
+
     def is_variable(self, vmaddr):        # no program data, no binds
         return False
 
@@ -415,6 +420,11 @@ class TestCppFromCtx(unittest.TestCase):
         })
         protos = C.extract_cpp_protos_from_ctx(ctx)
         self.assertEqual([fp.name for fp in protos], ["dup.proto"])   # de-duped
+
+    def test_a_const_section_of_any_segment_is_scanned(self):
+        blob = self._file_blob("auth.proto")
+        ctx = _FakeSectionCtx({("__AUTH_CONST", "__const"): (0x4000, blob)})
+        self.assertEqual([fp.name for fp in C.extract_cpp_protos_from_ctx(ctx)], ["auth.proto"])
 
     def test_no_sections_returns_empty(self):
         self.assertEqual(C.extract_cpp_protos_from_ctx(_FakeSectionCtx({})), [])
@@ -513,10 +523,7 @@ class TestCppCacheVsDescriptorPb2(unittest.TestCase):
                 ctx = BinaryContext.from_cache(reader, va)
                 # collect the raw blobs (to feed descriptor_pb2 the SAME bytes)
                 blobs = []
-                for seg, sec in C._DESC_SECTIONS:
-                    if not ctx.has_section(seg, sec):
-                        continue
-                    s = ctx.section(seg, sec)
+                for s in ctx.sections_named(*C._DESC_SECTIONS):
                     try:
                         data = ctx.read_bytes(s.vmaddr, s.vmsize)
                     except Exception:

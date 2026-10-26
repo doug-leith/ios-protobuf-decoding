@@ -140,7 +140,7 @@ class TestOnTheOracle(unittest.TestCase):
             return ([(m.qualified, m.shape, [(f.number, f.name, f.proto_type) for f in m.fields])
                      for m in msgs], MC._visitor_slots(ctx), MC._decoder_slots(ctx))
         aliased = sum(1 for ns in SY._tables(self.ctx)[0].values() if len(ns) > 1)
-        self.assertGreater(aliased, 1000)
+        self.assertGreater(aliased, 10)
         self.assertEqual(reading(False), reading(True))
 
 

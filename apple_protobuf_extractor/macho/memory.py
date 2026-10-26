@@ -239,6 +239,16 @@ def _within(max_len: Optional[int]) -> str:
     return f"within {max_len} bytes" if max_len is not None else "before the end of its segment"
 
 
+def packed_vmaddr(raw: int) -> int:
+    """The vmaddr a plain-arm64 dyld cache's packed pointer word holds: its low 36 bits, when the
+    bits above carry chain / authentication metadata; 0 for a word with none."""
+    return raw & 0xFFFFFFFFF if raw > 0xFFFFFFFFF else 0
+
+
+# little-endian words (BinaryContext.read_u32 and its kin)
+_U32, _U64, _S32, _S64 = (struct.Struct(f) for f in ('<I', '<Q', '<i', '<q'))
+
+
 class BinaryContext:
     """
     Random-access reader over a single-arch arm64 Mach-O binary.
@@ -477,6 +487,12 @@ class BinaryContext:
     def has_section(self, segname: str, sectname: str) -> bool:
         return (segname, sectname) in self._sections
 
+    def sections_named(self, *sectnames: str) -> List[Section]:
+        """The sections named one of *sectnames*, in any segment, in load-command order (the
+        cache builder and newer linkers move ``__objc_classlist`` / ``__cfstring`` / ``__const``
+        between ``__DATA``, ``__DATA_CONST``, ``__DATA_DIRTY`` and ``__AUTH_CONST``)."""
+        return [s for (_seg, name), s in self._sections.items() if name in sectnames]
+
     # ── Core read primitives ─────────────────────────────────────────────────
 
     def vmaddr_to_offset(self, vmaddr: int, length: int = 1) -> int:
@@ -519,36 +535,16 @@ class BinaryContext:
         return self._data[off : off + length]
 
     def read_u32(self, vmaddr: int) -> int:
-        if self._cache_reader is not None:
-            raw = self._cache_reader.read_raw(vmaddr, 4)
-            if raw is None or len(raw) < 4:
-                raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
-            return struct.unpack_from('<I', raw)[0]
-        return struct.unpack_from('<I', self._data, self.vmaddr_to_offset(vmaddr, 4))[0]
+        return _U32.unpack(self.read_bytes(vmaddr, 4))[0]
 
     def read_u64(self, vmaddr: int) -> int:
-        if self._cache_reader is not None:
-            val = self._cache_reader.read_u64(vmaddr)
-            if val is None:
-                raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
-            return val
-        return struct.unpack_from('<Q', self._data, self.vmaddr_to_offset(vmaddr, 8))[0]
+        return _U64.unpack(self.read_bytes(vmaddr, 8))[0]
 
     def read_s32(self, vmaddr: int) -> int:
-        if self._cache_reader is not None:
-            raw = self._cache_reader.read_raw(vmaddr, 4)
-            if raw is None or len(raw) < 4:
-                raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
-            return struct.unpack_from('<i', raw)[0]
-        return struct.unpack_from('<i', self._data, self.vmaddr_to_offset(vmaddr, 4))[0]
+        return _S32.unpack(self.read_bytes(vmaddr, 4))[0]
 
     def read_s64(self, vmaddr: int) -> int:
-        if self._cache_reader is not None:
-            raw = self._cache_reader.read_raw(vmaddr, 8)
-            if raw is None or len(raw) < 8:
-                raise ValueError(f"vmaddr 0x{vmaddr:x} not mapped in cache")
-            return struct.unpack_from('<q', raw)[0]
-        return struct.unpack_from('<q', self._data, self.vmaddr_to_offset(vmaddr, 8))[0]
+        return _S64.unpack(self.read_bytes(vmaddr, 8))[0]
 
     def read_cstring(self, vmaddr: int, max_len: Optional[int] = None) -> str:
         """Read a null-terminated C string, clamped to the segment boundary (in a cache, the
@@ -586,17 +582,11 @@ class BinaryContext:
         bits fall in one of this binary's own segments (an address only the cache maps is not
         resolvable here); else *raw*.  Only for a binary without chained fixups, whose pointers
         :attr:`_fixup_map` holds (:meth:`read_ptr`)."""
-        if raw > 0xFFFFFFFFF:          # bits set above bit 35 → possible metadata
-            low36 = raw & 0xFFFFFFFFF
-            if low36:
-                # Accept only when the target is within the binary's own mapped
-                # segments (the decode is then verifiable).
-                if any(
-                    s.vmaddr <= low36 < s.vmaddr + s.vmsize
-                    for s in self._segments
-                    if s.name != '__PAGEZERO'
-                ):
-                    return low36
+        low36 = packed_vmaddr(raw)
+        # accepted only within the binary's own mapped segments (the decode is then verifiable)
+        if low36 and any(s.vmaddr <= low36 < s.vmaddr + s.vmsize
+                         for s in self._segments if s.name != '__PAGEZERO'):
+            return low36
         return raw
 
     def read_ptr(self, vmaddr: int) -> int:
@@ -694,25 +684,13 @@ class BinaryContext:
         if not self._data:
             return
         if self._symtab:
+            from .nlist import iter_nlist
             symoff, nsyms, stroff, strsize = self._symtab
-            data = self._data
-            n = len(data)
-            str_end = min(stroff + strsize, n)
-            if symoff > 0 and stroff > 0 and symoff < n:
-                nsyms = min(nsyms, (n - symoff) // 16)
-                for i in range(nsyms):
-                    n_strx, _type, n_sect, _desc, n_value = struct.unpack_from(
-                        '<IBBHQ', data, symoff + i * 16)
-                    if n_strx == 0:
-                        continue
-                    sp = stroff + n_strx
-                    if sp >= str_end:
-                        continue
-                    end = data.find(b'\x00', sp, str_end)
-                    if end < 0:
-                        end = str_end
-                    yield (data[sp:end].decode('utf-8', errors='replace'),
-                           n_value if n_sect and n_value else None)
+            if symoff > 0 and stroff > 0:
+                for e in iter_nlist(self._data, symoff, 0, nsyms, stroff, stroff + strsize):
+                    if e.name:
+                        yield (e.name.decode('utf-8', errors='replace'),
+                               e.n_value if e.n_sect and e.n_value else None)
         if self._export_trie:
             from .export_trie import export_address, iter_export_trie
             base, size = self._export_trie
