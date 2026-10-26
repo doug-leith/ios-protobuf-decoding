@@ -24,7 +24,7 @@ from proto.callees import text_holding
 from proto.dispatch import _jump_table_arm_addrs
 from proto.models import record_heuristic_hit
 
-# [cap:INPUT-SANITY] runaway guard on a body read with no known extent (:func:`function_body`;
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] runaway guard on a body read with no known extent (:func:`function_body`;
 # with one, the extent bounds it).  A body that reaches it is marked truncated.
 _UNBOUNDED_MAX_INSNS = 4000
 # [cap:COSMETIC] instructions disassembled per read while following a path when the extent is

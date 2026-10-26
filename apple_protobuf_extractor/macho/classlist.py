@@ -90,7 +90,7 @@ log = logging.getLogger(__name__)
 # entry_list_t never has more than a handful of entries (one per attached
 # category, plus the base implementation); this cap is a corrupt-input
 # backstop only, mirroring _MAX_METHODS.
-_MAX_PREATTACHED_ENTRIES = 64
+_MAX_PREATTACHED_ENTRIES = 64   # [cap:INPUT-SANITY] the entry list's own count
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
@@ -718,7 +718,7 @@ def _parse_ivars(
                         # has-bits ivar leaked into the output as a phantom `bytes`
                         # field.  Read generously so the struct is captured whole and
                         # _is_proto_flags_ivar can recognise it.
-                        type_enc = ctx.read_cstring(type_ptr, max_len=65536)
+                        type_enc = ctx.read_cstring(type_ptr, max_len=65536)   # [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26]
                     except READ_ERRORS as exc:
                         record_unread(ctx, "ivar type", f"{entry_va:#x} ({name})", exc)
 

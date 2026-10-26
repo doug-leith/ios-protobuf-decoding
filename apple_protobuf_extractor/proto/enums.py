@@ -261,12 +261,9 @@ def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
     ``__objc_methname`` section contains an ``xAsString:`` or
     ``StringAsX:`` selector matching this ivar.
 
-    This is a fallback for shared-cache-extracted binaries where the
-    preoptimised relative method lists store selector references into
-    the shared cache's unified string pool (outside the binary's own
-    vmaddr range), making per-class method-name resolution impossible.
-    The selector strings themselves remain in the binary's own
-    ``__objc_methname`` section and are indexed by ``build_string_table``.
+    The fallback for a class whose method names are not taken as known (none is a core
+    proto selector: :func:`proto.extractor.extract_proto_message`); the selector strings
+    are in the binary's own ``__objc_methname`` section, indexed by ``build_string_table``.
     """
     pname = _proto_name(ivar_name)
     if not pname or len(pname) < 2:

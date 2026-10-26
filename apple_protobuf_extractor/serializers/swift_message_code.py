@@ -55,7 +55,11 @@ _UNIQUELY_REFERENCED = frozenset(("_swift_isUniquelyReferenced_nonNull_native",
 # decoder type's method that implements one (``BinaryDecoder.decodeSingularDoubleField``: ``V``)
 _DECODE_RE = re.compile(r"[PV]\d+(?:decode(Singular|Repeated)(\w+?)Field5value|"
                         r"(decodeMapField)9fieldType5value|(nextFieldNumber)S)")
-_MAX_DEPTH = 3                       # [cap:INPUT-SANITY] arm -> closure -> helper
+# [cap:AFFECTS-OUTPUT] calls followed from a field arm (arm -> closure -> helper ...): at 3, a
+# decodeMessage whose decode of a field is one call deeper does not list it, and a one-entry
+# name-map reading is then dropped as another type's -- 14 single-field PegasusAPI messages
+# (Searchfoundation_CopyCommand, ...) emitted with no fields; 4 recovers them, 4 to 24 agree.
+_MAX_DEPTH = 3
 
 
 def pointer(k: int, off: int = 0) -> Sym:

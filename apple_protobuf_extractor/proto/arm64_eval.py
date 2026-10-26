@@ -50,9 +50,10 @@ _STRICT_CONDS = frozenset(('hs', 'cs', 'lo', 'cc', 'ge', 'lt'))
 #: source is then the in-range one).
 _IN_RANGE_CONDS = frozenset(('ls', 'lo', 'cc', 'le', 'lt'))
 
-# [cap:INPUT-SANITY] An ordered gate (`cmp w, #imm12; b.hi`) spans at most 2^12 values by the
-# encoding of the immediate; a wider span cannot come from one unshifted compare.  Only a gate
-# whose register then indexes a table is expanded to the whole interval.
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] the widest ordered gate (`cmp w, #imm; b.hi`) expanded to its whole
+# interval: an unshifted immediate spans at most 2^12 values, but a register or `lsl #12` compare
+# can span more, and a wider gate is not expanded (its values are not candidates).  Only a gate
+# whose register then indexes a table is expanded.
 _MAX_GATE_SPAN = 1 << 12
 
 

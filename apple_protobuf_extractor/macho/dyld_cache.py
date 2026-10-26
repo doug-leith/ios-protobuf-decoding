@@ -204,10 +204,9 @@ _HDR_READ_SIZE      = 0x1e0  # covers all fields we need (past _HDR_OBJC_OPTS_SI
 _OBJC_OPT_HEADER_V1_SIZE           = 56
 _OBJC_OPT_HEADER_REL_SEL_BASE_POS  = 48
 
-# [cap:INPUT-SANITY — leave as-is] _MAX_CSTRING_LEN caps the NUL-scan when reading a
-# string.  The strings that reach the descriptor (selectors, class/enum names) top out
-# around ~100 chars, so this 1024 ceiling never truncates a real one — it only stops a
-# runaway read on unterminated bytes.  Huge headroom; leave.
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] _MAX_CSTRING_LEN: the default NUL-scan of a cache string (a selector,
+# a class or enum name; the longest selector in iPhone 8 GeoServices is over 600 characters).  A
+# longer one is not returned (None).
 _MAX_CSTRING_LEN    = 1024   # max selector string length we'll return
 _CSTRING_CHUNK      = 256    # bytes read at a time looking for a terminator [cap:COSMETIC]
 

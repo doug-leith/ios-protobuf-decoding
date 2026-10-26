@@ -63,13 +63,12 @@ from proto.models import MAX_FIELD_NUMBER, record_analysis_failure, record_heuri
 
 log = logging.getLogger(__name__)
 
-# [cap:INPUT-SANITY — verified 2026-10-18] how many calls deep from -readFrom: a dispatch core
-# is looked for, and how many rounds of evaluated jump-table arms extend a core (a round that
-# finds none ends the loop; the last round leaves a note).  Raising both 4 -> 16 changed no
-# output on any of the 12 ios_decoder/protos targets or iOS 27 / macOS 27 GeoServices.
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] how many calls deep from -readFrom: a dispatch core is looked for,
+# and how many rounds of evaluated jump-table arms extend a core (a round that finds none ends
+# the loop; the last round leaves a note).
 _DESCEND_DEPTH = 4
 _ARM_ROUNDS = 4
-# [cap:INPUT-SANITY] a br target further than this past the core's entry is not taken as one of
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] a br target further than this past the core's entry is not taken as one of
 # its arms (the largest GeoServices reader is ~5 KB; this is a runaway guard, not a window).
 _ARM_REACH = 0x40000
 

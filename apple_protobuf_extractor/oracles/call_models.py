@@ -139,7 +139,7 @@ class Runner:
                 written[addr] = (size, value & ((1 << (8 * size)) - 1))
         hook = uc.hook_add(UC_HOOK_MEM_WRITE, wrote)
         try:
-            uc.emu_start(va, RET_SENTINEL, count=50_000)
+            uc.emu_start(va, RET_SENTINEL, count=50_000)   # [cap:COSMETIC] an oracle's run budget
             ended = "returned" if uc.reg_read(A.UC_ARM64_REG_PC) == RET_SENTINEL else "budget"
         except UcError as e:
             ended = "fault: %s" % e

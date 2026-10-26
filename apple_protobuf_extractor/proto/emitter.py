@@ -1263,7 +1263,7 @@ def print_summary(
     pct_conf = _pct_floor(stats["confirmed"], total_fields)
     pct_est  = _pct_floor(stats["estimated"], total_fields) if stats["estimated"] else "0.0"
 
-    W   = 57
+    W   = 57                         # [cap:COSMETIC] the summary box's width
     sep = "─" * W
 
     def row(label: str, value, extra: str = "") -> str:

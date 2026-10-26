@@ -77,7 +77,7 @@ def _runlength_types(text):
         i = j + 1
     return out
 _STRUCT_KIND, _ENUM_KIND = 17, 18
-# [cap:INPUT-SANITY] runaway guard on the parent contexts walked for a qualified name (the
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] runaway guard on the parent contexts walked for a qualified name (the
 # walk ends at the module).  (A FieldDescriptor's records are bounded by its own count and the
 # end of __swift5_fieldmd, :func:`_read_field_types`.)
 _MAX_CONTEXT_DEPTH = 12

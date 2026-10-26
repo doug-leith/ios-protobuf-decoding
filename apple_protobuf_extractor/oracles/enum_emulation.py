@@ -25,7 +25,7 @@ from oracles.flow_emulation import RET_SENTINEL, Report, make_machine
 from oracles.writer_emulation import SELF, Run, _all_ivars, _method
 
 PROBE_MARGIN = 64
-MAX_PROBES = 4096                      # (a bound no enum table reaches: each probe is a run)
+MAX_PROBES = 4096                      # [cap:COSMETIC] an oracle's (a bound no enum table reaches: each probe is a run)
 _COMPARES = ("cmp", "cmn", "subs", "adds", "ccmp", "ccmn")
 
 
@@ -99,7 +99,7 @@ def table(machine, cl, cls, selector, values):
             uc.reg_write(A.UC_ARM64_REG_X30, RET_SENTINEL)
             uc.reg_write(A.UC_ARM64_REG_SP, 0x7f0000038000)
             try:
-                uc.emu_start(imp, RET_SENTINEL, count=20_000)
+                uc.emu_start(imp, RET_SENTINEL, count=20_000)   # [cap:COSMETIC] an oracle's run budget
             except UcError:
                 continue
             x0 = uc.reg_read(A.UC_ARM64_REG_X0)

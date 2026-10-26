@@ -64,7 +64,9 @@ _W, _S, _T = 'W', 'S', 'T'
 _P = 'P'                     # (_P, reg): a self-method summary's argument register on entry
 
 
-# [cap:INPUT-SANITY] runaway backstops (a writeTo: settles in a few sweeps of its blocks).
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] runaway backstops (a writeTo: settles in a few sweeps of its
+# blocks; the largest, 1,745 blocks in iOS 27 GeoServices, in 32,644 visits).  Each reports
+# when it binds (record_heuristic_hit).
 _MAX_BLOCK_VISITS = 50_000
 _MAX_SUMMARY_DEPTH = 3
 
@@ -264,7 +266,7 @@ class _Result:
 
     def fail(self, why: str) -> None:
         self.complete = False
-        if len(self.why) < 8:
+        if len(self.why) < 8:                # [cap:COSMETIC] reasons kept: they only explain
             self.why.append(why)
 
     def serialise(self, v) -> None:

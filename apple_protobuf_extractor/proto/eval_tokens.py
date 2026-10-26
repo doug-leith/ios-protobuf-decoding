@@ -25,6 +25,7 @@ def opaque(v) -> bool:
 
 def field_value(obj, off: int) -> Optional[Sym]:
     """``self->ivar`` at byte offset *off* (the array a reader appends to with addObject:)."""
+    # [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] an ivar offset below 16 MB
     return Sym("token", ("field", off)) if obj == SELF and 0 <= off < (1 << 24) else None
 
 

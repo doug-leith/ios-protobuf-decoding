@@ -166,7 +166,7 @@ class Flow(_EvalFlow):
                     tgt.setdefault(v, nm)
                 if res.problems:
                     self.incomplete.setdefault(off, "; ".join(res.problems[:3]))
-            elif res.problems and res.n_candidates >= 3:
+            elif res.problems and res.n_candidates >= 3:     # [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26, at >= 1]
                 self.unevaluated.setdefault(off, "; ".join(res.problems[:3]))
         for off in out:
             self.unevaluated.pop(off, None)

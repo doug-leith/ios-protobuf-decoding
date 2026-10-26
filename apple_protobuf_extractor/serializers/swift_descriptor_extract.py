@@ -88,7 +88,7 @@ from serializers.swift_namemap_bytecode import (
 
 log = logging.getLogger(__name__)
 
-# [cap:INPUT-SANITY] the largest (Int, _NameDescription) element stride tried while deriving a
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] the largest (Int, _NameDescription) element stride tried while deriving a
 # static name-map array's stride (the description is a few words in every swift-protobuf version;
 # 0x38 in the oracle fixtures' SwiftProtobuf: _NameDescription is 41 bytes, 8-aligned).
 _MAX_ELEMENT_STRIDE = 0x78

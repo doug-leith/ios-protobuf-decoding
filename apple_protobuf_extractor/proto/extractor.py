@@ -782,13 +782,9 @@ def extract_proto_message(
             class_detected_by_va_cluster=_class_detected_by_va_cluster,
         )
 
-    # Collect method names, filtering unresolved (None) entries from
-    # preoptimised shared-cache method lists.
+    # The method names (unresolved None entries left out) are taken as reliable only when one
+    # of the core proto selectors is among them; otherwise the ivar-based paths run.
     raw_method_names: Set[str] = {m.name for m in cls.methods if m.name is not None}
-    # For shared-cache binaries, most selectors can't be resolved and
-    # raw_method_names contains only stray partial strings.  Only treat the
-    # method names as reliable when at least one core proto selector is
-    # present; otherwise fall back to ivar-based heuristics throughout.
     if _REQUIRED_INSTANCE_METHODS & raw_method_names:
         instance_method_names: Set[str] = raw_method_names
     else:

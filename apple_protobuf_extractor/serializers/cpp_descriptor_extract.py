@@ -223,7 +223,8 @@ def decode_file_descriptor(blob: bytes) -> FileProto:
 # ── blob finder ──────────────────────────────────────────────────────────────
 
 # Field 1 (name) of a FileDescriptorProto: 0x0a <len:varint> <"....proto">.
-# len is a single byte for any real path (< 128).
+# len is a single byte for any real path (< 128).  [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] a path of 3 to 120
+# characters from that set: a longer one, or one with a space, is not found.
 _SIG = re.compile(rb"\x0a([\x01-\x7f])([0-9A-Za-z_./+-]{3,120}\.proto)")
 _FDP_TOP_FIELDS = frozenset(range(1, 13))   # FileDescriptorProto fields 1..12
 
