@@ -55,11 +55,6 @@ _UNIQUELY_REFERENCED = frozenset(("_swift_isUniquelyReferenced_nonNull_native",
 # decoder type's method that implements one (``BinaryDecoder.decodeSingularDoubleField``: ``V``)
 _DECODE_RE = re.compile(r"[PV]\d+(?:decode(Singular|Repeated)(\w+?)Field5value|"
                         r"(decodeMapField)9fieldType5value|(nextFieldNumber)S)")
-# [cap:AFFECTS-OUTPUT] calls followed from a field arm (arm -> closure -> helper ...): at 3, a
-# decodeMessage whose decode of a field is one call deeper does not list it, and a one-entry
-# name-map reading is then dropped as another type's -- 14 single-field PegasusAPI messages
-# (Searchfoundation_CopyCommand, ...) emitted with no fields; 4 recovers them, 4 to 24 agree.
-_MAX_DEPTH = 3
 
 
 def pointer(k: int, off: int = 0) -> Sym:
@@ -197,11 +192,12 @@ def implementation(ctx, witness: int) -> Code:
     entry arguments (x0-x2, self in x20) is that callee -- the ``TW`` thunk, and a body that
     identical-code folding made a call of a ``merged`` one, with the constants it adds in
     x3-x8 -- followed to the first that is not."""
-    code = Code(witness)
-    for _ in range(_MAX_DEPTH + 1):
+    code, seen = Code(witness), {witness}
+    while True:
         nxt = _forwarded_to(ctx, code.va)
-        if nxt is None:
+        if nxt is None or nxt[0] in seen:
             return code
+        seen.add(nxt[0])
         code = Code(nxt[0], tuple(sorted({**dict(code.args), **nxt[1]}.items())),
                     tuple(sorted({**dict(code.imports), **nxt[2]}.items())))
     return code
@@ -341,9 +337,10 @@ def _tail_called(ctx, va: int) -> Optional[int]:
     return memo[va]
 
 
-def _decodes(ctx, objs: _Objects, calls, depth: int, seen) -> List[Decoded]:
+def _decodes(ctx, objs: _Objects, calls, seen) -> List[Decoded]:
     """The Decoder field calls among *calls* (a run's), and in the image's functions they reach
-    (run with the arguments handed them)."""
+    (run with the arguments handed them; *seen*: the functions on the path to here, so a
+    recursion ends)."""
     out: List[Decoded] = []
     for c in calls:
         m = _match(_DECODE_RE, _call_names(ctx, objs, c.target, c.via))
@@ -364,14 +361,13 @@ def _decodes(ctx, objs: _Objects, calls, depth: int, seen) -> List[Decoded]:
                 d.origin, d.offset = objs.origin[split(v)[0]], split(v)[1]
             out.append(d)
             continue
-        if c.target is None or depth >= _MAX_DEPTH or text_holding(ctx, c.target) is None \
-                or c.target in seen:
+        if c.target is None or text_holding(ctx, c.target) is None or c.target in seen:
             continue
         flow = SY.function_flow(ctx, c.target)
         if flow is None:
             continue
         region = flow.run_from(0, dict(c.args), objects=objs.objects(c.target))
-        out.extend(_decodes(ctx, objs, region.calls, depth + 1, seen | {c.target}))
+        out.extend(_decodes(ctx, objs, region.calls, seen | {c.target}))
     return out
 
 
@@ -384,10 +380,10 @@ def decoded_fields(ctx, decode, numbers) -> Optional[Dict[int, List[Decoded]]]:
     objs = _Objects(ctx)
     entry = objs.entry(code)
     numbers = sorted(n for n in set(numbers) if 1 <= n <= MAX_FIELD_NUMBER)
-    return _fields(ctx, objs, code.va, entry, numbers, 1)
+    return _fields(ctx, objs, code.va, entry, numbers, frozenset({code.va}))
 
 
-def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth: int
+def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, seen
             ) -> Optional[Dict[int, List[Decoded]]]:
     from macho.disasm import _parse_imm
     flow = SY.function_flow(ctx, va)
@@ -414,11 +410,12 @@ def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth:
         elif text_holding(ctx, target) is not None:
             inner.append((target, st))
     if not nexts:
-        # the loop is in a function this one calls, handed what it holds
-        if depth >= _MAX_DEPTH:
-            return None
+        # the loop is in a function this one calls, handed what it holds (*seen*: the
+        # functions on the path to here)
         for target, st in inner:
-            got = _fields(ctx, objs, target, dict(st), numbers, depth + 1)
+            if target in seen:
+                continue
+            got = _fields(ctx, objs, target, dict(st), numbers, seen | {target})
             if got is not None:
                 return got
         return None
@@ -434,11 +431,10 @@ def _fields(ctx, objs: _Objects, va: int, entry: Dict[str, int], numbers, depth:
             return flow.run_from(k + 1, regs, stop, objects=model, slots=slots.get(k, {}),
                                  rejoin=rejoin)
         unknown = run((max(numbers) if numbers else 0) + 1)
-        # the arms' closures have their own budget, however deep the loop was found
-        common = {_key(d) for d in _decodes(ctx, objs, unknown.calls, 1, frozenset())}
+        common = {_key(d) for d in _decodes(ctx, objs, unknown.calls, frozenset({va}))}
         for n in numbers:
             r = run(n, frozenset(unknown.blocks))
-            for d in _decodes(ctx, objs, r.calls, 1, frozenset()):
+            for d in _decodes(ctx, objs, r.calls, frozenset({va})):
                 if _key(d) not in common and _key(d) not in {_key(x) for x in out.get(n, ())}:
                     out.setdefault(n, []).append(d)
     return out
@@ -605,12 +601,12 @@ def visited_fields(ctx, traverse) -> Dict[int, List[Visited]]:
     if code not in memo:
         objs = _Objects(ctx)
         out: Dict[int, List[Visited]] = {}
-        _visits(ctx, objs, code.va, objs.entry(code), 1, frozenset(), out)
+        _visits(ctx, objs, code.va, objs.entry(code), frozenset({code.va}), out)
         memo[code] = out
     return memo[code]
 
 
-def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
+def _visits(ctx, objs: _Objects, va: int, entry, seen, out) -> None:
     flow = SY.function_flow(ctx, va)
     if flow is None:
         return
@@ -634,10 +630,9 @@ def _visits(ctx, objs: _Objects, va: int, entry, depth: int, seen, out) -> None:
             if (v.label, v.kind, v.type) not in {(x.label, x.kind, x.type) for x in out.get(n, ())}:
                 out.setdefault(n, []).append(v)
             continue
-        if c.target is None or depth >= _MAX_DEPTH or text_holding(ctx, c.target) is None \
-                or c.target in seen:
+        if c.target is None or text_holding(ctx, c.target) is None or c.target in seen:
             continue
-        _visits(ctx, objs, c.target, c.args, depth + 1, seen | {c.target}, out)
+        _visits(ctx, objs, c.target, c.args, seen | {c.target}, out)
 
 
 # ── the proto type a call stands for ──────────────────────────────────────────

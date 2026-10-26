@@ -427,6 +427,7 @@ class _ClassFlow:
         self.off_to_ivar: Dict[int, str] = {iv.offset: iv.name for iv in cls.ivars
                                             if iv.offset} if cls is not None else {}
         self._summary_memo: Dict[int, FrozenSet] = {}
+        self._summary_cuts = 0               # summaries cut at _MAX_SUMMARY_DEPTH so far
 
     def _chain(self, cls: ObjcClass) -> List[ObjcClass]:
         return list(self.cl.ancestors(cls))
@@ -729,6 +730,7 @@ class _ClassFlow:
         if imp in self._summary_memo:
             return self._summary_memo[imp]
         self._summary_memo[imp] = frozenset({_T})    # recursion guard
+        cuts = self._summary_cuts
         out = frozenset({_T})
         if depth < _MAX_SUMMARY_DEPTH:
             entry = {'x0': frozenset({_S}),
@@ -739,9 +741,13 @@ class _ClassFlow:
                 # returns one is, ``('R', addr)``)
                 out = frozenset(o for o in res.ret if not (isinstance(o, tuple) and o[0] == 'R'))
         else:
+            self._summary_cuts += 1
             record_heuristic_hit(self.ctx, "_MAX_SUMMARY_DEPTH",
                                f"{self.cls.name if self.cls else '?'}: the method at {imp:#x}")
-        self._summary_memo[imp] = out
+        if self._summary_cuts == cuts:
+            self._summary_memo[imp] = out
+        else:                                    # it depends on how deep it was asked for
+            del self._summary_memo[imp]
         return out
 
     # ── one instruction ──────────────────────────────────────────────────────

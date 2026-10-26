@@ -473,3 +473,22 @@ class TestReview20261025(unittest.TestCase):
         res = self._run([('add', 'x8, x0, #0x10'), ('ldr', 'x1, [x8, #8]'), ('mov', 'x0, x2'),
                          ('mov', 'w2, #7'), ('b', '#0xe000')], {8: '_a', 0x18: '_b'})
         self.assertEqual(res.ser, {('I', '_b')})
+
+    def test_a_summary_cut_by_depth_is_not_reused_shallower(self):
+        # B returns ivar _b; A returns what B's summary gives.  Asked for at the depth limit, a
+        # summary is unknown (T) -- and so is one that asked for another there; neither may
+        # stand for the summary asked for at depth 0.
+        from unittest import mock
+        import proto.writer_flow as WF
+        wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
+
+        def run(self_, imp, entry, depth, top):
+            r = WF._Result()
+            r.ret = {('I', '_b')} if imp == 0xB else set(self_._summary(0xB, depth))
+            return r
+        with mock.patch.object(WF._ClassFlow, '_run', run):
+            self.assertEqual(wf._summary(0xB, WF._MAX_SUMMARY_DEPTH), {WF._T})
+            self.assertEqual(wf._summary(0xB, 0), {('I', '_b')})
+            wf._summary_memo.clear()
+            self.assertEqual(wf._summary(0xA, WF._MAX_SUMMARY_DEPTH - 1), {WF._T})
+            self.assertEqual(wf._summary(0xA, 0), {('I', '_b')})

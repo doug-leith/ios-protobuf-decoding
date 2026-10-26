@@ -17,6 +17,8 @@ import os
 import struct
 import unittest
 
+import pytest
+
 from serializers import swift_descriptor_extract as S
 from serializers import swift_message_code as MC
 from proto import function_body as FB
@@ -1365,6 +1367,34 @@ class TestLivePegasusSingleEntryStub(unittest.TestCase):
         enums = {e.name: e for e in S.swift_enums(_load_ctx(_pegasus_path()))}
         self.assertEqual(_fieldset(enums["Apple_Parsec_Feedback_V2_NullValue"]),
                          {(0, "NULL_VALUE")})
+
+
+def _pegasus_in_cache():
+    try:
+        import live_artifacts as V
+        return V.load_cache("PegasusAPI")
+    except Exception:
+        return None
+
+
+@pytest.mark.slow
+class TestLivePegasusFromCache(unittest.TestCase):
+    """PegasusAPI read from the iPhone 8 cache (the gate's mode), not from its extracted file."""
+    @classmethod
+    def setUpClass(cls):
+        loaded = _pegasus_in_cache()
+        cls.msgs = {m.name: m for m in S.swift_messages(loaded[0])} if loaded else None
+
+    def setUp(self):
+        if self.msgs is None:
+            self.skipTest("iPhone 8 cache not available")
+
+    def test_a_decode_four_calls_from_its_arm_confirms_the_entry(self):
+        # decodeMessage decodes field 1 four calls from the arm: with calls followed only three
+        # deep the one-entry reading was dropped as another type's (no fields)
+        for name, field in (("Searchfoundation_CopyCommand", "copyableItem"),
+                            ("Searchfoundation_ShareCommand", "shareItem")):
+            self.assertEqual(_fieldset(self.msgs[name]), {(1, field)}, name)
 
 
 class TestFieldlessMarker(unittest.TestCase):
