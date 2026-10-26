@@ -52,8 +52,8 @@ class TestRelativeSelectorBase(unittest.TestCase):
         )
 
     def test_calibration_picks_a_resolving_base(self):
-        ctx, _ = self._load("GeoServices")
-        base = ctx._rel_sel_base
+        _, cl = self._load("GeoServices")
+        base = cl.rel_sel_base
         self.assertIsNotNone(base, "selector base should resolve in cache mode")
         # The chosen base must hold the magic anchor selector.
         self.assertEqual(self.reader.read_cstring(base), "\U0001F92F")
@@ -75,7 +75,7 @@ class TestRelativeSelectorBase(unittest.TestCase):
             "precondition: CloudKitDaemon should have no local symbols",
         )
         ctx, cl = self._load("CloudKitDaemon")
-        self.assertIsNotNone(ctx._rel_sel_base)
+        self.assertIsNotNone(cl.rel_sel_base)
         named = sum(1 for c in cl for m in c.methods if m.name)
         total = sum(1 for c in cl for m in c.methods)
         self.assertGreater(named / total, 0.8,
@@ -100,7 +100,7 @@ class TestRelativeSelectorBase(unittest.TestCase):
         ctx = BinaryContext(open(path, "rb").read())
         st = build_string_table(ctx)
         cl = build_class_list(ctx, st)
-        self.assertIsNone(getattr(ctx, "_rel_sel_base", None))
+        self.assertIsNone(cl.rel_sel_base)
         # locationd still resolves its own selectors from its methname section.
         named = sum(1 for c in cl for m in c.methods if m.name)
         total = sum(1 for c in cl for m in c.methods)

@@ -497,12 +497,14 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
     """Decode *cls*'s readFrom: dispatch (see the module docstring).  Memoised per class on
     *ctx*: the element-by-number and element-by-ivar consumers share one evaluation.  The
     result depends on *core_index*, so it is memoised only for the image's own index (the
-    one cached on *ctx* as ``_readfrom_core_index``) and for an empty one; any other index
-    is evaluated afresh."""
+    one cached on *ctx* as ``_readfrom_core_index``) and for an empty one, any other index
+    evaluated afresh -- and on the image's proto class set once extraction has computed it
+    (:func:`_decode_core`'s known classes), which the key holds."""
+    known = getattr(ctx, "_proto_class_names_cache", None)
     if not core_index:
-        key = (cls.vmaddr, "empty")
+        key = (cls.vmaddr, "empty", known)
     elif core_index is getattr(ctx, "_readfrom_core_index", None):
-        key = (cls.vmaddr, "image")
+        key = (cls.vmaddr, "image", known)
     else:
         key = None
     memo = _ctx_cache(ctx, "_dispatch_eval_cache", dict)

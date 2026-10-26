@@ -249,7 +249,6 @@ class TestDirectSelectorReadFromTheBaseOnly(unittest.TestCase):
         from tests._fakes import NoImage
 
         class Ctx(NoImage):
-            _rel_sel_base = 0x100000
             strings = {0x100040: "%@ not a selector", 0x1040: "te"}   # base+0x40, va+0x40
 
             def read_s32(self, va):
@@ -258,7 +257,7 @@ class TestDirectSelectorReadFromTheBaseOnly(unittest.TestCase):
             def read_cstring(self, va):
                 return self.strings[va]
 
-        m = _parse_relative_method(Ctx(), 0x1000, None, has_direct=True)
+        m = _parse_relative_method(Ctx(), 0x1000, None, has_direct=True, rel_sel_base=0x100000)
         self.assertIsNone(m.name)                 # left for .symbols, not named 'te'
 
 

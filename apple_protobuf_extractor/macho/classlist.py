@@ -106,8 +106,11 @@ class ClassList:
     __len__ / __iter__ / __contains__
     """
 
-    def __init__(self, classes: List[ObjcClass]) -> None:
+    def __init__(self, classes: List[ObjcClass], rel_sel_base: Optional[int] = None) -> None:
         self._classes:   List[ObjcClass]         = classes
+        #: the dyld cache's relative-method-selector base the classes' direct selectors were read
+        #: from (None: a standalone binary, or undetermined)
+        self.rel_sel_base: Optional[int]         = rel_sel_base
         self._by_name:   Dict[str, ObjcClass]    = {}
         self._by_vmaddr: Dict[int, ObjcClass]    = {}
         self._children:  Dict[str, List[str]]    = {}   # parent → [child names]
@@ -324,7 +327,7 @@ def build_class_list(
     # methods, so preoptimized "direct selector" names decode from the binary
     # alone (no .symbols needed).  None in binary mode / when undetermined; the
     # parser then falls back to the existing selref/methname logic.
-    ctx._rel_sel_base = _resolve_relative_selector_base(ctx, sect, count)
+    rel_sel_base = _resolve_relative_selector_base(ctx, sect, count)
 
     raw_classes: List[ObjcClass] = []
     seen_vas: Set[int] = set()
@@ -337,7 +340,7 @@ def build_class_list(
 
         if ptr not in seen_vas:
             seen_vas.add(ptr)
-            cls = _parse_class(ctx, ptr, strings)
+            cls = _parse_class(ctx, ptr, strings, rel_sel_base)
             if cls is not None:
                 raw_classes.append(cls)
 
@@ -352,7 +355,7 @@ def build_class_list(
         if meta_va == 0 or meta_va in seen_vas:
             continue
         seen_vas.add(meta_va)
-        meta = _parse_class(ctx, meta_va, strings)
+        meta = _parse_class(ctx, meta_va, strings, rel_sel_base)
         if meta is not None:
             raw_classes.append(meta)
 
@@ -362,7 +365,7 @@ def build_class_list(
         if c.superclass_vmaddr:
             c.superclass_name = va_to_name.get(c.superclass_vmaddr)
 
-    return ClassList(raw_classes)
+    return ClassList(raw_classes, rel_sel_base)
 
 
 def _resolve_preattached_method_lists(ctx: BinaryContext, tagged_va: int) -> List[int]:
@@ -408,6 +411,7 @@ def _resolve_preattached_method_lists(ctx: BinaryContext, tagged_va: int) -> Lis
 
 def _parse_class(
     ctx: BinaryContext, class_va: int, strings: StringTable,
+    rel_sel_base: Optional[int] = None,
 ) -> Optional[ObjcClass]:
     """Parse one class_t at *class_va*."""
     try:
@@ -463,9 +467,9 @@ def _parse_class(
             # _resolve_preattached_method_lists); parse + concatenate every
             # resolved method_list_t rather than a single direct list.
             for ml_va in _resolve_preattached_method_lists(ctx, methods_va):
-                methods.extend(_parse_methods(ctx, ml_va, strings))
+                methods.extend(_parse_methods(ctx, ml_va, strings, rel_sel_base))
         else:
-            methods = _parse_methods(ctx, methods_va, strings)
+            methods = _parse_methods(ctx, methods_va, strings, rel_sel_base)
     ivars = _parse_ivars(ctx, ivars_va, strings) if ivars_va else []
 
     return ObjcClass(
@@ -483,6 +487,7 @@ def _parse_class(
 
 def _parse_methods(
     ctx: BinaryContext, list_va: int, strings: StringTable,
+    rel_sel_base: Optional[int] = None,
 ) -> List[ObjcMethod]:
     try:
         entsize_flags = ctx.read_u32(list_va)
@@ -522,7 +527,7 @@ def _parse_methods(
         try:
             if relative:
                 m = _parse_relative_method(
-                    ctx, entry_va, strings, has_direct=has_direct
+                    ctx, entry_va, strings, has_direct=has_direct, rel_sel_base=rel_sel_base
                 )
             else:
                 m = _parse_traditional_method(ctx, entry_va, strings)
@@ -578,6 +583,7 @@ def _parse_relative_method(
     ctx: BinaryContext, va: int, strings: StringTable,
     *,
     has_direct: bool = False,
+    rel_sel_base: Optional[int] = None,
 ) -> Optional[ObjcMethod]:
     # Each field is a relative s32 offset from its own field address
     name_rel  = ctx.read_s32(va)
@@ -607,11 +613,10 @@ def _parse_relative_method(
 
     # Step 0 — preoptimized direct selectors in a dyld shared cache.  The
     # nameOffset is measured from the cache-wide '🤯' selector-base address
-    # (resolved once in build_class_list and stashed on ctx), NOT from the
+    # (*rel_sel_base*, resolved once in build_class_list), NOT from the
     # method_t field.  When that base is known this is the authoritative
     # source and decodes every direct selector from the binary alone — no
     # .symbols table required.
-    rel_sel_base = getattr(ctx, '_rel_sel_base', None)
     # With the base known it is the only reading of a direct selector: va + nameOffset is then no
     # selector address, and reading a string there picks up the tail of another (iPhone 8
     # GeoServices: 'te', 'on:', 'precated' for long initialiser selectors).

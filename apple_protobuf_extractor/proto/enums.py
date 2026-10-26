@@ -23,7 +23,7 @@ from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from proto.models     import (ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics,
                               retag_enums)
-from proto.protocore  import _SCALAR_ENC, _proto_name
+from proto.protocore  import _SCALAR_ENC, _proto_name, enum_selectors
 from proto.dispatch   import _jump_table_arm_addrs, function_entries
 from proto.dictrep_flow import Flow
 from proto.callees import text_holding
@@ -251,9 +251,8 @@ def _harvest_dictrep(
     # The field's int is driven through the function's own code, value by value, to the
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.
     flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
-    enums = flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
-                            if iv.offset is not None and iv.offset_slot}, wanted)
-    return enums, flow.incomplete, flow.unevaluated
+    return flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
+                           if iv.offset is not None and iv.offset_slot}, wanted)
 
 
 def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
@@ -269,10 +268,8 @@ def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
     pname = _proto_name(ivar_name)
     if not pname or len(pname) < 2:
         return None
-    cap = pname[0].upper() + pname[1:]
-    for sel in (f"{pname}AsString:", f"StringAs{cap}:"):
-        if st.find(sel):
-            return cap
+    if any(st.find(sel) for sel in enum_selectors(pname)):
+        return pname[0].upper() + pname[1:]
     return None
 
 
@@ -668,7 +665,7 @@ def _recover_enum_values(ctx: BinaryContext, cls: ObjcClass, metaclass: Optional
     field *fld*: from its ``xAsString:`` (on the class or the metaclass), else the pairs
     ``_dictionaryRepresentation:`` gave (:func:`_tag_dictrep_enums`); the second item is None
     when neither source exists."""
-    as_string_sel = f"{fld.name}AsString:"
+    as_string_sel = enum_selectors(fld.name)[0]
     as_method = cls.get_method(as_string_sel)
     if as_method is None and metaclass is not None:
         as_method = metaclass.get_method(as_string_sel)

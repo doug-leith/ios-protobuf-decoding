@@ -84,6 +84,13 @@ def _proto_name(ivar_name: str) -> str:
 _HAS_BITS_NAMES: frozenset = frozenset({"hasbits", "has"})
 
 
+def enum_selectors(pname: str) -> Tuple[str, str]:
+    """The ``xAsString:`` and ``StringAsX:`` selectors the ProtocolBuffer generator gives the
+    enum field named *pname* (``feedbackType`` -> ``feedbackTypeAsString:``,
+    ``StringAsFeedbackType:``)."""
+    return f"{pname}AsString:", f"StringAs{pname[:1].upper()}{pname[1:]}:"
+
+
 def _is_has_bits_name(ivar_name: str) -> bool:
     """True if *ivar_name* is the has-bits bookkeeping ivar by name."""
     return ivar_name.replace("_", "").lower() in _HAS_BITS_NAMES
@@ -169,8 +176,7 @@ def _type_from_enc(
     pname = _proto_name(ivar_name)
 
     if type_enc in _SCALAR_ENC:
-        if (f"{pname}AsString:" in method_names
-                or f"StringAs{pname[0].upper()}{pname[1:]}:" in method_names):
+        if any(sel in method_names for sel in enum_selectors(pname)):
             # Enum field: return the proto enum type name and an "ENUM:" sentinel
             # so downstream code (emitter, value extractor) can identify it.
             # e.g. ivar "_feedbackType"  →  ("FeedbackType", "ENUM:FeedbackType")
@@ -209,9 +215,8 @@ def _type_from_enc(
         # only recovers the type *name* (the int decode is already wire-correct);
         # the value pairs are extracted by _collect_enum_definitions, which reverts
         # to the scalar if no usable xAsString: method resolves.
-        if scalar in ("int32", "uint32", "int64", "uint64") and (
-                f"{pname}AsString:" in method_names
-                or f"StringAs{pname[0].upper()}{pname[1:]}:" in method_names):
+        if scalar in ("int32", "uint32", "int64", "uint64") and any(
+                sel in method_names for sel in enum_selectors(pname)):
             enum_name = pname[0].upper() + pname[1:]
             return (enum_name, f"ENUM:{enum_name}")
         return (scalar, None)

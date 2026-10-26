@@ -45,13 +45,13 @@ def reg_bytes(tok: str) -> int:
     return 8 if t == 'sp' else REG_BYTES.get(t[:1], 8)
 
 
-def reg_mask(tok: str) -> int:
-    return 0xFFFFFFFF if tok.strip().lower().startswith('w') else 0xFFFFFFFFFFFFFFFF
-
-
 def reg_bits(tok: str) -> int:
     """Width of register operand *tok*: 32 for a w register, else 64."""
     return 32 if tok.strip().lower().startswith('w') else 64
+
+
+def reg_mask(tok: str) -> int:
+    return (1 << reg_bits(tok)) - 1
 
 
 _FP_REG = re.compile(r'^[bhsdqv](\d+)(\.\w+)?(\[(?:0x[0-9a-f]+|\d+)\])?$')    # a lane: v0.s[1], v0.b[0xa]
@@ -368,7 +368,7 @@ SHIFT_MNEMONICS = ('lsr', 'lsl', 'asr')
 
 def shift_value(mn: str, a: int, n: int, dest_tok: str) -> int:
     """``lsr`` / ``lsl`` / ``asr`` of *a* by *n*, in the destination's width."""
-    bits = 32 if dest_tok.strip().lower().startswith('w') else 64
+    bits = reg_bits(dest_tok)
     n %= bits
     a &= (1 << bits) - 1
     if mn == 'lsl':
@@ -384,7 +384,7 @@ def as_signed(v: Optional[int], tok: str) -> Optional[int]:
     materialised as ``mov w9, #-0x3bc4`` reads back as 0xFFFFC43C)."""
     if v is None:
         return None
-    bits = 32 if tok.strip().lower().startswith('w') else 64
+    bits = reg_bits(tok)
     return v - (1 << bits) if v >> (bits - 1) else v
 
 

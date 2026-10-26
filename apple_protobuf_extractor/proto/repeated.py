@@ -15,30 +15,17 @@ from macho.memory    import READ_ERRORS, BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
 from macho.disasm    import _parse_imm
 from proto.arm64_operands import RETURNS, mem_regs, split_ops
-from proto.callees   import callee_name, real_target, RETURNS_ARGUMENT
+from proto.callees   import callee_name, pb_field_writer_type, real_target, RETURNS_ARGUMENT
 from proto.protocore import _proto_name, _CLASS_TO_PROTO
 
 log = logging.getLogger(__name__)
 
-#: ProtocolBuffer.framework's field writers (ABI names ``_PBDataWriterWrite<T>Field``) by
-#: the proto type of the one value each serialises.  ``Submessage`` is not here: its
-#: element class comes from the class-naming paths.
-_WRITER_ELEMENT_TYPE = {
-    "BOOL": "bool", "Int32": "int32", "Int64": "int64", "Uint32": "uint32",
-    "Uint64": "uint64", "Sint32": "sint32", "Sint64": "sint64", "Fixed32": "fixed32",
-    "Fixed64": "fixed64", "Sfixed32": "sfixed32", "Sfixed64": "sfixed64",
-    "Float": "float", "Double": "double", "String": "string", "Data": "bytes",
-}
-
-
 def _writer_element_type(ctx: BinaryContext, helper_va: Optional[int]) -> Optional[str]:
     """The proto type the ProtocolBuffer field writer at *helper_va* serialises, by its ABI
-    name (:func:`proto.callees.callee_name`: a cache export, or a standalone binary's
-    import); None for an unnamed helper or a writer with no one value type."""
-    name = callee_name(ctx, helper_va) if helper_va else None
-    if not name or not (name.startswith("_PBDataWriterWrite") and name.endswith("Field")):
-        return None
-    return _WRITER_ELEMENT_TYPE.get(name[len("_PBDataWriterWrite"):-len("Field")])
+    name (:func:`proto.callees.pb_field_writer_type`: a cache export, or a standalone binary's
+    import); None for an unnamed helper or a writer with no one value type (``Submessage``:
+    its element class comes from the class-naming paths)."""
+    return pb_field_writer_type(callee_name(ctx, helper_va) if helper_va else None)
 
 def _repeated_element_type(ivar: ObjcIvar, metaclass: Optional[ObjcClass]) -> str:
     """

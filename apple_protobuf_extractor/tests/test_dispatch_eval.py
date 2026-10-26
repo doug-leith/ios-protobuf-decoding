@@ -526,6 +526,14 @@ class TestEvaluateClassMemo(unittest.TestCase):
         self.assertIs(a, b)
         self.assertEqual(self.calls, [0])
 
+    def test_the_proto_class_set_once_computed_is_part_of_the_key(self):
+        # the evaluation reads the image's proto class set once extraction has computed it
+        ctx = self._Ctx()
+        E.evaluate_class(ctx, self._Cls, {})
+        ctx._proto_class_names_cache = frozenset({'GEOX'})
+        E.evaluate_class(ctx, self._Cls, {})
+        self.assertEqual(self.calls, [0, 0])
+
     def test_image_index_is_memoised_separately_from_empty(self):
         ctx = self._Ctx()
         ctx._readfrom_core_index = {0x2000: 'GEOY'}
@@ -630,3 +638,4 @@ class TestATruncatedCoreIsReported(unittest.TestCase):
                            {}, out)
         self.assertTrue(any('read only in part' in n for n in out.notes))
         self.assertEqual([f[0] for f in get_diagnostics(ctx).analysis_failures], ['GEOX'])
+

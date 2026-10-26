@@ -30,7 +30,7 @@ _PKG = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 #: Attributes a module may set directly on a context: properties of the binary, computed once
 #: while parsing it, not per-extraction caches.
-_NOT_CACHES = {"_rel_sel_base"}
+_NOT_CACHES = set()
 
 
 def _ctx():

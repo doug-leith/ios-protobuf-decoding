@@ -373,7 +373,7 @@ class _Machine:
         opaque value is carried by a 64-bit copy (a 32-bit one cannot hold it)."""
         r = _norm_reg(tok)
         if self.opaque is not None and r in self.regs and self.opaque(self.regs[r]):
-            return self.regs[r] if tok.strip().lower().startswith('x') else None
+            return self.regs[r] if _wide(tok) else None
         return self.get(tok)
 
     def put(self, tok: str, v: Optional[int]) -> None:
@@ -783,7 +783,7 @@ class Flow:
         elif mn == 'mov' and len(ops) == 2 and not ops[1].startswith('#'):
             r = _norm_reg(ops[1])
             res = self.ivar_slot_of_reg(d, r) if r else None
-        elif mn == 'ldr' and len(ops) == 2 and ops[0].startswith('x'):
+        elif mn == 'ldr' and len(ops) == 2 and _wide(ops[0]):
             # container deref (PBRepeated.list): a POINTER loaded from the ivar's own
             # storage, no index -- a value read out of an array is not an address
             m = mem_regs(ops[1])
@@ -1191,7 +1191,7 @@ class Flow:
             put(ops[0], _add_sub(mn == 'adds', a, b))
         elif mn in LOAD_BYTES and len(ops) in (2, 3):
             ft = (self._field_load(m, ops[1])
-                  if len(ops) == 2 and mn == 'ldr' and ops[0].strip().lower().startswith('x')
+                  if len(ops) == 2 and mn == 'ldr' and _wide(ops[0])
                   else None)
             if ft is not None:
                 put(ops[0], ft)

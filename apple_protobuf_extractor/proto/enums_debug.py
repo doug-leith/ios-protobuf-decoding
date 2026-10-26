@@ -42,7 +42,7 @@ from macho.memory     import BinaryContext, PROGRAM_ERRORS
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass, ObjcIvar
 from proto.models     import ProtoField
-from proto.protocore  import _proto_name
+from proto.protocore  import _proto_name, enum_selectors
 from proto.config     import _dbg_enum
 from proto.enums      import _enum_name_from_pairs, _extract_xasstring, _xasstring_flow
 
@@ -99,9 +99,7 @@ def _gather_asstring_methname_hits(
     exist anywhere in the binary?" independently of whether it was resolved
     as a method name on the class.
     """
-    cap = pname[0].upper() + pname[1:] if pname else ""
-    xas_sel    = f"{pname}AsString:"
-    strx_sel   = f"StringAs{cap}:"
+    xas_sel, strx_sel = enum_selectors(pname)
 
     # Direct presence check (fast path via inverted index)
     xas_in_mn  = bool(st.find(xas_sel))
@@ -153,26 +151,18 @@ def _gather_type_compatible_methods(
             "types": m.types or "",
             "name":  m.name,   # None when unresolved
         }
-        # Try to extract a handful of enum values for identification
+        # the enum values, to identify what enum it is
         try:
-            max_v = _xasstring_gate_span(ctx, m.imp)
-            entry["field_count"] = max_v
-            if 1 <= max_v <= 512:
-                pairs_sample, _, _ = _extract_enum_values(ctx, m.imp)
-                entry["pairs_count"]   = len(pairs_sample)
-                entry["sample_values"] = [v for _, v in pairs_sample[:6]]
-                if pairs_sample:
-                    entry["derived_name"] = _enum_name_from_pairs(
-                        pairs_sample, "\x00"
-                    )
-            else:
-                entry["pairs_count"]   = 0
-                entry["sample_values"] = []
+            entry["field_count"] = _xasstring_gate_span(ctx, m.imp)
+            pairs = _extract_enum_values(ctx, m.imp)[0] if entry["field_count"] >= 1 else []
+            entry["pairs_count"] = len(pairs)
+            entry["sample_values"] = [v for _, v in pairs[:6]]
+            entry["derived_name"] = _enum_name_from_pairs(pairs, "\x00") if pairs else "\x00"
         except PROGRAM_ERRORS:
             raise
         except Exception as exc:
-            entry["extraction_error"] = str(exc)
-        results.append(entry)   # inside the loop
+            entry["error"] = str(exc)
+        results.append(entry)
     return results
 
 
@@ -251,38 +241,12 @@ def _emit_mode_c_debug(ctx: BinaryContext, cls: ObjcClass, fld: ProtoField,
     because no ``xAsString:`` method could be resolved/extracted. Builds the candidate
     list + record. Carved out of :func:`proto.enums._collect_enum_definitions` (only
     runs under ``--debug-enums``)."""
-    candidates_info: List[Dict[str, Any]] = []
-    for mc in cls.methods:
-        if mc.imp == 0:
-            continue
-        if mc.types and mc.types not in _ASSTRING_INT_TYPES:
-            continue
-        try:
-            fc = _xasstring_gate_span(ctx, mc.imp)
-            if fc < 2:
-                continue
-            _cand_pairs, _cand_conf, _cand_trunc = _extract_enum_values(ctx, mc.imp)
-            _cand_derived = (_enum_name_from_pairs(_cand_pairs, "\x00")
-                             if _cand_pairs else "\x00")
-            candidates_info.append({
-                "imp":          f"0x{mc.imp:x}",
-                "types":        mc.types or "",
-                "name":         mc.name,
-                "pairs_count":  len(_cand_pairs),
-                "sample_values": [v for _, v in _cand_pairs[:6]],
-                "derived_name": _cand_derived,
-                "phase1_match": (
-                    _cand_derived != "\x00"
-                    and (
-                        _cand_derived == (fld.name[0].upper() + fld.name[1:])
-                        or _cand_derived.endswith(fld.name[0].upper() + fld.name[1:])
-                    )
-                ),
-            })
-        except PROGRAM_ERRORS:
-            raise
-        except Exception as _ce:
-            candidates_info.append({"imp": f"0x{mc.imp:x}", "error": str(_ce)})
+    cap = fld.name[:1].upper() + fld.name[1:]
+    candidates_info = [
+        c if "error" in c else {**c, "phase1_match": c["derived_name"] != "\x00"
+                                and c["derived_name"].endswith(cap)}
+        for c in _gather_type_compatible_methods(cls, ctx)
+        if "error" in c or c["field_count"] >= 2]
     if not candidates_info:
         _sub = "no_candidates"
     elif all(c.get("derived_name", "\x00") != "\x00" for c in candidates_info):

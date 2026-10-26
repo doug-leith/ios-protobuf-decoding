@@ -245,6 +245,25 @@ for _name in ("_objc_release", "_objc_sync_enter", "_objc_sync_exit",
 RUNTIME_CONTRACTS["_os_unfair_lock_lock_with_options"] = (("x0", "x1"), None)
 RUNTIME_CONTRACTS["____chkstk_darwin"] = (("x9",), None)
 
+#: ProtocolBuffer.framework's field writers, ``_PBDataWriterWrite<T>Field(writer, value,
+#: field)`` (the floating-point ones take the value in v0, the field number in w1): the proto
+#: type of the one value each serialises, by T.
+PB_FIELD_WRITERS: Dict[str, str] = {
+    "BOOL": "bool", "Int32": "int32", "Int64": "int64", "Uint32": "uint32",
+    "Uint64": "uint64", "Sint32": "sint32", "Sint64": "sint64", "Fixed32": "fixed32",
+    "Fixed64": "fixed64", "Sfixed32": "sfixed32", "Sfixed64": "sfixed64",
+    "Float": "float", "Double": "double", "String": "string", "Data": "bytes",
+}
+
+
+def pb_field_writer_type(name: Optional[str]) -> Optional[str]:
+    """The proto type the field writer named *name* (:data:`PB_FIELD_WRITERS`) serialises;
+    None for any other name."""
+    if not name or not (name.startswith("_PBDataWriterWrite") and name.endswith("Field")):
+        return None
+    return PB_FIELD_WRITERS.get(name[len("_PBDataWriterWrite"):-len("Field")])
+
+
 #: Callees that change fewer registers than AAPCS64 lets a call change (every caller-saved one,
 #: and the frame slots it can reach): the registers each changes; none writes memory its caller
 #: owns.  The stack probe a frame over a page calls first (``mov w9, #size ; adrp x17 ;

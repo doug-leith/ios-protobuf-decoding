@@ -242,12 +242,12 @@ class TestUnreadInputIsAnError(unittest.TestCase):
         real = C._parse_class
         hit = []
 
-        def unreadable_first(ctx_, va, strings):
+        def unreadable_first(ctx_, va, strings, rel_sel_base=None):
             if not hit:
                 hit.append(va)
                 C.record_unread(ctx_, "class", f"{va:#x}", ValueError("unmapped"))
                 return None
-            return real(ctx_, va, strings)
+            return real(ctx_, va, strings, rel_sel_base)
         with mock.patch.object(C, '_parse_class', unreadable_first), \
                 self.assertLogs('macho.memory', 'WARNING'):
             cl = build_class_list(ctx, st)

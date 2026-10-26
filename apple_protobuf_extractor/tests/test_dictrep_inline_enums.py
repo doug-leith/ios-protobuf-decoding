@@ -283,15 +283,15 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
     def test_one_value_that_cannot_be_evaluated_makes_the_enum_incomplete_not_absent(self):
         flow, _ = self._flow(two_guard='cbz x5, merge')          # x5: not tracked
         out = flow.enum_maps({SLOT: 24})
-        self.assertEqual(out, {24: [(0, 'K_ZERO'), (1, 'K_ONE')]})
-        self.assertIn('value 2', flow.incomplete[24])
-        self.assertEqual(flow.unevaluated, {})
+        self.assertEqual(out.maps, {24: [(0, 'K_ZERO'), (1, 'K_ONE')]})
+        self.assertIn('value 2', out.incomplete[24])
+        self.assertEqual(out.unevaluated, {})
 
     def test_a_switch_nothing_could_be_evaluated_for_is_listed_as_unevaluated(self):
         flow, _ = self._flow(guard='cbz x5, merge')              # every path aborts
         out = flow.enum_maps({SLOT: 24})
-        self.assertEqual(out, {})
-        self.assertIn('untracked', flow.unevaluated[24])
+        self.assertEqual(out.maps, {})
+        self.assertIn('untracked', out.unevaluated[24])
 
     def test_one_compare_that_cannot_be_evaluated_is_listed_too(self):
         # a single `cmp w8, #1` (no zero test, no second compare): every path aborts
@@ -300,8 +300,9 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
                       if not (i.mnemonic == 'cbz' and i.op_str.startswith('w8'))
                       and not (i.mnemonic == 'cmp' and i.op_str.endswith('#2'))]
         flow = Flow(flow.ctx, flow.insns)
-        self.assertEqual(flow.enum_maps({SLOT: 24}), {})
-        self.assertIn('untracked', flow.unevaluated[24])
+        out = flow.enum_maps({SLOT: 24})
+        self.assertEqual(out.maps, {})
+        self.assertIn('untracked', out.unevaluated[24])
 
     def test_harvest_reports_all_three_results(self):
         from proto.enums import _harvest_dictrep
@@ -316,8 +317,8 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
 
     def test_clean_enum_is_not_flagged(self):
         flow, _ = self._flow()
-        flow.enum_maps({SLOT: 24})
-        self.assertEqual((flow.incomplete, flow.unevaluated), ({}, {}))
+        out = flow.enum_maps({SLOT: 24})
+        self.assertEqual((out.incomplete, out.unevaluated), ({}, {}))
 
 
 class TestBitmaskGatedTable(unittest.TestCase):

@@ -33,7 +33,7 @@ from proto.writeto   import _extract_writeto_field_numbers
 from proto.writer_flow import writer_flow_for
 from proto.dispatch  import _jump_table_arm_addrs, build_function_index, function_entries
 from proto.function_body import function_body
-from proto.callees   import import_name, real_target
+from proto.callees   import import_name, pb_field_writer_type, real_target
 from proto.models    import record_failed_pass
 from proto.protocore import (
     _is_proto_flags_ivar, _type_from_enc, _INTERNAL_PB_IVARS,
@@ -187,23 +187,19 @@ def _family_by_evaluation(ctx: BinaryContext, target: int) -> str:
 #: The note on an int field whose writer shows no encoding (family ``"unknown"``).
 INT_ENCODING_NOTE = "integer encoding not confirmed (int / sint / fixed not told apart)"
 
-#: ProtocolBuffer.framework's field writers, by the wire-type family each encodes (the int
-#: ones; the others leave the type alone).  A standalone binary calls them through import
-#: stubs, which name them.
-_WRITER_FAMILY = {
-    "Int32": "int32", "Uint32": "uint32", "Sint32": "sint32", "Sint64": "sint64",
-    "Fixed32": "fixed32", "Sfixed32": "fixed32", "Fixed64": "fixed64", "Sfixed64": "fixed64",
-    "Int64": "plain", "Uint64": "plain",
+#: The wire-type family of the int types (the others leave the type alone).
+_TYPE_FAMILY = {
+    "int32": "int32", "uint32": "uint32", "sint32": "sint32", "sint64": "sint64",
+    "fixed32": "fixed32", "sfixed32": "fixed32", "fixed64": "fixed64", "sfixed64": "fixed64",
 }
 
 
 def _family_from_import(ctx: BinaryContext, va: int) -> Optional[str]:
-    """The family of the ``_PBDataWriterWrite<Type>Field`` writer the import stub at *va*
-    calls, by its bound name; None when *va* is not such a stub."""
-    name = import_name(ctx, va) or ""
-    if name.startswith("_PBDataWriterWrite") and name.endswith("Field"):
-        return _WRITER_FAMILY.get(name[len("_PBDataWriterWrite"):-len("Field")], "plain")
-    return None
+    """The family of the field writer (:func:`proto.callees.pb_field_writer_type`) the import
+    stub at *va* calls, by its bound name; None when *va* is not such a stub.  (A standalone
+    binary calls the writers through import stubs, which name them.)"""
+    ptype = pb_field_writer_type(import_name(ctx, va))
+    return None if ptype is None else _TYPE_FAMILY.get(ptype, "plain")
 
 
 def _classify_write_helper(ctx: BinaryContext, helper_va: Optional[int]) -> str:

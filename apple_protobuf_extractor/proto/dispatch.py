@@ -20,7 +20,7 @@ from macho.classlist import ClassList, ObjcClass
 from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.arm64_operands import (PATH_ENDS, first_end, imm_operand, is_cond_branch, reads,
+from proto.arm64_operands import (PATH_ENDS, first_end, imm_operand, is_cond_branch, reads, reg_bits,
                                   split_ops)
 from proto.models import record_heuristic_hit
 from proto.protoclass_set import _proto_class_set
@@ -126,7 +126,7 @@ def _index_bound(flow, k: int):
         imm = _parse_imm(ops[2] if ins.mnemonic == 'lsr' else ops[3])
         if r is None or imm is None:
             return None
-        bits = (64 if ops[0].startswith('x') else 32) - imm if ins.mnemonic == 'lsr' else imm
+        bits = reg_bits(ops[0]) - imm if ins.mnemonic == 'lsr' else imm
         if not 0 < bits or 1 << bits > _MAX_GATE_SPAN:
             return None                  # (a wide shift is arithmetic, not a gate: no report)
         return k + 1, r, 1 << bits

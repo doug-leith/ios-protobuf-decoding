@@ -170,6 +170,10 @@ def read_u32(ctx, va: int) -> int:
     return struct.unpack("<I", ctx.read_bytes(va, 4))[0]
 
 
+def read_u16(ctx, va: int) -> int:
+    return struct.unpack("<H", ctx.read_bytes(va, 2))[0]
+
+
 def rel(ctx, va: int) -> int:
     """The target of the relative direct pointer at *va*."""
     return va + read_i32(ctx, va)

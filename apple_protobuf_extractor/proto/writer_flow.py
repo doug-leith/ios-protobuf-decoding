@@ -47,7 +47,7 @@ from proto.dispatch import (_jump_table_arm_addrs, build_function_index, decoded
                             function_entries)
 from proto.dispatch_eval import _function_insns
 from proto.function_body import is_function_entry
-from proto.callees import (callee_name, sent_selector, stub_selector, call_reads, text_holding,
+from proto.callees import (PB_FIELD_WRITERS, callee_name, sent_selector, stub_selector, call_reads, text_holding,
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
 from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, CALLER_SAVED, CALLS,
@@ -75,20 +75,18 @@ _MAX_SUMMARY_DEPTH = 3
 # The Objective-C runtime's are proto.callees.RUNTIME_CONTRACTS (imported as _ARC) and
 # NORETURN: (reads, returns) by exported symbol name, fixed by the runtime ABI.
 
-# PBDataWriter functions (ProtocolBuffer runtime ABI): (reads, serialised value register).
-# ``PBDataWriterWrite<T>Field(writer, value, field)``; the floating-point ones take the value
-# in v0 and the field number in w1.  Marks are length bookkeeping: they serialise nothing of
-# ours.
+# PBDataWriter functions (ProtocolBuffer runtime ABI): (reads, serialised value register), the
+# field writers' by :data:`proto.callees.PB_FIELD_WRITERS`.  Marks are length bookkeeping: they
+# serialise nothing of ours.
 _PB_WRITE: Dict[str, Tuple[Tuple[str, ...], Optional[str]]] = {
-    "_PBDataWriterWriteDoubleField": (("x0", "v0", "x1"), "v0"),
-    "_PBDataWriterWriteFloatField": (("x0", "v0", "x1"), "v0"),
     "_PBDataWriterWriteBareVarint": (("x0", "x1"), "x1"),
     PLACE_MARK: (("x0", "x1", "x2"), None),
     RECALL_MARK: (("x0", "x1"), None),
 }
-for _t in ("BOOL", "Int32", "Int64", "Uint32", "Uint64", "Sint32", "Sint64", "Fixed32",
-           "Fixed64", "Sfixed32", "Sfixed64", "String", "Data"):
-    _PB_WRITE[f"_PBDataWriterWrite{_t}Field"] = (("x0", "x1", "x2"), "x1")
+for _t, _ptype in PB_FIELD_WRITERS.items():
+    _PB_WRITE[f"_PBDataWriterWrite{_t}Field"] = ((("x0", "v0", "x1"), "v0")
+                                                 if _ptype in ("float", "double")
+                                                 else (("x0", "x1", "x2"), "x1"))
 for _t in ("Submessage", "Subgroup"):
     _PB_WRITE[f"_PBDataWriterWrite{_t}"] = (("x0", "x1", "x2"), "x1")
 

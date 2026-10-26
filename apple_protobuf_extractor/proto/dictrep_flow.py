@@ -29,11 +29,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, NamedTuple, Optional, Set, Tuple
 
 from proto.arm64_eval import Flow as _EvalFlow
 from proto.arm64_eval import _Abort, _ENTRY, _MAX_GATE_SPAN, _norm_reg, mem_regs, split_ops
-from proto.arm64_operands import LOAD_BYTES
+from proto.arm64_operands import LOAD_BYTES, reg_bits
 
 log = logging.getLogger(__name__)
 
@@ -130,26 +130,20 @@ class Flow(_EvalFlow):
         if ins.mnemonic not in LOAD_BYTES or len(ops) != 2:
             return None
         dest = _norm_reg(ops[0])
-        size = LOAD_BYTES[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
+        size = LOAD_BYTES[ins.mnemonic] or reg_bits(ops[0]) // 8
         if dest is None or size == 8:
             return None
         return self.analyse_root(k, dest, size, stop)
 
     def enum_maps(self, slot_offsets: Dict[int, int], wanted: Optional[Set[int]] = None
-                  ) -> Dict[int, List[Tuple[int, str]]]:
-        """``{ivar offset: [(value, name), ...]}`` for every field of the function that is an
-        enum (see :meth:`analyse_root` for the decision).  *slot_offsets* is the class's ivars,
-        ``{offset variable address: offset}``.  *wanted* only limits the work to those ivars
-        (by offset); it never changes a result."""
+                  ) -> "EnumMaps":
+        """The enums of the function's fields (see :meth:`analyse_root` for the decision), by
+        ivar offset.  *slot_offsets* is the class's ivars, ``{offset variable address:
+        offset}``.  *wanted* only limits the work to those ivars (by offset); it never changes
+        a result."""
         out: Dict[int, Dict[int, str]] = {}
-        # What the evaluation could NOT settle, by ivar offset -- reported, never silent:
-        #   incomplete:  a field that WAS recovered as an enum but some value could not be
-        #                evaluated (or a table gate was too wide to enumerate): values may be
-        #                missing from it
-        #   unevaluated: a field whose value the code compares or indexes with, whose
-        #                evaluation yielded nothing: it may be an enum that stays untyped
-        self.incomplete: Dict[int, str] = {}
-        self.unevaluated: Dict[int, str] = {}
+        incomplete: Dict[int, str] = {}
+        unevaluated: Dict[int, str] = {}
         roots = self.value_loads()
         every_root = frozenset(k for k, _ in roots)
         for k, slot in roots:
@@ -159,7 +153,7 @@ class Flow(_EvalFlow):
             ins = self.insns[k]
             ops = split_ops(ins.op_str)
             dest = _norm_reg(ops[0])
-            size = LOAD_BYTES[ins.mnemonic] or (4 if ops[0].startswith('w') else 8)
+            size = LOAD_BYTES[ins.mnemonic] or reg_bits(ops[0]) // 8
             if size == 8 or dest is None:
                 continue                                  # a pointer load, not an enum value
             res = self.analyse_root(k, dest, size, every_root - {k})
@@ -168,12 +162,23 @@ class Flow(_EvalFlow):
                 for v, nm in res.pairs.items():
                     tgt.setdefault(v, nm)
                 if res.problems:
-                    self.incomplete.setdefault(off, "; ".join(res.problems[:3]))
+                    incomplete.setdefault(off, "; ".join(res.problems[:3]))
             elif res.problems:
-                self.unevaluated.setdefault(off, "; ".join(res.problems[:3]))
+                unevaluated.setdefault(off, "; ".join(res.problems[:3]))
         for off in out:
-            self.unevaluated.pop(off, None)
-        return {off: sorted(m.items()) for off, m in out.items()}
+            unevaluated.pop(off, None)
+        return EnumMaps({off: sorted(m.items()) for off, m in out.items()}, incomplete,
+                        unevaluated)
+
+
+class EnumMaps(NamedTuple):
+    """:meth:`Flow.enum_maps`: what it recovered, and what the evaluation could NOT settle, by
+    ivar offset -- reported, never silent."""
+    maps: Dict[int, List[Tuple[int, str]]]   # {offset: [(value, name), ...]}
+    incomplete: Dict[int, str]    # an enum some value of which could not be evaluated (or a
+    #                               table gate too wide to enumerate): values may be missing
+    unevaluated: Dict[int, str]   # a value the code compares or indexes with, whose evaluation
+    #                               yielded nothing: it may be an enum that stays untyped
 
 
 @dataclass

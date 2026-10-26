@@ -33,7 +33,8 @@ import re
 import struct
 from typing import Dict, NamedTuple, Optional, Set
 
-from macho.memory import READ_ERRORS, record_unread
+from macho.memory import READ_ERRORS, _ctx_cache, record_unread
+from serializers.swift_symbols import read_i32, read_u16, read_u32
 
 # Swift stdlib / Foundation type name -> proto scalar type.
 _SWIFT_SCALAR = {
@@ -83,18 +84,6 @@ _STRUCT_KIND, _ENUM_KIND = 17, 18
 _MAX_CONTEXT_DEPTH = 12
 
 
-def _i32(ctx, va):
-    return struct.unpack("<i", ctx.read_bytes(va, 4))[0]
-
-
-def _u32(ctx, va):
-    return struct.unpack("<I", ctx.read_bytes(va, 4))[0]
-
-
-def _u16(ctx, va):
-    return struct.unpack("<H", ctx.read_bytes(va, 2))[0]
-
-
 def _relptr(ctx, va):
     """Swift RelativeDirectPointer: target = address + signed int32.
 
@@ -105,7 +94,7 @@ def _relptr(ctx, va):
     (:func:`_parent_desc`), and a ``__swift5_types`` record, which carries a kind in its
     low bits (:func:`_type_record`).  Symbolic references inside a mangled name carry
     their own control byte and are handled separately in :func:`_resolve_symbolic`."""
-    v = _i32(ctx, va)
+    v = read_i32(ctx, va)
     return 0 if v == 0 else va + v
 
 
@@ -114,11 +103,32 @@ def _type_record(ctx, va):
     pointer whose low two bits are its TypeReferenceKind -- 0 the descriptor itself, 1 a
     pointer to it (another image's, or behind a fixup); 0 for an ObjC class reference
     (2 / 3), which has no Swift descriptor."""
-    v = _i32(ctx, va)
+    v = read_i32(ctx, va)
     kind, target = v & 3, va + (v & ~3)
     if v == 0 or kind > 1:
         return 0
     return ctx.read_ptr(target) if kind == 1 else target
+
+
+def type_descriptors(ctx):
+    """``[(record address, nominal type descriptor)]`` of the image's ``__swift5_types`` records
+    that name a Swift descriptor (:func:`_type_record`), read once per image; an unreadable
+    record is recorded and skipped."""
+    def build():
+        out = []
+        if not ctx.has_section("__TEXT", "__swift5_types"):
+            return out
+        sec = ctx.section("__TEXT", "__swift5_types")
+        for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize // 4 * 4, 4):
+            try:
+                desc = _type_record(ctx, rec)
+            except READ_ERRORS as exc:
+                record_unread(ctx, "Swift type record", f"{rec:#x}", exc)
+                continue
+            if desc:
+                out.append((rec, desc))
+        return out
+    return _ctx_cache(ctx, "_swift_type_descriptors", build)
 
 
 def _cstr(ctx, va):
@@ -139,7 +149,7 @@ def _desc_name(ctx, desc):
 
 def _desc_kind(ctx, desc):
     try:
-        return _u32(ctx, desc) & 0x1F
+        return read_u32(ctx, desc) & 0x1F
     except READ_ERRORS:
         return -1
 
@@ -314,13 +324,9 @@ def local_enum_names(ctx):
     ``OneOf_*`` oneof wrappers, which are not proto enums).  A message field whose
     type is one of these is a proto enum field (varint on the wire)."""
     out = set()
-    if not ctx.has_section("__TEXT", "__swift5_types"):
-        return out
-    sec = ctx.section("__TEXT", "__swift5_types")
-    for i in range(sec.vmsize // 4):
+    for rec, desc in type_descriptors(ctx):
         try:
-            desc = _type_record(ctx, sec.vmaddr + i * 4)
-            if not desc or _desc_kind(ctx, desc) != _ENUM_KIND:
+            if _desc_kind(ctx, desc) != _ENUM_KIND:
                 continue
             name = _desc_name(ctx, desc)
             if name and not name.startswith(_ONEOF_PREFIX):
@@ -328,7 +334,7 @@ def local_enum_names(ctx):
                 if q:
                     out.add(q)
         except READ_ERRORS as exc:
-            record_unread(ctx, "Swift type record", f"{sec.vmaddr + i * 4:#x}", exc)
+            record_unread(ctx, "Swift type record", f"{rec:#x}", exc)
     return out
 
 
@@ -474,8 +480,8 @@ def _read_field_types(ctx, desc, fieldmd):
     if not fd:
         return {}, set(), set()
     try:
-        nfields = _u32(ctx, fd + 0x0C)
-        recsize = _u16(ctx, fd + 0x0A) or 12
+        nfields = read_u32(ctx, fd + 0x0C)
+        recsize = read_u16(ctx, fd + 0x0A) or 12
     except READ_ERRORS as exc:
         record_unread(ctx, "Swift field descriptor", f"{fd:#x}", exc)
         return {}, set(), set()
@@ -513,7 +519,7 @@ def _parent_desc(ctx, desc):
     """The parent context descriptor: a relative indirectable pointer at ``desc + 0x04`` -- with
     its low bit set, the address of a pointer to the parent (one in another image, or behind a
     fixup: iOS 27 GeoServices' Polygon2D, whose parent MapGeometry is reached so)."""
-    v = _i32(ctx, desc + 0x04)
+    v = read_i32(ctx, desc + 0x04)
     if not v:
         return 0
     if v & 1:
@@ -592,7 +598,6 @@ def collect_field_types(ctx) -> FieldMetadata:
     if not (ctx.has_section("__TEXT", "__swift5_types") and
             ctx.has_section("__TEXT", "__swift5_fieldmd")):
         return FieldMetadata({}, {}, set(), {})
-    sec = ctx.section("__TEXT", "__swift5_types")
     fmd = ctx.section("__TEXT", "__swift5_fieldmd")
     fieldmd = (fmd.vmaddr, fmd.vmaddr + fmd.vmsize)
     out: Dict[str, Dict[str, str]] = {}
@@ -600,12 +605,9 @@ def collect_field_types(ctx) -> FieldMetadata:
     incomplete: Dict[str, set] = {}
     structs: set = set()
     enums: Dict[str, tuple] = {}
-    for i in range(sec.vmsize // 4):
+    for rec, desc in type_descriptors(ctx):
         # one malformed descriptor must never abort whole-image recovery.
         try:
-            desc = _type_record(ctx, sec.vmaddr + i * 4)
-            if not desc:
-                continue
             kind = _desc_kind(ctx, desc)
             name = _desc_name(ctx, desc)
             if not name:
@@ -637,7 +639,7 @@ def collect_field_types(ctx) -> FieldMetadata:
             if names:
                 stored.setdefault(key, set()).update(names)
         except READ_ERRORS as exc:
-            record_unread(ctx, "Swift type record", f"{sec.vmaddr + i * 4:#x}", exc)
+            record_unread(ctx, "Swift type record", f"{rec:#x}", exc)
     # A oneof whose enum is a type of its own, not a nested OneOf_ (Apple's generators:
     # TokenGenerationCore's ``Tokengenerationcore_Wireformat_ValueEnum``): a message's property of
     # an enum whose cases carry payloads beyond UNRECOGNIZED(Int), a proto enum's only one --

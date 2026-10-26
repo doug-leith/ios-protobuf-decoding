@@ -35,7 +35,8 @@ from macho.memory import READ_ERRORS
 from serializers import swift_descriptor_extract as S
 from serializers import swift_message_code as MC
 from serializers import swift_symbols as SY
-from serializers.swift_type_recovery import _cstr, _demangle_one, _i32, _relptr, _u16, _u32
+from serializers.swift_symbols import read_i32 as _i32, read_u16 as _u16, read_u32 as _u32
+from serializers.swift_type_recovery import _cstr, _demangle_one, _relptr
 
 _LOADS = frozenset(("ldr", "ldur", "ldrb", "ldurb", "ldrh", "ldurh", "ldrsw", "ldursw", "ldp"))
 _WIDTH = {"x": 8, "w": 4, "d": 8, "s": 4, "q": 16, "h": 2, "b": 1}

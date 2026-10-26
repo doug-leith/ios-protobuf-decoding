@@ -464,13 +464,9 @@ def _accessors(ctx) -> Dict[int, int]:
 
     def build():
         out: Dict[int, int] = {}
-        if not ctx.has_section("__TEXT", "__swift5_types"):
-            return out
-        sec = ctx.section("__TEXT", "__swift5_types")
-        for rec in range(sec.vmaddr, sec.vmaddr + sec.vmsize, 4):
+        for _rec, desc in TR.type_descriptors(ctx):
             try:
-                desc = TR._type_record(ctx, rec)
-                if desc and TR._desc_kind(ctx, desc) in (16, 17, 18) and read_i32(ctx, desc + 0x0C):
+                if TR._desc_kind(ctx, desc) in (16, 17, 18) and read_i32(ctx, desc + 0x0C):
                     out.setdefault(rel(ctx, desc + 0x0C), desc)
             except READ_ERRORS:
                 continue
