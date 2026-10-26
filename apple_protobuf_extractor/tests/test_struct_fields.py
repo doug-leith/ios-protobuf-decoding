@@ -226,6 +226,20 @@ class TestAnalyzeBracket(_Patched):
         insns, _ = self._insns()
         self.assertIsNone(SF.analyze_bracket(None, insns, 0))
 
+    def test_a_write_in_a_shared_tail_is_followed(self):
+        # begin(1) ; w2 = 3 ; b tail ... tail: write(w2) ; b back to the end mark
+        insns, fake = asm((0x1000, [
+            ('str', 'xzr, [sp, #8]'), ('add', 'x1, sp, #8'), ('mov', 'x0, x19'),
+            ('mov', 'w2, #1'), ('bl', '#0x18dbdab88'),                       # begin, field 1
+            ('mov', 'w2, #3'), ('b', '#0x102c'),
+            ('add', 'x1, sp, #8'), ('mov', 'x0, x19'), ('bl', '#0x18dbdab94'),   # end
+            ('ret', ''),
+            ('mov', 'x0, x19'), ('bl', '#0x18dbdac30'), ('b', '#0x101c')]))  # the shared tail
+        self.patch(fake)
+        b = SF.analyze_bracket(None, insns, 4)
+        self.assertIsNotNone(b)
+        self.assertEqual((b.number, [(fn, t) for _k, fn, t in b.writes]), (1, [(3, 0x18dbdac30)]))
+
     def test_a_mark_is_the_runtime_s_by_name_not_a_call_of_its_shape(self):
         # (the same call, a frame scratch in x1 and a field number, to a function not named
         # _PBDataWriterPlaceMark)

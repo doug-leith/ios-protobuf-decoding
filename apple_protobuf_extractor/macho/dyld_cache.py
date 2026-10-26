@@ -296,22 +296,24 @@ class DyldCacheReader:
         # store main path for find_image_header (imagesText lives there)
         self._main_path: str = main_path
 
-        main_hdr = self._read_hdr_bytes(main_path)
-        self._check_magic(main_hdr, main_path)
-        # Parse imagesText metadata so find_image_header() works without
-        # re-reading the header.  Must run before _load_mappings overwrites
-        # nothing — it is purely a read of the already-buffered header bytes.
-        self._img_text_off, self._img_text_cnt = (
-            self._load_images_text_meta(main_hdr)
-        )
-        self._mapping_offset_value, self._objc_opts_offset, self._objc_opts_size = (
-            self._load_objc_opts_meta(main_hdr)
-        )
         # Slide-info versions seen across every cache file; decides how wide the
         # runtime-offset field of a DATA pointer is (see decode_ptr).
         self._slide_versions: Set[int] = set()
-        self._load_mappings(main_hdr, main_path)
-        self._load_subcaches(main_hdr, main_path)
+        try:
+            main_hdr = self._read_hdr_bytes(main_path)
+            self._check_magic(main_hdr, main_path)
+            # imagesText metadata, so find_image_header() works without re-reading the header
+            self._img_text_off, self._img_text_cnt = (
+                self._load_images_text_meta(main_hdr)
+            )
+            self._mapping_offset_value, self._objc_opts_offset, self._objc_opts_size = (
+                self._load_objc_opts_meta(main_hdr)
+            )
+            self._load_mappings(main_hdr, main_path)
+            self._load_subcaches(main_hdr, main_path)
+        except BaseException:
+            self.close()                         # (the files opened so far)
+            raise
         self._mappings.sort(key=lambda m: m.vmaddr)
         # Pre-built key list for O(log n) bisect lookups.
         self._vmaddr_keys: List[int] = [m.vmaddr for m in self._mappings]
@@ -1108,11 +1110,11 @@ class DyldCacheReader:
         memo = self.__dict__.setdefault('_image_exports_memo', {})
         if mach_header_va in memo:
             return memo[mach_header_va]
-        from .export_trie import decode_export_trie
+        from .export_trie import decode_export_trie, export_address
         lc = self._commands_or_none(mach_header_va)
         data = self._linkedit_read(lc, lc.export_trie) if lc is not None else None
-        out = ({name: mach_header_va + off for name, (_flags, off) in decode_export_trie(data).items()}
-               if data else {})
+        out = ({name: export_address(flags, off, mach_header_va)
+                for name, (flags, off) in decode_export_trie(data).items()} if data else {})
         memo[mach_header_va] = out
         return out
 

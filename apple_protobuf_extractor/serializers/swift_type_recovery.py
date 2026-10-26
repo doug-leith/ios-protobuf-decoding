@@ -476,9 +476,12 @@ def _read_field_types(ctx, desc, fieldmd):
     try:
         nfields = _u32(ctx, fd + 0x0C)
         recsize = _u16(ctx, fd + 0x0A) or 12
-    except READ_ERRORS:
+    except READ_ERRORS as exc:
+        record_unread(ctx, "Swift field descriptor", f"{fd:#x}", exc)
         return {}, set(), set()
     if not (fieldmd[0] <= fd and fd + 0x10 + nfields * recsize <= fieldmd[1]):
+        record_unread(ctx, "Swift field descriptor", f"{fd:#x}",
+                      ValueError(f"{nfields} records of {recsize} bytes run past __swift5_fieldmd"))
         return {}, set(), set()
     fields: Dict[str, str] = {}
     incomplete: set = set()
@@ -522,7 +525,7 @@ def _qualified_name(ctx, desc) -> Optional[str]:
     """Dotted qualified name of a nominal type (``Outer.Inner``), built by walking
     the parent-context chain and joining the names of the enclosing nominal types
     (anonymous / extension contexts — which swift nests private types under — are
-    skipped; the module terminates the walk)."""
+    skipped; the module terminates the walk).  None when a context cannot be read."""
     names = []
     cur = desc
     for _ in range(_MAX_CONTEXT_DEPTH):
@@ -537,8 +540,10 @@ def _qualified_name(ctx, desc) -> Optional[str]:
                 if nm:
                     names.append(nm)
             cur = _parent_desc(ctx, cur)
-        except READ_ERRORS:
-            break                        # bad parent pointer: degrade to what we have
+        except READ_ERRORS as exc:
+            # a part of the name would be another type's: no name, and the read is recorded
+            record_unread(ctx, "swift type context", f"{cur:#x}", exc)
+            return None
     else:
         from proto.models import record_heuristic_hit
         record_heuristic_hit(ctx, "_MAX_CONTEXT_DEPTH",

@@ -69,6 +69,7 @@ from macho.memory import PROGRAM_ERRORS
 
 import argparse
 import logging
+import os
 import sys
 import time
 from contextlib import contextmanager
@@ -726,6 +727,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _cmd_list_frameworks(args.cache)
 
     _configure_logging(args.verbose)
+    if args.diagnostics_json and os.path.exists(args.diagnostics_json):
+        os.remove(args.diagnostics_json)         # a run that fails early leaves none, not a stale one
 
     from macho.memory    import BinaryContext
 
@@ -806,6 +809,7 @@ def _extract_and_write(args, ctx, data, cache, cache_native, mach_va, source_nam
         # or a standalone executable), or classes the superclass walk did not confirm:
         # fail loudly rather than emit silently-degraded or guessed schemas.
         print(f"error: {exc}", file=sys.stderr)
+        _write_diagnostics(args, ctx, error=str(exc))
         return 1
     finally:
         if _debug_fh is not None:
@@ -830,11 +834,20 @@ def _extract_and_write(args, ctx, data, cache, cache_native, mach_va, source_nam
     else:
         # ── Build + write proto files ──────────────────────────────────────────
         status = _build_and_write_output(messages, args, source_name, ctx, input_kind)
+    _write_diagnostics(args, ctx)
+    return status
+
+
+def _write_diagnostics(args, ctx, error: Optional[str] = None) -> None:
+    """``--diagnostics-json``: the run's diagnostics, and the error that ended it if one did."""
     if args.diagnostics_json:
         import json
+        from proto.models import get_diagnostics
+        out = get_diagnostics(ctx).as_dict()
+        if error is not None:
+            out["error"] = error
         with open(args.diagnostics_json, "w") as fh:
-            json.dump(get_diagnostics(ctx).as_dict(), fh, indent=1)
-    return status
+            json.dump(out, fh, indent=1)
 
 
 if __name__ == "__main__":

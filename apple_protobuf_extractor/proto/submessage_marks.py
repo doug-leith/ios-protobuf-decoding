@@ -93,10 +93,17 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
             ins, mn, nxt = insns[k], insns[k].mnemonic, k + 1
             if mn in RETURNS:
                 return None                          # a path with no end mark
-            if mn in ('bl', 'b'):
+            if mn == 'b':
+                t = at.get(branch_target(ins))
+                if t is None:
+                    return None                      # leaves the function (a tail-called write
+                                                     # too): no end mark
+                nxt = t                              # in-function jump (a shared tail's write
+                                                     # is recorded at its own bl)
+            elif mn == 'bl':
                 fn = field_number_at(flow, k)
                 target = branch_target(ins)
-                mark = callee_name(ctx, target) if mn == 'bl' else None
+                mark = callee_name(ctx, target)
                 if mark == RECALL_MARK and scratch_slot_of(flow, k) == slot:
                     ended = True
                     break                            # END mark: this path is complete
@@ -104,15 +111,8 @@ def analyze_bracket(ctx, insns: Sequence, begin_idx: int) -> Optional[Bracket]:
                     return None                      # nested begin / another bracket's end
                 if fn is not None and target is not None:
                     writes.append((k, fn, target))
-                elif mn == 'bl' and target is not None:
+                elif target is not None:
                     callees.append(target)
-                if mn == 'b':
-                    if fn is not None:
-                        return None                  # a tail-called write ends the function: no end mark
-                    t = at.get(target)
-                    if t is None:
-                        return None
-                    nxt = t                          # in-function jump
             elif is_conditional(mn):
                 t = at.get(branch_target(ins))
                 if t is None:

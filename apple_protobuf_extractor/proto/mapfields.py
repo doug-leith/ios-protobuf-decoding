@@ -41,7 +41,6 @@ extractor then keeps the flagged ``bytes`` fallback.  See LIMITATIONS.md (1).
 """
 from __future__ import annotations
 
-import logging
 from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
@@ -49,23 +48,21 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
-from proto.callees import real_target, stub_selector
+from proto.callees import callee_name, real_target, stub_selector
 
 from proto.arm64cfg import mem_operand
-from proto.arm64_operands import split_ops
+from proto.arm64_operands import branch_target, split_ops
 from proto.dispatch import FunctionEntries, function_entries
 from proto.function_body import function_body, function_listing
 from proto.writeto import BoundWrite
-from proto.submessage_marks import analyze_bracket, scratch_slot_of
+from proto.submessage_marks import PLACE_MARK, analyze_bracket, scratch_slot_of
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
-from proto.models import FieldLabel, ProtoField, ProtoMessage
+from proto.models import FieldLabel, ProtoField, ProtoMessage, record_analysis_failure
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
 from proto.dispatch import listing_flow
 from proto.arm64_eval import Objects
 from proto.dispatch_eval import evaluate_class
-
-log = logging.getLogger(__name__)
 
 
 def _addr_to_name(ctx, addr, offset_to_name):
@@ -289,13 +286,19 @@ def scan_block_enumerated_maps(
             continue
         try:
             body = function_body(ctx, invoke, entries)
-        except READ_ERRORS:
+        except READ_ERRORS as exc:
+            record_unread(ctx, "function", f"{invoke:#x}", exc)
             continue
-        if not body or body.truncated:
-            continue                                    # never analyse a truncated body
+        if not body or body.truncated:                  # never analyse a truncated body
+            record_unread(ctx, "map entry block", f"{invoke:#x}",
+                          ValueError("its body was read only in part"))
+            continue
         body_flow = listing_flow(ctx, body)
         for k, b in enumerate(body):
-            if b.mnemonic == 'bl' and scratch_slot_of(body_flow, k) is not None:
+            # the begin mark: a call to PBDataWriterPlaceMark, handed a stack slot in x1 (by
+            # that shape alone when the callee is unnamed)
+            if b.mnemonic == 'bl' and scratch_slot_of(body_flow, k) is not None \
+                    and callee_name(ctx, branch_target(b)) in (PLACE_MARK, None):
                 entry = analyze_entry(ctx, body, k)
                 if entry is not None:
                     out[ivar] = entry
@@ -360,8 +363,9 @@ def find_map_writers(
     for name, e in writers.items():
         owner = taken.get(e.number)
         if owner is not None and owner != name:
-            log.debug("%s.%s: map field number %d collides with %s; ignored",
-                      cls.name, name, e.number, owner)
+            record_analysis_failure(ctx, cls.name, "map fields",
+                                    f"{name}: its entry writer's field number {e.number} is "
+                                    f"{owner}'s; not taken for a map")
             continue
         taken[e.number] = name
         out[name] = e
@@ -558,7 +562,7 @@ def _finalize_map_fields(
             except PROGRAM_ERRORS:
                 raise
             except Exception as exc:
-                log.debug("map type resolution failed for %s.%s: %s",
-                          msg.class_name, fld.name, exc)
+                record_analysis_failure(ctx, msg.class_name, "map types",
+                                        f"{fld.name}: {type(exc).__name__}: {exc}")
                 types = MapTypes(None, None, None, f"analysis failed: {type(exc).__name__}")
             _apply_map_types(fld, types)

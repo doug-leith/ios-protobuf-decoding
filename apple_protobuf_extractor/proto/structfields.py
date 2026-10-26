@@ -59,7 +59,7 @@ from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, function_entr
 from proto.function_body import function_body, function_listing
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.submessage_marks import Bracket, analyze_bracket
-from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage
+from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage, record_analysis_failure
 from proto.writeto import BoundWrite
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.eval_tokens import SELF, READER, OPAQUE
@@ -916,11 +916,13 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None)
                 families.setdefault(off, set()).add(_classify_write_helper(ctx, h))
         if len(numbers) != 1 or len(shapes) != 1 or keyed is None \
                 or any(len(v) != 1 for v in families.values()):
-            log.debug("struct %s: owners disagree on layout; left as bytes", tag)
+            record_analysis_failure(ctx, tag, "inline struct",
+                                    "its owners disagree on its layout: left as bytes")
             continue
         pname = _class_to_proto_name(tag, prefixes)
         if tag in taken_classes or pname in taken_names:
-            log.debug("struct %s: name collides with an existing message; left as bytes", tag)
+            record_analysis_failure(ctx, tag, "inline struct",
+                                    f"its name {pname} is an existing message's: left as bytes")
             continue
         layout, number_of = items[0][1], dict(items[0][2])
         fields, enums = [], []

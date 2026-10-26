@@ -397,7 +397,11 @@ def _resolve_preattached_method_lists(ctx: BinaryContext, tagged_va: int) -> Lis
     except READ_ERRORS as exc:
         record_unread(ctx, "pre-attached method lists", f"{base:#x}", exc)
         return []
-    if entsize == 0 or count == 0 or count > _MAX_PREATTACHED_ENTRIES:
+    if count == 0:
+        return []
+    if entsize == 0 or count > _MAX_PREATTACHED_ENTRIES:
+        record_unread(ctx, "pre-attached method lists", f"{base:#x}",
+                      ValueError(f"entsize {entsize}, count {count}: not an entry list"))
         return []
 
     results: List[int] = []
@@ -431,6 +435,7 @@ def _parse_class(
         return None
 
     if ro_va == 0:
+        record_unread(ctx, "class", f"{class_va:#x}", ValueError("its class_ro_t pointer is 0"))
         return None
 
     try:

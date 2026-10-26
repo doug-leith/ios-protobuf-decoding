@@ -136,7 +136,7 @@ def _decode_chain_ptr(raw: int, fmt: int, image_base: int) -> int:
         if fmt == _DYLD_PTR_64_OFFSET:
             target += image_base
         return target
-    return raw   # unknown format: return verbatim
+    return raw   # (an unknown format's segments are not walked: _parse_chained_fixups_lc)
 
 
 def _chain_next_stride(raw: int, fmt: int) -> int:
@@ -714,12 +714,12 @@ class BinaryContext:
                     yield (data[sp:end].decode('utf-8', errors='replace'),
                            n_value if n_sect and n_value else None)
         if self._export_trie:
-            from .export_trie import iter_export_trie
+            from .export_trie import export_address, iter_export_trie
             base, size = self._export_trie
             if 0 < base < len(self._data):
-                for name, _flags, off in iter_export_trie(
+                for name, flags, off in iter_export_trie(
                         self._data[base:min(base + size, len(self._data))]):
-                    yield name, (None if off is None else self.image_base + off)
+                    yield name, export_address(flags, off, self.image_base)
 
     def function_starts(self) -> List[int]:
         """The image's function entries (``LC_FUNCTION_STARTS``), sorted; ``[]`` without the
@@ -867,6 +867,11 @@ class BinaryContext:
 
             if ptr_fmt == 0 or seg_info_abs + 22 > len(blob):
                 continue
+            if ptr_fmt not in _ARM64E_FAMILY and ptr_fmt not in (_DYLD_PTR_64, _DYLD_PTR_64_OFFSET):
+                # its pointers would be taken for addresses: none of the segment's is read
+                record_unread(self, "chained fixups", f"segment {seg_idx}",
+                              ValueError(f"pointer format {ptr_fmt} is not decoded"))
+                continue
             page_count = struct.unpack_from('<H', blob, seg_info_abs + 20)[0]
             # pointer_format is per segment (offset 6, above): the chain walk below uses
             # this segment's.
@@ -909,7 +914,8 @@ class BinaryContext:
             seen.add(vmaddr)
             try:
                 off = self.vmaddr_to_offset(vmaddr, 8)
-            except ValueError:
+            except ValueError as exc:
+                record_unread(self, "chained fixup chain", f"{vmaddr:#x}", exc)
                 break
             raw = struct.unpack_from('<Q', self._data, off)[0]
 

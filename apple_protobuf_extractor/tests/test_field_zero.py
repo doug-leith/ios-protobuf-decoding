@@ -41,9 +41,9 @@ class TestFieldZeroFlagLive(unittest.TestCase):
         # estimated (field 0 is illegal → tool can't confirm it), and flagged.
         self.assertFalse(key.number_confirmed,
                          'field-0 field must be estimated, not confirmed')
-        self.assertIsNotNone(key.type_inference_note)
-        self.assertIn('wire field number is 0', key.type_inference_note)
-        self.assertIn('LIMITATIONS.md (4)', key.type_inference_note)
+        self.assertIsNotNone(key.number_note)
+        self.assertIn('wire field number is 0', key.number_note)
+        self.assertIn('LIMITATIONS.md (4)', key.number_note)
 
     def test_confirmed_siblings_not_flagged(self):
         # lifetime #2 / accessTime #3 are written with real (non-zero) numbers →
@@ -56,8 +56,7 @@ class TestFieldZeroFlagLive(unittest.TestCase):
         for fn in ('lifetime', 'accessTime'):
             f = self._field('NTPBCacheHint', fn)
             self.assertTrue(f.number_confirmed, f'{fn} should be confirmed')
-            note = f.type_inference_note or ''
-            self.assertNotIn('wire field number is 0', note)
+            self.assertIsNone(f.number_note)
 
 
 if __name__ == '__main__':

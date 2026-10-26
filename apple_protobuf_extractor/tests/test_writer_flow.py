@@ -55,6 +55,12 @@ class TestExportTrie(unittest.TestCase):
         self.assertEqual(decode_export_trie(self._trie()),
                          {"_a": (0, 0x1234), "_bx": (0, 0x5678)})
 
+    def test_an_absolute_symbol_s_value_is_not_offset_by_the_image_base(self):
+        from macho.export_trie import export_address
+        self.assertEqual(export_address(0x00, 0x1234, 0x1_0000_0000), 0x1_0000_1234)
+        self.assertEqual(export_address(0x02, 0x1234, 0x1_0000_0000), 0x1234)   # ABSOLUTE
+        self.assertIsNone(export_address(0x08, None, 0x1_0000_0000))           # re-export
+
     def test_truncated_trie_does_not_raise(self):
         # cut anywhere, the trie yields only symbols it states in full
         trie = self._trie()
@@ -492,3 +498,18 @@ class TestReview20261025(unittest.TestCase):
             wf._summary_memo.clear()
             self.assertEqual(wf._summary(0xA, WF._MAX_SUMMARY_DEPTH - 1), {WF._T})
             self.assertEqual(wf._summary(0xA, 0), {('I', '_b')})
+
+
+class TestWriteSiteNumber(unittest.TestCase):
+    def _site(self, name, x1=None, x2=None):
+        from proto.writer_flow import WriteSite
+        return WriteSite(addr=0x1000, target=0x2000, name=name, writer_reg="x0", x1=x1, x2=x2,
+                         args=(), v0_origins=frozenset(), slot=None)
+
+    def test_a_bare_varint_takes_no_field_number(self):
+        # PBDataWriterWriteBareVarint(writer, value): whatever w2 holds is not its number
+        self.assertIsNone(self._site("_PBDataWriterWriteBareVarint", x1=5, x2=7).number)
+
+    def test_the_number_is_the_writer_s_third_argument(self):
+        self.assertEqual(self._site("_PBDataWriterWriteDoubleField", x1=3, x2=9).number, 3)
+        self.assertEqual(self._site("_PBDataWriterWriteInt32Field", x1=0, x2=4).number, 4)

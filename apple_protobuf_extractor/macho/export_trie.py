@@ -15,8 +15,21 @@ from typing import Dict, Iterator, Optional, Tuple
 
 from .leb import read_uleb
 
+EXPORT_SYMBOL_FLAGS_KIND_MASK = 0x03
+EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE = 0x02
 EXPORT_SYMBOL_FLAGS_REEXPORT = 0x08
 EXPORT_SYMBOL_FLAGS_STUB_AND_RESOLVER = 0x10
+
+
+def export_address(flags: int, offset: Optional[int], image_base: int) -> Optional[int]:
+    """The address an export names: *image_base* + its offset, but an absolute symbol's value
+    is the value itself (not in the image); a re-export (offset None) names none."""
+    if offset is None:
+        return None
+    if flags & EXPORT_SYMBOL_FLAGS_KIND_MASK == EXPORT_SYMBOL_FLAGS_KIND_ABSOLUTE:
+        return offset
+    return image_base + offset
+
 
 def iter_export_trie(data: bytes) -> Iterator[Tuple[str, int, Optional[int]]]:
     """``(symbol name, flags, image offset or None)`` for every terminal node of the trie in

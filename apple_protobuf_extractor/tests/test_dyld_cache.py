@@ -241,6 +241,26 @@ class TestDyldCacheReaderSynthetic(unittest.TestCase):
             self.assertEqual(r.read_cstring(vmaddr),     '')
             self.assertEqual(r.read_cstring(vmaddr + 1), 'next')
 
+    def test_a_reader_that_cannot_be_built_closes_what_it_opened(self):
+        import builtins
+        import tempfile
+        from unittest import mock
+        opened, real_open = [], builtins.open
+
+        def tracked(*a, **k):
+            f = real_open(*a, **k)
+            opened.append(f)
+            return f
+        with tempfile.NamedTemporaryFile(suffix="_dyld", delete=False) as tf:
+            tf.write(b"not a dyld cache" * 64)
+        try:
+            with mock.patch("builtins.open", tracked), self.assertRaises(Exception):
+                DyldCacheReader(tf.name)
+        finally:
+            os.unlink(tf.name)
+        self.assertTrue(opened)
+        self.assertTrue(all(f.closed for f in opened))
+
     def test_long_cstring_read_in_chunks(self):
         # longer than a read chunk: read to its terminator (no *max_len*, the default), refused
         # past a *max_len* given

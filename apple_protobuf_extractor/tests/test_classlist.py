@@ -850,6 +850,32 @@ class TestMethodListCount:
         assert [u[:2] for u in unread_input(ctx)] == [("method list", "0x4000")]
 
 
+class TestDropsAreRecorded:
+    def test_a_class_with_no_class_ro_t(self):
+        from macho.classlist import _parse_class
+        from macho.memory import unread_input
+
+        class Ctx:
+            def read_ptr(self, va):
+                return 0
+        ctx = Ctx()
+        assert _parse_class(ctx, 0x4000, StringTable()) is None
+        assert [u[:2] for u in unread_input(ctx)] == [("class", "0x4000")]
+
+    def test_a_pre_attached_list_past_the_bound(self):
+        import struct as _s
+        from macho.classlist import _MAX_PREATTACHED_ENTRIES, _resolve_preattached_method_lists
+        from macho.memory import unread_input
+
+        class Ctx:
+            def read_u32(self, va):
+                return _s.unpack_from("<I", _s.pack("<II", 8, _MAX_PREATTACHED_ENTRIES + 1),
+                                      va - 0x4000)[0]
+        ctx = Ctx()
+        assert _resolve_preattached_method_lists(ctx, 0x4001) == []
+        assert [u[0] for u in unread_input(ctx)] == ["pre-attached method lists"]
+
+
 class TestSuperclassChain:
     """macho.classlist.superclass_chain: a class of the image read from the class list,
     another image's through its class_t (+8 its superclass), a bound slot by its import."""

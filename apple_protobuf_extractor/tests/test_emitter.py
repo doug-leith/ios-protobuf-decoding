@@ -624,6 +624,16 @@ class TestProtoFileEmit(unittest.TestCase):
         self.assertNotIn("unresolved message types", out)
 
 
+class TestFieldNotes(unittest.TestCase):
+    def test_a_number_note_and_a_type_note_both_show(self):
+        # writeTo: writes the field as 0, and its type is a guess: neither hides the other
+        f = _field("key", 1, confirmed=False)
+        f.number_note, f.type_inference_note = "wire field number is 0", "type guessed"
+        out = ProtoFile("geo", "geo.proto", [_geo_msg("Foo", [f])], []).emit()
+        line = next(ln for ln in out.splitlines() if " key = 1;" in ln)
+        self.assertIn("number estimated; wire field number is 0; type guessed", line)
+
+
 # ── TestComputeStats ──────────────────────────────────────────────────────────
 
 class TestComputeStats(unittest.TestCase):
@@ -1081,6 +1091,24 @@ class TestCliPhaseHelpers(unittest.TestCase):
                            "-o", "/tmp/never_written"])
         self.assertEqual(rc, 1)
         self.assertTrue(cache.closed)
+
+    def test_a_failed_run_leaves_no_stale_diagnostics_file(self):
+        import cli
+        import tempfile
+        from unittest import mock
+        from macho.dyld_cache import ImageNotFoundError
+
+        cache = self._FakeCache(ImageNotFoundError("nope"))
+        with tempfile.TemporaryDirectory() as d:
+            diag = os.path.join(d, "diag.json")
+            with open(diag, "w") as fh:
+                fh.write('{"from": "an earlier run"}')
+            with mock.patch.object(cli, "_open_cache", lambda path, native: cache), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                rc = cli.main(["--framework", "NoSuchFramework", "--cache", "/tmp/c",
+                               "-o", os.path.join(d, "out"), "--diagnostics-json", diag])
+            self.assertEqual(rc, 1)
+            self.assertFalse(os.path.exists(diag))
 
     # ── _load_binary_context ──────────────────────────────────────────────────
 

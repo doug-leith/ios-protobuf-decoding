@@ -410,3 +410,23 @@ class TestOneofEnumOfItsOwn(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQualifiedNameReadError(unittest.TestCase):
+    def test_an_unreadable_parent_gives_no_name_not_part_of_one(self):
+        # Inner (0x100) inside a parent context at 0x200 that cannot be read
+        from types import SimpleNamespace
+        from unittest import mock
+        import serializers.swift_type_recovery as T
+        from macho.memory import unread_input
+
+        def kind(ctx, d):
+            if d == 0x200:
+                raise ValueError("unmapped")
+            return T._STRUCT_KIND
+        ctx = SimpleNamespace()
+        with mock.patch.object(T, "_desc_kind", kind), \
+                mock.patch.object(T, "_desc_name", lambda ctx, d: "Inner"), \
+                mock.patch.object(T, "_parent_desc", lambda ctx, d: 0x200):
+            self.assertIsNone(T._qualified_name(ctx, 0x100))
+        self.assertEqual([u[:2] for u in unread_input(ctx)], [("swift type context", "0x200")])

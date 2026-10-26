@@ -23,7 +23,7 @@ from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from proto.models     import (ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics,
                               retag_enums)
-from proto.protocore  import _proto_name
+from proto.protocore  import _SCALAR_ENC, _proto_name
 from proto.dispatch   import _jump_table_arm_addrs, function_entries
 from proto.dictrep_flow import Flow
 from proto.callees import text_holding
@@ -438,8 +438,8 @@ def _qualify_enum_name(cls_proto: str, base_enum: str) -> str:
 # count → mode-aware file-header severity (see emitter.py).
 _ENUM_UNRESOLVED_COMMENT = (
     "enum value-string selector present but its values could not be recovered; "
-    "emitted as int32 (wire-compatible) — this is an unresolved enum, not a plain "
-    "integer; do not rely on the int32 type"
+    "emitted as its integer type (wire-compatible) — this is an unresolved enum, not a "
+    "plain integer"
 )
 
 
@@ -532,7 +532,7 @@ def _collect_enum_definitions(
             if _dbg_w is not None:
                 _emit_mode_c_debug(ctx, cls, fld, st, enum_name, as_method,
                                    instance_method_names, _dbg_w)
-            _revert_enum(fields, enum_name)
+            _revert_enum(fields, enum_name, cls)
             seen_enum_names.discard(enum_name)
             continue
         pairs, confirmed, truncated, incomplete_reason = recovered
@@ -573,14 +573,17 @@ def _tag_enum(fld: ProtoField, qualified: str) -> None:
     fld.type_class = f"ENUM:{qualified}"
 
 
-def _revert_enum(fields: List[ProtoField], enum_name: str) -> None:
-    """Every field of enum *enum_name* is a plain ``int32`` again, flagged: a value-string
-    selector exists but its values could not be recovered, so the int32 is a degraded
-    fallback, not a true scalar (transparency: surface it instead of degrading silently)."""
+def _revert_enum(fields: List[ProtoField], enum_name: str, cls: ObjcClass) -> None:
+    """Every field of enum *enum_name* is its ivar's integer type again (``int32``, or
+    ``uint32`` for an unsigned ivar), flagged: a value-string selector exists but its values
+    could not be recovered, so the integer is a degraded fallback, not a true scalar
+    (transparency: surface it instead of degrading silently)."""
+    encs = {_proto_name(iv.name): iv.type_enc for iv in cls.ivars}
     for f in fields:
         if f.type_class == f"ENUM:{enum_name}":
             f.type_class = None
-            f.type_name  = "int32"
+            f.type_name  = "uint32" if _SCALAR_ENC.get(encs.get(f.name) or "") == "uint32" \
+                else "int32"
             f.disambiguation_comment = _ENUM_UNRESOLVED_COMMENT
 
 

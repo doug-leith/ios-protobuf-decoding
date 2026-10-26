@@ -75,10 +75,9 @@ _METHOD_RE = re.compile(rb'^([-+])\[([A-Za-z0-9_]+)(?:\([A-Za-z0-9_]+\))? ([^\]]
 class ImageLocalSymbols:
     """Per-image selector lookup tables recovered from the local symbol table.
 
-    ``imp_to_sel`` maps an implementation vmaddr to its selector name (used to
-    correct method names by IMP).  ``class_to_sels`` maps each class name to
-    its ``{selector: imp}`` dict (used to add methods that exist as symbols but
-    are absent from the optimised method list).
+    ``imp_to_sel`` maps an implementation vmaddr to its selector name, image-wide.
+    ``class_to_sels`` maps each class name to its ``{selector: imp}`` dict: a class's
+    methods are renamed and completed from it (:func:`apply_to_classes`).
 
     The ``meta_*`` variants hold the same data for **class methods** (``+[Cls
     sel]``).  These are kept separate because a metaclass shares its instance
@@ -267,9 +266,10 @@ def apply_to_classes(classes, syms: ImageLocalSymbols) -> Dict[str, int]:
 
     Two passes per class:
 
-    1. **Rename by IMP** — every method whose implementation address is known
-       in ``imp_to_sel`` gets that selector name, where the method list's differs or is
-       missing (none on the iPhone 8 and iOS 27 caches: their lists name every method).
+    1. **Rename by IMP** — every method whose implementation address the class's own
+       symbols (``class_to_sels``) name gets that selector name, where the method list's
+       differs or is missing (none on the iPhone 8 and iOS 27 caches: their lists name every
+       method).
     2. **Add missing** — selectors present in the symbol table but absent from
        the parsed method list (the optimised list is often a subset) are
        appended as name-only :class:`ObjcMethod` entries so downstream
@@ -287,8 +287,10 @@ def apply_to_classes(classes, syms: ImageLocalSymbols) -> Dict[str, int]:
     renamed = corrected = added = meta_added = 0
     for cls in classes:
         is_meta = getattr(cls, 'is_meta', False)
-        imp_to_sel = syms.meta_imp_to_sel if is_meta else syms.imp_to_sel
         name_to_sels = syms.meta_to_sels if is_meta else syms.class_to_sels
+        # this class's own symbols: an IMP folded into several classes' methods has a symbol
+        # per class, and the image-wide map would give one class another's selector
+        imp_to_sel = {imp: sel for sel, imp in (name_to_sels.get(cls.name) or {}).items()}
 
         for m in cls.methods:
             sel = imp_to_sel.get(m.imp)

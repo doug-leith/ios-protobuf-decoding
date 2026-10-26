@@ -278,6 +278,11 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             for b, a in arms.items():
                 br_arms.setdefault(b, set()).update(a)
             flow = Flow(ctx, insns, br_arms=br_arms)
+        if getattr(insns, "truncated", False) and _round == 0:
+            detail = (f"the dispatch core at {core_va:#x} was read only in part: fields may be "
+                      f"missing")
+            out.notes.append(detail)
+            record_analysis_failure(ctx, cls.name, "readFrom: dispatch", detail)
         idom = dominators(flow.cfg)
         sites = _lsr3_sites(flow)
         results: List[Tuple[int, str, Dict[int, object], object]] = []

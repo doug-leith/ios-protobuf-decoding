@@ -67,6 +67,14 @@ class TestApplyToClasses(unittest.TestCase):
         self.assertEqual(cls.methods[0].name, 'readFrom:')
         self.assertEqual(counts['corrected'], 1)
 
+    def test_a_folded_imp_is_named_by_each_class_s_own_symbol(self):
+        # one body at 0x10 is Foo's -count and Bar's -size: each keeps its own selector
+        syms = ImageLocalSymbols(imp_to_sel={0x10: 'count'},
+                                 class_to_sels={'Foo': {'count': 0x10}, 'Bar': {'size': 0x10}})
+        foo, bar = _class('Foo', [_method(None, 0x10)]), _class('Bar', [_method(None, 0x10)])
+        apply_to_classes([foo, bar], syms)
+        self.assertEqual((foo.methods[0].name, bar.methods[0].name), ('count', 'size'))
+
     def test_fills_null_name(self):
         cls = _class('Foo', [_method(None, 0x20)])
         counts = apply_to_classes([cls], self._syms())

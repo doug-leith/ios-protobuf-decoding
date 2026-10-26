@@ -162,6 +162,10 @@ class ProtoField:
     # type_name is set to "bytes" as a fallback; this field retains the
     # original ObjC class name for inline comment output.
 
+    number_note: Optional[str] = None
+    # What is known to be wrong with an estimated field NUMBER (writeTo: writes it as 0):
+    # emitted after "number estimated", whatever its type notes say.
+
     disambiguation_comment: Optional[str] = None
     # Set when the field's enum has a value-string selector but its values could not be
     # recovered (proto.enums._revert_enum, structfields): the field is emitted as int32

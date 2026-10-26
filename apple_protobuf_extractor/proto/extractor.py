@@ -910,9 +910,9 @@ def extract_proto_message(
         # ACCEPTED LIMITATION (field# 0): writeTo: writes this ESTIMATED field
         # written with a literal field number 0 (Apple 0-based; illegal in .proto).
         # The estimated number is not wire-accurate — flag it (see LIMITATIONS.md (4),
-        # #52).  Only for estimated fields: a confirmed number is the real one.
-        if not confirmed and ivar.name in _wrote_zero and not _type_note:
-            _type_note = _FIELD_ZERO_NOTE
+        # #52), beside any note on its type.  Only for estimated fields: a confirmed
+        # number is the real one.
+        _number_note = _FIELD_ZERO_NOTE if not confirmed and ivar.name in _wrote_zero else None
 
         # ACCEPTED LIMITATION (singular embedded struct): a by-value `{Name=...}`
         # struct field is a submessage on the wire but emits as bytes; flag it so
@@ -940,6 +940,7 @@ def extract_proto_message(
             type_class=type_class,
             number_confirmed=confirmed,
             type_inference_note=_type_note,
+            number_note=_number_note,
             repeated_encoding=_repeated_encoding(ivar, _bound_writes, type_name, type_class),
         ))
 

@@ -587,3 +587,21 @@ class TestInitFamily(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestATruncatedCoreIsReported(unittest.TestCase):
+    def test_a_core_read_only_in_part_is_a_note_and_an_analysis_failure(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        import proto.dispatch_eval as E
+        from proto.function_body import FunctionBody
+        from proto.models import get_diagnostics
+        from tests._listing import text_listing
+        body = FunctionBody(text_listing('ret')[0])
+        body.truncated = True
+        ctx, out = SimpleNamespace(), E.ClassDispatch('GEOX')
+        with mock.patch.object(E, '_function_insns', lambda *a, **k: body):
+            E._decode_core(ctx, 0x1000, {}, SimpleNamespace(name='GEOX', ivars=[], methods=[]),
+                           {}, out)
+        self.assertTrue(any('read only in part' in n for n in out.notes))
+        self.assertEqual([f[0] for f in get_diagnostics(ctx).analysis_failures], ['GEOX'])

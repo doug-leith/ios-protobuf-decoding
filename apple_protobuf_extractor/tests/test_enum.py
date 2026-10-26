@@ -1509,3 +1509,55 @@ class TestEndToEndEnum(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestEnumWithoutValues(unittest.TestCase):
+    """An enum field with no value-string method is its ivar's integer type again, flagged --
+    uint32 for an unsigned ivar, not int32.  (One whose method yields no values stays an enum:
+    its placeholder value says the values were not recovered.)"""
+
+    def _collect(self, enc, recovered):
+        from types import SimpleNamespace
+        from unittest import mock
+        import proto.enums as EN
+        cls = SimpleNamespace(name="GEOX", ivars=[SimpleNamespace(name="_kind", type_enc=enc)])
+        fld = ProtoField(name="kind", number=1, type_name="Kind", label=FieldLabel.OPTIONAL,
+                         type_class="ENUM:Kind")
+        with mock.patch.object(EN, "_tag_dictrep_enums", lambda *a, **k: ({}, {})), \
+                mock.patch.object(EN, "_recover_enum_values", lambda *a, **k: (None, recovered)):
+            enums = EN._collect_enum_definitions(None, cls, [fld], None, {"readFrom:"}, None)
+        return enums, fld
+
+    def test_an_unsigned_ivar_reverts_to_uint32(self):
+        enums, fld = self._collect("I", None)
+        self.assertEqual(enums, [])
+        self.assertEqual((fld.type_name, fld.type_class), ("uint32", None))
+        self.assertIn("could not be recovered", fld.disambiguation_comment)
+
+    def test_a_signed_one_to_int32(self):
+        enums, fld = self._collect("i", None)
+        self.assertEqual((enums, fld.type_name), ([], "int32"))
+
+
+class TestEnumNamesDecollided(unittest.TestCase):
+    def _pf(self, messages):
+        return ProtoFile(package="geo", filename="geo.proto", messages=messages, imports=[])
+
+    def test_a_split_enum_s_new_name_is_not_one_already_taken(self):
+        # two incompatible "Status" enums: the second becomes BStatus -- which another
+        # message's enum already is
+        a = _proto_enum("Status", [(0, "STATUS_OK")])
+        b = _proto_enum("Status", [(0, "STATUS_FAIL")])
+        taken = _proto_enum("BStatus", [(0, "B_STATUS_X")])
+        enums = self._pf([_msg("A", enums=[a]), _msg("B", enums=[b]),
+                          _msg("C", enums=[taken])])._collect_enums()
+        names = [e.name for e in enums]
+        self.assertEqual(len(names), len(set(names)), names)
+
+    def test_an_empty_enum_s_placeholder_is_decollided(self):
+        # "Other" (de-collided first) holds a value ZONE_UNKNOWN: the empty "Zone"'s
+        # placeholder cannot be it too
+        other = _proto_enum("Other", [(0, "OTHER_A"), (3, "ZONE_UNKNOWN")])
+        zone = _proto_enum("Zone")
+        text = self._pf([_msg("A", enums=[other]), _msg("B", enums=[zone])]).emit()
+        self.assertEqual(text.count(" ZONE_UNKNOWN = "), 1, text)

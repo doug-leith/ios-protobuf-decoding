@@ -420,7 +420,20 @@ class TestForeignRuntimeFailuresAreNotSilent(unittest.TestCase):
                 out = _dedupe_cpp_messages(list(order))
             self.assertEqual(len(out), 1)
             self.assertEqual(len(out[0].fields), 21, 'discovery order must not decide')
-            self.assertIn('differing field counts', out[0].message_note)
+            self.assertIn('different fields', out[0].message_note)
+
+    def test_duplicate_cpp_messages_with_as_many_different_fields_are_reported_too(self):
+        from proto.foreign import _dedupe_cpp_messages
+
+        def m(name):
+            return ProtoMessage(name='M', class_name='x', package='p',
+                                fields=[ProtoField(name, 1, 'int32', FieldLabel.OPTIONAL)])
+        with self.assertLogs('proto.foreign', 'WARNING'):
+            out = _dedupe_cpp_messages([m('a'), m('b')])
+        self.assertEqual(len(out), 1)
+        self.assertIn('1 of the other copy', out[0].message_note)
+        same = _dedupe_cpp_messages([m('a'), m('a')])       # identical copies: one, quietly
+        self.assertEqual((len(same), same[0].message_note), (1, None))
 
 
 class TestCapstoneRequired(unittest.TestCase):

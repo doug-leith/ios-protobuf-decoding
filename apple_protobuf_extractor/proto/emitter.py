@@ -558,6 +558,8 @@ class ProtoFile:
         parts: List[str] = []
         if not fld.number_confirmed:
             parts.append("number estimated")
+        if fld.number_note:
+            parts.append(fld.number_note)
         if fld.unresolved_type_class:
             parts.append(f"unresolved: {fld.unresolved_type_class}")
         if fld.type_inference_note:
@@ -650,7 +652,8 @@ class ProtoFile:
                 name_instances.setdefault(enum.name, []).append((enum, msg))
 
         result_enums: List[ProtoEnum] = []
-        field_renames: Dict[str, Dict[str, str]] = {}
+        field_renames: Dict[int, Dict[str, str]] = {}      # id(message) -> {old: new}
+        type_names: Set[str] = set(name_instances) | {m.name for m in self.messages}
 
         # ── Step 2: process each name group ──────────────────────────────────
         for enum_name, instances in name_instances.items():
@@ -684,14 +687,17 @@ class ProtoFile:
                     result_enums.append(best)
                 else:
                     first_msg = min(group, key=lambda t: t[1].name)[1]
-                    new_name = f"{first_msg.name}{enum_name}"
+                    new_name, n = f"{first_msg.name}{enum_name}", 2
+                    while new_name in type_names:
+                        new_name, n = f"{first_msg.name}{enum_name}{n}", n + 1
+                    type_names.add(new_name)
                     result_enums.append(replace(best, name=new_name))
                     for _, m in group:
-                        field_renames.setdefault(m.class_name, {})[enum_name] = new_name
+                        field_renames.setdefault(id(m), {})[enum_name] = new_name
 
         # ── Step 3: patch field references for any splits ─────────────────────
         for msg in self.messages:
-            retag_enums(msg.fields, field_renames.get(msg.class_name, {}))
+            retag_enums(msg.fields, field_renames.get(id(msg), {}))
 
         # ── Step 4: de-collide enum names against message names ───────────────
         # proto3 forbids an enum and a message sharing a name within one
@@ -798,11 +804,14 @@ class ProtoFile:
         rebuilt: List[ProtoEnum] = []
         for enum in result_enums:
             if not enum.values:
-                # Empty enum: the placeholder ``…_UNKNOWN = 0`` is materialised
-                # by ProtoEnum.to_proto().  Reserve that name so a later value
-                # cannot collide with it; emit the enum unchanged.
-                taken.add(f"{_enum_prefix(enum.name)}_UNKNOWN")
-                rebuilt.append(enum)
+                # Empty enum: ProtoEnum.to_proto() emits the placeholder ``…_UNKNOWN = 0``;
+                # de-collided like any value (an earlier enum may hold that name).
+                placeholder = f"{_enum_prefix(enum.name)}_UNKNOWN"
+                unique = self._unique_value_name(placeholder, taken)
+                taken.add(unique)
+                rebuilt.append(enum if unique == placeholder else replace(enum, values=[
+                    ProtoEnumValue(name=unique, number=0,
+                                   comment="values not recovered from binary")]))
                 continue
 
             new_values: List[ProtoEnumValue] = []

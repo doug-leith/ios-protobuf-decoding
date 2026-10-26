@@ -238,9 +238,11 @@ def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
     A schema embedded by more than one image is decoded once per image, so the same
     messages can appear several times.  protoc rejects a redefinition
     ("X is already defined"), so collapse exact-name duplicates within a package.
-    A duplicate that DIFFERS in field count (different protobuf versions of the same
-    well-known message) keeps the larger field set, so no field is lost, and the message
-    is annotated and warned about -- never silently resolved by discovery order."""
+    A duplicate that DIFFERS (different protobuf versions of the same well-known message)
+    keeps the copy with more fields (on a tie, the first), and the message is annotated and
+    warned about -- never silently resolved by discovery order."""
+    def fields_of(m: ProtoMessage):
+        return {(f.number, f.name, f.type_name, f.label) for f in m.fields}
     seen: Dict[tuple, ProtoMessage] = {}
     out: List[ProtoMessage] = []
     for m in messages:
@@ -250,14 +252,16 @@ def _dedupe_cpp_messages(messages: List[ProtoMessage]) -> List[ProtoMessage]:
             seen[key] = m
             out.append(m)
             continue
-        if len(prev.fields) != len(m.fields):
+        if fields_of(prev) != fields_of(m):
             keep, drop = (m, prev) if len(m.fields) > len(prev.fields) else (prev, m)
-            log.warning("C++ message %r in package %r decoded twice with differing "
-                        "field counts (%d vs %d); keeping the larger",
-                        m.name, m.package, len(prev.fields), len(m.fields))
-            keep.message_note = (f"decoded from more than one image with differing field counts "
-                                 f"({len(keep.fields)} kept, {len(drop.fields)} dropped): "
-                                 f"different protobuf versions of this message")
+            lost = len(fields_of(drop) - fields_of(keep))
+            log.warning("C++ message %r in package %r decoded twice with different fields "
+                        "(%d vs %d); keeping the one with more (%d of the other's not in it)",
+                        m.name, m.package, len(prev.fields), len(m.fields), lost)
+            keep.message_note = (f"decoded from more than one image with different fields "
+                                 f"({len(keep.fields)} kept; {lost} of the other copy's "
+                                 f"{len(drop.fields)} not among them): different protobuf "
+                                 f"versions of this message")
             seen[key] = keep
             out[out.index(prev)] = keep
     return out

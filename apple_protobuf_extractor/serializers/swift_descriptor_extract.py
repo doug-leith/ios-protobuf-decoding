@@ -72,7 +72,7 @@ from dataclasses import dataclass, field
 from collections import Counter
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, PROGRAM_ERRORS
+from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, PROGRAM_ERRORS, record_unread
 from macho.disasm import _norm_reg, _parse_imm
 from proto.arm64_eval import Flow
 from proto.callees import text_holding
@@ -893,9 +893,16 @@ def _witnesses(ctx: BinaryContext) -> Dict[str, Dict[str, MC.Code]]:
 
     def build():
         try:
-            return {_qualified_name(ctx, td): ws for td, ws in MC.message_witnesses(ctx).items()}
-        except READ_ERRORS:
+            found = MC.message_witnesses(ctx)
+        except READ_ERRORS as exc:
+            record_unread(ctx, "swift protocol conformances", "the image", exc)
             return {}
+        out = {}
+        for td, ws in found.items():
+            name = _qualified_name(ctx, td)          # (None: unreadable, recorded there)
+            if name is not None:
+                out[name] = ws
+        return out
     return _ctx_cache(ctx, "_swift_witnesses_by_name", build)
 
 

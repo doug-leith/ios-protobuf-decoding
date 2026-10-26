@@ -219,10 +219,13 @@ class WriteSite:
 
     @property
     def number(self) -> Optional[int]:
-        """The field number the call is handed: w1 when the value travels in v0, none for a
-        recall mark, else w2."""
-        if self.name == RECALL_MARK:
-            return None
+        """The field number the call is handed: a PB writer's third argument, if it takes one
+        (w1 after a value in v0, else w2; a recall mark and a bare varint take none); for a
+        callee without a contract, w1 when the value travels in v0, else w2."""
+        pb = _PB_WRITE.get(self.name) if self.name else None
+        if pb is not None:
+            reads = pb[0]
+            return None if len(reads) < 3 else self.x1 if reads[2] == "x1" else self.x2
         return self.x1 if self._value_reg == "v0" else self.x2
 
     @property

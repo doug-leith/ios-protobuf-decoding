@@ -134,7 +134,7 @@ class TestImageBaseBeforeTheFixups(unittest.TestCase):
     """The chains are walked once every segment, and so the image base, is known: a fixups
     command ahead of the segment commands decodes as one after them."""
 
-    def _binary(self, fixups_first):
+    def _binary(self, fixups_first, fmt=6, page_start=0):
         import struct
         from tests.conftest import _pack_header, _pack_section64, _pack_segment64
         base, data_va, data_off, blob_off = 0x1_0000_0000, 0x1_0000_4000, 0x1000, 0x1010
@@ -142,7 +142,7 @@ class TestImageBaseBeforeTheFixups(unittest.TestCase):
         # __DATA's has chains), then its dyld_chained_starts_in_segment: one page, a chain
         # starting at the page's first byte, DYLD_CHAINED_PTR_64_OFFSET
         starts = struct.pack('<I3I', 3, 0, 0, 16)
-        in_seg = struct.pack('<IHHQIHH', 24, 0x4000, 6, data_va - base, 0, 1, 0)
+        in_seg = struct.pack('<IHHQIHH', 24, 0x4000, fmt, data_va - base, 0, 1, page_start)
         blob = struct.pack('<7I', 0, 32, 72, 72, 0, 1, 0) + bytes(4) + starts + in_seg
         blob += bytes(80 - len(blob))
         fixups = struct.pack('<IIII', 0x80000034, 16, blob_off, len(blob))
@@ -164,6 +164,18 @@ class TestImageBaseBeforeTheFixups(unittest.TestCase):
             ctx, base, slot = self._binary(fixups_first)
             self.assertEqual(ctx.image_base, base)
             self.assertEqual(ctx.read_ptr(slot), base + 0x10, fixups_first)
+
+    def test_a_pointer_format_not_decoded_is_recorded_not_read_as_addresses(self):
+        from macho.memory import unread_input
+        ctx, _base, slot = self._binary(False, fmt=99)
+        self.assertEqual([u[:2] for u in unread_input(ctx)], [("chained fixups", "segment 2")])
+        self.assertEqual(ctx.read_ptr(slot), 0x10)          # the word, no fixup made of it
+
+    def test_a_chain_off_its_segment_is_recorded(self):
+        from macho.memory import unread_input
+        ctx, _base, data_va = self._binary(False, page_start=0x20)   # past the 16 file bytes
+        self.assertEqual([u[:2] for u in unread_input(ctx)],
+                         [("chained fixup chain", f"{data_va + 0x20:#x}")])
 
 def _load_expected():
     spec = importlib.util.spec_from_file_location(
