@@ -369,7 +369,7 @@ class TestReviewFixes(unittest.TestCase):
                    mock.patch.object(WF, 'callee_name', lambda ctx, va: None),
                    mock.patch.object(WF, 'stub_selector', lambda ctx, va: None)]
         if patch_visits is not None:
-            patches.append(mock.patch.object(WF, '_MAX_BLOCK_VISITS', patch_visits))
+            patches.append(mock.patch.object(WF, '_VISITS_PER_BLOCK', patch_visits))
         for p in patches:
             p.start()
         try:

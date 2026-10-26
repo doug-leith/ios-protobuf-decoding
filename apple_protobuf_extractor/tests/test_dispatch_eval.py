@@ -638,4 +638,3 @@ class TestATruncatedCoreIsReported(unittest.TestCase):
                            {}, out)
         self.assertTrue(any('read only in part' in n for n in out.notes))
         self.assertEqual([f[0] for f in get_diagnostics(ctx).analysis_failures], ['GEOX'])
-

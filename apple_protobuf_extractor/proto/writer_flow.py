@@ -64,10 +64,12 @@ _W, _S, _T = 'W', 'S', 'T'
 _P = 'P'                     # (_P, reg): a self-method summary's argument register on entry
 
 
-# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] runaway backstops (a writeTo: settles in a few sweeps of its
-# blocks; the largest, 1,745 blocks in iOS 27 GeoServices, in 32,644 visits).  Each reports
-# when it binds (record_heuristic_hit).
-_MAX_BLOCK_VISITS = 50_000
+# [cap:COSMETIC — ×8 changes none of the 19 gate targets, 2026-10-26] runaway backstops.  Each
+# reports when it binds (record_heuristic_hit).  A writer flow settles in a few sweeps of its
+# blocks: over the 19 gate targets and the 209-image sweep (17,291 runs, 2026-10-26) at most
+# 22.3 visits a block (the largest, 1,745 blocks in iOS 27 GeoServices, 32,644 visits), so the
+# fixpoint's budget is a multiple of the function's size, not one number for every function.
+_VISITS_PER_BLOCK = 64
 _MAX_SUMMARY_DEPTH = 3
 
 
@@ -473,10 +475,10 @@ class _ClassFlow:
 
         res = _Result()
         states = flow.forward([(cfg.entry, _St(entry))], run_block,
-                              max_visits=_MAX_BLOCK_VISITS)
+                              max_visits=_VISITS_PER_BLOCK * len(cfg.order))
         if states is None:
             res.fail("fixpoint did not settle")
-            record_heuristic_hit(self.ctx, "_MAX_BLOCK_VISITS", f"writer flow of {run.lo:#x}")
+            record_heuristic_hit(self.ctx, "_VISITS_PER_BLOCK", f"writer flow of {run.lo:#x}")
             return res
         for b, st in states.items():
             self._block(st.copy(), b, res, run)
