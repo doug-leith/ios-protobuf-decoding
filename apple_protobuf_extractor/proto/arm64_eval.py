@@ -68,8 +68,7 @@ class Sym:
     difference of two frame addresses (a number: it does not depend on where the stack is),
     and the order of frame addresses.  Anything else -- its bits, a shift, a token plus a
     number -- raises TypeError: an operation the machine does not take as unknown is a bug,
-    not a value (TODO #139: these were integers in bands, where such an operation quietly
-    made a plausible number)."""
+    not a value (as an integer it would make a plausible number)."""
     kind: str
     ident: Any = None
     off: int = 0
@@ -1563,8 +1562,8 @@ class Flow:
         path into it that can execute agrees, and a branch whose condition is known follows only
         the side taken -- but started mid-function and bounded by *stop* (e.g. the blocks that
         dominate a reader's ``lsr Wf, Wtag, #3``, so one loop iteration is evaluated).  A call
-        clobbers the caller-saved registers, flags and (once a stack address has escaped) the
-        slots.
+        clobbers the caller-saved registers, flags and the slots a callee may reach (a stack
+        address handed to one, or stored where one may find it: :class:`_Machine`).
         The result lists every call (``bl`` / ``blr`` / a ``b`` out of the function) with the
         argument registers x0-x7 known at it (opaque values included, see :class:`_Machine`),
         and the blocks reached in first-visit order.  *objects*: see :class:`Objects`;

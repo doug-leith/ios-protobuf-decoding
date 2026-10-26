@@ -83,7 +83,6 @@ class FieldDispatch:
     element_core: Optional[str] = None         # class of the ReadAllFrom core handed the reader
     element_classes: Tuple[str, ...] = ()      # proto classes whose class_t is an argument
     adder_ivar: Optional[str] = None
-    calls: List[Tuple[int, Optional[int]]] = field(default_factory=list)   # (call addr, target)
 
     @property
     def element(self) -> Optional[str]:
@@ -370,7 +369,6 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
             classes: List[str] = list(fd.element_classes)
             elem_obj = None
             for c in calls:
-                fd.calls.append((c.addr, c.target))
                 if (fd.element_core is None and c.target in core_index
                         and c.args.get('x0') not in (SELF, READER)):
                     fd.element_core = core_index[c.target]

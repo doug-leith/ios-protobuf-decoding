@@ -489,7 +489,7 @@ def resolve_map_types(
     return MapTypes(key_type, value_type, value_class, "; ".join(reasons) or None)
 
 
-# ── Post-extraction finalisation (moved from proto.extractor) ───────────────
+# ── Post-extraction finalisation ─────────────────────────────────────────────
 
 _MAP_FIELD_NOTE = (
     "map<> field (ObjC NSMutableDictionary) emitted as bytes; no map-entry writer "

@@ -1,6 +1,6 @@
 """writeTo: write-helper identification and wire-type-family classification.
 
-Carved out of ``proto/extractor.py`` (output-identical move).  Apple's PB runtime
+Apple's PB runtime
 emits a small set of per-binary *write helpers* — the functions a ``writeTo:`` IMP
 calls to encode each field.  Which helper a field uses is a structural signal the
 ivar ``@encode`` cannot carry:

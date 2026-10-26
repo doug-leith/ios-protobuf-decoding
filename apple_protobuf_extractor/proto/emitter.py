@@ -28,7 +28,7 @@ Messages are split by ObjC prefix into separate .proto files:
     CLP*   →  package "clp"    →  clp.proto
     CLM*   →  package "clm"    →  clm.proto
     CLN*   →  package "cln"    →  cln.proto
-    other  →  package "other"  →  other.proto
+    other  →  the class name's leading capitals, lowercased (:func:`package_for_class`)
 
 Cross-package type references (e.g. a "geo" message that references a "clp"
 class) generate import statements and are qualified in the emitted proto
@@ -347,7 +347,7 @@ class ProtoFile:
 
     def emit(self, class_to_pkg: Optional[Dict[str, str]] = None) -> str:
         """
-        Return the full proto3 file content as a string.
+        Return the file's content (edition 2023) as a string.
 
         Parameters
         ----------
@@ -518,7 +518,7 @@ class ProtoFile:
                        "(ObjC subclass — parent fields not repeated here)")
         if msg.enum_recovery_truncated:
             out.append("  // WARNING: enum recovery may be INCOMPLETE "
-                       "(_dictionaryRepresentation: disassembly budget exceeded); "
+                       "(_dictionaryRepresentation: read only in part); "
                        "some int32 fields may actually be enums")
         if msg.serialised_by:
             out.append(f"  // no writeTo: of its own: serialised by {msg.serialised_by}'s "
@@ -953,7 +953,7 @@ def _break_map_import_cycles(
     Per-class packages (e.g. CoreParsec: one ``_cpstruct.proto`` per ObjC class) make a
     mutually-recursive pair of messages — ``_CPStruct`` holds ``map<string, _CPValue>``
     while ``_CPValue`` holds a ``_CPStruct`` — a file import cycle, which protoc rejects
-    for the whole set.  Map-value references are cut first (as before 2026-10-15); a cycle
+    for the whole set.  Map-value references are cut first; a cycle
     with no map edge left is cut at a message-typed field (``_CPListValue`` holds ``repeated
     _CPValue`` while ``_CPValue`` holds a ``_CPListValue``).  The reference becomes ``bytes``
     (a message is length-delimited, so it still decodes) with an inline note naming the

@@ -6,18 +6,12 @@ Recovers ObjC method names from a dyld shared cache's **local-symbol table**
 
 Why this exists
 ---------------
-For cache-native frameworks built with preoptimised "direct selector" method
-lists (e.g. GeoServices), the method-list ``nameOffset`` field is effectively
-stripped: it points at unrelated binary data, so selector names cannot be
-recovered from the method list at all.  Measured on GeoServices: of 60,562
-methods, every single one resolved to either a null or a wrong
-(false-positive) name via the method list.
-
-The ``.symbols`` file, however, carries the original local symbol table with
-full ``-[Class selector]`` entries, keyed by implementation address.  The
-method list's ``impOffset`` field *is* reliable, so an IMP→symbol lookup gives
-a 100%-accurate selector name.  This module parses that table, scoped to a
-single image, and returns the lookup maps.
+A cache image's optimised method lists name their methods (relative selectors, through the
+cache's selector base: :mod:`macho.relative_selector_base`), but leave methods out, and a
+metaclass's ``baseMethods`` is NULL.  The ``.symbols`` file carries the original local symbol
+table with full ``-[Class selector]`` / ``+[Class selector]`` entries, keyed by implementation
+address: the methods a list leaves out, and the class methods.  This module parses that table,
+scoped to a single image, and returns the lookup maps.
 
 Format (verified against a real iOS arm64 ``.symbols`` file)
 -----------------------------------------------------------
@@ -274,8 +268,8 @@ def apply_to_classes(classes, syms: ImageLocalSymbols) -> Dict[str, int]:
     Two passes per class:
 
     1. **Rename by IMP** — every method whose implementation address is known
-       in ``imp_to_sel`` gets its authoritative selector name, replacing the
-       null or false-positive name produced by the stripped method list.
+       in ``imp_to_sel`` gets that selector name, where the method list's differs or is
+       missing (none on the iPhone 8 and iOS 27 caches: their lists name every method).
     2. **Add missing** — selectors present in the symbol table but absent from
        the parsed method list (the optimised list is often a subset) are
        appended as name-only :class:`ObjcMethod` entries so downstream

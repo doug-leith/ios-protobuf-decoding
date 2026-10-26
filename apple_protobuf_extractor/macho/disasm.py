@@ -1,5 +1,5 @@
 """
-macho/disasm.py — arm64 disassembler and instruction-stream analysis.
+macho/disasm.py — arm64 disassembler.
 
 Architecture
 ------------
@@ -10,10 +10,6 @@ Architecture
   instructions.  Pass stop_at_ret=False to continue past ret (needed when
   scanning writeTo: methods whose out-of-line field blocks follow the main
   function epilogue).
-
-* Analysis primitives operate on List[Insn] — no BinaryContext needed.
-  All pattern matching is structural (mnemonic + op_str regex); no hardcoded
-  addresses are ever used.  The same code works across any arm64 binary.
 
 Public API
 ----------

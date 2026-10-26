@@ -315,12 +315,10 @@ def _cmd_list_frameworks(cache_arg: str) -> int:
 
 
 # ── main() pipeline stages ─────────────────────────────────────────────────────
-# Carved out of main() so the entry point reads as a short pipeline (load →
-# extract → emit) and each self-contained phase is a named unit.  main() still
-# owns the cache lifecycle, source-mode branching, and the extraction core (whose
-# finally-block cache close is intentionally kept there).
+# main() reads as a short pipeline (load → extract → emit), each phase a named unit; it owns
+# the cache: it opens it and closes it once the output is written.
 
-def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native) -> int:
+def _cmd_list_serializers(ctx, cl, list_bytes, source_name) -> int:
     """--list-serializers: print which protobuf runtimes are present and the
     message names under each, then exit (no full per-message disassembly).
     ``list_bytes`` is the raw image bytes in binary mode (lets the C++ scan sweep
@@ -356,8 +354,6 @@ def _cmd_list_serializers(ctx, cl, list_bytes, source_name, cache, cache_native)
             "descriptor sections."
         )
     print()
-    if cache is not None and cache_native:
-        cache.close()
     return 0
 
 
@@ -445,11 +441,8 @@ def _build_and_write_output(messages, args, source_name, ctx, input_kind) -> int
 
 # ── main() helpers ─────────────────────────────────────────────────────────────
 #
-# main() is argument dispatch, not binary-format reasoning, so it splits along
-# the CLI's own phase boundaries with nothing lost.  Each helper below owns one
-# phase and prints its own diagnostics; a phase that cannot continue raises
-# _CliAbort, which main() turns into the exit status.  Messages and exit codes
-# are unchanged from when this was one 209-line function.
+# Each helper below owns one phase of main() and prints its own diagnostics; a phase that
+# cannot continue raises _CliAbort, which main() turns into the exit status.
 
 
 class _CliAbort(Exception):
@@ -571,7 +564,6 @@ def _load_cache_native_context(args, cache, BinaryContext):
             "image path to disambiguate.",
             file=sys.stderr,
         )
-        cache.close()
         raise _CliAbort() from exc
     except ImageNotFoundError as exc:
         print(
@@ -580,7 +572,6 @@ def _load_cache_native_context(args, cache, BinaryContext):
             f"to see all available image paths.",
             file=sys.stderr,
         )
-        cache.close()
         raise _CliAbort() from exc
     _done(t)
     print(
@@ -594,7 +585,6 @@ def _load_cache_native_context(args, cache, BinaryContext):
         raise
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
-        cache.close()
         raise _CliAbort() from exc
     return ctx, mach_va
 
@@ -802,8 +792,7 @@ def _extract_and_write(args, ctx, data, cache, cache_native, mach_va, source_nam
     # swift reads the .symbols nlist, both through ctx); passing `data` only when
     # present lets the binary-mode C++ scan sweep the whole image.
     if args.list_serializers:
-        return _cmd_list_serializers(
-            ctx, cl, data, source_name, cache, cache_native)
+        return _cmd_list_serializers(ctx, cl, data, source_name)
 
     # ── Proto extraction ──────────────────────────────────────────────────────
     t = _step("extracting proto schemas")

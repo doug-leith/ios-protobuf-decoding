@@ -104,13 +104,6 @@ def _is_real_field_ivar(ivar: ObjcIvar) -> bool:
       has-bits ivar (``_is_has_bits_name``);
     * the proto has-bits / lazy-load bitfield struct (``_is_proto_flags_ivar`` —
       the ``{?="has_…"b1…}`` / ``{?="read_…"b1…}`` form).
-
-    TODO #60: the previous version ALSO took a getter/setter selector as a
-    positive admission signal, unioned with the shape test.  Measured inert — on
-    every supported artifact there is zero ivar a getter admits but the shape
-    would reject (``NAME-rescues-flags == 0`` on GeoServices + CLP), so the name
-    term never changed the outcome.  Dropping it is byte-identical and removes the
-    last name-shape dependence from admission.
     """
     if ivar.name in _INTERNAL_PB_IVARS or _is_has_bits_name(ivar.name):
         return False
@@ -262,12 +255,8 @@ def _field_label(
        stays ``bytes`` per #37 / LIMITATIONS.md (2));
     3. object array  ``@"NSArray"`` / ``@"NSMutableArray"``.
 
-    TODO #60: the previous version decided repeated/optional from constructed
-    selector names (``add<X>:``+``<x>Count`` → repeated, ``has<X>`` → optional).
-    Measured redundant for the object-array case (the NSArray shape rule catches
-    the same fields) and BUGGY for ``^{struct}`` (it mislabelled ~40 GeoServices
-    inline-C-struct repeated fields as ``optional`` because they lack ``add…:``
-    accessors).  The shape rules above are the principled replacement.
+    A label is never read off a selector's spelling (``add<X>:`` / ``has<X>``): an inline
+    C-struct repeated field has no ``add…:`` accessor.
     """
     enc = ivar.type_enc
     if _is_packed_list_enc(enc):

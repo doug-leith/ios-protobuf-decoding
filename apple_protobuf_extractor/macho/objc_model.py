@@ -2,14 +2,11 @@
 macho/objc_model.py — the parsed ObjC model: method / ivar / class records.
 
 A LEAF module: it holds the record shapes only, and imports nothing from
-``macho`` itself.  That is the point of its existence.  ``classlist`` builds
-these records and ``local_symbols`` repairs them (grafting selector names from
-the ``.symbols`` sub-cache), so both need the shapes; keeping the shapes here
+``macho`` itself.  ``classlist`` builds these records and ``local_symbols`` adds to them
+(methods from the ``.symbols`` sub-cache), so both need the shapes; keeping the shapes here
 means ``local_symbols`` does not have to import the parser to name its own
-inputs.  Before this module existed it did, which closed a
-``classlist → memory → dyld_cache → local_symbols → classlist`` import cycle
-that only stayed loadable because the offending imports were deferred into
-function bodies.
+inputs (that import would close a ``classlist → memory → dyld_cache → local_symbols →
+classlist`` cycle).
 
 ``classlist`` re-exports all three names, so ``from macho.classlist import
 ObjcClass`` keeps working and remains the natural import for callers that are

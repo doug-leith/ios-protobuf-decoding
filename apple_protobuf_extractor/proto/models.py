@@ -29,15 +29,15 @@ def _enum_prefix(name: str) -> str:
 
 # ── Enum models ───────────────────────────────────────────────────────────────
 
-#: Emitted above an enum whose recovery stopped early -- the value-string method overran
-#: the disassembler's instruction budget, or a pointer-table entry could not be read -- so
-#: some values could not be recovered.
+#: Emitted above an enum whose recovery stopped early -- the value-string method was read
+#: only in part (:attr:`proto.function_body.FunctionBody.truncated`), or a table entry could
+#: not be read -- so some values could not be recovered.
 #: Unlike a sparse-enum gap (an undefined value), this is a *tool* limit — the
 #: missing values exist in the binary but were not read.
 _ENUM_TRUNCATED_COMMENT = (
     "// WARNING: values may be INCOMPLETE — recovery stopped before every value was read "
-    "(the value-string method exceeded the disassembly budget, or a table entry could not "
-    "be read); the missing values exist in the binary."
+    "(the value-string method was read only in part, or a table entry could not be read); "
+    "the missing values exist in the binary."
 )
 
 
@@ -71,14 +71,11 @@ class ProtoEnum:
     name:             str                   # e.g. "FeedbackType"
     values:           List[ProtoEnumValue]  # may be empty if not recovered
     values_confirmed: bool = False          # True when cleanly extracted from binary
-    values_truncated: bool = False          # True when the value-string method was
-                                            # cut off at the disassembler's
-                                            # instruction budget: values encoded
-                                            # past the cap are missing, so the set
-                                            # below may be incomplete.
+    values_truncated: bool = False          # True when some values may be missing: the
+                                            # value-string method was read only in part,
+                                            # or a value could not be evaluated.
     incomplete_reason: Optional[str] = None  # With values_truncated: WHY values may be
-                                            # missing, when it is not the disassembly
-                                            # budget (e.g. a value of the inlined
+                                            # missing (e.g. a value of the inlined
                                             # converter could not be evaluated).
     closed:           bool = False          # A closed enum (proto2's): an unknown value
                                             # is no value of the field; emitted with
@@ -166,11 +163,9 @@ class ProtoField:
     # original ObjC class name for inline comment output.
 
     disambiguation_comment: Optional[str] = None
-    # Set when an xAsString: method was detected in __objc_methname but
-    # its implementation could not be identified unambiguously (multiple
-    # type-compatible candidates, none with a discriminating value prefix).
-    # The field is emitted as its raw scalar type (int32/uint32) with this
-    # comment so the user knows to re-run with --cache.
+    # Set when the field's enum has a value-string selector but its values could not be
+    # recovered (proto.enums._revert_enum, structfields): the field is emitted as int32
+    # with this comment, an unresolved enum rather than a plain integer.
 
     type_inference_note: Optional[str] = None
     # Set when the field's TYPE was chosen by a name-based heuristic rather than
@@ -279,9 +274,9 @@ class ProtoMessage:
     enums:      List[ProtoEnum]  = field(default_factory=list)
     # Enum definitions inlined by this message (emitted at file scope).
     # Each entry is a unique enum whose type_class is "ENUM:<name>".
-    # True when -[cls _dictionaryRepresentation:] disassembly hit the budget cap,
-    # so dictRep enum recovery may be incomplete and some int32 fields below may
-    # actually be enums.  Emitted as a class-level WARNING comment.
+    # True when -[cls _dictionaryRepresentation:] was read only in part, so dictRep enum
+    # recovery may be incomplete and some int32 fields below may actually be enums.
+    # Emitted as a class-level WARNING comment.
     enum_recovery_truncated: bool = False
     # Proto message name of the parent class when this message is an ObjC subclass
     # of ANOTHER proto message (not the PBCodable/PBRequest base) — TODO #46.  The

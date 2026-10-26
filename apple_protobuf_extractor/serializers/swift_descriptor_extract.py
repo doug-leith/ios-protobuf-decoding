@@ -213,7 +213,7 @@ def _tail_call_args(insns) -> Optional[Dict[str, int]]:
     listing.
 
     Such a getter / builder holds no table of its own: the (number, name) data is in the
-    function it passes (shape D), in a literal it passes (shape E, F) or in a static blob."""
+    function it passes (shape D), in a literal it passes (shape E) or in a static blob."""
     if (len(insns) < 2 or insns[-1].mnemonic != "b" or _tail_calls(insns) != [len(insns) - 1]
             or any(i.mnemonic not in _SETUP for i in insns[:-1])):
         return None
@@ -519,8 +519,8 @@ def _shared_once_init_targets(insns) -> List[int]:
 
     Only a pure stub qualifies: a once-init getter with its own fast / cold path (the
     :func:`_runtime_namemap_fields` shape) branches first, and an address in its cold path is
-    not this type's builder (#74: remindd's UnmigrateRequest picked up its sibling `Option`
-    enum's builder that way)."""
+    not this type's builder (remindd's UnmigrateRequest would take its sibling `Option`
+    enum's)."""
     args = _tail_call_args(insns)
     return list(args.values()) if args else []
 
@@ -735,7 +735,7 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
     # its literal (number, name) table (:func:`_builder_entries`,
     # which follows one further tail-call when the builder is itself just an
     # arg-setup stub for a second shared template) -- oracle-validated for
-    # the same reason as runtime-namemap.  #74.
+    # the same reason as runtime-namemap.
     best_shared: List[SwiftField] = []
     shared_shape = "shared-once"
     for t in _shared_once_init_targets(insns):
@@ -875,8 +875,7 @@ def _norm(name: str) -> str:
 def _norm_property(name: str) -> str:
     """:func:`_norm` of a Swift property's name, less the ``_p`` swift-protobuf appends to one
     that would collide (``has_version`` -> ``hasVersion_p``: an accessor prefix, a reserved
-    word) -- only on this side: a proto name may end in ``_p`` itself (``foo_p`` -> ``fooP``).
-    Remote Mirror showed 21 fields left untyped by the plain join (TODO #128)."""
+    word) -- only on this side: a proto name may end in ``_p`` itself (``foo_p`` -> ``fooP``)."""
     return _norm(name[:-2] if name.endswith("_p") else name)
 
 
@@ -1073,9 +1072,9 @@ _FAT_MAGIC_64_BE = 0xCAFEBABF
 _CPU_TYPE_ARM64 = 0x0100000C
 
 
-def load_macho_slice(data: bytes, prefer=("arm64e", "arm64")) -> bytes:
-    """Return a single-arch Mach-O slice from *data*, picking the preferred arm64
-    slice from a fat binary; returns *data* unchanged if already thin."""
+def load_macho_slice(data: bytes) -> bytes:
+    """Return a single-arch Mach-O slice from *data*: a fat binary's arm64e slice, else its
+    arm64 one; *data* unchanged if already thin."""
     if len(data) < 8:
         return data
     magic = struct.unpack_from(">I", data, 0)[0]
@@ -1100,7 +1099,7 @@ def load_macho_slice(data: bytes, prefer=("arm64e", "arm64")) -> bytes:
         if cputype != _CPU_TYPE_ARM64:
             continue
         is_e = (cpusub & 0x00FFFFFF) == 2
-        rank = 0 if (is_e and prefer[0] == "arm64e") else 1
+        rank = 0 if is_e else 1
         if best is None or rank < best[0]:
             best = (rank, off, size)
     if best and best[1] + best[2] <= len(data):

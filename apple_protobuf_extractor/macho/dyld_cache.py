@@ -365,7 +365,7 @@ class DyldCacheReader:
         are absent.  (The array must lie in the file: :meth:`_iter_images`.)
         """
         # imagesTextOffset u64 at 0x88, imagesTextCount u64 at 0x90.
-        # _HDR_READ_SIZE = 0x1a0 > 0x98, so the header bytes we already read
+        # _HDR_READ_SIZE (0x1e0) > 0x98, so the header bytes we already read
         # always cover these two fields.
         if len(hdr) < _HDR_IMG_TEXT_CNT + 8:
             return 0, 0
@@ -1222,8 +1222,7 @@ class DyldCacheReader:
         upper bits carry chain-link / PAC-authentication metadata for the
         boot-time ASLR slide walk.  Two on-disk encodings are known:
 
-        * **plain-arm64 caches** (e.g. the iOS non-e cache this tool was
-          originally built against): the low 36 bits of the raw value already
+        * **plain-arm64 caches** (e.g. the iPhone 8 cache): the low 36 bits of the raw value already
           equal the absolute target vmaddr — no addition needed, because the
           cache's own base fits within those 36 bits.
         * **arm64e caches** (iOS arm64e devices and every Apple Silicon macOS
@@ -1250,7 +1249,7 @@ class DyldCacheReader:
 
         A slide-info v5 cache (and only v5) encodes every pointer as the offset from
         :attr:`cache_base` (3. alone): an offset that is itself a mapped address -- a macOS 27
-        target at or above 0x3_0000_0000 -- is not taken for the address (#133).
+        target at or above 0x3_0000_0000 -- is not taken for the address.
         """
         if not raw:
             return 0

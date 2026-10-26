@@ -8,10 +8,9 @@ proto.extractor) -> cycle-free; extractor re-imports the surface so call sites +
 tests are unchanged.
 
 The ``--debug-enums`` diagnostic record builders (xAsString/methname candidate
-scanning, Mode A/B/C record assembly) have moved to proto.enums_debug — this
-module's ``_collect_enum_definitions`` imports it lazily (function-local, only
-when a debug sink is actually supplied) to avoid a cycle, since enums_debug
-imports back from here.
+scanning, Mode A/B/C record assembly) are proto.enums_debug's; this module's
+``_collect_enum_definitions`` imports it lazily (function-local, only when a debug sink is
+supplied), since enums_debug imports from here.
 """
 from __future__ import annotations
 import logging
@@ -250,8 +249,7 @@ def _harvest_dictrep(
         _ctx_cache(ctx, "_dictrep_truncated_classes", set).add(cls.name)
 
     # The field's int is driven through the function's own code, value by value, to the
-    # CFString it hands to the dictionary -- see proto/dictrep_flow.py.  This replaces the
-    # earlier look-back-window passes (jump table / pointer table / compare chain).
+    # CFString it hands to the dictionary -- see proto/dictrep_flow.py.
     flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
     enums = flow.enum_maps({iv.offset for iv in cls.ivars if iv.offset is not None}, wanted)
     return enums, flow.incomplete, flow.unevaluated
@@ -339,25 +337,6 @@ def _enum_name_from_pairs(
     return ''.join(p.capitalize() for p in parts)
 
 
-# ObjC type encodings that identify a genuine ``xAsString:`` method.
-# An xAsString: method for an int32/uint32 enum field takes (self @0, SEL @8,
-# enum_value i/I @16) and returns id (@), giving a total frame of 20 bytes.
-# Requiring this encoding eliminates short stub methods, getters (@16@0:8),
-# void setters (v24@0:8@16), and other false-positive candidates whose IMP
-# happens to be adjacent to the real enum method in memory, causing the
-# linear-disassembly pattern scan to pick up the pointer-table code that
-# belongs to the real method.
-#
-# Solely consumed by proto.enums_debug now (imported from there) — no
-# production code in this module still references it.
-_ASSTRING_INT_TYPES: frozenset = frozenset({
-    "@20@0:8i16",  # standard: returns id, frame 20, int32 arg
-    "@20@0:8I16",  # unsigned int32 variant
-    "@24@0:8i16",  # 24-byte frame (some ABI variants)
-    "@24@0:8I16",
-})
-
-
 @dataclass
 class XasResult:
     """The enum recovered from one ``xAsString:`` method."""
@@ -375,20 +354,6 @@ def _xasstring_flow(ctx: BinaryContext, imp: int) -> Tuple[Optional[Flow], bool]
     if not insns:
         return None, False
     return Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns)), insns.truncated
-
-
-def _xasstring_gate_span(ctx: BinaryContext, imp: int) -> int:
-    """Number of values the widest ordered gate on the argument of ``-[C xAsString:]`` at
-    *imp* (``w2``) admits, along the CFG from the entry (:meth:`Flow.candidates`):
-    ``cmp w2, #N ; b.hi`` admits N + 1, ``b.hs`` N, a bias (``sub w8, w2, #k``) shifts the
-    range without widening it.  0 when no gate guards the value."""
-    if imp == 0:
-        return 0
-    flow, _ = _xasstring_flow(ctx, imp)
-    if flow is None:
-        return 0
-    scan = flow.candidates(-1, 'x2', (-(1 << 31), 1 << 31))
-    return max((hi - lo + 1 for lo, hi in scan.intervals), default=0)
 
 
 def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
@@ -416,20 +381,11 @@ def _extract_xasstring(ctx: BinaryContext, imp: int) -> XasResult:
     res = flow.analyse_root(-1, 'x2', 4, frozenset(), direct=True)
     problems = list(res.problems)
     if truncated:
-        problems.append("the method body exceeded the disassembly budget")
+        problems.append("the method body was read only in part (no known extent, or a word "
+                        "that does not decode)")
     pairs = sorted(res.pairs.items())
     return XasResult(pairs, bool(pairs) and not problems, bool(problems),
                      "; ".join(problems[:3]) if problems else None)
-
-
-def _extract_enum_values(
-    ctx: BinaryContext,
-    imp: int,
-) -> Tuple[List[Tuple[int, str]], bool, bool]:
-    """``(pairs, confirmed, truncated)`` of the ``xAsString:`` method at *imp*
-    (:func:`_extract_xasstring` without the reason)."""
-    r = _extract_xasstring(ctx, imp)
-    return r.pairs, r.confirmed, r.truncated
 
 
 def _qualify_enum_name(cls_proto: str, base_enum: str) -> str:

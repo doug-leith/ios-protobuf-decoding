@@ -1037,9 +1037,9 @@ class TestCliPhaseHelpers(unittest.TestCase):
         def close(self):
             self.closed = True
 
-    def test_ambiguous_framework_aborts_and_closes_cache(self):
-        """An ambiguous --framework must list the candidates, close the cache and
-        abort -- main()'s post-extraction close is never reached on this path."""
+    def test_ambiguous_framework_aborts(self):
+        """An ambiguous --framework lists the candidates and aborts (main() closes the cache:
+        test_main_closes_the_cache_when_loading_aborts)."""
         from cli import _load_cache_native_context, _CliAbort
         from macho.dyld_cache import AmbiguousImageError
 
@@ -1052,12 +1052,11 @@ class TestCliPhaseHelpers(unittest.TestCase):
             with self.assertRaises(_CliAbort) as cm:
                 _load_cache_native_context(args, cache, BinaryContext=None)
         self.assertEqual(cm.exception.code, 1)
-        self.assertTrue(cache.closed, "cache must be closed before aborting")
         out = err.getvalue()
         self.assertIn("matches 2 images", out)
         self.assertIn("/b/GeoServicesCore", out)
 
-    def test_missing_framework_aborts_and_closes_cache(self):
+    def test_missing_framework_aborts(self):
         from cli import _load_cache_native_context, _CliAbort
         from macho.dyld_cache import ImageNotFoundError
 
@@ -1068,8 +1067,20 @@ class TestCliPhaseHelpers(unittest.TestCase):
             with self.assertRaises(_CliAbort) as cm:
                 _load_cache_native_context(args, cache, BinaryContext=None)
         self.assertEqual(cm.exception.code, 1)
-        self.assertTrue(cache.closed, "cache must be closed before aborting")
         self.assertIn("not found in cache", err.getvalue())
+
+    def test_main_closes_the_cache_when_loading_aborts(self):
+        import cli
+        from unittest import mock
+        from macho.dyld_cache import ImageNotFoundError
+
+        cache = self._FakeCache(ImageNotFoundError("nope"))
+        with mock.patch.object(cli, "_open_cache", lambda path, native: cache), \
+                contextlib.redirect_stderr(io.StringIO()):
+            rc = cli.main(["--framework", "NoSuchFramework", "--cache", "/tmp/c",
+                           "-o", "/tmp/never_written"])
+        self.assertEqual(rc, 1)
+        self.assertTrue(cache.closed)
 
     # ── _load_binary_context ──────────────────────────────────────────────────
 

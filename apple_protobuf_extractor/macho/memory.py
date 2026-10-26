@@ -262,7 +262,6 @@ class BinaryContext:
         self._fixup_map: Dict[int, int]              = {}   # vmaddr → decoded vmaddr
         self._bind_name_map: Dict[int, str]          = {}   # vmaddr → import symbol name
         self._bind_slots: set                        = set()  # every chained-fixup bind
-        self._chain_formats: set                     = set()  # pointer formats of its segments
         self._chained = False                        # LC_DYLD_CHAINED_FIXUPS present
         self._chained_fixups_lc: Optional[Tuple[int, int]] = None   # its (dataoff, datasize)
         self._imports:   List[str]                   = []   # ordinal → import symbol name
@@ -279,20 +278,6 @@ class BinaryContext:
         # LC_FUNCTION_STARTS (file_off, size); binary mode only (function_starts()).
         self._function_starts_lc: Optional[Tuple[int, int]] = None
         self._function_starts: Optional[List[int]] = None
-
-        # Per-extraction memoisation caches owned by proto.*, declared here so the
-        # attributes are discoverable.  proto.extractor.extract_all() clears every
-        # registered cache at the start of a run (reset_ctx_caches), so reusing one
-        # BinaryContext across extractions cannot leak stale results.  None == empty.
-        # Names of classes whose -[cls _dictionaryRepresentation:] was read only in part
-        # (proto.function_body: no known extent), so dictRep enum recovery may be
-        # incomplete; surfaced as ProtoMessage.enum_recovery_truncated.  None == empty.
-        self._dictrep_truncated_classes: Optional[set] = None
-        # Binary-wide field-typing pre-passes, lazily built + cached for standalone
-        # extract_proto_message callers (extract_all builds + passes them directly).
-        # None == not yet built; an empty set/dict is a valid built result.
-        self._string_write_helpers:  Optional[frozenset] = None
-        self._readfrom_core_index:   Optional[dict] = None
 
         (_, cputype, cpusubtype, _filetype,
          ncmds, sizeofcmds, _flags, _) = struct.unpack_from('<IIIIIIII', data, 0)
@@ -377,7 +362,6 @@ class BinaryContext:
         self._fixup_map: Dict[int, int]             = {}
         self._bind_name_map: Dict[int, str]         = {}
         self._bind_slots: set                       = set()  # a cache binds nothing at load
-        self._chain_formats: set                    = set()
         self._chained = False
         self._imports:   List[str]                  = []   # unused in cache mode
         self._symtab:    Optional[Tuple[int, int, int, int]] = None  # see binary __init__
@@ -387,8 +371,8 @@ class BinaryContext:
         self._image_base: Optional[int]             = mach_header_va
         self._cache_reader                          = reader
 
-        # cpu_type / cpu_subtype — arm64 non-e (adequate for downstream tests
-        # that check is_arm64e; GeoServices is always plain arm64).
+        # cpu_type / cpu_subtype: not read from a cache image's header (nothing that decodes
+        # reads them); arm64, subtype 0 -- also for an arm64e cache.
         self._cpu_type    = CPU_TYPE_ARM64
         self._cpu_subtype = 0
         # Cache images are always shared libraries (frameworks/dylibs).
@@ -452,7 +436,8 @@ class BinaryContext:
 
     @property
     def image_base(self) -> int:
-        """Lowest vmaddr of non-PAGEZERO segments (cached after construction)."""
+        """The vmaddr of the image's Mach-O header (:meth:`_local_image_base`; in a cache, the
+        header the image was loaded from)."""
         return self._image_base if self._image_base is not None else 0
 
     @property
@@ -881,13 +866,9 @@ class BinaryContext:
 
             if ptr_fmt == 0 or seg_info_abs + 22 > len(blob):
                 continue
-            self._chain_formats.add(ptr_fmt)
             page_count = struct.unpack_from('<H', blob, seg_info_abs + 20)[0]
-            # NOTE: pointer_format is read PER SEGMENT (offset 6, above) and the
-            # chain walk below uses that local `ptr_fmt` — which is correct, since
-            # different segments may in principle carry different formats.  (An
-            # earlier `self._fixup_fmt` cache of the first non-zero segment's format
-            # was never read anywhere and has been removed.)
+            # pointer_format is per segment (offset 6, above): the chain walk below uses
+            # this segment's.
 
             if seg_idx >= len(self._segments):
                 continue
@@ -917,8 +898,7 @@ class BinaryContext:
                     imports: Optional[List[str]] = None) -> None:
         """Walk one fixup chain, populating ``_fixup_map`` and ``_bind_name_map``.
 
-        Rebase entries (bind=0) are decoded and stored in ``_fixup_map`` as
-        before.  Bind entries (bind=1) have their import symbol name stored in
+        Rebase entries (bind=0) are decoded and stored in ``_fixup_map``.  Bind entries (bind=1) have their import symbol name stored in
         ``_bind_name_map`` so callers can identify external class references
         (e.g. slot → ``"_OBJC_CLASS_$_NSString"``).
         """

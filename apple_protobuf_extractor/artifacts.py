@@ -10,7 +10,7 @@ So relocating or renaming the artifact folder is a one-line change here
 (:data:`DEFAULT_DATA_DIRNAME`) or a single env var (``MACHO_DATA_DIR``) — no
 edits scattered across the codebase.
 
-Per-artifact env overrides are still honoured (back-compat / one-offs), and take
+Per-artifact env overrides (one-offs) take
 precedence over the data dir:
 
     MACHO_TEST_CACHE      cache directory (containing dyld_shared_cache_arm64*)
@@ -101,8 +101,7 @@ def geoservices_path():
     there is no genuinely standalone build. The dylib/-tree copy this falls
     back to is a cache EXTRACTION: its ObjC selector names do not resolve
     (0% — they live in the cache's shared string table, outside this image's
-    own vmaddr range; see commit 148f9a5, "Replace no-symbols fallbacks with
-    an up-front error/warning gate"). It's fine for callers that don't need
+    own vmaddr range: proto.extractor._check_selectors_resolved reports it). It's fine for callers that don't need
     selector-name resolution (raw section presence, embedded C++ descriptor
     bytes); `proto.extractor.extract_all()`'s full ObjC-selector-based
     pipeline will correctly refuse it (ProtoClassDetectionError /

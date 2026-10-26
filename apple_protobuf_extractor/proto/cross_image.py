@@ -6,7 +6,7 @@ dyld shared cache, by extracting that class from the image that defines it.
 
 The extractor recovers one image at a time, so a field typed by a class from elsewhere
 (CloudKitDaemon's ``CKDPRecord.recordIdentifier`` is a ``CKDPRecordIdentifier``, defined in
-CloudKit.framework) used to fall back to ``bytes  // unresolved: <Class>``.  In the cache
+CloudKit.framework) would fall back to ``bytes  // unresolved: <Class>``.  In the cache
 the owning image is not a guess:
 
 1. **Class reference** (exact).  Code that creates or tests an instance of the class goes

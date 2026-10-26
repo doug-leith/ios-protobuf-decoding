@@ -5,7 +5,7 @@ struct instead of an ObjC object: a *singular* one by value (``@encode`` ``{Tag=
 "_has"{?=…}}``) and a *repeated* one as an array of them (``^{Tag=II{?=b1b1}}`` plus the
 ``_xCount`` / ``_xSpace`` ivars).  On the wire the field is a length-delimited sub-message,
 but no ObjC class stands behind it, so there is no ``writeTo:`` to read and the element type
-used to degrade to ``bytes`` (LIMITATIONS.md (2)).
+would degrade to ``bytes`` (LIMITATIONS.md (2)).
 
 Everything needed is nevertheless in the binary, and none of it is a heuristic:
 
@@ -666,15 +666,14 @@ def decode_inline_dictrep_members(ctx, insns: Sequence, is_ivar_offset,
 class StructSite:
     """A struct-typed field of one class and the ``writeTo:`` begin-mark bound
     to it: enough to analyse the write once the whole image is extracted."""
-    ivar: str
     write_addr: int              # address of the begin-mark ``bl``
     ivar_offset: int             # the ivar's declared byte offset in the object
     number: int
     enc: str                     # the ivar's @encode
 
 
-def record_struct_site(ctx, class_name: str, field_name: str, ivar_name: str,
-                       ivar_offset: int, enc: Optional[str], write: Optional[BoundWrite]) -> None:
+def record_struct_site(ctx, class_name: str, field_name: str, ivar_offset: int,
+                       enc: Optional[str], write: Optional[BoundWrite]) -> None:
     """Remember a struct-typed field's bound begin-mark for :func:`finalize_struct_fields`.
     A no-op unless the ivar is a flat scalar struct and a write binds it."""
     if write is None:
@@ -682,7 +681,7 @@ def record_struct_site(ctx, class_name: str, field_name: str, ivar_name: str,
     if parse_struct_encoding(enc) is None:
         return
     _ctx_cache(ctx, "_struct_sites", dict)[(class_name, field_name)] = StructSite(
-        ivar_name, write.addr, ivar_offset, write.number, enc)
+        write.addr, ivar_offset, write.number, enc)
 
 
 _MEMBER_NAME_MISSING = ("member name not recovered (the struct's @encode names no members); "

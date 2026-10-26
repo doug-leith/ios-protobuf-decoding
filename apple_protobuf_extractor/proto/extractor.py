@@ -141,7 +141,7 @@ _ELEMENT_UNRESOLVED_NOTE = (
 # has been extracted (it needs the binary-wide write-helper table).  What cannot be
 # recovered stays flagged: a map field whose entry writer was found but whose types
 # were not emits as ``repeated bytes`` (each element an entry message); one with no
-# entry writer at all keeps the legacy ``bytes`` + note.  See LIMITATIONS.md (1).
+# entry writer at all keeps ``bytes`` + note.  See LIMITATIONS.md (1).
 _MAP_OBJC_CLASSES = MAP_OBJC_CLASSES
 
 # ACCEPTED LIMITATION (field# 0): Apple emits deliberate 0-based proto fields
@@ -184,16 +184,16 @@ def _embedded_struct_note(ivar: ObjcIvar, type_name: str,
     """Flag a singular by-value embedded C-struct field that resolved to `bytes`.
 
     @encode `{Name=...}` (a NAMED struct, not the anonymous `{?=...}` has-bits /
-    packed-list shapes) stored by value is a submessage on the wire whose element
-    type isn't modelled.  Returns the note, or None when this isn't that case.
-    See LIMITATIONS.md (2)."""
+    packed-list shapes) stored by value is a submessage on the wire; the note stays only
+    when :func:`proto.structfields.finalize_struct_fields` cannot read its members.
+    Returns the note, or None when this isn't that case.  See LIMITATIONS.md (2)."""
     enc = ivar.type_enc or ""
     if (type_class is None and type_name == "bytes"
             and enc.startswith("{") and not enc.startswith("{?")):
         m = re.match(r"^\{([^=]+)=", enc)
         sname = m.group(1) if m else "?"
-        return (f"embedded fixed-struct '{sname}' emitted as bytes; element "
-                f"type/layout not modelled — see LIMITATIONS.md (2)")
+        return (f"embedded fixed-struct '{sname}' emitted as bytes; its members were not "
+                f"recovered — see LIMITATIONS.md (2)")
     return None
 
 
@@ -205,8 +205,7 @@ class _FieldNumberResult:
     confirmed_numbers: Dict[str, int]   # ivar_name → 1-based field number
     wt_helpers:        Dict[str, int]   # ivar_name → write-helper vmaddr
     string_helper:     Optional[int]    # vmaddr of string write-helper, or None
-    # ivars writeTo: wrote with a literal field# 0 (#52); default keeps older
-    # constructors (and tests) that predate this field working unchanged.
+    # ivars writeTo: wrote with a literal field# 0 (#52)
     wrote_zero_fields: Set[str] = field(default_factory=set)
     # {ivar_name: MapEntryWriter} for NSDictionary ivars whose map-entry writer was
     # recovered (#41); their numbers are already merged into ``confirmed_numbers``.
@@ -934,7 +933,7 @@ def extract_proto_message(
         # struct's serialiser once the whole image is extracted (#37).  Fields it cannot
         # resolve keep the flagged `bytes` fallback set above.
         if type_name == "bytes":
-            record_struct_site(ctx, cls.name, pname, ivar.name, ivar.offset, ivar.type_enc,
+            record_struct_site(ctx, cls.name, pname, ivar.offset, ivar.type_enc,
                                _bound_writes.get(ivar.name))
 
         fields.append(ProtoField(
@@ -995,8 +994,8 @@ def extract_proto_message(
         class_name=cls.name,
         fields=fields,
         enums=enums,
-        # Flagged when -[cls _dictionaryRepresentation:] disassembly hit the budget
-        # cap during enum harvest, so some int32 fields may be unrecovered enums.
+        # Flagged when -[cls _dictionaryRepresentation:] was read only in part during enum
+        # harvest, so some int32 fields may be unrecovered enums.
         enum_recovery_truncated=cls.name in (
             getattr(ctx, "_dictrep_truncated_classes", None) or set()),
         inherits_from=_inherits_from,

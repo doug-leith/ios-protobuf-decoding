@@ -371,15 +371,15 @@ class TestProtoEnumModel(unittest.TestCase):
         self.assertIn("~", repr(e))
 
     def test_truncated_enum_emits_incomplete_warning(self):
-        # An enum whose value-string scan hit its disassembly budget must be
-        # flagged so the user knows the value set may be missing high values.
+        # An enum whose value-string method was read only in part must be flagged so the
+        # user knows the value set may be incomplete.
         e = ProtoEnum("MotionType", [
             ProtoEnumValue("MOTION_TYPE_UNKNOWN", 0),
             ProtoEnumValue("MOTION_TYPE_WALK", 1),
         ], values_confirmed=False, values_truncated=True)
         out = e.to_proto()
         self.assertIn("INCOMPLETE", out)
-        self.assertIn("budget", out)
+        self.assertIn("read only in part", out)
         # The comment sits ABOVE the enum block (a leading // line).
         self.assertLess(out.index("INCOMPLETE"), out.index("enum MotionType {"))
         # The values themselves are still emitted normally.

@@ -25,18 +25,17 @@ class LoadedImage:
     st: StringTable
     cl: ClassList
     # Cache images only: what the .symbols local symbols changed (apply_to_classes' counts),
-    # or None when the .symbols sub-cache does not list the image -- its method names are
-    # then only what the (possibly preoptimised, name-stripped) method lists say.
+    # or None when the .symbols sub-cache does not list the image -- its methods are then
+    # only those its method lists hold.
     symbol_counts: Optional[Dict[str, int]] = None
 
 
 def load_classes(ctx: BinaryContext, reader=None, mach_va: Optional[int] = None,
                  step: Optional[Callable[[str], ContextManager]] = None) -> LoadedImage:
-    """String table and class list of *ctx*; for a cache image (*reader*, *mach_va*) the
-    method names restored from the ``.symbols`` sub-cache: a preoptimised "direct selector"
-    method list strips the selector name field, and the local symbols ``-[Class sel]`` are
-    keyed by the reliable IMP.  *step(label)*, when given, wraps each stage (progress
-    output)."""
+    """String table and class list of *ctx*; for a cache image (*reader*, *mach_va*) with the
+    methods its optimised method lists leave out added from the ``.symbols`` sub-cache's
+    local symbols (``-[Class sel]``, keyed by IMP: :func:`macho.local_symbols.apply_to_classes`).
+    *step(label)*, when given, wraps each stage (progress output)."""
     step = step or (lambda _label: nullcontext())
     with step("building string table"):
         st = build_string_table(ctx)

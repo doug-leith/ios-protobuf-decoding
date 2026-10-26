@@ -484,8 +484,8 @@ def _build_readfrom_core_index(
     stripped.  Also builds the function index (:func:`build_function_index`).
 
     One pass over the classlist, threaded through to every :func:`extract_proto_message`
-    call.  Two classes sharing one core would make the index name only the first; none do
-    (GeoServices: 1598 cores, all distinct).
+    call.  Two classes sharing one core would make the index name only the first (none do in
+    GeoServices).
     """
     index: Dict[int, str] = {}
     build_function_index(ctx, cl)

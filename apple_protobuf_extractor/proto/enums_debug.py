@@ -1,8 +1,7 @@
 """proto/enums_debug — ``--debug-enums`` diagnostic record builders.
 
-Split out of proto.enums (and proto.extractor's ``_emit_mode_a_debug``) so the
-diagnostic surface for the enum-fallback instrumentation lives in one place,
-separate from the schema-recovery code it audits. This module is never
+The diagnostic surface for the enum-fallback instrumentation, apart from the
+schema-recovery code it audits.  This module is never
 exercised by the synthetic-fixture suite (the diagnostic sink is off in normal
 extraction) — see tests/synthetic_fixtures/README.md.
 
@@ -23,22 +22,21 @@ Three failure modes are distinguished:
                             genuinely absent from __objc_methname.
 
   C  revert_to_scalar     — ENUM: tag was set (either path), but the enum
-                            collection loop reverted it because method_exists=False.
-                            Sub-reasons: no_candidates | all_phase1_rejected |
-                            ambiguous_sentinels.
+                            collection loop reverted it: no values were recovered
+                            (proto.enums._recover_enum_values).
+                            Sub-reasons: no_candidates | all_phase1_rejected.
 
 Record format: JSON Lines (one JSON object per line). Each record contains the
 class, field, and all diagnostic state available at the point of failure so
 the cause can be determined without re-running the extraction.
 
-Imports from proto.enums at module scope (for ``_extract_enum_values``,
-``_enum_name_from_pairs``, ``_ASSTRING_INT_TYPES``) — callers in proto.enums
-must therefore import this module lazily (inside the function that needs it,
-not at module load time) to avoid a cycle; proto.extractor, which sits above
-both, imports this module normally.
+Imports from proto.enums at module scope (``_extract_xasstring``, ``_xasstring_flow``,
+``_enum_name_from_pairs``) — callers in proto.enums must therefore import this module
+lazily (inside the function that needs it, not at module load time) to avoid a cycle;
+proto.extractor, which sits above both, imports this module normally.
 """
 from __future__ import annotations
-from typing import Any, Callable, Dict, List, Set
+from typing import Any, Callable, Dict, List, Set, Tuple
 
 from macho.memory     import BinaryContext, PROGRAM_ERRORS
 from macho.strings    import StringTable
@@ -46,8 +44,47 @@ from macho.classlist  import ObjcClass, ObjcIvar
 from proto.models     import ProtoField
 from proto.protocore  import _proto_name
 from proto.config     import _dbg_enum
-from proto.enums      import (_ASSTRING_INT_TYPES, _extract_enum_values, _enum_name_from_pairs,
-                              _xasstring_gate_span)
+from proto.enums      import _enum_name_from_pairs, _extract_xasstring, _xasstring_flow
+
+
+# ObjC type encodings that identify a genuine ``xAsString:`` method.
+# An xAsString: method for an int32/uint32 enum field takes (self @0, SEL @8,
+# enum_value i/I @16) and returns id (@), giving a total frame of 20 bytes.
+# Requiring this encoding eliminates short stub methods, getters (@16@0:8),
+# void setters (v24@0:8@16), and other false-positive candidates whose IMP
+# happens to be adjacent to the real enum method in memory, causing the
+# linear-disassembly pattern scan to pick up the pointer-table code that
+# belongs to the real method.
+_ASSTRING_INT_TYPES: frozenset = frozenset({
+    "@20@0:8i16",  # standard: returns id, frame 20, int32 arg
+    "@20@0:8I16",  # unsigned int32 variant
+    "@24@0:8i16",  # 24-byte frame (some ABI variants)
+    "@24@0:8I16",
+})
+
+
+def _xasstring_gate_span(ctx: BinaryContext, imp: int) -> int:
+    """Number of values the widest ordered gate on the argument of ``-[C xAsString:]`` at
+    *imp* (``w2``) admits, along the CFG from the entry (:meth:`Flow.candidates`):
+    ``cmp w2, #N ; b.hi`` admits N + 1, ``b.hs`` N, a bias (``sub w8, w2, #k``) shifts the
+    range without widening it.  0 when no gate guards the value."""
+    if imp == 0:
+        return 0
+    flow, _ = _xasstring_flow(ctx, imp)
+    if flow is None:
+        return 0
+    scan = flow.candidates(-1, 'x2', (-(1 << 31), 1 << 31))
+    return max((hi - lo + 1 for lo, hi in scan.intervals), default=0)
+
+
+def _extract_enum_values(
+    ctx: BinaryContext,
+    imp: int,
+) -> Tuple[List[Tuple[int, str]], bool, bool]:
+    """``(pairs, confirmed, truncated)`` of the ``xAsString:`` method at *imp*
+    (:func:`_extract_xasstring` without the reason)."""
+    r = _extract_xasstring(ctx, imp)
+    return r.pairs, r.confirmed, r.truncated
 
 
 def _gather_asstring_methname_hits(

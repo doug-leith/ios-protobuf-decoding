@@ -13,7 +13,8 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-from proto.enums import _extract_xasstring, _xasstring_gate_span
+from proto.enums import _extract_xasstring
+from proto.enums_debug import _xasstring_gate_span
 from tests.test_dictrep_inline_enums import _enum_ctx
 
 NAMES = {0x9000 + 0x20 * i: f'K_{i}' for i in range(6)}

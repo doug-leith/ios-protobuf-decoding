@@ -1,8 +1,7 @@
 """macho/relative_selector_base — the dyld-cache relative-method-selector anchor.
 
-Carved out of ``classlist.py`` (which only ever calls the single entry point
-:func:`_resolve_relative_selector_base` once, before parsing methods): this
-module resolves ONE vmaddr — the cache-wide '🤯' anchor a preoptimized
+``classlist.py`` calls its one entry point, :func:`_resolve_relative_selector_base`, once
+before parsing methods.  It resolves ONE vmaddr — the cache-wide '🤯' anchor a preoptimized
 "direct selector" relative method_t's ``nameOffset`` is measured from — and
 has no dependency on ``ObjcClass``/``ClassList`` or any other parsing state.
 
@@ -72,10 +71,8 @@ def _sample_direct_selector_name_offsets(
         if ptr == 0:
             continue
         try:
-            # read_ptr() only strips HIGH chain/cache metadata bits (>= bit
-            # 36); it never clears the low ObjC/Swift tag bits, which can be
-            # set simultaneously with a high fixup bit.  Always mask them off
-            # unconditionally (see classlist._parse_class for the same fix).
+            # read_ptr() never clears the low ObjC/Swift tag bits, which can be set
+            # together with a high fixup bit: mask them off (as classlist._parse_class does).
             ro_va = ctx.read_ptr(ptr + CLASS_T_DATA) & FAST_DATA_MASK
             if not ro_va:
                 continue

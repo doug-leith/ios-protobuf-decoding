@@ -226,7 +226,7 @@ class TestIos27Live(unittest.TestCase):
     def test_sparse_enum_with_a_hole_is_read_in_full(self):
         # networkServiceAsString:'s pointer table has an undeclared value 15; the iPhone 8
         # enum has all 29 values (0..28).  Reading to the first empty slot gave 15.
-        from proto.enums import _extract_enum_values
+        from proto.enums_debug import _extract_enum_values
         m = next(c for c in self.cl if c.name == "GEOLogMsgEventNetwork" and not c.is_meta)
         imp = m.get_method("networkServiceAsString:").imp
         pairs, _confirmed, _trunc = _extract_enum_values(self.ctx, imp)

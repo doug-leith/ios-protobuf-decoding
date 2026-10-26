@@ -90,20 +90,14 @@ log = logging.getLogger(__name__)
 # entry_list_t never has more than a handful of entries (one per attached
 # category, plus the base implementation); this cap is a corrupt-input
 # backstop only, mirroring _MAX_METHODS.
-_ENTRY_LIST_ENTSIZE     = 8   # sizeof(int64_t) — the on-disk entry stride
 _MAX_PREATTACHED_ENTRIES = 64
 
 
 # ── Data classes ─────────────────────────────────────────────────────────────
 #
-# ObjcMethod / ObjcIvar / ObjcClass are defined in the leaf module
-# macho/objc_model.py and imported above.  The split exists so local_symbols --
-# which repairs these records from the .symbols sub-cache -- can name them
-# without importing this parser; that import closed a
-# classlist → memory → dyld_cache → local_symbols → classlist cycle.  They are
-# re-exported from here because this is where they are built, so
-# `from macho.classlist import ObjcClass` remains correct for the ~20 callers
-# that already use the parser.
+# ObjcMethod / ObjcIvar / ObjcClass are defined in the leaf module macho/objc_model.py (so
+# local_symbols, which adds to these records, need not import this parser) and re-exported
+# from here, where they are built.
 
 
 # ── ClassList ─────────────────────────────────────────────────────────────────
@@ -386,7 +380,7 @@ def _resolve_preattached_method_lists(ctx: BinaryContext, tagged_va: int) -> Lis
     """Resolve a tagged (bit 0 set) ``baseMethods`` vmaddr to the real
     method_list_t address(es) it stands in for.
 
-    See the comment above ``_ENTRY_LIST_ENTSIZE`` for the on-disk entry_list_t
+    See the comment above ``_MAX_PREATTACHED_ENTRIES`` for the on-disk entry_list_t
     layout.  Returns every entry's resolved address, in on-disk order (base
     implementation first, then each pre-attached category) — deliberately
     ALL of them, not just the last: unlike a runtime dispatch table (where a
@@ -520,9 +514,6 @@ def _parse_methods(
         entsize = max(entsize_flags & 0x0000_FFFC, 24)  # at least 24 for traditional
     entry_va  = list_va + 8
 
-    if entsize == 0:
-        return []
-
     # A real class has far fewer than _MAX_METHODS methods ([cap:INPUT-SANITY]): a count past
     # it is a misdecoded ``baseMethods`` pointer landing on unrelated mapped memory, whose
     # entries would be thousands of garbage methods -- the class gets none, warned.
@@ -615,13 +606,11 @@ def _parse_relative_method(
     # (resolved once in build_class_list and stashed on ctx), NOT from the
     # method_t field.  When that base is known this is the authoritative
     # source and decodes every direct selector from the binary alone — no
-    # .symbols table required.  (Earlier code mis-read va + name_rel here,
-    # which overshoots the local __objc_methname into unrelated data, leaving
-    # name=None for cache images that lack a .symbols sub-cache.)
+    # .symbols table required.
     rel_sel_base = getattr(ctx, '_rel_sel_base', None)
     # With the base known it is the only reading of a direct selector: va + nameOffset is then no
     # selector address, and reading a string there picks up the tail of another (iPhone 8
-    # GeoServices: 'te', 'on:', 'precated' for long initialiser selectors once rejected).
+    # GeoServices: 'te', 'on:', 'precated' for long initialiser selectors).
     from_base = has_direct and rel_sel_base is not None
     if from_base:
         try:
@@ -694,8 +683,6 @@ def _parse_ivars(
         return []
 
     entsize = max(entsize, _MIN_IVAR_ENTSIZE)
-    if entsize == 0:
-        return []
 
     entry_va = list_va + 8
     # the list lies in one segment of the image: a count that runs past it is misread

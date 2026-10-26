@@ -158,12 +158,6 @@ class TestConfirmFieldNumbersBoundary(unittest.TestCase):
         self.assertIn(r.string_helper, helpers)
 
 
-# NOTE: the field-count-aware writeTo: disassembly budget (_writeto_insn_budget /
-# _WRITETO_MAX_INSNS / _WRITETO_INSNS_PER_FIELD) and its TestWriteToInsnBudget cover
-# were deleted in Phase B8 with the forward-scan decoder.  The sole decoder is now
-# the CFG walk, which is reachability-bounded (no instruction budget).
-
-
 # ══════════════════════════════════════════════════════════════════════════════
 # field_number_at — the number a write call is handed, by reaching definitions
 # ══════════════════════════════════════════════════════════════════════════════

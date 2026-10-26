@@ -20,8 +20,9 @@ Each adapted message sets :attr:`ProtoMessage.serializer` and an explicit
 so :func:`proto.emitter.build_proto_files` groups them into their own
 ``<package>.proto`` files alongside the PBCodable output.
 
-Binary mode only: the C++ scan reads the raw image bytes and the Swift scan reads
-the symbol table / export trie — both unavailable for cache-native images.
+Both modes (:func:`collect_foreign_messages`): with the raw bytes of a binary the C++ scan
+sweeps the whole image; cache-native it reads the descriptor sections, and the Swift reader the
+``.symbols`` nlist, through the context.
 """
 from __future__ import annotations
 
@@ -73,9 +74,8 @@ def _cpp_field(f: "_cpp.Field", package: str,
         # Resolve the (absolute) descriptor type name through the global
         # registry so a reference into ANOTHER package is emitted qualified
         # (``pkg.Type``) and a reference into ANOTHER source file is imported.
-        # The flat emitter has one package per file; flattening a cross-package
-        # ref with ``_`` produced a name no file defines, so protoc rejected it
-        # ("X is not defined").  Qualification is by package, imports by file —
+        # The flat emitter has one package per file (a cross-package ref flattened with
+        # ``_`` would name a type no file defines).  Qualification is by package, imports by file —
         # a package may span several source files (see _cpp_out_filenames).
         fqn = f.type_name[1:] if f.type_name.startswith(".") else f.type_name
         entry = registry.get(fqn)

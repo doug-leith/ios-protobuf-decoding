@@ -524,7 +524,7 @@ class TestHalfwordJumpTableEnumLive(unittest.TestCase):
         from macho.strings import build_string_table
         from macho.classlist import build_class_list
         from macho.local_symbols import apply_to_classes
-        from proto.enums import _extract_enum_values
+        from proto.enums_debug import _extract_enum_values
 
         cls.reader = DyldCacheReader(_CACHE_MAIN)
         mv = cls.reader.find_image_header('GeoServices')
@@ -607,7 +607,7 @@ class TestChainedSegmentEnumLive(unittest.TestCase):
         from macho.strings import build_string_table
         from macho.classlist import build_class_list
         from macho.local_symbols import apply_to_classes
-        from proto.enums import _extract_enum_values
+        from proto.enums_debug import _extract_enum_values
 
         cls.reader = DyldCacheReader(_CACHE_MAIN)
         mv = cls.reader.find_image_header('GeoServices')
@@ -673,7 +673,7 @@ class TestUnattributedSegmentWarnsLive(unittest.TestCase):
         from macho.strings import build_string_table
         from macho.classlist import build_class_list
         from macho.local_symbols import apply_to_classes
-        from proto.enums import _extract_enum_values
+        from proto.enums_debug import _extract_enum_values
 
         cls.reader = DyldCacheReader(_CACHE_MAIN)
         mv = cls.reader.find_image_header('GeoServices')
@@ -766,7 +766,7 @@ class TestLongMethodNotFalselyTruncatedLive(unittest.TestCase):
         from macho.strings import build_string_table
         from macho.classlist import build_class_list
         from macho.local_symbols import apply_to_classes
-        from proto.enums import _extract_enum_values
+        from proto.enums_debug import _extract_enum_values
 
         cls.reader = DyldCacheReader(_CACHE_MAIN)
         mv = cls.reader.find_image_header('GeoServices')

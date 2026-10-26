@@ -14,7 +14,7 @@ package, matching the rest of the tool's capstone-only footprint).
 
 Note: libprotobuf-**lite** binaries do NOT embed descriptors (no names), so this
 finds nothing there — detection of that case lives in
-``proto.extractor.cpp_protobuf_namespaces``.
+``proto.foreign_detect.cpp_protobuf_namespaces``.
 """
 from __future__ import annotations
 

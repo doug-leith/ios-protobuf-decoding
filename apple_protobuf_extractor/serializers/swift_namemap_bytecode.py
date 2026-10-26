@@ -1,7 +1,7 @@
 """swift_namemap_bytecode.py — decoder for the packed-bytecode ``_NameMap`` used by
 newer swift-protobuf / InternalSwiftProtobuf toolchains (iOS 27 and later).
 
-Read by :func:`swift_descriptor_extract._extract_namemap`: the literal a getter passes (shape
+Read by :func:`swift_descriptor_extract._extract_namemap_raw`: the literal a getter passes (shape
 E) and the one a shared once-init builder stub passes (shape D).  Strictly self-validating:
 :func:`decode_namemap_bytecode` returns ``None`` unless the literal has the header,
 only known opcodes, NUL-terminated names and is consumed exactly, so a non-bytecode
