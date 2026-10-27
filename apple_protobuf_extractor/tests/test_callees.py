@@ -378,6 +378,28 @@ class TestCallReads(unittest.TestCase):
         self.assertIn('x9', got)
         self.assertLessEqual(max(counts.values()), 4)
 
+    def test_an_answer_used_deeper_in_a_cycle_is_read_again_when_it_grows(self):
+        # A calls A, C, D and reads x20; B calls D; C calls B, A; D calls C.  Reading A, B is
+        # read using A's answer so far (A open, then C, B, D, C): when A's reads grow, B's
+        # must be read again -- B reaches A, so B reads x20 (it was memoised without it).
+        import proto.callees as C
+        import proto.liveness as L
+        from tests._fakes import TextImage
+        from tests._listing import layout
+        A, B, Cf, D = 0x9000, 0xa000, 0xb000, 0xc000
+        calls = {A: [A, Cf, D], B: [D], Cf: [B, A], D: [Cf]}
+        _o, fd = layout(*[(f, [('bl', f'#{t:#x}') for t in ts]
+                           + ([('mov', 'x0, x20')] if f == A else []) + [('ret', '')])
+                          for f, ts in calls.items()])
+        none = lambda ctx, va: None                                       # noqa: E731
+        with mock.patch.object(C, 'callee_name', none), mock.patch.object(L, 'callee_name', none), \
+                mock.patch.object(C, 'stub_selector', none), \
+                mock.patch.object(L, 'stub_selector', none), \
+                mock.patch('proto.function_body.disasm', fd), mock.patch.object(C, 'disasm', fd):
+            image = TextImage((0x1000, 0x100000), starts=set(calls))
+            self.assertIn('x20', L.call_reads(image, A))
+            self.assertIn('x20', L.call_reads(image, B))
+
     def test_a_tail_call_reads_what_its_target_reads(self):
         from proto.callees import ABI_ARGS
         got = self._reads(blocks=[(0x9000, [('mov', 'x0, x20'), ('b', '#0xa000')])],

@@ -474,6 +474,8 @@ def _swift_field(f, module: str = "", types: Optional["_SwiftTypes"] = None) -> 
     return ProtoField(name=f.name, number=f.number, type_name=type_name,
                       label=label,
                       number_confirmed=getattr(f, "number_confirmed", True),
+                      repeated_encoding=(getattr(f, "repeated_encoding", None)
+                                         if label is FieldLabel.REPEATED else None),
                       type_inference_note=note,
                       ref_package=ref_pkg,
                       unresolved_type_class=unresolved)

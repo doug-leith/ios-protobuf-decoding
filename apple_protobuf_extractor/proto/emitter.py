@@ -296,10 +296,12 @@ def _best_in_compat_group(
 
 
 
-# A repeated scalar C-list no writeTo: write binds: its wire encoding
-# is unknown, and the file's edition default (PACKED) is only a default.
+# A repeated scalar / enum field whose writing code does not say how it is written (no write
+# binds a PBCodable ivar; a Swift traverse does not visit it): its wire encoding is unknown, and
+# the file's edition default (PACKED) is only a default.
 _REPEATED_ENCODING_UNSEEN_NOTE = (
-    "packed/expanded not read from writeTo: (declared PACKED by the edition default)")
+    "packed/expanded not read from the code that writes it (declared PACKED by the edition "
+    "default)")
 
 
 # ── ProtoFile data model ───────────────────────────────────────────────────────

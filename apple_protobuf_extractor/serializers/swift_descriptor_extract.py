@@ -79,7 +79,8 @@ from proto.callees import text_holding
 from proto.dispatch import listing_flow
 from proto.function_body import FunctionBody, function_body
 from proto.arm64_operands import branch_target, parse_mem, split_ops, writes
-from proto.models import MAX_FIELD_NUMBER, record_analysis_failure, record_heuristic_hit
+from proto.models import (MAX_FIELD_NUMBER, PACKABLE_SCALARS, record_analysis_failure,
+                          record_heuristic_hit)
 from serializers import swift_message_code as MC
 from serializers.swift_symbols import NAMEMAP_MARKER as _NAMEMAP_MARKER, function_names, symbol_addrs
 from serializers.swift_type_recovery import demangle_idents
@@ -112,6 +113,10 @@ class SwiftField:
     # map key-or-value that didn't decode, shown as `bytes`); surfaced as a note so
     # the `bytes` isn't read as certain (#67).
     type_note: Optional[str] = None
+    # A repeated scalar / enum field: "PACKED" (traverse writes it with visitPacked…) or
+    # "EXPANDED" (visitRepeated…), "UNSEEN" when traverse does not say; None for any other
+    # field (:func:`_repeated_encoding`, the ProtoField contract).
+    repeated_encoding: Optional[str] = None
 
 
 @dataclass
@@ -936,10 +941,11 @@ def _attach_types(ctx: BinaryContext, msgs: List[SwiftMessage],
         if not m.fields:
             continue
         decoded = decodes.get(id(m)) or {}
-        visits = _visited_types(ctx, m, traverse_of.get((m.module, m.name)))
+        visits = _visits(ctx, m, traverse_of.get((m.module, m.name)))
         for f in m.fields:
-            _type_field(ctx, m, f, decoded.get(f.number, ()), visits.get(f.number),
-                        joined.get((id(m), f.number)))
+            calls, written = decoded.get(f.number, ()), visits.get(f.number, ())
+            _type_field(ctx, m, f, calls, _one_type(written), joined.get((id(m), f.number)))
+            f.repeated_encoding = _repeated_encoding(f, calls, written)
 
 
 def _decoded_by_message(ctx: BinaryContext, msgs: List[SwiftMessage]) -> Dict[int, Optional[dict]]:
@@ -962,22 +968,44 @@ def _decoded_by_message(ctx: BinaryContext, msgs: List[SwiftMessage]) -> Dict[in
     return decodes
 
 
-def _visited_types(ctx: BinaryContext, m: SwiftMessage, traverse: Optional[MC.Code]
-                   ) -> Dict[int, str]:
-    """``{number: proto type}`` of the numbers *m*'s ``traverse`` visits with one type; a number
-    it visits that the name map does not list is the message's analysis failure."""
+def _visits(ctx: BinaryContext, m: SwiftMessage, traverse: Optional[MC.Code]
+            ) -> Dict[int, List["MC.Visited"]]:
+    """``{number: [Visited]}``: the Visitor calls *m*'s ``traverse`` makes for each number; a
+    number it visits that the name map does not list is the message's analysis failure."""
     visited = {} if traverse is None else \
         _read_code(ctx, m.qualified, "swift traverse", MC.visited_fields, ctx, traverse) or {}
     unlisted = sorted(set(visited) - {f.number for f in m.fields})
     if unlisted:
         record_analysis_failure(ctx, m.qualified, "swift name map",
                                 f"traverse visits {unlisted}, the name map does not list them")
-    visits: Dict[int, str] = {}
-    for num, vs in visited.items():
-        types = {t for t in map(MC.decoded_type, vs) if t}
-        if len(types) == 1:
-            visits[num] = next(iter(types))
-    return visits
+    return visited
+
+
+def _one_type(calls) -> Optional[str]:
+    """The proto type *calls* (Decoder or Visitor calls for one number) agree on, or None."""
+    types = {t for t in map(MC.decoded_type, calls) if t}
+    return next(iter(types)) if len(types) == 1 else None
+
+
+def _packable(call) -> bool:
+    """A Decoder / Visitor call for a scalar protobuf can pack (a number, a bool) or an enum."""
+    return call.kind == "Enum" or (call.kind in MC.SCALARS and call.kind not in ("String", "Bytes"))
+
+
+_VISIT_ENCODING = {"Packed": "PACKED", "Repeated": "EXPANDED"}
+
+
+def _repeated_encoding(f: SwiftField, decoded, visits) -> Optional[str]:
+    """How the repeated scalar / enum field *f* is written: as its ``traverse`` visits it
+    (*visits*), ``visitPacked…`` PACKED, ``visitRepeated…`` EXPANDED; UNSEEN when traverse
+    does not say.  None for any other field."""
+    t = f.proto_type or ""
+    if not t.startswith("repeated ") or not (
+            any(_packable(c) for c in list(decoded) + list(visits))
+            or t[len("repeated "):] in PACKABLE_SCALARS):
+        return None
+    labels = {v.label for v in visits if v.label in _VISIT_ENCODING}
+    return _VISIT_ENCODING[labels.pop()] if len(labels) == 1 else "UNSEEN"
 
 
 def _type_field(ctx: BinaryContext, m: SwiftMessage, f: SwiftField, decoded, visited: Optional[str],
@@ -985,8 +1013,7 @@ def _type_field(ctx: BinaryContext, m: SwiftMessage, f: SwiftField, decoded, vis
     """*f*'s type: decodeMessage's (*decoded*: its calls for the number), checked against
     traverse's (*visited*); else traverse's; else the reflection type joined by name (*joined*:
     ``(type, note)``), reported."""
-    types = {t for t in map(MC.decoded_type, decoded) if t}
-    dt = next(iter(types)) if len(types) == 1 else None
+    dt = _one_type(decoded)
     if dt is not None:
         f.proto_type, f.type_note = dt, None
         if visited is not None and visited != dt:

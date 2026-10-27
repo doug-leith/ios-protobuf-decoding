@@ -174,12 +174,12 @@ class _Open:
 
 def _depends_on(open_: dict, index: int) -> None:
     """The function being read now (the innermost open one) used the reads of the open
-    function at *index*."""
+    function at *index* (directly, or an answer read from them): that one's answer so far was
+    used -- a call came back to it -- so its growth must be read again."""
     if open_:
-        cur = next(reversed(open_.values()))
-        cur.low = min(cur.low, index)
-        if index == cur.index:
-            cur.cyclic = True
+        frames = list(open_.values())
+        frames[-1].low = min(frames[-1].low, index)
+        frames[index].cyclic = True
 
 
 def _live_in(ctx, target: int) -> Tuple[str, ...]:

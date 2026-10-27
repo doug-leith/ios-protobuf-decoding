@@ -444,6 +444,32 @@ class TestNameMapBuilderValidation(unittest.TestCase):
                          ([(1, "a_field"), (2, "b_field"), (3, "c_field")], "runtime-namemap"))
 
 
+class TestRepeatedEncodingFromTraverse(unittest.TestCase):
+    """A repeated scalar / enum field is written as its traverse visits it: visitPacked…
+    PACKED, visitRepeated… EXPANDED (an unpacked field), UNSEEN when traverse does not say; any
+    other field has no encoding."""
+
+    def enc(self, proto_type, visits=(), decoded=()):
+        f = S.SwiftField(1, "xs", proto_type)
+        return S._repeated_encoding(f, decoded, visits)
+
+    def test_each_case(self):
+        V = MC.Visited
+        self.assertEqual(self.enc("repeated int32", [V("Packed", "Int32")]), "PACKED")
+        self.assertEqual(self.enc("repeated int32", [V("Repeated", "Int32")]), "EXPANDED")
+        self.assertEqual(self.enc("repeated Mod.Kind", [V("Repeated", "Enum", "Mod.Kind")]),
+                         "EXPANDED")
+        self.assertEqual(self.enc("repeated int32"), "UNSEEN")
+        self.assertIsNone(self.enc("repeated string", [V("Repeated", "String")]))
+        self.assertIsNone(self.enc("repeated Mod.Msg", [V("Repeated", "Message", "Mod.Msg")]))
+        self.assertIsNone(self.enc("int32", [V("Singular", "Int32")]))
+
+    def test_the_adapter_keeps_it(self):
+        from proto.foreign import _swift_field
+        f = S.SwiftField(3, "xs", "repeated int32", repeated_encoding="EXPANDED")
+        self.assertEqual(_swift_field(f).repeated_encoding, "EXPANDED")
+
+
 class TestUnlistedVisitedNumbersReported(unittest.TestCase):
     """A reading with no check of its own (here a bytecode literal) that lacks a number
     traverse visits is emitted, and the message's analysis failure says so."""

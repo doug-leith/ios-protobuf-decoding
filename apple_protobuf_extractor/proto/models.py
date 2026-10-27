@@ -215,8 +215,10 @@ class ProtoField:
     # For a repeated field of a packable type (a scalar or an enum), set by its producer, who
     # knows the type: how it is written on the wire, "PACKED" (one length-delimited run) or
     # "EXPANDED" (one tag per element) -- for PBCodable read off the write binding it
-    # (proto.extractor._repeated_encoding), "UNSEEN" when no write binds it; for C++ what its
-    # descriptor says (proto.foreign._cpp_field).  None for any other field.  The emitter
+    # (proto.extractor._repeated_encoding), for Swift off the Visitor method its traverse calls
+    # (serializers.swift_descriptor_extract._repeated_encoding), "UNSEEN" when that code does
+    # not say; for C++ what its descriptor says (proto.foreign._cpp_field).  None for any other
+    # field.  The emitter
     # declares EXPANDED explicitly (edition 2023 defaults to PACKED) and notes an UNSEEN one.
 
     delimited: bool = False
