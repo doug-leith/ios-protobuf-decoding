@@ -2,14 +2,15 @@
 
 A class is a proto message if its superclass chain reaches a
 PBCodable root by NAME (anchor 1, structural), or -- retired, hard-failing heuristics -- by
-the VA-cluster closure / the per-class score (see proto.protoclass_heuristic).  Also stamps
-the inheritance and "claimed only by a heuristic" sets on ``ctx`` for the emitter.
+the VA-cluster closure / the per-class score (see proto.protoclass_heuristic).  The set
+carries what the detection found on the way: the inheritance map and the classes claimed only
+by a heuristic (:class:`ProtoClassSet`).
 """
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Set
+from typing import Dict, FrozenSet, Optional, Set
 
-from macho.memory import BinaryContext, _ctx_cache, _ctx_store
+from macho.memory import BinaryContext, _ctx_cache
 from macho.classlist import ClassList, ObjcClass, superclass_chain
 from proto.protoclass_heuristic import _is_proto_class, va_cluster_closure
 
@@ -24,18 +25,36 @@ _PB_ROOT_NAMES: FrozenSet[str] = frozenset(
     {"PBCodable", "PBRequest", "PBResponse", "PBMessage"})
 
 
-def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
+class ProtoClassSet(frozenset):
+    """The proto message class names of an image (a frozenset of them), and what their
+    detection found (:func:`_proto_class_set`):
+
+    * ``inherits`` -- {child: parent ObjC name} for a proto-to-proto subclass (its immediate
+      superclass is itself a proto MESSAGE, not a PB root): the emitter flags its inherited
+      fields;
+    * ``rooted`` -- the classes whose superclass chain names a PB root (anchor 1);
+    * ``cluster_only`` / ``heuristic_only`` -- the classes the name walk did NOT confirm,
+      claimed by the VA-cluster closure, or by the per-class seed alone: errors (empty on every
+      corpus measured, :mod:`proto.protoclass_heuristic`, computed on every run);
+    * ``chain_exits`` -- where an unconfirmed class's chain left the image (a standalone file
+      cannot follow it: a dylib extracted from a dyld cache points into the cache)."""
+
+    def __new__(cls, names=(), inherits: Optional[Dict[str, str]] = None,
+                rooted: FrozenSet[str] = frozenset(), cluster_only: FrozenSet[str] = frozenset(),
+                heuristic_only: FrozenSet[str] = frozenset(),
+                chain_exits: Optional[Dict[str, int]] = None):
+        self = super().__new__(cls, names)
+        self.inherits = inherits or {}
+        self.rooted, self.cluster_only, self.heuristic_only = rooted, cluster_only, heuristic_only
+        self.chain_exits = chain_exits or {}
+        return self
+
+
+def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> ProtoClassSet:
     """Full set of proto message class NAMES (TODO #46): the ``_is_proto_class``
     heuristic seed unioned with the PBCodable superclass-chain closure (two anchors,
-    above).  Side effect: stamps ``ctx._proto_inherits`` = {child: parent_objc_name}
-    for proto-to-proto subclasses (immediate superclass is itself a proto MESSAGE,
-    not a PB root) so the emitter can flag inherited fields.  ALSO stamps
-    ``ctx._proto_class_heuristic_only`` = frozenset of class names whose proto-ness
-    rests SOLELY on the heuristic seed (anchor 1's pure name/bind walk, re-run over
-    every class regardless of prior seed membership, did NOT independently confirm
-    them) -- empty on every corpus measured (:mod:`proto.protoclass_heuristic`), but computed
-    on every run, so the emitter can flag it the day it isn't.  Memoised on ctx."""
-    def _build() -> FrozenSet[str]:
+    above), with what the detection found (:class:`ProtoClassSet`).  Memoised on ctx."""
+    def _build() -> ProtoClassSet:
         non_meta = [c for c in cl if not c.is_meta]
         by_va: Dict[int, ObjcClass] = {c.vmaddr: c for c in non_meta}
         seed = {c.name for c in non_meta if _is_proto_class(c)}
@@ -77,8 +96,6 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
             parent = names[0] if names else None
             if parent and parent not in _PB_ROOT_NAMES:
                 inherits[c.name] = parent
-        _ctx_store(ctx, "_proto_inherits", inherits)
-        _ctx_store(ctx, "_proto_class_rooted", frozenset(anchor1_names))
         # Classes the pure name/bind walk (anchor 1) did NOT independently reach,
         # split by WHICH non-structural path claimed them.  Both are ERRORS, not
         # footnotes: anchor 1 alone reproduces the full set on every corpus measured
@@ -89,14 +106,10 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
         #     claimed it and the superclass chain never confirmed it.
         #   * heuristic-only — neither structural anchor claimed it; it is in the
         #     set solely because the per-class _is_proto_class score seeded it.
-        _cluster_only = frozenset(anchor2_names - anchor1_names)
-        _heuristic_only = frozenset(proto - anchor1_names - anchor2_names)
-        _ctx_store(ctx, "_proto_class_cluster_only", _cluster_only)
-        _ctx_store(ctx, "_proto_class_heuristic_only", _heuristic_only)
-        # where an unconfirmed class's chain left the image (a standalone file cannot
-        # follow it: a dylib extracted from a dyld cache points into the cache)
-        _ctx_store(ctx, "_proto_class_chain_exits", exits)
-        return frozenset(proto)
+        return ProtoClassSet(proto, inherits=inherits, rooted=frozenset(anchor1_names),
+                             cluster_only=frozenset(anchor2_names - anchor1_names),
+                             heuristic_only=frozenset(proto - anchor1_names - anchor2_names),
+                             chain_exits=exits)
 
     return _ctx_cache(ctx, "_proto_class_names_cache", _build)
 
@@ -104,5 +117,4 @@ def _proto_class_set(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
 def rooted_proto_classes(ctx: BinaryContext, cl: ClassList) -> FrozenSet[str]:
     """The names of the classes whose superclass chain names a PB root (anchor 1): the
     proto classes by structure alone."""
-    _proto_class_set(ctx, cl)
-    return ctx._proto_class_rooted
+    return _proto_class_set(ctx, cl).rooted

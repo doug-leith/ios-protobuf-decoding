@@ -111,13 +111,13 @@ class TestCollectEnumDefinitionsDebugWriterKwarg(unittest.TestCase):
     def test_no_writer_kwarg_returns_without_error(self):
         """Backward compat: no enum_debug_writer kwarg → no error, same behavior."""
         result = self._fn(self.ctx, _make_cls(), [], self.st, set(), None)
-        self.assertEqual(result, [])
+        self.assertEqual(result.enums, [])
 
     def test_writer_kwarg_accepted_without_error(self):
         records: List[Dict[str, Any]] = []
         result = self._fn(self.ctx, _make_cls(), [], self.st, set(), None,
                           enum_debug_writer=records.append)
-        self.assertEqual(result, [])
+        self.assertEqual(result.enums, [])
 
     def test_writer_kwarg_receives_mode_c_record_on_revert(self):
         # ENUM: field, no method → revert → Mode C → debug record emitted to kwarg writer

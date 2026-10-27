@@ -16,9 +16,9 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Sequence, Set, Tuple
 
-from macho.memory     import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
+from macho.memory     import READ_ERRORS, BinaryContext, record_unread, PROGRAM_ERRORS
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from proto.models     import (ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics,
@@ -212,10 +212,18 @@ def _dictrep_body(ctx: BinaryContext, imp: int) -> FunctionBody:
     return function_listing(ctx, imp, function_entries(ctx))
 
 
+class DictrepHarvest(NamedTuple):
+    """What a class's ``_dictionaryRepresentation:`` says of its enums (:func:`_harvest_dictrep`)."""
+    enums: Dict[int, List[Tuple[int, str]]]
+    incomplete: Dict[int, str]
+    unevaluated: Dict[int, str]
+    truncated: bool = False          # the body was read only in part: enums may be missing
+
+
 def _harvest_dictrep(
     ctx: BinaryContext, cls: ObjcClass, wanted: Optional[Set[int]] = None,
-) -> Tuple[Dict[int, List[Tuple[int, str]]], Dict[int, str], Dict[int, str]]:
-    """``(enums, incomplete, unevaluated)``, each keyed by ivar offset.
+) -> DictrepHarvest:
+    """``(enums, incomplete, unevaluated, truncated)``, the first three keyed by ivar offset.
 
     *enums* is ``{ivar_offset: [(value, name), …]}`` for each enum field whose int→name map
     is recovered (empty when the method is absent); *wanted* (ivar offsets) only limits the
@@ -226,19 +234,19 @@ def _harvest_dictrep(
     result: Dict[int, List[Tuple[int, str]]] = {}
     imp = _find_dictrep_c_func(ctx, cls)
     if imp is None:
-        return result, {}, {}
+        return DictrepHarvest(result, {}, {})
     try:
         insns = _dictrep_body(ctx, imp)
     except READ_ERRORS as exc:
         record_unread(ctx, "method body", f"-[{cls.name} _dictionaryRepresentation:] {imp:#x}",
                       exc)
-        return result, {}, {}
+        return DictrepHarvest(result, {}, {})
     if not insns:
-        return result, {}, {}
+        return DictrepHarvest(result, {}, {})
 
     # Fail loud on a body read only in part: with no known extent (no function entry above
-    # it and no __text) the read stops at a runaway guard.  Flag the whole class (caller ->
-    # ProtoMessage.enum_recovery_truncated -> emitted comment) rather than silently drop
+    # it and no __text) the read stops at a runaway guard.  Flag the whole class (``truncated``
+    # -> ProtoMessage.enum_recovery_truncated -> emitted comment) rather than silently drop
     # tail enums.  Only called when >=1 int field is still untyped (caller guard).
     if insns.truncated:
         log.warning(
@@ -246,13 +254,13 @@ def _harvest_dictrep(
             "-[%s _dictionaryRepresentation:] is not known and its read stopped early; "
             "switch-table enums past that point are not recovered, so some int32 fields "
             "may actually be enums.", cls.name, cls.name)
-        _ctx_cache(ctx, "_dictrep_truncated_classes", set).add(cls.name)
 
     # The field's int is driven through the function's own code, value by value, to the
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.
     flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
-    return flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
-                           if iv.offset is not None and iv.offset_slot}, wanted)
+    return DictrepHarvest(*flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
+                                           if iv.offset is not None and iv.offset_slot}, wanted),
+                          truncated=insns.truncated)
 
 
 def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
@@ -463,6 +471,12 @@ def _enum_values_from_pairs(enum_name: str, pairs: Sequence[Tuple[int, str]]
     return values
 
 
+class EnumDefinitions(NamedTuple):
+    """A class's enums (:func:`_collect_enum_definitions`)."""
+    enums: List[ProtoEnum]
+    dictrep_truncated: bool          # its _dictionaryRepresentation: was read only in part
+
+
 def _collect_enum_definitions(
     ctx: BinaryContext,
     cls: ObjcClass,
@@ -473,8 +487,10 @@ def _collect_enum_definitions(
     *,
     prefixes: Optional[Tuple[str, ...]] = None,
     enum_debug_writer: Optional[Callable[[Dict[str, Any]], None]] = None,
-) -> List[ProtoEnum]:
-    """Extract :class:`ProtoEnum` definitions for all ``ENUM:``-tagged fields.
+) -> "EnumDefinitions":
+    """Extract :class:`ProtoEnum` definitions for all ``ENUM:``-tagged fields, and whether the
+    class's ``_dictionaryRepresentation:`` was read only in part (some int fields may then be
+    enums not recovered).
 
     In order:
 
@@ -506,7 +522,8 @@ def _collect_enum_definitions(
 
     if not instance_method_names:
         _tag_methname_enums(ctx, cls, fields, st, _pfx, _dbg_w)
-    dictrep_pairs, dictrep_incomplete = _tag_dictrep_enums(ctx, cls, fields, st, _pfx)
+    dictrep_pairs, dictrep_incomplete, dictrep_truncated = _tag_dictrep_enums(
+        ctx, cls, fields, st, _pfx)
 
     enums: List[ProtoEnum] = []
     seen_enum_names: Set[str] = set()
@@ -558,7 +575,7 @@ def _collect_enum_definitions(
             incomplete_reason=incomplete_reason,
         ))
 
-    return enums
+    return EnumDefinitions(enums, dictrep_truncated)
 
 
 def _is_untyped_int(fld: ProtoField) -> bool:
@@ -603,9 +620,9 @@ def _tag_methname_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFi
 
 def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoField],
                        st: StringTable, prefixes: Tuple[str, ...]
-                       ) -> Tuple[Dict[str, List[Tuple[int, str]]], Dict[str, str]]:
+                       ) -> Tuple[Dict[str, List[Tuple[int, str]]], Dict[str, str], bool]:
     """Phase 1.5, ``_dictionaryRepresentation:`` switch-table enums: ``(pairs, incomplete)``
-    by field name.
+    by field name, and whether the body was read only in part.
 
     Recover enums for scalar-int fields that have NO xAsString:/StringAsX: companion
     selector.  Apple stores their int→name map in the class's
@@ -622,12 +639,12 @@ def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFie
     dictrep_pairs: Dict[str, List[Tuple[int, str]]] = {}
     dictrep_incomplete: Dict[str, str] = {}
     if not any(_is_untyped_int(f) for f in fields):
-        return dictrep_pairs, dictrep_incomplete
+        return dictrep_pairs, dictrep_incomplete, False
     ivar_off_by_pname = {_proto_name(iv.name): iv.offset for iv in cls.ivars
                          if iv.name and iv.offset is not None}
     untyped_offsets = {ivar_off_by_pname[f.name] for f in fields
                        if _is_untyped_int(f) and f.name in ivar_off_by_pname}
-    dr_enums, dr_incomplete, dr_unevaluated = _harvest_dictrep(
+    dr_enums, dr_incomplete, dr_unevaluated, truncated = _harvest_dictrep(
         ctx, cls, wanted=untyped_offsets)
     if dr_enums:
         cls_prefix = _class_to_proto_name(cls.name, prefixes)
@@ -655,7 +672,7 @@ def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFie
                     "may be an enum: a switch over this field's value in "
                     "_dictionaryRepresentation: could not be evaluated (" + reason + ")")
             get_diagnostics(ctx).unevaluated_switches.append((cls.name, fld.name, reason))
-    return dictrep_pairs, dictrep_incomplete
+    return dictrep_pairs, dictrep_incomplete, truncated
 
 
 def _recover_enum_values(ctx: BinaryContext, cls: ObjcClass, metaclass: Optional[ObjcClass],

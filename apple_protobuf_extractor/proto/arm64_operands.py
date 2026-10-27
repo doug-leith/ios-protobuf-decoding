@@ -332,7 +332,7 @@ def reads(ins: Insn) -> List[str]:
     """Registers (xN / vN form) *ins* reads, as :func:`writes` sees its operands: a load its
     address registers (an LSE atomic also the value it adds / swaps in); a store, compare or
     test every register; an exclusive store all but its status; a call through a register
-    that register (what the callee reads is :func:`proto.callees.call_reads`'); ``movk`` /
+    that register (what the callee reads is :func:`proto.liveness.call_reads`'); ``movk`` /
     ``bfi`` / a lane write also the destination they change only part of; anything else every
     register but the destination(s)."""
     mn = ins.mnemonic

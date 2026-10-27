@@ -86,10 +86,10 @@ class TestProtoClassSetOffline(unittest.TestCase):
         self.assertEqual(pset, frozenset({"AReq", "BReq", "CSub"}))
         self.assertNotIn("DPlain", pset)
         # CSub's immediate superclass is the local proto class AReq → inheritance note.
-        self.assertEqual(getattr(ctx, "_proto_inherits", {}).get("CSub"), "AReq")
+        self.assertEqual(pset.inherits.get("CSub"), "AReq")
         # BReq/AReq subclass the PB root directly → no inheritance note.
-        self.assertNotIn("BReq", getattr(ctx, "_proto_inherits", {}))
-        self.assertNotIn("AReq", getattr(ctx, "_proto_inherits", {}))
+        self.assertNotIn("BReq", pset.inherits)
+        self.assertNotIn("AReq", pset.inherits)
 
     def test_system_root_is_never_a_pb_cluster_root(self):
         """A (false) seed whose immediate non-local super resolves to NSObject must
@@ -125,9 +125,9 @@ class TestProtoClassSetOffline(unittest.TestCase):
         ctx = _NoReadCtx()
 
         with _allow_heuristic():
-            PS._proto_class_set(ctx, cl)
-        self.assertEqual(ctx._proto_class_heuristic_only, frozenset({"AReq"}))
-        self.assertEqual(ctx._proto_class_cluster_only, frozenset({"BReq", "CSub"}))
+            pset = PS._proto_class_set(ctx, cl)
+        self.assertEqual(pset.heuristic_only, frozenset({"AReq"}))
+        self.assertEqual(pset.cluster_only, frozenset({"BReq", "CSub"}))
 
     def test_structurally_confirmed_class_is_flagged_by_neither(self):
         """The normal case: the by-name superclass walk reaches PBCodable (the superclass
@@ -140,8 +140,8 @@ class TestProtoClassSetOffline(unittest.TestCase):
 
         pset = PS._proto_class_set(ctx, cl)
         self.assertIn("AReq", pset)
-        self.assertEqual(ctx._proto_class_heuristic_only, frozenset())
-        self.assertEqual(ctx._proto_class_cluster_only, frozenset())
+        self.assertEqual(pset.heuristic_only, frozenset())
+        self.assertEqual(pset.cluster_only, frozenset())
 
 
 class TestNonStructuralDetectionFailsTheRun(unittest.TestCase):
@@ -280,7 +280,7 @@ class TestSingleClassPathFlagsButDoesNotFail(unittest.TestCase):
         msg = E.extract_proto_message(ctx, StringTable(), cl, cls)
         self.assertIsNotNone(msg)
         self.assertTrue(msg.class_detected_by_heuristic)
-        self.assertEqual(ctx._proto_class_heuristic_only, frozenset({"AReq"}))
+        self.assertEqual(PS._proto_class_set(ctx, cl).heuristic_only, frozenset({"AReq"}))
 
 
 class TestNonStructuralDetectionRendersAsError(unittest.TestCase):

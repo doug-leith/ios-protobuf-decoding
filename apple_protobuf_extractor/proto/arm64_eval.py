@@ -27,8 +27,8 @@ from macho.memory import READ_ERRORS
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder)
 from macho.strings import read_cfstring_text
-from proto.callees import (call_reads, call_clobbers as callee_clobbers, outlined_fragment,
-                           outlined_tail, outlined_tail_reg)
+from proto.callees import (call_clobbers as callee_clobbers, outlined_fragment, outlined_tail,
+                           outlined_tail_reg)
 from proto.arm64_operands import (
     ARG_GPRS, AUTHENTICATED_BRANCHES, CALL_ARG_GPRS, CALLER_SAVED, CALLER_SAVED_GPRS, CALLS,
     INDIRECT_BRANCHES, POINTER_AUTH, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES, TRAPS,
@@ -1506,10 +1506,11 @@ class Flow:
         return self._reg_targets
 
     def _call_reads(self, target: Optional[int]) -> Optional[Tuple[str, ...]]:
-        """The registers a call to *target* reads (:func:`proto.callees.call_reads`: e.g.
+        """The registers a call to *target* reads (:func:`proto.liveness.call_reads`: e.g.
         ``objc_retain_x19`` reads x19 only); None (x0-x8) without an image to name it by."""
         if target is None or self.ctx is None:
             return None
+        from proto.liveness import call_reads     # (a callee's reads are read with a Flow)
         return call_reads(self.ctx, target)
 
     def _propagate_step(self, m: "_Machine", k: int, call_result=None,

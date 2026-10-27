@@ -518,7 +518,7 @@ def _shared_once_init_targets(insns) -> List[int]:
     :func:`proto.callees.text_holding` holds), which drops the token and the slot in ``__DATA``.
 
     Only a pure stub qualifies: a once-init getter with its own fast / cold path (the
-    :func:`_runtime_namemap_fields` shape) branches first, and an address in its cold path is
+    :func:`_read_runtime` shape) branches first, and an address in its cold path is
     not this type's builder (remindd's UnmigrateRequest would take its sibling `Option`
     enum's)."""
     args = _tail_call_args(insns)
@@ -540,13 +540,11 @@ def _tail_callee(ctx: BinaryContext, insns) -> Optional[Tuple[int, Dict[str, int
     return t, regs
 
 
-def _builder_entries(ctx: BinaryContext, va: int,
-                     enum: bool = False) -> Tuple[List[SwiftField], bool]:
-    """One builder's (number, name) table, and whether the listing it was read off was cut
-    by the runaway guard.  When the builder is itself only an arg-setup stub (``adr
-    x1,<storage>; adr x2,<name>; mov w3,<len>; b <template>``) for a shared template that does
-    the stores, the template is read with the registers the stub hands it (:func:`_tail_callee`)
-    as its entry values."""
+def _builder_entries(ctx: BinaryContext, va: int, enum: bool = False) -> "_Reading":
+    """One builder's (number, name) table.  When the builder is itself only an arg-setup stub
+    (``adr x1,<storage>; adr x2,<name>; mov w3,<len>; b <template>``) for a shared template
+    that does the stores, the template is read with the registers the stub hands it
+    (:func:`_tail_callee`) as its entry values."""
     try:
         body = function_body(ctx, va)
         got = _walk_namemap_builder(ctx, body, enum)
@@ -555,8 +553,8 @@ def _builder_entries(ctx: BinaryContext, va: int,
             body = function_body(ctx, callee[0])
             got = _walk_namemap_builder(ctx, body, enum, entry=callee[1])
     except READ_ERRORS:
-        return [], False
-    return got, body.truncated
+        return _Reading([], "shared-once")
+    return _Reading(got, "shared-once", body.truncated)
 
 
 def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
@@ -573,42 +571,118 @@ def _closure_arg_targets(ctx: BinaryContext, insns) -> List[int]:
     return out
 
 
-def _unconfirmed_if_cut(fields: List[SwiftField], cut: bool) -> List[SwiftField]:
-    """*fields*, their numbers estimated when the listing they were read off was *cut* short
-    (the runaway guard: its (number, name) table may be incomplete) -- rendered "number
-    estimated" rather than laundered as confirmed."""
-    if cut:
-        for f in fields:
-            f.number_confirmed = False
-    return fields
+class _Reading(NamedTuple):
+    """One lowering's (number, name) entries as read (:func:`_extract_namemap_raw`): its shape,
+    and whether a listing they were read off was *cut* short by the runaway guard (its table
+    may be incomplete: the numbers are then estimated, not confirmed)."""
+    fields: List[SwiftField]
+    shape: str
+    cut: bool = False
+
+    def taken(self) -> Tuple[List[SwiftField], str]:
+        """The entries, their numbers estimated when the reading was cut."""
+        if self.cut:
+            for f in self.fields:
+                f.number_confirmed = False
+        return self.fields, self.shape
 
 
-def _runtime_namemap_fields(ctx: BinaryContext, getter_insns,
-                            enum: bool = False) -> List[SwiftField]:
-    """The once-initialised ``_NameMap`` lowering: the getter fast-path loads a
-    cached ``_NameMap`` from ``__bss`` and a ``cmn x?,#1; b.ne <builder>`` guards
-    a cold builder that constructs it once.  Follow the cold path to the builder
-    closure and read its literal ``(number, name)`` table (:func:`_walk_namemap_
-    builder`).  Returns ``[]`` unless the once-init signature is present AND a builder is
-    found.
+def _read_static(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optional[_Reading]:
+    """Shape C: the array the getter hands ``swift_initStaticObject`` (a data blob, never cut)."""
+    for blob in _static_objects(ctx, insns):
+        got = _parse_static_blob(ctx, blob, enum)
+        if got:
+            return _Reading(got, "static")
+    return None
+
+
+def _read_inline(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optional[_Reading]:
+    """Shape A, inline, directly in the getter, or in the function it tail-calls with its
+    registers (CreateML getters: ``adrp; add; b <the closure placed next>``)."""
+    got = _walk_inline_closure(ctx, insns, enum)
+    if got:
+        return _Reading(got, "inline", insns.truncated)
+    callee = _tail_callee(ctx, insns)
+    if callee is None:
+        return None
+    try:
+        body = function_body(ctx, callee[0])
+    except READ_ERRORS:
+        return None
+    got = _walk_inline_closure(ctx, body, enum, entry=callee[1])
+    return _Reading(got, "inline", body.truncated) if got else None
+
+
+def _read_runtime(ctx: BinaryContext, init_va: int, insns, enum: bool) -> _Reading:
+    """The once-initialised ``_NameMap`` lowering: the getter fast-path loads a cached
+    ``_NameMap`` from ``__bss`` and a ``cmn x?,#1; b.ne <builder>`` guards a cold builder that
+    constructs it once.  The builder -- the getter's own cold path, or the closure it hands
+    ``swift_once`` -- and its literal ``(number, name)`` table (:func:`_walk_namemap_builder`),
+    the longest reading.  Empty unless the once-init signature is present AND a builder is found.
 
     This recovers app types whose nameMap is emitted as a runtime ``_NameMap``
     (e.g. remindd ``StartMigrationRequest.Credential``, 5 fields), not only the SwiftProtobuf
     well-known types."""
     # Gate: the lazy-_NameMap guard compares the cached pointer to the -1 sentinel.
-    if not any(ins.mnemonic == "cmn" and ins.op_str.strip().endswith("#1")
-               for ins in getter_insns):
-        return []
-    # The builder: the getter's own cold path, or the closure it hands swift_once.
-    readings = [(_walk_namemap_builder(ctx, getter_insns, enum),
-                 getattr(getter_insns, "truncated", False))]
-    readings += [_builder_entries(ctx, c, enum) for c in _closure_arg_targets(ctx, getter_insns)]
-    best: List[SwiftField] = []
-    best_truncated = False
-    for got, trunc in readings:
-        if len(got) > len(best):
-            best, best_truncated = got, trunc
-    return _unconfirmed_if_cut(best, best_truncated)
+    if not any(ins.mnemonic == "cmn" and ins.op_str.strip().endswith("#1") for ins in insns):
+        return _Reading([], "runtime-namemap")
+    readings = [_Reading(_walk_namemap_builder(ctx, insns, enum), "runtime-namemap",
+                         getattr(insns, "truncated", False))]
+    readings += [_builder_entries(ctx, c, enum)._replace(shape="runtime-namemap")
+                 for c in _closure_arg_targets(ctx, insns)]
+    return max(readings, key=lambda r: len(r.fields))       # (the first of the longest)
+
+
+def _read_shared_once(ctx: BinaryContext, init_va: int, insns,
+                      enum: bool) -> Optional[_Reading]:
+    """Shape D, a shared once-init template (``adr x0,<token>; adr x1,<storage>; adr
+    x2,<builder>; b <shared-template>``): every CODE address the stub passes (the once-token and
+    storage are data) is read for its literal (number, name) table (:func:`_builder_entries`,
+    which follows one further tail call when the builder is itself an arg-setup stub for a
+    second shared template), or -- iOS 27 -- is a stub passing a packed bytecode literal (x2)
+    and its length (w3) to the shared template (shape E's data, one hop deeper; the literal is
+    decoded whole or not at all, so a cut listing cannot shorten it).  The longest reading."""
+    best: Optional[_Reading] = None
+    for t in _shared_once_init_targets(insns):
+        if t == init_va or text_holding(ctx, t) is None:
+            continue
+        r = _builder_entries(ctx, t, enum)
+        if not r.fields:
+            try:
+                stub = function_body(ctx, t)
+                lit = bytecode_literal_from_getter(ctx, stub, enum=enum, flow=_flow_of(ctx, stub))
+            except READ_ERRORS:
+                lit = None
+            dec = decode_namemap_bytecode(lit, enum=enum) if lit else None
+            if dec:
+                r = _Reading([SwiftField(n, nm) for n, nm in dec], "bytecode")
+        if r.fields and (best is None or len(r.fields) > len(best.fields)):
+            best = r
+    return best
+
+
+def _read_bytecode(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optional[_Reading]:
+    """Shape E, a packed-bytecode ``_NameMap(bytecode:)`` literal (iOS 27 toolchain) the getter
+    hands with its length to a shared template; decoded whole or not at all."""
+    lit = bytecode_literal_from_getter(ctx, insns, enum=enum, flow=_flow_of(ctx, insns))
+    decoded = decode_namemap_bytecode(lit, enum=enum) if lit is not None else None
+    return _Reading([SwiftField(n, nm) for n, nm in decoded], "bytecode") if decoded else None
+
+
+def _read_inline_closure(ctx: BinaryContext, init_va: int, insns,
+                         enum: bool) -> Optional[_Reading]:
+    """Shape A, inline in the closure the getter passes a call (device getter -> swift_once)."""
+    for t in _closure_arg_targets(ctx, insns):
+        if t == init_va:
+            continue
+        try:
+            cl = function_body(ctx, t)
+        except READ_ERRORS:
+            continue
+        got = _walk_inline_closure(ctx, cl, enum)
+        if got:
+            return _Reading(got, "inline-closure", cl.truncated)
+    return None
 
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
@@ -683,111 +757,49 @@ def _extract_namemap(ctx: BinaryContext, init_va: int,
 def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
                          traverse: Optional[MC.Code] = None,
                          enum: bool = False, owner: str = "") -> Tuple[List[SwiftField], str]:
-    """Recover one type's (number, name) entries, auto-detecting the lowering.
+    """Recover one type's (number, name) entries, auto-detecting the lowering: the first shape
+    whose reader (``_read_*``) finds a table, those with no check of their own validated
+    against the message's ``traverse`` (:func:`_namemap_builder_validated`).  A reading cut
+    short by the runaway guard has its numbers estimated (:meth:`_Reading.taken`).
 
     Every shape reads the getter's :func:`~proto.function_body.function_body` -- what its entry reaches, up to its
     returns and tail calls -- so a stub getter (a tail call) is never read on into the
     next function in memory.
 
     *traverse*: the message's ``traverse(visitor:)``, whose visited numbers are the oracle of
-    the readings with no check of their own (:func:`_namemap_builder_validated`); a failure to
-    read it is recorded as *owner*'s.  *enum*: the type is a swift ``enum`` (case value <->
-    case name) rather than a message.  The same lowerings are used, but values may be 0 /
-    negative / repeated and there is no ``traverse`` to cross-check against."""
+    the readings with no check of their own; a failure to read it is recorded as *owner*'s.
+    *enum*: the type is a swift ``enum`` (case value <-> case name) rather than a message.  The
+    same lowerings are used, but values may be 0 / negative / repeated and there is no
+    ``traverse`` to cross-check against."""
     try:
         insns = function_body(ctx, init_va)
     except READ_ERRORS:
         return [], "none"
+    visited: List[Optional[Set[int]]] = []
 
-    # C — static object: the array the getter hands swift_initStaticObject.
-    for blob in _static_objects(ctx, insns):
-        got = _parse_static_blob(ctx, blob, enum)
-        if got:
-            return got, "static"
+    def validated(got: List[SwiftField]) -> bool:
+        if not visited:
+            visited.append(_visited_numbers(ctx, traverse, owner))
+        return _namemap_builder_validated(ctx, got, visited[0], enum)
 
-    # A — inline, directly in this function, or in the function it tail-calls with its
-    # registers (CreateML getters: `adrp; add; b <the closure placed next>`).
-    got = _unconfirmed_if_cut(_walk_inline_closure(ctx, insns, enum), insns.truncated)
-    callee = None if got else _tail_callee(ctx, insns)
-    if callee is not None:
-        try:
-            body = function_body(ctx, callee[0])
-            got = _unconfirmed_if_cut(_walk_inline_closure(ctx, body, enum, entry=callee[1]),
-                                      body.truncated)
-        except READ_ERRORS:
-            got = []
-    if got:
-        return got, "inline"
-
-    # Runtime-built _NameMap (once-init `cmn x?,#1; b.ne <builder>`): follow the
-    # cold builder closure and read its literal (number, name) table.  #72.
-    got = _runtime_namemap_fields(ctx, insns, enum)
-    if len(got) > (0 if enum else 1) and _namemap_builder_validated(
-            ctx, got, _visited_numbers(ctx, traverse, owner), enum):
-        return got, "runtime-namemap"
+    for read in (_read_static, _read_inline):
+        r = read(ctx, init_va, insns, enum)
+        if r is not None:
+            return r.taken()
+    runtime = _read_runtime(ctx, init_va, insns, enum)
+    if len(runtime.fields) > (0 if enum else 1) and validated(runtime.fields):
+        return runtime.taken()
+    shared = _read_shared_once(ctx, init_va, insns, enum)
+    if shared is not None and (shared.shape == "bytecode" or validated(shared.fields)):
+        return shared.taken()
+    for read in (_read_bytecode, _read_inline_closure):
+        r = read(ctx, init_va, insns, enum)
+        if r is not None:
+            return r.taken()
     # a runtime builder with exactly ONE entry is used last, under the same oracle validation and
     # Swift reflection's check of the name (``runtime-single``): its literal is the only support.
-    runtime_single = got if (len(got) == 1 and not enum) else None
-
-    # D — shared once-init template (`adr x0,<token>; adr x1,<storage>;
-    # adr x2,<builder>; b <shared-template>`): chase every CODE address the stub
-    # passes (skipping the once-token / storage data addresses) and read
-    # its literal (number, name) table (:func:`_builder_entries`,
-    # which follows one further tail-call when the builder is itself just an
-    # arg-setup stub for a second shared template) -- oracle-validated for
-    # the same reason as runtime-namemap.
-    best_shared: List[SwiftField] = []
-    shared_shape = "shared-once"
-    for t in _shared_once_init_targets(insns):
-        if t == init_va or text_holding(ctx, t) is None:
-            continue
-        got = _unconfirmed_if_cut(*_builder_entries(ctx, t, enum))
-        packed = False
-        if not got:
-            # iOS 27: the builder is a stub passing the packed bytecode literal (x2) and its
-            # length (w3) to the shared template (shape E's data, one hop deeper)
-            try:
-                stub = function_body(ctx, t)
-                lit = bytecode_literal_from_getter(ctx, stub, enum=enum, flow=_flow_of(ctx, stub))
-            except READ_ERRORS:
-                lit = None
-            dec = decode_namemap_bytecode(lit, enum=enum) if lit else None
-            if dec:
-                got = [SwiftField(n, nm) for n, nm in dec]
-                packed = True
-        if len(got) > len(best_shared):
-            best_shared = got
-            shared_shape = "bytecode" if packed else "shared-once"
-    if best_shared and (shared_shape == "bytecode"
-                        or _namemap_builder_validated(
-                            ctx, best_shared, _visited_numbers(ctx, traverse, owner), enum)):
-        return best_shared, shared_shape
-
-    # E — packed-bytecode `_NameMap(bytecode:)` literal (iOS 27 toolchain): the
-    # getter hands a string literal + length to a shared template.  Placed after
-    # D (whose targets are code addresses; the literal is data, so the two never
-    # collide).
-    lit = bytecode_literal_from_getter(ctx, insns, enum=enum, flow=_flow_of(ctx, insns))
-    if lit is not None:
-        decoded = decode_namemap_bytecode(lit, enum=enum)
-        if decoded:
-            return [SwiftField(n, nm) for n, nm in decoded], "bytecode"
-
-    # A — inline, in the closure the getter passes a call (device getter → swift_once).
-    for t in _closure_arg_targets(ctx, insns):
-        if t == init_va:
-            continue
-        try:
-            cl = function_body(ctx, t)
-        except READ_ERRORS:
-            continue
-        got = _unconfirmed_if_cut(_walk_inline_closure(ctx, cl, enum), cl.truncated)
-        if got:
-            return got, "inline-closure"
-
-    if runtime_single and _namemap_builder_validated(
-            ctx, runtime_single, _visited_numbers(ctx, traverse, owner)):
-        return runtime_single, "runtime-single"
+    if len(runtime.fields) == 1 and not enum and validated(runtime.fields):
+        return runtime._replace(shape="runtime-single").taken()
     return [], "none"
 
 

@@ -188,8 +188,10 @@ class TestConstantOnEveryPath(unittest.TestCase):
         import proto.callees as C
         from tests._fakes import NoImage
         insns = listing('mov x21, #0', f'bl {CALL}', 'ret')
+        import proto.liveness as L
         with mock.patch.object(C, 'callee_name', lambda ctx, va: '_$s4main5thingyyKF'), \
-                mock.patch.object(C, 'stub_selector', lambda ctx, va: None):
+                mock.patch.object(L, 'callee_name', lambda ctx, va: '_$s4main5thingyyKF'), \
+                mock.patch.object(L, 'stub_selector', lambda ctx, va: None):
             flow = Flow(NoImage(), insns)
             self.assertEqual(flow.known_before(len(insns) - 1).get('x21'), 0)
 

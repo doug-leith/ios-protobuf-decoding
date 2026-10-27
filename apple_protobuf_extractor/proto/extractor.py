@@ -45,11 +45,11 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 # Direct internal dependencies: a consumer of any of these imports it from the module that
 # defines it (proto.protocore / dispatch / repeated / enums / writeto / config, macho.*).
-from macho.memory    import BinaryContext, _ctx_cache, _ctx_store, reset_ctx_caches, PROGRAM_ERRORS
+from macho.memory    import BinaryContext, _ctx_store, reset_ctx_caches, PROGRAM_ERRORS
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
-from proto.models    import (FieldLabel, ProtoField, ProtoMessage, get_diagnostics,
+from proto.models    import (FieldLabel, ImageEvidence, ProtoField, ProtoMessage, get_diagnostics,
                              record_analysis_failure, record_failed_pass, record_heuristic_hit,
                              PACKABLE_SCALARS)
 from proto.writeto   import BoundWrite, _extract_writeto_field_numbers, writeto_sent_selectors
@@ -75,7 +75,7 @@ from proto.repeated  import (
 from proto.structfields import finalize_struct_fields, record_struct_site
 from proto.mapfields import (
     MAP_OBJC_CLASSES, MAP_IVAR_ENCS, MapEntryWriter, find_map_writers,
-    record_helper_votes, _finalize_map_fields, _MAP_FIELD_NOTE,
+    record_helper_votes, _finalize_map_fields, _MAP_FIELD_NOTE, _MAP_WHOLE_IMAGE_NOTE,
 )
 from proto.protoclass_set import _proto_class_set, rooted_proto_classes
 from proto.foreign_detect import (   # noqa: F401  (public API re-exports)
@@ -177,6 +177,12 @@ _FIELD_ZERO_NOTE = (
 # SINGULAR analogue of the repeated `^{Struct}` case in LIMITATIONS.md (2); it
 # reaches the same `("bytes", None)` catch-all in `_type_from_enc`.  A genuine
 # NSData field (@encode `@"NSData"`) is a real `bytes` and is NOT flagged.
+
+
+#: An inline-struct field of a single-class extraction: its members agree across every owner
+#: of its struct tag, which only :func:`extract_all` sees.
+_STRUCT_WHOLE_IMAGE_NOTE = ("inline C struct emitted as bytes: its members are read over the "
+                            "whole image (extract_all), not by a single-class extraction")
 
 
 def _embedded_struct_note(ivar: ObjcIvar, type_name: str,
@@ -689,6 +695,7 @@ def extract_proto_message(
     readfrom_core_index: "Optional[Dict[int, str]]" = _AUTO,
     prefixes: Optional[Tuple[str, ...]] = None,
     enum_debug_writer: Optional[Callable[[Dict[str, Any]], None]] = None,
+    evidence: Optional[ImageEvidence] = None,
 ) -> Optional[ProtoMessage]:
     """
     Extract proto field descriptors from a single ObjC proto class.
@@ -707,11 +714,15 @@ def extract_proto_message(
     proto class core.
 
     Both default to ``_AUTO``: when not supplied they are **lazily built + cached
-    on ctx** so a standalone call produces the same complete output as one driven
-    by :func:`extract_all` (which passes them explicitly).  To deliberately run the
+    on ctx**, as :func:`extract_all` builds them.  To deliberately run the
     degraded path, pass an explicit empty/None value (``string_write_helpers=
     frozenset()`` / ``readfrom_core_index=None``) — the degradation is then chosen,
     not silent.
+
+    ``evidence``: where to record what the passes over the whole image need (the
+    :class:`proto.models.ImageEvidence` :func:`extract_all` collects and then types map
+    fields and inline-struct fields from).  Without it (a single-class call), those fields
+    stay ``bytes`` with a note saying they are resolved over the whole image.
 
     Returns a ProtoMessage, or None if extraction fails entirely.
     """
@@ -744,9 +755,8 @@ def extract_proto_message(
     _dbg = enum_debug_writer
 
     # Inheritance note (TODO #46): when this class is an ObjC subclass of another
-    # proto MESSAGE, its own ivars are only a partial field set.  _proto_class_set
-    # (run by the gate above) stamped the {child: parent_objc_name} map on ctx.
-    _parent_objc = (getattr(ctx, "_proto_inherits", None) or {}).get(cls.name)
+    # proto MESSAGE, its own ivars are only a partial field set (the set's inheritance map).
+    _parent_objc = _proto_class_names.inherits.get(cls.name)
     _inherits_from = _class_to_proto_name(_parent_objc, _pfx) if _parent_objc else None
 
     # Non-structural class detection (see _proto_class_set): the by-name
@@ -755,17 +765,14 @@ def extract_proto_message(
     # measured so far — but computed for
     # real rather than assumed absent.
     #   heuristic: (a) cls IS in cl and neither structural anchor claimed it
-    #   (ctx._proto_class_heuristic_only, stamped by the gate's earlier
-    #   _proto_class_set call); (b) cls is NOT in cl at all (e.g. a synthetic caller
+    #   (the set's heuristic_only); (b) cls is NOT in cl at all (e.g. a synthetic caller
     #   per the gate's documented fallback), so the anchors never considered it and
     #   only the direct _is_proto_class(cls) check applies.
     #   va_cluster: the heuristic-seeded VA-cluster closure (anchor 2) claimed it
     #   and the name walk (anchor 1) did not.
-    _class_detected_by_heuristic = (
-        cls.name not in _proto_class_names
-        or cls.name in (getattr(ctx, "_proto_class_heuristic_only", None) or frozenset()))
-    _class_detected_by_va_cluster = cls.name in (
-        getattr(ctx, "_proto_class_cluster_only", None) or frozenset())
+    _class_detected_by_heuristic = (cls.name not in _proto_class_names
+                                    or cls.name in _proto_class_names.heuristic_only)
+    _class_detected_by_va_cluster = cls.name in _proto_class_names.cluster_only
 
     # No writeTo: of its own: the ancestor's writeTo: serialises this class and cannot
     # reach its own ivars, so none of them is a wire field.
@@ -830,7 +837,9 @@ def extract_proto_message(
 
     # One vote per field for "which wire kind does this write helper encode" — the
     # binary-wide table :func:`_finalize_map_fields` reads to type map keys/values.
-    record_helper_votes(ctx, field_ivars, _wt_helpers, _proto_class_names)
+    _evidence = evidence if evidence is not None else ImageEvidence()
+    record_helper_votes(ctx, _evidence.helper_votes, field_ivars, _wt_helpers,
+                        _proto_class_names)
 
     # ── Principled repeated-<message> element types (readFrom: dispatch) ───────
     _dispatch = _resolve_dispatch_context(ctx, cls, readfrom_core_index, field_ivars)
@@ -900,10 +909,10 @@ def extract_proto_message(
         # it cannot resolve — the field stays flagged `bytes` (see LIMITATIONS.md (1), #41).
         if type_class in _MAP_OBJC_CLASSES:
             if ivar.name in _map_writers:
-                _ctx_cache(ctx, "_map_writers", dict)[(cls.name, pname)] = \
-                    _map_writers[ivar.name]
+                _evidence.map_writers[(cls.name, pname)] = _map_writers[ivar.name]
             if not _type_note:
-                _type_note = _MAP_FIELD_NOTE
+                _type_note = (_MAP_WHOLE_IMAGE_NOTE if ivar.name in _map_writers and evidence is None
+                              else _MAP_FIELD_NOTE)
 
         # ACCEPTED LIMITATION (field# 0): writeTo: writes this ESTIMATED field
         # written with a literal field number 0 (Apple 0-based; illegal in .proto).
@@ -927,8 +936,10 @@ def extract_proto_message(
         # struct's serialiser once the whole image is extracted (#37).  Fields it cannot
         # resolve keep the flagged `bytes` fallback set above.
         if type_name == "bytes":
-            record_struct_site(ctx, cls.name, pname, ivar.offset_slot, ivar.type_enc,
-                               _bound_writes.get(ivar.name))
+            if record_struct_site(_evidence.struct_sites, cls.name, pname, ivar.offset_slot,
+                                  ivar.type_enc, _bound_writes.get(ivar.name)) \
+                    and evidence is None:
+                _type_note = _STRUCT_WHOLE_IMAGE_NOTE
 
         fields.append(ProtoField(
             name=pname,
@@ -980,7 +991,7 @@ def extract_proto_message(
     fields.sort(key=lambda f: f.number)
 
     # ── Enum collection ──────────────────────────────────────────────────────
-    enums = _collect_enum_definitions(
+    enums, _dictrep_truncated = _collect_enum_definitions(
         ctx, cls, fields, st, instance_method_names, metaclass,
         prefixes=_pfx, enum_debug_writer=_dbg)
 
@@ -991,8 +1002,7 @@ def extract_proto_message(
         enums=enums,
         # Flagged when -[cls _dictionaryRepresentation:] was read only in part during enum
         # harvest, so some int32 fields may be unrecovered enums.
-        enum_recovery_truncated=cls.name in (
-            getattr(ctx, "_dictrep_truncated_classes", None) or set()),
+        enum_recovery_truncated=_dictrep_truncated,
         inherits_from=_inherits_from,
         # When no fields were recovered, distinguish a genuine zero-field opaque
         # passthrough (schema empty BY DESIGN) from a possible extraction miss, so
@@ -1139,12 +1149,10 @@ def extract_all(
     # Placed after the cache reset and before the expensive pre-passes: a failure
     # aborts with NO output and no wasted work, and cannot be swallowed by the
     # per-class ``except Exception`` handler further down.
-    _proto_class_set(ctx, cl)
+    _classes = _proto_class_set(ctx, cl)
     check_no_heuristic_detection(
-        getattr(ctx, "_proto_class_heuristic_only", None) or frozenset(),
-        getattr(ctx, "_proto_class_cluster_only", None) or frozenset(),
-        source=getattr(ctx, "source_name", None) or "<binary>",
-        exits=getattr(ctx, "_proto_class_chain_exits", None))
+        _classes.heuristic_only, _classes.cluster_only,
+        source=getattr(ctx, "source_name", None) or "<binary>", exits=_classes.chain_exits)
 
     # Image-wide pre-passes, built once here (per class would be O(n^2)); a failure is
     # recorded in the run diagnostics and the run continues without it.
@@ -1159,6 +1167,7 @@ def extract_all(
     log.debug("readFrom core index: %d classes", len(readfrom_core_index))
 
     messages: List[ProtoMessage] = []
+    evidence = ImageEvidence()      # for the passes over all the messages, below
     failed: List[str] = []          # class names whose extraction raised
     for cls in cl:
         if cls.is_meta:
@@ -1169,7 +1178,8 @@ def extract_all(
                                         string_write_helpers=string_write_helpers,
                                         readfrom_core_index=readfrom_core_index,
                                         prefixes=prefixes,
-                                        enum_debug_writer=enum_debug_writer)
+                                        enum_debug_writer=enum_debug_writer,
+                                        evidence=evidence)
         except PROGRAM_ERRORS:
             # A wiring/refactor bug (e.g. the enums-carve missing-import NameError)
             # must HARD-fail, not be swallowed as a per-class "decode failed" — those
@@ -1198,11 +1208,11 @@ def extract_all(
         )
 
     # Map<> fields (#41): type them now that the binary-wide write-helper table is complete.
-    _finalize_map_fields(ctx, cl, messages, readfrom_core_index)
+    _finalize_map_fields(ctx, cl, messages, readfrom_core_index, evidence)
 
     # Inline C-struct sub-messages (#37): synthesise a message per struct tag and retype the
     # owner fields whose struct serialiser was decoded.
-    finalize_struct_fields(ctx, cl, messages, prefixes)
+    finalize_struct_fields(ctx, cl, messages, evidence, prefixes)
 
     messages.sort(key=lambda m: m.class_name)
     return messages

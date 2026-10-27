@@ -192,7 +192,7 @@ class TestFlowAgainstEmulation(unittest.TestCase):
 @pytest.mark.slow
 @unittest.skipUnless(LOCATIOND and _unicorn(), "locationd binary or unicorn not available")
 class TestCallReadsAgainstEmulation(unittest.TestCase):
-    """:func:`proto.callees.call_reads` against concrete runs of each function, its callees
+    """:func:`proto.liveness.call_reads` against concrete runs of each function, its callees
     in the image run too (:mod:`oracles.callreads_emulation`): one locationd function in 400
     (one in 100 with MACHO_TEST_ORACLE_FULL=1)."""
 

@@ -402,10 +402,7 @@ class TestDictRepEnumsLive(unittest.TestCase):
                        and not c.is_meta), None)
         if target is None:
             self.skipTest('GEOPDSearchQueryIntentMetadata not in this cache')
-        self.ctx._dictrep_truncated_classes = None
-        _harvest_dictrep(self.ctx, target)[0]
-        self.assertNotIn('GEOPDSearchQueryIntentMetadata',
-                         self.ctx._dictrep_truncated_classes or set())
+        self.assertFalse(_harvest_dictrep(self.ctx, target).truncated)
 
     def _harvest_field(self, class_name, field_name):
         """{value: name} for class_name.field_name's dictRep enum, or None."""
@@ -1011,7 +1008,7 @@ class TestDictRepBodyKeepsEvaluatedArmsIOS27(unittest.TestCase):
         if c is None:
             return
         off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}
-        enums, incomplete, _ = _harvest_dictrep(ctx, c)
+        enums, incomplete, _u, _t = _harvest_dictrep(ctx, c)
         cls.res = ({k: dict(enums.get(off.get(k), [])) for k in ('uiAction', 'uiTarget')},
                    incomplete)
 
@@ -1071,10 +1068,9 @@ class TestNoArgDictRepLive(unittest.TestCase):
             c = next((c for c in clist if c.name == cn and not c.is_meta), None)
             if c is None or c.get_method('_dictionaryRepresentation:') is not None:
                 continue
-            enums = _harvest_dictrep(ctx, c)[0]
+            got = _harvest_dictrep(ctx, c)
             off = {_proto_name(iv.name): iv.offset for iv in c.ivars if iv.name}.get(field)
-            cls.res[cn] = (dict(enums.get(off, [])),
-                           cn in (getattr(ctx, '_dictrep_truncated_classes', None) or set()))
+            cls.res[cn] = (dict(got.enums.get(off, [])), got.truncated)
 
     @classmethod
     def tearDownClass(cls):

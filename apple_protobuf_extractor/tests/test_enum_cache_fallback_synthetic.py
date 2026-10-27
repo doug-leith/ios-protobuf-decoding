@@ -77,7 +77,7 @@ class TestEnumMethnameFallback(unittest.TestCase):
             self.ctx, self.cls_status, [fld], self.st,
             instance_method_names=set(),   # forces the Phase-1 fallback path
             metaclass=None,
-        )
+        ).enums
         self.assertEqual(fld.type_class, "ENUM:TestEnumStatus")
         self.assertEqual(fld.type_name, "TestEnumStatus")
         self.assertEqual(len(enums), 1)

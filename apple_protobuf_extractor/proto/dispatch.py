@@ -360,13 +360,12 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
     """``[{br address: arms}, Flow or None, sorted listing]`` for *insns*, memoised on *ctx* per
     listing: the decoder's last Flow is kept when it was built with the final arms."""
     from proto.arm64_eval import Flow
-    from proto.callees import provisional_answers     # (callees imports this module lazily)
     ins = sorted(insns, key=lambda i: i.addr)
     key = (tuple(i.addr for i in ins), bounds)
     memo = _ctx_cache(ctx, "_jump_table_arms", dict)
     hit = memo.get(key)
     if hit is None:
-        provisional = provisional_answers(ctx)[0]
+        provisional = _provisional_answers(ctx)[0]
         by_br: Dict[int, frozenset] = {}
         final = None
         lo, hi = bounds or (ins[0].addr, ins[-1].addr + 4)
@@ -386,7 +385,7 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
                 break
             by_br = {**by_br, **new}
         hit = memo[key] = [by_br, final, ins]
-        if provisional_answers(ctx)[0] != provisional:
+        if _provisional_answers(ctx)[0] != provisional:
             _ctx_cache(ctx, "_provisional_decodes", list).append((key, ins, bounds))
         if bounds is not None and all(ins[0].addr <= a < ins[-1].addr + 4
                                       for arms in by_br.values() for a in arms):
@@ -397,8 +396,20 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
     return hit
 
 
+def _provisional_answers(ctx: BinaryContext) -> list:
+    """``[n]``: how many times :func:`proto.liveness.call_reads` has answered with what was known
+    so far of a function still being read (a call back into an unsettled cycle)."""
+    return _ctx_cache(ctx, "_provisional_answers", lambda: [0])
+
+
+def note_provisional_answer(ctx: BinaryContext) -> None:
+    """:func:`proto.liveness.call_reads` answered with what is known so far of a function still
+    being read: a jump table decoded meanwhile used it (:func:`recheck_provisional_decodes`)."""
+    _provisional_answers(ctx)[0] += 1
+
+
 def recheck_provisional_decodes(ctx: BinaryContext) -> None:
-    """Decode again each jump table first decoded while :func:`proto.callees.call_reads` was
+    """Decode again each jump table first decoded while :func:`proto.liveness.call_reads` was
     still solving a cycle of functions, with what it read of the cycle then (the evaluation
     reads calls' reads: which stack slots a call can write).  Called once every cycle has
     settled.  A table that decodes differently now is warned of and replaced; what was read

@@ -1,4 +1,4 @@
-""":func:`proto.callees.call_reads` against concrete runs of each function in an emulator (Unicorn):
+""":func:`proto.liveness.call_reads` against concrete runs of each function in an emulator (Unicorn):
 the registers a run of it really reads before writing them -- through every function of the image
 it calls, which run too -- must be among those ``call_reads`` says a call to it may read.
 
@@ -23,8 +23,8 @@ from oracles.flow_emulation import (make_machine, Report, RET_SENTINEL, SP0, ran
                                     _X)
 from proto.arm64_operands import (ARG_FPRS, CALL_ARG_GPRS, CALLER_SAVED, PAIR_STORES, STORE_BYTES,
                                   parse_mem, reads, reg_name, split_ops, writes)
-from proto.callees import (_ALL_REGS, RUNTIME_CONTRACTS, SWIFT_CALL_ARGS, _is_swift_name,
-                           call_reads)
+from proto.callees import RUNTIME_CONTRACTS, SWIFT_CALL_ARGS, _is_swift_name
+from proto.liveness import _ALL_REGS, call_reads
 
 _CALLEE_SAVED = frozenset([f"x{i}" for i in range(19, 29)] + [f"v{i}" for i in range(8, 16)])
 _NOT_VALUES = frozenset(("sp", "x29", "x30", "xzr"))

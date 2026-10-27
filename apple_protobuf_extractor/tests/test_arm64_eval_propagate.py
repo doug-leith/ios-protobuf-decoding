@@ -92,7 +92,6 @@ class TestStackSlots(unittest.TestCase):
     def test_a_runtime_call_is_handed_only_the_registers_its_contract_reads(self):
         # objc_retain_x19 reads x19 only: the stack address in x8 (a scratch) is not handed
         from unittest import mock
-        import proto.arm64_eval as AE
         insns = listing(*PROLOGUE, 'adrp x8, #0x5000', 'add x8, x8, #0x40', 'str x8, [sp, #8]',
                         'add x8, sp, #8', f'bl {CALL}', 'ldr x3, [sp, #8]', f'bl {CALL}',
                         *EPILOGUE)
@@ -100,7 +99,7 @@ class TestStackSlots(unittest.TestCase):
         from proto.callees import ABI_ARGS, RUNTIME_CONTRACTS
         for reads, want in ((RUNTIME_CONTRACTS["_objc_retain_x19"][0], PLAIN), (ABI_ARGS, None)):
             # the contract of the call's own target; an unknown target reads x0-x8
-            with mock.patch.object(AE, 'call_reads',
+            with mock.patch('proto.liveness.call_reads',
                                    lambda ctx, va, r=reads: r if va == 0x9000 else ABI_ARGS):
                 self.assertEqual(Flow(NoImage(), insns).propagate({}, [k])[k].get('x3'), want)
 

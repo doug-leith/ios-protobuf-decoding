@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 
 # ── Shared helper ─────────────────────────────────────────────────────────────
@@ -270,6 +270,21 @@ def retag_enums(fields: Iterable["ProtoField"], renames: Mapping[str, str]) -> N
         new = renames.get(tc[5:]) if tc and tc.startswith("ENUM:") else None
         if new is not None:
             f.type_name, f.type_class = new, f"ENUM:{new}"
+
+
+@dataclass
+class ImageEvidence:
+    """What extracting each class of an image leaves for the passes over all its messages
+    (:func:`proto.extractor.extract_all` collects it, handing it to
+    :func:`proto.extractor.extract_proto_message`): each map field's entry writer and each
+    inline-struct field's bound begin mark, by ``(class name, field name)``, and one vote per
+    field for the wire kind of the write helper it uses (helper address -> ``Counter`` of
+    kinds).  A map's key and value are typed by the votes of the whole image
+    (:func:`proto.mapfields._finalize_map_fields`), and an inline struct's members must agree
+    across every owner of its tag (:func:`proto.structfields.finalize_struct_fields`)."""
+    map_writers: Dict[Tuple[str, str], Any] = field(default_factory=dict)
+    helper_votes: Dict[int, Any] = field(default_factory=dict)
+    struct_sites: Dict[Tuple[str, str], Any] = field(default_factory=dict)
 
 
 @dataclass

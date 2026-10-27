@@ -19,7 +19,7 @@ A call's inputs are what its callee reads.  Calls into the Objective-C runtime a
 ProtocolBuffer runtime are named by their exported / imported ABI symbol
 (:func:`proto.callees.callee_name`) and have fixed contracts (:data:`proto.callees.RUNTIME_CONTRACTS`, :data:`_PB_WRITE`):
 ``objc_retain_x2`` reads x2 and returns it; ``PBDataWriterWriteInt32Field(writer, value,
-field)`` serialises x1.  Any other callee reads what :func:`proto.callees.call_reads` says
+field)`` serialises x1.  Any other callee reads what :func:`proto.liveness.call_reads` says
 (the AAPCS64 argument registers, or for a function of the image itself, with or without a
 calling convention, the registers it reads before writing them) and returns a value derived
 from all of them.
@@ -47,8 +47,9 @@ from proto.dispatch import (_jump_table_arm_addrs, build_function_index, decoded
                             function_entries)
 from proto.dispatch_eval import _function_insns
 from proto.function_body import is_function_entry
-from proto.callees import (PB_FIELD_WRITERS, callee_name, sent_selector, stub_selector, call_reads, text_holding,
+from proto.callees import (PB_FIELD_WRITERS, callee_name, sent_selector, stub_selector, text_holding,
                            RUNTIME_CONTRACTS as _ARC, NORETURN as _NORETURN)
+from proto.liveness import call_reads
 from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes, LOAD_BYTES, STORE_BYTES,
                                   PAIR_LOADS, PAIR_STORES, RETURNS, CALLER_SAVED, CALLS,
                                   AUTHENTICATED_BRANCHES, ARG_GPRS, branch_target, is_conditional,
@@ -595,7 +596,7 @@ class _ClassFlow:
         tail call: :meth:`_tail_call`), or a leaf function its shape cannot be told from.  Its
         effect on the state is its instructions' (run
         with *frag_vals*, the registers before each); as a call it is a write site when handed
-        the writer, and may serialise what it reads (:func:`proto.callees.call_reads`)."""
+        the writer, and may serialise what it reads (:func:`proto.liveness.call_reads`)."""
         self._site(st, tgt, None, res, depth, addr, vals)
         argp = self._read_origins(st, call_reads(self.ctx, tgt), vals)[0]
         if _W in argp or st.esc:

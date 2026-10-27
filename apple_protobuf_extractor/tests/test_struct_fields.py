@@ -22,7 +22,7 @@ import proto.extractor as E
 import proto.structfields as SF
 import proto.function_body as FB
 import live_artifacts as V
-from proto.models import FieldLabel
+from proto.models import FieldLabel, ImageEvidence
 from macho.disasm import disasm
 from tests._a64asm import assemble, FlowCtx
 from tests._writer_calls import exits, run_writer_flow
@@ -649,8 +649,9 @@ def _extract(classes):
     if loaded is None:
         return None
     ctx, st, cl = loaded
-    msgs = [E.extract_proto_message(ctx, st, cl, cl.find(c)) for c in classes]
-    SF.finalize_struct_fields(ctx, cl, msgs)
+    evidence = ImageEvidence()
+    msgs = [E.extract_proto_message(ctx, st, cl, cl.find(c), evidence=evidence) for c in classes]
+    SF.finalize_struct_fields(ctx, cl, msgs, evidence)
     return {m.class_name: m for m in msgs}
 
 
@@ -1219,8 +1220,10 @@ def _extract_from(cache, classes):
         syms = reader.image_local_symbols(mv)
         if syms:
             apply_to_classes(cl, syms)
-        msgs = [E.extract_proto_message(ctx, st, cl, cl.find(c)) for c in classes]
-        SF.finalize_struct_fields(ctx, cl, msgs)
+        evidence = ImageEvidence()
+        msgs = [E.extract_proto_message(ctx, st, cl, cl.find(c), evidence=evidence)
+                for c in classes]
+        SF.finalize_struct_fields(ctx, cl, msgs, evidence)
         return {m.class_name: m for m in msgs}
     finally:
         reader.close()

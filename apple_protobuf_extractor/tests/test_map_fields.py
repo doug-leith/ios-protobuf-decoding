@@ -509,42 +509,43 @@ class TestHelperVotes(unittest.TestCase):
             setattr(M, name, repl)
             self.addCleanup(setattr, M, name, orig)
         self.ctx = FakeCtx()
+        self.votes = {}
 
     class _Iv:
         def __init__(self, name, enc):
             self.name, self.type_enc = name, enc
 
     def _vote(self, ivars, helpers, protos=frozenset({'GEOMsg'})):
-        M.record_helper_votes(self.ctx, ivars, helpers, protos)
+        M.record_helper_votes(self.ctx, self.votes, ivars, helpers, protos)
 
     def test_unanimous_kinds(self):
         I = self._Iv
         self._vote([I('_a', '@"NSString"'), I('_b', '@"NSString"'), I('_c', '@"GEOMsg"'),
                     I('_d', 'I'), I('_e', '@"NSData"'), I('_f', 'B')],
                    {'_a': 0x10, '_b': 0x10, '_c': 0x20, '_d': 0x30, '_e': 0x40, '_f': 0x50})
-        self.assertEqual([M.helper_kind(self.ctx, h) for h in (0x10, 0x20, 0x30, 0x40, 0x50)],
+        self.assertEqual([M.helper_kind(self.ctx, self.votes, h) for h in (0x10, 0x20, 0x30, 0x40, 0x50)],
                          ['string', 'message', 'uint32', 'bytes', 'bool'])
 
     def test_conflicting_votes_are_not_guessed(self):
         I = self._Iv
         self._vote([I('_a', 'i'), I('_b', 'I')], {'_a': 0x10, '_b': 0x10})
-        self.assertIsNone(M.helper_kind(self.ctx, 0x10))
+        self.assertIsNone(M.helper_kind(self.ctx, self.votes, 0x10))
 
     def test_unseen_helper_is_unknown(self):
-        self.assertIsNone(M.helper_kind(self.ctx, 0x99))
+        self.assertIsNone(M.helper_kind(self.ctx, self.votes, 0x99))
 
     def test_arrays_dictionaries_and_unknown_objects_do_not_vote(self):
         I = self._Iv
         self._vote([I('_a', '@"NSMutableArray"'), I('_b', '@"NSMutableDictionary"'),
                     I('_c', '@"NSObject"'), I('_d', '{?="list"^i"count"Q"size"Q}')],
                    {'_a': 0x10, '_b': 0x20, '_c': 0x30, '_d': 0x40})
-        self.assertEqual(getattr(self.ctx, '_helper_votes', {}), {})
+        self.assertEqual(self.votes, {})
 
     def test_int_votes_are_refined_by_wire_family(self):
         M._classify_write_helper = lambda ctx, va: 'sint32'
         I = self._Iv
         self._vote([I('_a', 'i')], {'_a': 0x10})
-        self.assertEqual(M.helper_kind(self.ctx, 0x10), 'sint32')
+        self.assertEqual(M.helper_kind(self.ctx, self.votes, 0x10), 'sint32')
 
 
 class TestResolveMapTypes(unittest.TestCase):
@@ -552,7 +553,7 @@ class TestResolveMapTypes(unittest.TestCase):
     def setUp(self):
         self.kinds = {1: 'string', 2: 'message', 3: 'uint32', 4: 'bytes', 5: 'string', 6: 'int32'}
         self.classes = {'GEOVal'}
-        for name, repl in (('helper_kind', lambda ctx, va: self.kinds.get(va)),
+        for name, repl in (('helper_kind', lambda ctx, votes, va: self.kinds.get(va)),
                            ('readfrom_value_classes',
                             lambda ctx, cls, n, ci, known: set(self.classes))):
             orig = getattr(M, name)
@@ -561,7 +562,7 @@ class TestResolveMapTypes(unittest.TestCase):
 
     def resolve(self, key=1, value=2, **kw):
         w = M.MapEntryWriter(number=1, key_helper=key, value_helper=value, **kw)
-        return M.resolve_map_types(None, None, w, {}, frozenset({'GEOVal'}))
+        return M.resolve_map_types(None, None, w, {}, frozenset({'GEOVal'}), {})
 
     def test_string_to_message(self):
         t = self.resolve()
@@ -782,6 +783,7 @@ class TestLiveCoreParsec(unittest.TestCase):
         if loaded is None:
             raise unittest.SkipTest("CoreParsec dyld cache not available")
         ctx, st, cl = loaded
+        cls.loaded = loaded
         msgs = E.extract_all(ctx, st, cl)
         # Snapshot the extractor's own state BEFORE any emission (resolve_type_refs /
         # cycle breaking legitimately rewrite map value fields); emit from a copy.
@@ -804,6 +806,15 @@ class TestLiveCoreParsec(unittest.TestCase):
             self.assertEqual((n, conf, mk, mv, mc), (num, True, kt, vt, vc), key)
             self.assertIsNone(note, key)
             self.assertIs(label, FieldLabel.OPTIONAL, key)
+
+    def test_a_single_class_extraction_says_its_map_is_typed_over_the_image(self):
+        # a map's key and value are typed by the write-helper votes of the whole image: one
+        # class extracted alone leaves the map bytes, saying so (its entry writer WAS found)
+        ctx, st, cl = self.loaded
+        msg = E.extract_proto_message(ctx, st, cl, cl.find('_CPClientSession'))
+        f = next(f for f in msg.fields if f.name == 'resourceVersions')
+        self.assertIsNone(f.map_key_type)
+        self.assertEqual(f.type_inference_note, M._MAP_WHOLE_IMAGE_NOTE)
 
     @unittest.skipUnless(shutil.which('protoc'), 'protoc not on PATH')
     def test_emitted_files_with_maps_compile_together(self):

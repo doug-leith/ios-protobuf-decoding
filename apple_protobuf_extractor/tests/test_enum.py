@@ -1526,9 +1526,9 @@ class TestEnumWithoutValues(unittest.TestCase):
         cls = SimpleNamespace(name="GEOX", ivars=[SimpleNamespace(name="_kind", type_enc=enc)])
         fld = ProtoField(name="kind", number=1, type_name="Kind", label=FieldLabel.OPTIONAL,
                          type_class="ENUM:Kind")
-        with mock.patch.object(EN, "_tag_dictrep_enums", lambda *a, **k: ({}, {})), \
+        with mock.patch.object(EN, "_tag_dictrep_enums", lambda *a, **k: ({}, {}, False)), \
                 mock.patch.object(EN, "_recover_enum_values", lambda *a, **k: (None, recovered)):
-            enums = EN._collect_enum_definitions(None, cls, [fld], None, {"readFrom:"}, None)
+            enums = EN._collect_enum_definitions(None, cls, [fld], None, {"readFrom:"}, None).enums
         return enums, fld
 
     def test_an_unsigned_ivar_reverts_to_uint32(self):

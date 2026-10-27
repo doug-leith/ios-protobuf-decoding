@@ -245,12 +245,13 @@ class TestCollectEnumDefinitions(unittest.TestCase):
     """
     _collect_enum_definitions runs both the shared-cache methname scan
     (which may mutate fields by adding ENUM: tags) and the enum extraction
-    loop (which may mutate fields by reverting ENUM: → int32 and returns
-    List[ProtoEnum]).
+    loop (which may mutate fields by reverting ENUM: → int32 and returns the
+    List[ProtoEnum], with whether the dictionary representation was read in part).
     """
 
     def setUp(self):
-        (*_, self._fn) = _import_helpers()
+        (*_, collect) = _import_helpers()
+        self._fn = lambda *a, **k: collect(*a, **k).enums
         self.ctx = _ctx()
         self.st  = _st()
 

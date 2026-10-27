@@ -309,7 +309,7 @@ class TestWhatCouldNotBeEvaluatedIsReported(unittest.TestCase):
         code = [c.replace('{guard}', 'nop').replace('{two_guard}', 'cbz x5, merge')
                 for c in self.CHAIN]
         ctx, _ = _enum_ctx(code, strings=self.NAMES, slots={0x5040: 24})
-        enums, incomplete, unevaluated = _harvest_dictrep(
+        enums, incomplete, unevaluated, _t = _harvest_dictrep(
             ctx, _FakeCls(0x1000, [_FakeIvar('_kind', 24, SLOT)]))
         self.assertEqual(sorted(enums), [24])
         self.assertEqual(list(incomplete), [24])

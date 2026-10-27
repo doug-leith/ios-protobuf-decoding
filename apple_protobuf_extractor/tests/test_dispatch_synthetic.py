@@ -236,7 +236,6 @@ class TestProvisionalDecodes(unittest.TestCase):
     def test_a_table_that_decodes_differently_once_settled_is_warned_of(self):
         from unittest import mock
         import proto.dispatch as D
-        from proto.callees import provisional_answers
         from tests._fakes import NoImage
         from tests._listing import insns
         listing = insns([('cmp', 'w8, #1'), ('b.hi', '#0x1010'), ('adr', 'x9, #0x1010'),
@@ -246,7 +245,7 @@ class TestProvisionalDecodes(unittest.TestCase):
 
         def evaluated(flow, idom, kb, lo, hi):
             if len(answers) == 2:
-                provisional_answers(ctx)[0] += 1   # it consulted a function still being read
+                D.note_provisional_answer(ctx)     # it consulted a function still being read
             return answers.pop(0)
 
         with mock.patch.object(D, '_evaluated_arms', evaluated):
@@ -259,7 +258,6 @@ class TestProvisionalDecodes(unittest.TestCase):
     def test_a_table_that_decodes_the_same_is_not_remarked(self):
         from unittest import mock
         import proto.dispatch as D
-        from proto.callees import provisional_answers
         from proto.models import get_diagnostics
         from tests._fakes import NoImage
         from tests._listing import insns
@@ -270,7 +268,7 @@ class TestProvisionalDecodes(unittest.TestCase):
 
         def evaluated(flow, idom, kb, lo, hi):
             if not calls:
-                provisional_answers(ctx)[0] += 1
+                D.note_provisional_answer(ctx)
             calls.append(kb)
             return {0x1010}
 
@@ -313,8 +311,10 @@ class TestTableBaseParkedAcrossACall(unittest.TestCase):
                          ('br', 'x9'),                                                   # 0x1028
                          ('b', '#0x1008'), ('b', '#0x1008'),                             # arms
                          ('cbnz', 'x0, #0x1008'), ('ret', '')])   # 0x1034: the loop's own edge
+        import proto.liveness as L
         with mock.patch.object(C, 'callee_name', lambda ctx, va: None), \
-                mock.patch.object(C, 'stub_selector', lambda ctx, va: None):
+                mock.patch.object(L, 'callee_name', lambda ctx, va: None), \
+                mock.patch.object(L, 'stub_selector', lambda ctx, va: None):
             return D._jump_table_arm_addrs(Image(), listing, per_br=True).get(0x1028, set())
 
     def test_the_table_decodes(self):

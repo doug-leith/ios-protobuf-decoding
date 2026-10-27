@@ -59,7 +59,8 @@ from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, function_entr
 from proto.function_body import function_body, function_listing
 from proto.enums import _ENUM_UNRESOLVED_COMMENT, _find_dictrep_c_func, _enum_values_from_pairs, _enum_name_from_pairs, _qualify_enum_name
 from proto.submessage_marks import submessage
-from proto.models import FieldLabel, ProtoEnum, ProtoField, ProtoMessage, record_analysis_failure
+from proto.models import (FieldLabel, ImageEvidence, ProtoEnum, ProtoField, ProtoMessage,
+                          record_analysis_failure)
 from proto.writeto import BoundWrite, writer_calls
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.eval_tokens import SELF, READER, OPAQUE
@@ -675,17 +676,18 @@ class StructSite:
     enc: str                     # the ivar's @encode
 
 
-def record_struct_site(ctx, class_name: str, field_name: str, offset_slot: Optional[int],
-                       enc: Optional[str], write: Optional[BoundWrite]) -> None:
-    """Remember a struct-typed field's bound begin-mark for :func:`finalize_struct_fields`.
-    A no-op unless the ivar is a flat scalar struct, its offset variable is known and a write
-    binds it."""
+def record_struct_site(sites: Dict[Tuple[str, str], StructSite], class_name: str,
+                       field_name: str, offset_slot: Optional[int], enc: Optional[str],
+                       write: Optional[BoundWrite]) -> bool:
+    """Add to *sites* (:attr:`proto.models.ImageEvidence.struct_sites`) a struct-typed field's
+    bound begin-mark for :func:`finalize_struct_fields`; True when it is one.  A no-op unless
+    the ivar is a flat scalar struct, its offset variable is known and a write binds it."""
     if write is None or not offset_slot:
-        return
+        return False
     if parse_struct_encoding(enc) is None:
-        return
-    _ctx_cache(ctx, "_struct_sites", dict)[(class_name, field_name)] = StructSite(
-        write.addr, offset_slot, write.number, enc)
+        return False
+    sites[(class_name, field_name)] = StructSite(write.addr, offset_slot, write.number, enc)
+    return True
 
 
 _MEMBER_NAME_MISSING = ("member name not recovered (the struct's @encode names no members); "
@@ -868,15 +870,17 @@ def _make_enum(base_name: str, pairs: Sequence[Tuple[int, str]]) -> ProtoEnum:
     return ProtoEnum(name=name, values=values)
 
 
-def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], prefixes=None) -> None:
+def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], evidence: ImageEvidence,
+                           prefixes=None) -> None:
     """Post-extraction pass (TODO #37): turn every ``bytes``-typed struct field whose
     serialiser was decoded into a message-typed field, synthesising one :class:`ProtoMessage`
     per struct tag (appended to *messages*).
 
     Sites are grouped by tag and every owner of a tag must agree on the member numbers and
     wire families — a disagreement leaves the whole tag as the flagged ``bytes`` fallback.
-    A tag that collides with a real ObjC class or an existing message name is skipped."""
-    sites = getattr(ctx, "_struct_sites", None) or {}
+    A tag that collides with a real ObjC class or an existing message name is skipped.
+    *evidence*: the sites the extraction of each class recorded (:func:`record_struct_site`)."""
+    sites = evidence.struct_sites
     if not sites:
         return
     entries = function_entries(ctx)

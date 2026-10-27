@@ -431,8 +431,8 @@ class TestNameMapBuilderValidation(unittest.TestCase):
         read = [(1, "a_field"), (2, "b_field"), (3, "c_field")]
         visits = {n: [MC.Visited("Singular", "Int32")] for n in visited}
         with mock.patch.object(FB, "disasm", ctx.fake), \
-                mock.patch.object(S, "_runtime_namemap_fields",
-                                  lambda *a, **k: [S.SwiftField(*e) for e in read]), \
+                mock.patch.object(S, "_read_runtime", lambda *a, **k: S._Reading(
+                    [S.SwiftField(*e) for e in read], "runtime-namemap")), \
                 mock.patch.object(MC, "visited_fields", lambda ctx, code: visits):
             got, shape = S._extract_namemap(ctx, 0x1000, MC.Code(0x2000), owner="Mod.M")
         return [(f.number, f.name) for f in got], shape
@@ -1707,8 +1707,8 @@ class TestLiveCacheMessageProtection(unittest.TestCase):
 
 class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
     """A builder listing read without a function index stops at the runaway guard
-    (``_UNBOUNDED_MAX_INSNS``) with its path still open: `_runtime_namemap_fields` must flag the
-    numbers it read off it as estimated.  A genuine (if synthetic) arm64 instruction stream --
+    (``_UNBOUNDED_MAX_INSNS``) with its path still open: the name map read off it
+    (:func:`S._extract_namemap_raw`, the runtime builder's one entry) has its numbers estimated.  A genuine (if synthetic) arm64 instruction stream --
     disassembled through capstone, not faked -- long enough to reach the guard without a ret,
     embedding one real (number, name) store, behind a once-init getter (``cmn x0, #1; b.ne
     <builder>``) whose listing reaches it."""
@@ -1749,7 +1749,7 @@ class TestRuntimeNamemapFieldsHitCapLive(unittest.TestCase):
         return _FakeCtx(bytes(buf))
 
     def _fields(self, ctx):
-        return S._runtime_namemap_fields(ctx, FB.function_body(ctx, self._GETTER_VA))
+        return S._extract_namemap_raw(ctx, self._GETTER_VA)[0]
 
     def test_builder_hitting_cap_flags_number_unconfirmed(self):
         ctx = self._build(self._CAP + 16, terminate_with_ret=False)   # runs on past the guard

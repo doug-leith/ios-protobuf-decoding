@@ -130,29 +130,33 @@ class TestSentSelector(unittest.TestCase):
 
 
 class TestCallReads(unittest.TestCase):
-    """proto.callees.call_reads: one answer to "what may this call read" for both
+    """proto.liveness.call_reads: one answer to "what may this call read" for both
     interpreters (WriterFlow and arm64_eval.Flow)."""
 
     def _reads(self, name=None, sel=None, blocks=(), names=None, text=(0x1000, 0x100000),
                starts=None, then_index=None):
         import proto.callees as C
+        import proto.liveness as L
         from tests._fakes import TextImage
         from tests._listing import layout
 
         _o, fd = layout(*blocks) if blocks else ([], lambda *a, **k: [])
         named = names or {}
-        with mock.patch.object(C, 'callee_name',
-                               lambda ctx, va: name if va == 0x9000 else named.get(va)), \
-                mock.patch.object(C, 'stub_selector', lambda ctx, va: sel if va == 0x9000 else None), \
+        names_of = lambda ctx, va: name if va == 0x9000 else named.get(va)   # noqa: E731
+        selector_of = lambda ctx, va: sel if va == 0x9000 else None          # noqa: E731
+        with mock.patch.object(C, 'callee_name', names_of), \
+                mock.patch.object(L, 'callee_name', names_of), \
+                mock.patch.object(C, 'stub_selector', selector_of), \
+                mock.patch.object(L, 'stub_selector', selector_of), \
                 mock.patch('proto.function_body.disasm', fd), \
                 mock.patch.object(C, 'disasm', fd):
             image = TextImage(text, starts=({a for a, _body in blocks} | set(named))
                               if starts is None else starts)
-            got = set(C.call_reads(image, 0x9000))
+            got = set(L.call_reads(image, 0x9000))
             if then_index is None:
                 return got
             image._function_entries = set(then_index)      # build_function_index, later
-            return got, set(C.call_reads(image, 0x9000))
+            return got, set(L.call_reads(image, 0x9000))
 
     def test_a_named_swift_function_reads_self_error_and_async_registers_too(self):
         from proto.callees import ABI_ARGS
@@ -197,7 +201,7 @@ class TestCallReads(unittest.TestCase):
 
     def test_a_br_to_a_pointer_read_at_an_index_is_not(self):
         # ldr x2, [x8, x1, lsl #3]: a table of code pointers -- undecoded, every register
-        from proto.callees import _ALL_REGS
+        from proto.liveness import _ALL_REGS
         got = self._reads(blocks=[(0x9000, [('ldr', 'x2, [x8, x1, lsl #3]'), ('br', 'x2')])])
         self.assertEqual(got, set(_ALL_REGS) - {'x2'})
 
@@ -296,7 +300,7 @@ class TestCallReads(unittest.TestCase):
             # a code base plus a byte read from a table at an index (x8): no bound, undecoded
             got = self._reads(blocks=[(0x9000, [('adr', 'x9, #0x9010'), ('ldrb', 'w10, [x28, x8]'),
                                                 ('add', 'x9, x9, x10, lsl #2'), ('br', 'x9')])])
-        from proto.callees import _ALL_REGS
+        from proto.liveness import _ALL_REGS
         self.assertEqual(got, set(_ALL_REGS) - {'x9', 'x10'})
         self.assertIn('undecoded jump table hit', logs.output[0])
 
@@ -350,18 +354,18 @@ class TestCallReads(unittest.TestCase):
         calls the next twice and the first back; the last reads x9 -- and how many times each
         was read."""
         import collections
-        import proto.callees as C
+        import proto.liveness as L
         fns = [0x9000 + 0x100 * i for i in range(n)]
         blocks = [(fns[i], [('bl', f'#{fns[i + 1]:#x}'), ('bl', f'#{fns[i + 1]:#x}'),
                             ('bl', f'#{fns[0]:#x}'), ('ret', '')]) for i in range(n - 1)]
         blocks.append((fns[-1], [('mov', 'x0, x9'), ('ret', '')]))
         counts = collections.Counter()
-        real = C._live_in
+        real = L._live_in
 
         def counted(ctx, target):
             counts[target] += 1
             return real(ctx, target)
-        with mock.patch.object(C, '_live_in', counted):
+        with mock.patch.object(L, '_live_in', counted):
             return self._reads(blocks=blocks), counts
 
     def test_a_cycle_s_functions_are_read_once_a_round(self):
@@ -391,18 +395,19 @@ class TestCallReadsDeepChain(unittest.TestCase):
         from types import SimpleNamespace
         from unittest import mock
         import proto.callees as C
-        import proto.dispatch as D
+        import proto.liveness as L
         from proto.models import get_diagnostics
         text = SimpleNamespace(vmaddr=0x1000, vmsize=0x100000)
         ctx = SimpleNamespace(has_section=lambda *a: True, section=lambda *a: text)
 
         def live_in(ctx_, target):
-            return () if target >= 0x1000 + 4 * 100_000 else C.call_reads(ctx_, target + 4)
-        with mock.patch.object(C, "callee_name", lambda c, t: None), \
-                mock.patch.object(C, "stub_selector", lambda c, t: None), \
-                mock.patch.object(C, "_live_in", live_in), \
-                mock.patch.object(D, "function_entries", lambda c: []), \
-                mock.patch.object(D, "recheck_provisional_decodes", lambda c: None):
-            self.assertEqual(C.call_reads(ctx, 0x1000), C._ALL_REGS)
+            return () if target >= 0x1000 + 4 * 100_000 else L.call_reads(ctx_, target + 4)
+        with mock.patch.object(L, "callee_name", lambda c, t: None), \
+                mock.patch.object(C, "callee_name", lambda c, t: None), \
+                mock.patch.object(L, "stub_selector", lambda c, t: None), \
+                mock.patch.object(L, "_live_in", live_in), \
+                mock.patch.object(L, "function_entries", lambda c: []), \
+                mock.patch.object(L, "recheck_provisional_decodes", lambda c: None):
+            self.assertEqual(L.call_reads(ctx, 0x1000), L._ALL_REGS)
         self.assertIn("call chain deeper than the stack",
                       [h[0] for h in get_diagnostics(ctx).heuristics_hit])

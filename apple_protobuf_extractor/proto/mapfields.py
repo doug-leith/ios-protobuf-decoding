@@ -47,7 +47,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
+from macho.memory import READ_ERRORS, BinaryContext, record_unread, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
 from proto.callees import real_target, stub_selector
@@ -59,7 +59,8 @@ from proto.function_body import function_body, function_listing
 from proto.writeto import BoundWrite, writer_calls
 from proto.submessage_marks import NO_OPEN_MARK, PLACE_MARK, submessage
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
-from proto.models import FieldLabel, ProtoField, ProtoMessage, record_analysis_failure
+from proto.models import (FieldLabel, ImageEvidence, ProtoField, ProtoMessage,
+                          record_analysis_failure)
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
 from proto.protoclass_set import _proto_class_set
 from proto.dispatch import listing_flow
@@ -392,14 +393,14 @@ def _ivar_wire_kind(enc: str, proto_classes: FrozenSet[str]) -> Optional[str]:
 
 
 def record_helper_votes(
-    ctx: BinaryContext, field_ivars: Sequence[ObjcIvar], helpers: Dict[str, int],
-    proto_classes: FrozenSet[str],
+    ctx: BinaryContext, votes: Dict[int, Counter], field_ivars: Sequence[ObjcIvar],
+    helpers: Dict[str, int], proto_classes: FrozenSet[str],
 ) -> None:
-    """Accumulate, on *ctx*, one vote per field ``{canonical write helper → wire kind of
-    the ivar that uses it}``.  Called per class by ``extract_proto_message`` with the write
-    helpers the write sites already bound (``WriteBindings.helpers``; no extra analysis), so by
-    the end of ``extract_all`` the table covers every class in the binary."""
-    votes = _ctx_cache(ctx, "_helper_votes", dict)
+    """Add to *votes* (:attr:`proto.models.ImageEvidence.helper_votes`) one vote per field
+    ``{canonical write helper → wire kind of the ivar that uses it}``.  Called per class by
+    ``extract_proto_message`` with the write helpers the write sites already bound
+    (``WriteBindings.helpers``; no extra analysis), so by the end of ``extract_all`` the table
+    covers every class in the binary."""
     for iv in field_ivars:
         va = helpers.get(iv.name)
         kind = _ivar_wire_kind(iv.type_enc or "", proto_classes) if va else None
@@ -413,13 +414,13 @@ def record_helper_votes(
         votes.setdefault(real_target(ctx, va), Counter())[kind] += 1
 
 
-def helper_kind(ctx: BinaryContext, helper_va: int) -> Optional[str]:
+def helper_kind(ctx: BinaryContext, votes: Dict[int, Counter], helper_va: int) -> Optional[str]:
     """Wire kind of a write helper: the UNANIMOUS kind of the ivars that use it
-    binary-wide, else ``None`` (never seen, or conflicting votes — not guessed)."""
-    votes = (getattr(ctx, "_helper_votes", None) or {}).get(real_target(ctx, helper_va))
-    if not votes or len(votes) != 1:
+    binary-wide (*votes*), else ``None`` (never seen, or conflicting votes — not guessed)."""
+    got = votes.get(real_target(ctx, helper_va))
+    if not got or len(got) != 1:
         return None
-    return next(iter(votes))
+    return next(iter(got))
 
 
 # ── readFrom: value class ─────────────────────────────────────────────────────
@@ -449,9 +450,10 @@ def readfrom_value_classes(
 
 def resolve_map_types(
     ctx: BinaryContext, cls: ObjcClass, writer: MapEntryWriter,
-    core_index: Dict[int, str], known_classes: FrozenSet[str],
+    core_index: Dict[int, str], known_classes: FrozenSet[str], votes: Dict[int, Counter],
 ) -> MapTypes:
-    """Resolve a map field's key/value types from its :class:`MapEntryWriter`.
+    """Resolve a map field's key/value types from its :class:`MapEntryWriter` and the image's
+    write-helper *votes*.
 
     Key = the key helper's wire kind (must be a legal map-key type).  Value = the value
     helper's wire kind; for ``message`` the class is the single proto class the
@@ -459,8 +461,8 @@ def resolve_map_types(
     reference NONE (the two serializers are cross-checked — disagreement is reported,
     not resolved).  The NSNumber unboxing selector, where present, must be consistent
     with the helper-derived scalar type."""
-    kt = helper_kind(ctx, writer.key_helper)
-    vt = helper_kind(ctx, writer.value_helper)
+    kt = helper_kind(ctx, votes, writer.key_helper)
+    vt = helper_kind(ctx, votes, writer.value_helper)
     reasons: List[str] = []
 
     key_type: Optional[str] = kt if kt in MAP_KEY_TYPES else None
@@ -499,6 +501,12 @@ def resolve_map_types(
 _MAP_FIELD_NOTE = (
     "map<> field (ObjC NSMutableDictionary) emitted as bytes; no map-entry writer "
     "found in writeTo: so key/value types not recovered — see LIMITATIONS.md (1)"
+)
+#: A map field of a single-class extraction whose entry writer was found: its key and value are
+#: typed by the write-helper votes of the whole image, which only extract_all collects.
+_MAP_WHOLE_IMAGE_NOTE = (
+    "map<> field (ObjC NSMutableDictionary) emitted as bytes: its key/value types are read over "
+    "the whole image (extract_all), not by a single-class extraction"
 )
 
 
@@ -539,15 +547,15 @@ def _apply_map_types(fld: ProtoField, types: MapTypes) -> None:
 
 def _finalize_map_fields(
     ctx: BinaryContext, cl: ClassList, messages: List[ProtoMessage],
-    core_index: Dict[int, str],
+    core_index: Dict[int, str], evidence: ImageEvidence,
 ) -> None:
     """Post-extraction pass (#41): type every map field whose entry writer was recovered.
 
     Runs after the whole image is extracted because a map key/value helper's type is the
-    unanimous type of the ivars that use it binary-wide (``ctx._helper_votes``, filled by
-    :func:`record_helper_votes` as each class was extracted).  A field with no entry
+    unanimous type of the ivars that use it binary-wide (*evidence*'s ``helper_votes``, filled
+    by :func:`record_helper_votes` as each class was extracted).  A field with no entry
     writer is left untouched (flagged ``bytes``)."""
-    writers = getattr(ctx, "_map_writers", None) or {}
+    writers = evidence.map_writers
     if not writers:
         return
     known = _proto_class_set(ctx, cl)
@@ -559,7 +567,8 @@ def _finalize_map_fields(
             if writer is None or cls is None:
                 continue
             try:
-                types = resolve_map_types(ctx, cls, writer, core_index, known)
+                types = resolve_map_types(ctx, cls, writer, core_index, known,
+                                          evidence.helper_votes)
             except PROGRAM_ERRORS:
                 raise
             except Exception as exc:
