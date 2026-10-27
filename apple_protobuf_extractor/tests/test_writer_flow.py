@@ -340,7 +340,7 @@ class TestIOS27SharedSelectorStub(unittest.TestCase):
         cl = build_class_list(ctx, build_string_table(ctx))
         wf = WriterFlow(ctx, cl)
         cls = cl.find("GEOPlaceSearchRequest")
-        add_form = [s.target for s in wf.write_sites(cls) if s.target is not None
+        add_form = [s.target for s in wf.writer_calls(cls).sites if s.target is not None
                     and [i.mnemonic for i in disasm(ctx, s.target, 3, stop_at_ret=False)]
                     == ["adrp", "add", "b"]]
         self.assertTrue(add_form)

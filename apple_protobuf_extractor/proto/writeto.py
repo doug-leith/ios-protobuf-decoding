@@ -26,27 +26,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from macho.memory import BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ObjcClass, ObjcIvar
 from proto.models import MAX_FIELD_NUMBER, record_analysis_failure
-from proto.arm64_operands import CALLS
-
-
-def field_number_at(flow, k: int) -> Optional[int]:
-    """The proto field number the field-write call (``bl``, or tail-call ``b``) at
-    ``flow.insns[k]`` is handed: the constant w2 holds there (:meth:`Flow.const_before`:
-    exactly one constant definition reaches it over the listing's CFG) -- or, for a
-    float/double writer, whose value travels in v0 and number in w1, the constant w1 holds
-    when the one definition of v0 reaching the call is not a call (an FP argument set up for
-    it; a call only clobbers v0).  A float/double writer takes no third argument, so a
-    constant in w2 means an integer writer; without an FP value a constant w1 is just an
-    argument (``os_unfair_lock_lock_with_options(lock, 0x10000)``).  None when no such
-    constant reaches the call."""
-    n = flow.const_before(k, 'x2')
-    if n is None:
-        defs = flow.defs_before(k, 'v0')
-        if len(defs) == 1:
-            (d,) = defs
-            if d >= 0 and flow.insns[d].mnemonic not in CALLS:
-                n = flow.const_before(k, 'x1')
-    return n
+from proto.submessage_marks import NO_OPEN_MARK
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -87,10 +67,6 @@ class WriteBindings:
     zero_fields: Set[str] = field(default_factory=set)       # written with field# 0 only (#52)
 
 
-# No length-delimited mark is open on any path into the call (WriteSite.open_marks).
-_NO_OPEN_MARK = frozenset({()})
-
-
 def _ivars_of(origins) -> Set[str]:
     return {o[1] for o in origins if isinstance(o, tuple) and o[0] == 'I'}
 
@@ -109,7 +85,7 @@ def _site_bindings(sites, field_ivars) -> WriteBindings:
     zero: Set[str] = set()
     for s in sites:
         n = s.number
-        if n is None or s.open_marks != _NO_OPEN_MARK:
+        if n is None or s.open_marks != NO_OPEN_MARK:
             continue
         elem: List[int] = []
         if s.is_mark:
@@ -151,19 +127,28 @@ def _extract_writeto_field_numbers(
     ``ctx._writer_flow``).  Empty when the pre-pass has not built the flow (``ctx`` None, a
     direct unit test) or the flow does not decide the class -- the caller then falls back
     to its own flagged estimate."""
+    calls = writer_calls(ctx, cls)
+    return WriteBindings() if calls is None else _site_bindings(calls.sites, field_ivars)
+
+
+def writer_calls(ctx: BinaryContext, cls: ObjcClass, invoke: Optional[int] = None):
+    """The calls of *cls*'s ``writeTo:`` -- or, given *invoke*, of the block function at it that
+    the ``writeTo:`` passes on -- that may be handed the writer, with the marks open where it is
+    left (:class:`proto.writer_flow.WriterCalls`, on the image's writer flow,
+    ``ctx._writer_flow``).  None when the pre-pass has not built the flow (``ctx`` None, a
+    direct unit test) or the flow does not decide the function."""
     wf = getattr(ctx, "_writer_flow", None)
     if wf is None:
-        return WriteBindings()
+        return None
     try:
-        sites = wf.write_sites(cls)
+        return wf.writer_calls(cls) if invoke is None else wf.block_calls(cls, invoke)
     except PROGRAM_ERRORS:
         raise                       # our own wiring bug — never mask it
     except Exception as exc:
         # Bad binary input → per-class fail-safe (flagged ivar-order estimate), reported.
         record_analysis_failure(ctx, getattr(cls, "name", "?"), "writeTo: flow",
                                 f"{type(exc).__name__}: {exc}")
-        return WriteBindings()
-    return WriteBindings() if sites is None else _site_bindings(sites, field_ivars)
+        return None
 
 
 def writeto_sent_selectors(ctx: BinaryContext, cls: ObjcClass) -> Optional[frozenset]:

@@ -382,10 +382,10 @@ class TestEnumValueNameDisclosure(unittest.TestCase):
 @unittest.skipUnless(_HAVE_FIXTURE, 'synthetic fixture binary not built')
 class TestWriterFlowFailureIsRecorded(unittest.TestCase):
 
-    def test_write_sites_that_raise_are_an_analysis_failure(self):
+    def test_writer_calls_that_raise_are_an_analysis_failure(self):
         from proto.writer_flow import WriterFlow
         ctx, st, cl = _load()
-        with mock.patch.object(WriterFlow, 'write_sites', side_effect=RuntimeError('boom')):
+        with mock.patch.object(WriterFlow, 'writer_calls', side_effect=RuntimeError('boom')):
             extract_all(ctx, st, cl)
         failures = get_diagnostics(ctx).analysis_failures
         self.assertTrue(failures)

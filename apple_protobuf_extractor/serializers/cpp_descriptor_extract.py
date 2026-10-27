@@ -367,34 +367,67 @@ def _ref(type_name: str, package: str) -> str:
 
 def _emit_enum(e: EnumType, ind: str, out: List[str]) -> None:
     out.append(f"{ind}enum {e.name} {{")
+    numbers = [num for _name, num in e.values]
+    if len(set(numbers)) < len(numbers):         # protoc compiled it only with this option
+        out.append(f"{ind}  option allow_alias = true;")
     for name, num in e.values:
         out.append(f"{ind}  {name} = {num};")
     out.append(f"{ind}}}")
 
 
 def _emit_message(m: Message, package: str, proto3: bool, ind: str,
-                  out: List[str]) -> None:
+                  out: List[str], scope: str) -> None:
+    """*m* (full name *scope*) as a ``message`` block."""
     out.append(f"{ind}message {m.name} {{")
-    inner = ind + "  "
+    _emit_body(m, package, proto3, ind + "  ", out, scope)
+    out.append(f"{ind}}}")
+
+
+def _groups(m: Message, scope: str) -> Dict[int, Message]:
+    """*m*'s group fields, by number, each with the nested type it is declared by: proto2's
+    ``group Name = N { ... }`` declares the type ``Name`` beside a field ``name``."""
+    nested = {f"{scope}.{n.name}": n for n in m.nested}
+    out = {}
+    for f in m.fields:
+        n = nested.get(f.type_name.lstrip(".")) if f.type == 10 else None
+        if n is not None and f.name == n.name.lower():
+            out[f.number] = n
+    return out
+
+
+def _emit_body(m: Message, package: str, proto3: bool, inner: str,
+               out: List[str], scope: str) -> None:
+    groups = _groups(m, scope)
     for e in m.enums:
         _emit_enum(e, inner, out)
     for n in m.nested:
-        _emit_message(n, package, proto3, inner, out)
+        if n not in groups.values():
+            _emit_message(n, package, proto3, inner, out, f"{scope}.{n.name}")
+
+    def field(f: Field, ind: str, in_oneof: bool = False) -> None:
+        line = _emit_field(f, package, proto3, in_oneof)
+        g = groups.get(f.number)
+        if g is None:
+            out.append(ind + line)
+            return
+        label = line.split(" ", 1)[0] + " " if not in_oneof else ""
+        out.append(f"{ind}{label}group {g.name} = {f.number} {{")
+        _emit_body(g, package, proto3, ind + "  ", out, f"{scope}.{g.name}")
+        out.append(f"{ind}}}")
+
     # group fields by oneof
-    plain = [f for f in m.fields if f.oneof_index < 0]
     by_oneof: Dict[int, List[Field]] = {}
     for f in m.fields:
         if f.oneof_index >= 0:
             by_oneof.setdefault(f.oneof_index, []).append(f)
-    for f in plain:
-        out.append(inner + _emit_field(f, package, proto3))
+        else:
+            field(f, inner)
     for idx, fs in sorted(by_oneof.items()):
         oname = m.oneofs[idx] if idx < len(m.oneofs) else f"oneof_{idx}"
         out.append(f"{inner}oneof {oname} {{")
         for f in fs:
-            out.append("  " + inner + _emit_field(f, package, proto3, in_oneof=True))
+            field(f, inner + "  ", in_oneof=True)
         out.append(f"{inner}}}")
-    out.append(f"{ind}}}")
 
 
 def _emit_field(f: Field, package: str, proto3: bool, in_oneof: bool = False) -> str:
@@ -427,7 +460,9 @@ def format_proto(fp: FileProto) -> str:
     for e in fp.enums:
         _emit_enum(e, "", out); out.append("")
     for m in fp.messages:
-        _emit_message(m, fp.package, proto3, "", out); out.append("")
+        _emit_message(m, fp.package, proto3, "", out,
+                      f"{fp.package}.{m.name}" if fp.package else m.name)
+        out.append("")
     return "\n".join(out).rstrip() + "\n"
 
 

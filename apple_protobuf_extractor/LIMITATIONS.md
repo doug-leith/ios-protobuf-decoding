@@ -93,9 +93,10 @@ numbers and no comment, from three sources that are all in the binary:
 - the struct's **name and member layout** — the ivar `@encode`;
 - each member's **field number and wire type** — the struct's C serialiser (`has-bit test ;
   load [struct+offset] ; write(field#)` per member), whether it is a called function or inlined
-  between the begin/end marks of the owner's `writeTo:` (the has-bit tests of an inlined struct
-  put some members out of line, past the loop's back-edge, so the body is walked as a CFG
-  region, with a symbolic base-register tracker that follows the ivar-offset variable);
+  between the begin/end marks of the owner's `writeTo:` (the writes the writer flow finds with
+  the begin mark open on the paths into them -- the has-bit tests of an inlined struct put some
+  out of line, past the loop's back-edge -- each value traced to a member through the
+  ivar-offset variable);
 - each member's **name** — the `@encode` where it names members (`"_duration"I`), otherwise the
   `CFString` keys of the struct's dictionary representation (a called function, or inlined into
   the owner's `_dictionaryRepresentation:`).

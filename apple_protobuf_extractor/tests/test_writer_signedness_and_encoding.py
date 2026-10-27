@@ -138,7 +138,7 @@ class TestRepeatedEncodingOffline(unittest.TestCase):
         self.assertIn('repeated uint32 xs = 3;', out)
         out = self._emit(type_name='uint32', repeated_encoding='UNSEEN')
         self.assertIn('repeated uint32 xs = 3;  // packed/expanded not read from writeTo:', out)
-        out = self._emit(type_name='string', repeated_encoding='EXPANDED')   # not packable
+        out = self._emit(type_name='string')   # not packable: its producer sets no encoding
         self.assertIn('repeated string xs = 3;', out)
 
 

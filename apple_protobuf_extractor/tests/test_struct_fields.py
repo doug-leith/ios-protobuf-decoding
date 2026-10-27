@@ -21,11 +21,14 @@ import artifacts
 import proto.extractor as E
 import proto.structfields as SF
 import proto.function_body as FB
-from proto.dispatch import listing_flow
 import live_artifacts as V
 from proto.models import FieldLabel
 from macho.disasm import disasm
 from tests._a64asm import assemble, FlowCtx
+from tests._writer_calls import exits, run_writer_flow
+from proto.submessage_marks import submessage
+
+_W, _S = frozenset({'W'}), frozenset({'S'})
 
 
 # ── fake instruction memory (same idiom as test_map_fields) ───────────────────
@@ -203,51 +206,60 @@ _PD_DEPARTURE_WRITETO = (0x18c27d07c, [
 ])
 
 
-class TestAnalyzeBracket(_Patched):
-    def _insns(self):
-        insns, fake = asm(_PD_DEPARTURE_WRITETO)
-        self.patch(fake)
-        begin = next(i for i, x in enumerate(insns)
-                     if x.mnemonic == 'bl' and x.op_str == '#0x18dbdab88')
-        return insns, begin
+class TestSubmessage(_Patched):
+    """proto.submessage_marks.submessage: the calls the writer flow records with a begin mark
+    innermost."""
+
+    def _calls(self, listing=_PD_DEPARTURE_WRITETO, entry=None, names=None):
+        calls, _insns = run_writer_flow([listing], entry=entry or {'x0': _S, 'x2': _W},
+                                        names=names, tails=exits(listing))
+        return calls, next(s for s in calls.sites if s.target == 0x18dbdab88)
 
     def test_field_number_and_struct_writer_callee_of_a_bracketed_member(self):
-        insns, begin = self._insns()
-        b = SF.analyze_bracket(None, insns, begin)
-        self.assertEqual(b.number, 1)
-        self.assertEqual(b.callees, (0x18c241b50,))
+        sub = submessage(*self._calls())
+        self.assertEqual((sub.number, sub.callees, sub.writes), (1, (0x18c241b50,), ()))
 
     def test_a_begin_with_no_end_mark_is_rejected(self):
-        insns, begin = self._insns()
-        cut = [x for x in insns if x.op_str != '#0x18dbdab94']
-        self.assertIsNone(SF.analyze_bracket(None, cut, begin))
+        base, lines = _PD_DEPARTURE_WRITETO
+        cut = [('nop', '') if op == '#0x18dbdab94' else (mn, op) for mn, op in lines]
+        self.assertIsNone(submessage(*self._calls((base, cut))))
 
     def test_not_a_begin_mark_is_rejected(self):
-        insns, _ = self._insns()
-        self.assertIsNone(SF.analyze_bracket(None, insns, 0))
+        calls, _begin = self._calls()
+        writer = next(s for s in calls.sites if s.target == 0x18c241b50)
+        self.assertIsNone(submessage(calls, writer))
 
     def test_a_write_in_a_shared_tail_is_followed(self):
         # begin(1) ; w2 = 3 ; b tail ... tail: write(w2) ; b back to the end mark
-        insns, fake = asm((0x1000, [
+        calls, begin = self._calls((0x1000, [
             ('str', 'xzr, [sp, #8]'), ('add', 'x1, sp, #8'), ('mov', 'x0, x19'),
             ('mov', 'w2, #1'), ('bl', '#0x18dbdab88'),                       # begin, field 1
             ('mov', 'w2, #3'), ('b', '#0x102c'),
             ('add', 'x1, sp, #8'), ('mov', 'x0, x19'), ('bl', '#0x18dbdab94'),   # end
             ('ret', ''),
-            ('mov', 'x0, x19'), ('bl', '#0x18dbdac30'), ('b', '#0x101c')]))  # the shared tail
-        self.patch(fake)
-        b = SF.analyze_bracket(None, insns, 4)
-        self.assertIsNotNone(b)
-        self.assertEqual((b.number, [(fn, t) for _k, fn, t in b.writes]), (1, [(3, 0x18dbdac30)]))
+            ('mov', 'x0, x19'), ('bl', '#0x18dbdac30'), ('b', '#0x101c')]),   # the shared tail
+            entry={'x19': _W})
+        sub = submessage(calls, begin)
+        self.assertEqual((sub.number, [(t.number, t.target) for t in sub.writes]),
+                         (1, [(3, 0x18dbdac30)]))
 
     def test_a_mark_is_the_runtime_s_by_name_not_a_call_of_its_shape(self):
         # (the same call, a frame scratch in x1 and a field number, to a function not named
         # _PBDataWriterPlaceMark)
-        from unittest import mock
-        import proto.submessage_marks as SM
-        insns, begin = self._insns()
-        with mock.patch.object(SM, "callee_name", lambda ctx, va: None):
-            self.assertIsNone(SF.analyze_bracket(None, insns, begin))
+        self.assertIsNone(submessage(*self._calls(names={})))
+
+    def test_a_frame_pointer_scratch_pairs_the_marks(self):
+        # A function that addresses its locals from the frame pointer says ``sub x1, x29, #K``
+        # (not ``add x1, sp, #K``) for the scratch (real GEOPDDepartureSequence).
+        calls, begin = self._calls((0x1000, [
+            ('sub', 'sp, sp, #0x100'), ('stp', 'x29, x30, [sp, #0xf0]'),
+            ('add', 'x29, sp, #0xf0'),
+            ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'), ('mov', 'w2, #0xb'),
+            ('bl', '#0x18dbdab88'), ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'),
+            ('bl', '#0x18dbdab94'), ('ldp', 'x29, x30, [sp, #0xf0]'),
+            ('add', 'sp, sp, #0x100'), ('ret', '')]), entry={'x19': _W})
+        self.assertIsNotNone(begin.slot)
+        self.assertEqual(submessage(calls, begin).number, 0xb)
 
 
 # Real listing: the dictionary-representation function of GEOWiFiQualityTimeRange — per member
@@ -407,25 +419,25 @@ _GENERICTILE_WRITETO = (0x18d2f8ee8, [
 
 class TestInlineStructWrites(_Patched):
     def _bracket(self, listing, layout_enc, ivar_off_var):
-        insns, fake = asm(listing)
-        self.patch(fake)
-        begin = next(i for i, x in enumerate(insns)
-                     if x.mnemonic == 'bl' and x.op_str == '#0x18dbdab88')
-        br = SF.analyze_bracket(None, insns, begin)
+        # (a writeTo: from its middle: the writer in x19, self in x21)
+        calls, insns = run_writer_flow([listing], entry={'x19': _W, 'x21': _S},
+                                       tails=exits(listing))
+        self.patch(asm(listing)[1])
+        br = submessage(calls, next(s for s in calls.sites if s.target == 0x18dbdab88))
         return insns, br, SF.parse_struct_encoding(layout_enc), (lambda a: a == ivar_off_var)
 
     def test_by_value_struct_members_are_read_from_the_inline_writes(self):
         insns, br, layout, var = self._bracket(
             _SESSIONID_WRITETO, '{GEOSessionID="_high"Q"_low"Q}', 0x1e1dd6328)
         self.assertEqual((br.number, br.callees), (10, ()))
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br.writes, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {8: 1, 0: 2})
 
     def test_array_members_including_out_of_line_ones_are_found(self):
         insns, br, layout, var = self._bracket(
             _GENERICTILE_WRITETO, '^{GEOGenericTile=IIi{?=b1b1b1}}', 0x1e1ddfbe4)
         self.assertEqual(br.number, 4)
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br.writes, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 3, 8: 1, 4: 2})
 
     def test_a_double_member_is_traced_by_data_flow_not_by_distance(self):
@@ -442,14 +454,14 @@ class TestInlineStructWrites(_Patched):
             ('add', 'x1, sp, #0x48'), ('mov', 'x0, x19'), ('bl', '#0x18dbdab94'), ('ret', '')])
         insns, br, layout, var = self._bracket(listing, '{GEOFix="_lat"d"_n"i}', 0x1e1dd6328)
         self.assertEqual(br.number, 10)
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br.writes, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 1, 8: 2})
 
     def test_wrong_offset_variable_binds_nothing(self):
         insns, br, layout, _ = self._bracket(
             _SESSIONID_WRITETO, '{GEOSessionID="_high"Q"_low"Q}', 0x1e1dd6328)
         self.assertEqual(
-            SF.decode_inline_writes(None, insns, br, lambda a: a == 0xdead0000, layout), [])
+            SF.decode_inline_writes(None, insns, br.writes, lambda a: a == 0xdead0000, layout), [])
 
     def test_a_site_s_ivar_is_its_offset_variable_not_the_offset_it_holds(self):
         # another class's ivar at the same offset has its own variable (0x1e1dd6330)
@@ -457,9 +469,9 @@ class TestInlineStructWrites(_Patched):
         insns, br, layout, _ = self._bracket(_SESSIONID_WRITETO, enc, 0x1e1dd6328)
         own, other = (SF._ivar_slot_test(SF.StructSite(0, slot, 10, enc))
                       for slot in (0x1e1dd6328, 0x1e1dd6330))
-        self.assertEqual(SF.match_layout(layout, SF.decode_inline_writes(None, insns, br, own, layout)),
+        self.assertEqual(SF.match_layout(layout, SF.decode_inline_writes(None, insns, br.writes, own, layout)),
                          {8: 1, 0: 2})
-        self.assertEqual(SF.decode_inline_writes(None, insns, br, other, layout), [])
+        self.assertEqual(SF.decode_inline_writes(None, insns, br.writes, other, layout), [])
 
 
 # Real listing: the loop in -[GEOCoarseLocationRing _dictionaryRepresentation:] that builds one
@@ -901,22 +913,6 @@ class TestMakeEnum(unittest.TestCase):
                          ('TimepointType', ['TIMEPOINT_TYPE_DEPART', 'TIMEPOINT_TYPE_ARRIVE']))
 
 
-class TestFramePointerScratch(_Patched):
-    """A function that addresses its locals from the frame pointer says ``sub x1, x29, #K``
-    (not ``add x1, sp, #K``) for the begin/end-mark scratch (real GEOPDDepartureSequence)."""
-
-    def test_the_begin_and_end_marks_pair_on_the_same_frame_slot(self):
-        order, _ = asm((0x1000, [
-            ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'), ('mov', 'w2, #0xb'),
-            ('bl', '#0x18dbdab88'), ('sub', 'x1, x29, #0xd8'), ('mov', 'x0, x19'),
-            ('bl', '#0x18dbdab94')]))
-        flow = listing_flow(None, order)
-        from proto.submessage_marks import scratch_slot_of
-        begin, end = scratch_slot_of(flow, 3), scratch_slot_of(flow, 6)
-        self.assertEqual(begin, end)
-        self.assertIsNotNone(begin)
-
-
 class TestLiveStructEnums(unittest.TestCase):
     """The six enum members of the inline structs that have no ObjC class, and the repeated
     12-byte struct array the walk used to bind to its count ivar.  Values are the binary's own
@@ -1078,17 +1074,17 @@ _RING_WRITETO_ARM64E = (0x1986d66b8, [
 
 class TestInlineStructWritesNewerToolchain(_Patched):
     def test_array_element_through_the_ivar_slot_and_a_scaled_index(self):
-        insns, fake = asm(_RING_WRITETO_ARM64E)
-        self.patch(fake)
-        begin = next(i for i, x in enumerate(insns)
-                     if x.mnemonic == 'bl' and x.op_str == '#0x1a0103d00')
-        br = SF.analyze_bracket(None, insns, begin)
+        calls, insns = run_writer_flow([_RING_WRITETO_ARM64E], entry={'x0': _S, 'x2': _W},
+                                       tails=exits(_RING_WRITETO_ARM64E))
+        self.patch(asm(_RING_WRITETO_ARM64E)[1])
+        br = submessage(calls, next(s for s in calls.sites if s.target == 0x1a0103d00))
         layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
         var = lambda a: a == 0x1e4930558                                       # noqa: E731
-        loads = SF.track_struct_loads(None, insns, max(br.region), var, True, window=set(br.region))
+        last = max(k for k, x in enumerate(insns) if x.addr in {t.addr for t in br.writes})
+        loads = SF.track_struct_loads(None, insns, last, var, True)
         # the array-pointer load through &self->_points is not a member; the two element loads are
         self.assertEqual(sorted(loads.values()), [(0, 4), (4, 4)])
-        w = SF.decode_inline_writes(None, insns, br, var, layout)
+        w = SF.decode_inline_writes(None, insns, br.writes, var, layout)
         self.assertEqual(SF.match_layout(layout, w), {0: 1, 4: 2})
 
     def test_a_by_value_struct_through_add_is_still_the_struct(self):

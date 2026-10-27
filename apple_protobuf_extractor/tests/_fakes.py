@@ -89,9 +89,10 @@ MARKS = {0x18dbdab88: "_PBDataWriterPlaceMark", 0x18dbdab94: "_PBDataWriterRecal
 
 
 def name_marks(test):
-    """Name :data:`MARKS` for proto.submessage_marks for the life of *test* (a TestCase)."""
+    """Name :data:`MARKS` for the writer flow (proto.writer_flow) for the life of *test* (a
+    TestCase)."""
     from unittest import mock
-    import proto.submessage_marks as SM
-    patcher = mock.patch.object(SM, "callee_name", lambda ctx, va: MARKS.get(va))
+    import proto.writer_flow as WF
+    patcher = mock.patch.object(WF, "callee_name", lambda ctx, va: MARKS.get(va))
     patcher.start()
     test.addCleanup(patcher.stop)

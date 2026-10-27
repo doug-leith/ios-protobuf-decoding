@@ -257,6 +257,137 @@ class TestCppWireFacts(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
 
 
+def _compiled(texts):
+    """``(pool, FileDescriptorSet)`` of the .proto *texts* (``{path: text}``) as protoc builds
+    them."""
+    import subprocess, tempfile
+    from google.protobuf import descriptor_pb2, descriptor_pool
+    with tempfile.TemporaryDirectory() as d:
+        for name, text in texts.items():
+            path = os.path.join(d, name)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as fh:
+                fh.write(text)
+        out = os.path.join(d, "set.pb")
+        r = subprocess.run(["protoc", "-I", d, "--include_imports", "--descriptor_set_out=" + out]
+                           + sorted(texts), cwd=d, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        with open(out, "rb") as fh:
+            fds = descriptor_pb2.FileDescriptorSet.FromString(fh.read())
+    pool = descriptor_pool.DescriptorPool()
+    for f in fds.file:
+        pool.Add(f)
+    return pool, fds
+
+
+def _types(pool, fds):
+    """``(messages, enums)`` by full name, every file but protobuf's own."""
+    msgs, enums = {}, {}
+
+    def walk(scope, protos, enum_protos):
+        for e in enum_protos:
+            enums[f"{scope}{e.name}"] = pool.FindEnumTypeByName(f"{scope}{e.name}")
+        for m in protos:
+            msgs[f"{scope}{m.name}"] = pool.FindMessageTypeByName(f"{scope}{m.name}")
+            walk(f"{scope}{m.name}.", m.nested_type, m.enum_type)
+
+    for f in fds.file:
+        if not f.name.startswith("google/protobuf/"):
+            walk(f"{f.package}." if f.package else "", f.message_type, f.enum_type)
+    return msgs, enums
+
+
+def _flat_name(desc) -> str:
+    """The extractor's name for the C++ type *desc*: its package sanitised, nesting joined by
+    ``_`` (:func:`proto.foreign._flat`)."""
+    pkg = desc.file.package
+    rest = desc.full_name[len(pkg) + 1:] if pkg else desc.full_name
+    return (f"{F._sanitize_pkg(pkg)}." if pkg else "") + rest.replace(".", "_")
+
+
+class TestCliAndExtractorAgree(unittest.TestCase):
+    """The C++ schemas two ways: the standalone CLI's ``format_proto`` (the file as declared:
+    proto2 / proto3, nested types, oneofs) and the extractor's shared emitter (edition 2023,
+    nesting flattened).  Compiled by protoc, every message has the same fields, each with the
+    same name, wire type, cardinality, presence rule for ``required``, packing and type, and
+    every enum the same values, open or closed.  Where the two differ by design: field
+    presence (edition 2023 tracks it for every singular field), oneofs (flattened), and an enum
+    value name the flattening made collide in its package (renamed ``<name>_<n>``)."""
+
+    def _check(self, protos):
+        import re, shutil
+        if shutil.which("protoc") is None:
+            self.skipTest("protoc not on PATH")
+        cli = _types(*_compiled({fp.name: C.format_proto(fp) for fp in protos}))
+        files = build_proto_files(F._cpp_protos_to_messages(list(protos)), source_name="x")
+        emitted = _types(*_compiled({pf.filename: pf.emit() for pf in files}))
+
+        def ref(fd):
+            t = fd.message_type or fd.enum_type
+            return _flat_name(t) if t is not None else None
+
+        def wire(fd):
+            return (fd.name, fd.type, fd.is_repeated, fd.is_required, fd.is_packed, ref(fd))
+
+        (cli_msgs, cli_enums), (out_msgs, out_enums) = cli, emitted
+        self.assertEqual(sorted(_flat_name(d) for d in cli_msgs.values()), sorted(out_msgs))
+        for d in cli_msgs.values():
+            o = out_msgs[_flat_name(d)]
+            self.assertEqual({f.number: wire(f) for f in d.fields},
+                             {f.number: wire(f) for f in o.fields}, d.full_name)
+        self.assertEqual(sorted(_flat_name(d) for d in cli_enums.values()), sorted(out_enums))
+        for d in cli_enums.values():
+            o = out_enums[_flat_name(d)]
+            self.assertEqual(d.is_closed, o.is_closed, d.full_name)
+            self.assertEqual(sorted(v.number for v in d.values), sorted(v.number for v in o.values))
+            for v in d.values:
+                renamed = o.values_by_number[v.number].name
+                self.assertTrue(any(w.name == v.name or re.fullmatch(re.escape(v.name) + r"_\d+", w.name)
+                                    for w in o.values if w.number == v.number),
+                                (d.full_name, v.name, renamed))
+        return len(cli_msgs)
+
+    def _file(self, syntax):
+        return C.FileProto(name="w.proto", package="W.Pkg", syntax=syntax,
+                           enums=[C.EnumType(name="Kind", values=[("K_ONE", 1), ("K_UNO", 1)])],
+                           messages=[C.Message(name="M", fields=[
+                               C.Field(name="plain", number=1, label=3, type=5),
+                               C.Field(name="packed", number=2, label=3, type=17,
+                                       packed=True, has_packed=True),
+                               C.Field(name="unpacked", number=3, label=3, type=1,
+                                       packed=False, has_packed=True),
+                               C.Field(name="kinds", number=4, label=3, type=14,
+                                       type_name=".W.Pkg.Kind"),
+                               C.Field(name="names", number=5, label=3, type=9),
+                               C.Field(name="inner", number=6, label=3, type=11,
+                                       type_name=".W.Pkg.M.Inner"),
+                               C.Field(name="kind", number=7, label=1, type=14,
+                                       type_name=".W.Pkg.Kind")]
+                               + ([C.Field(name="req", number=8, label=2, type=9),
+                                   C.Field(name="grp", number=9, label=1, type=10,
+                                           type_name=".W.Pkg.M.Grp")]
+                                  if syntax == "proto2" else []),
+                               nested=[C.Message(name="Inner", fields=[C.Field(name="x", number=1, type=5)]),
+                                       C.Message(name="Grp", fields=[C.Field(name="y", number=1, type=5)])],
+                               enums=[C.EnumType(name="Shade", values=[("S_ZERO", 0)])])])
+
+    def test_proto2(self):
+        self._check([self._file("proto2")])
+
+    def test_proto3(self):
+        self._check([C.FileProto(**{**self._file("proto3").__dict__,
+                                    "enums": [C.EnumType(name="Kind", values=[("K_ZERO", 0), ("K_ONE", 1)])]})])
+
+    def test_locationd_and_nearbyd(self):
+        import artifacts
+        for name in ("locationd", os.path.join("libexec", "nearbyd")):
+            path = os.path.join(artifacts.data_dir(), name)
+            if not os.path.isfile(path):
+                self.skipTest(f"{name} binary not available")
+            with self.subTest(name), open(path, "rb") as fh:
+                self.assertGreater(self._check(C.extract_cpp_protos(fh.read())), 100)
+
+
 class TestCppByFileGrouping(unittest.TestCase):
 
     def _same_pkg_two_files(self):

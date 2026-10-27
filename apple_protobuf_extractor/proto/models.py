@@ -212,11 +212,12 @@ class ProtoField:
     # message field whose class was not extracted).
 
     repeated_encoding: Optional[str] = None
-    # For a repeated scalar/enum stored as a C-list: how writeTo: writes it on the wire,
-    # "PACKED" (one length-delimited run) or "EXPANDED" (one tag per element), read off the
-    # write binding it (proto.extractor._repeated_encoding); "UNSEEN" when no write binds
-    # it; None when not a C-list.  The emitter declares EXPANDED explicitly (edition 2023
-    # defaults to PACKED) and notes an UNSEEN one.
+    # For a repeated field of a packable type (a scalar or an enum), set by its producer, who
+    # knows the type: how it is written on the wire, "PACKED" (one length-delimited run) or
+    # "EXPANDED" (one tag per element) -- for PBCodable read off the write binding it
+    # (proto.extractor._repeated_encoding), "UNSEEN" when no write binds it; for C++ what its
+    # descriptor says (proto.foreign._cpp_field).  None for any other field.  The emitter
+    # declares EXPANDED explicitly (edition 2023 defaults to PACKED) and notes an UNSEEN one.
 
     delimited: bool = False
     # A message written as a group (start / end tags, not length-delimited): the emitter

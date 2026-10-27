@@ -14,7 +14,7 @@ All field-number anchors are verified against Hopper's disassembly of the
 ``ALSLocation.infoMask = 13`` and ``ALSCellTower.psc = 12`` are the **last**
 field of their message, serialised via a tail-call ``b`` to the PB write helper
 with the epilogue hoisted in between — the case fixed in
-``_extract_writeto_field_numbers`` / ``proto.writeto.field_number_at``.  They must
+``_extract_writeto_field_numbers`` / ``proto.writer_flow.WriteSite.number``.  They must
 be binary-confirmed (not next_unconfirmed filler).
 
 Gated on the binary's presence: set the ``MACHO_TEST_LOCATIOND`` env var (see

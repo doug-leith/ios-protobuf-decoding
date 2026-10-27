@@ -9,6 +9,7 @@ protoc-compiles the emitted files.  The GeoServices block-shape maps are covered
 golden snapshot (``test_golden_output``, ``<map>`` keys).
 """
 import copy
+from types import SimpleNamespace
 import os
 import shutil
 import subprocess
@@ -23,7 +24,9 @@ import proto.callees as C
 import proto.function_body as FB
 import proto.extractor as E
 from proto.dispatch import FunctionEntries, listing_flow
-from proto.submessage_marks import scratch_slot_of
+from proto.submessage_marks import PLACE_MARK
+import proto.writer_flow as WF
+from tests._writer_calls import exits, run_writer_flow
 from proto.emitter import build_proto_files, write_from_messages
 from proto.models import FieldLabel, ProtoField, ProtoMessage
 
@@ -200,34 +203,52 @@ def _ctx_with_selectors(**sels):
     return ctx
 
 
-class TestAnalyzeEntry(_Patched):
+_W = frozenset({'W'})
 
-    def _begin(self, insns):
-        return next(i for i, x in enumerate(insns) if x.mnemonic == 'bl'
-                    and scratch_slot_of(listing_flow(None, insns), i) is not None)
+
+class _Classes(list):
+    """A class list whose classes have no superclass."""
+
+    def ancestors(self, cls):
+        return [cls]
+
+
+def _with_writer_flow(ctx, cls):
+    """*ctx* with the image's writer flow (the ``writeTo:`` pre-pass's) over the one class *cls*."""
+    ctx._writer_flow = WF.WriterFlow(ctx, _Classes([cls]))
+    return ctx
+
+
+class TestAnalyzeEntry(_Patched):
+    """analyze_entry on the writer flow's calls of a block's invoke function (the block in x0,
+    the writer among what it captured) or of an inline loop."""
+
+    def _entry(self, listing, *more, ctx=None, entry=None, begin=None):
+        insns, fd = asm(listing, *more)
+        self.patch(fd)
+        calls, _ = run_writer_flow([listing, *more], entry=entry or {'x0': _W},
+                                   tails=exits(listing))
+        begin = begin or (lambda s: s.name == PLACE_MARK)
+        return M.analyze_entry(ctx or FakeCtx(), insns, calls,
+                               next(s for s in calls.sites if begin(s)))
 
     def test_block_invoke_string_key_message_value(self):
-        insns, fd = asm(_MANIFEST_INVOKE)
-        self.patch(fd)
-        e = M.analyze_entry(FakeCtx(), insns, self._begin(insns))
+        e = self._entry(_MANIFEST_INVOKE)
         self.assertEqual(e.number, 1)
         self.assertEqual((e.key_helper, e.value_helper), (0x18dbdac18, 0x18dbdac24))
         self.assertEqual((e.key_sel, e.value_sel), (None, None))
 
     def test_unboxing_selector_is_traced_to_the_value(self):
-        insns, fd = asm(_INDEX_INVOKE, selector_stub(0x18db2ce60, 0x18d000000))
-        self.patch(fd)
         ctx = _ctx_with_selectors(s18d000000='unsignedIntValue')
-        e = M.analyze_entry(ctx, insns, self._begin(insns))
+        e = self._entry(_INDEX_INVOKE, selector_stub(0x18db2ce60, 0x18d000000), ctx=ctx)
         self.assertEqual(e.number, 2)
         self.assertEqual(e.value_helper, 0x18dbdac30)
         self.assertEqual((e.key_sel, e.value_sel), (None, 'unsignedIntValue'))
 
     def test_selector_stub_call_after_begin_is_not_the_end_mark(self):
-        insns, fd = asm(_INLINE_LOOP, selector_stub(0x19bae49e0, 0x19c000000))
-        self.patch(fd)
         ctx = _ctx_with_selectors(s19c000000='intValue')
-        e = M.analyze_entry(ctx, insns, self._begin(insns))
+        e = self._entry(_INLINE_LOOP, selector_stub(0x19bae49e0, 0x19c000000), ctx=ctx,
+                        entry={'x19': _W})
         self.assertEqual(e.number, 2)
         self.assertEqual((e.key_helper, e.value_helper), (0x1a2582dfc, 0x1a2582e20))
         self.assertEqual((e.key_sel, e.value_sel), ('intValue', None))
@@ -235,9 +256,7 @@ class TestAnalyzeEntry(_Patched):
     def _mutate(self, edit):
         lines = list(_MANIFEST_INVOKE[1])
         edit(lines)
-        insns, fd = asm((_MANIFEST_INVOKE[0], lines))
-        self.patch(fd)
-        return M.analyze_entry(FakeCtx(), insns, self._begin(insns))
+        return self._entry((_MANIFEST_INVOKE[0], lines))
 
     def test_no_end_mark_is_rejected(self):
         self.assertIsNone(self._mutate(lambda L: L.__delitem__(slice(-7, -4))))
@@ -274,23 +293,29 @@ class TestAnalyzeEntry(_Patched):
         self.assertIsNone(self._mutate(early))
 
     def test_not_a_begin_mark_is_rejected(self):
-        insns, fd = asm(_MANIFEST_INVOKE)
-        self.patch(fd)
-        key_call = next(i for i, x in enumerate(insns) if x.op_str == '#0x18dbdac18')
-        self.assertIsNone(M.analyze_entry(FakeCtx(), insns, key_call))
+        self.assertIsNone(self._entry(_MANIFEST_INVOKE, begin=lambda s: s.target == 0x18dbdac18))
+
+
+class _Cls:
+    """The class whose ``writeTo:`` is :data:`_MANIFEST_WRITETO`."""
+    name, vmaddr, methods, ivars = 'GEOFake', 0x5000, (), ()
+
+    def get_method(self, sel):
+        return SimpleNamespace(imp=_MANIFEST_WRITETO[0]) if sel == 'writeTo:' else None
 
 
 class TestScanBlockEnumeratedMaps(_Patched):
 
-    def _scan(self, writeto=_MANIFEST_WRITETO, names=None):
-        insns, fd = asm(writeto, _MANIFEST_INVOKE,
+    def _scan(self, writeto=_MANIFEST_WRITETO, names=None, invoke=_MANIFEST_INVOKE):
+        insns, fd = asm(writeto, invoke,
                         selector_stub(0x18dae11e0, 0x18d100000))
         self.patch(fd)
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8                      # ivar-offset variable -> offset 8
         if names is None:
             names = M._IvarNames({0x1dcfb30e4: '_publisherAttributionSources'}, {})
-        return M.scan_block_enumerated_maps(ctx, writeto[0], FunctionEntries([0x18ce417e8]), names)
+        return M.scan_block_enumerated_maps(_with_writer_flow(ctx, _Cls()), _Cls(), writeto[0],
+                                            FunctionEntries([0x18ce417e8]), names)
 
     def test_block_map_is_found_and_bound_to_its_ivar(self):
         got = self._scan()
@@ -309,6 +334,15 @@ class TestScanBlockEnumeratedMaps(_Patched):
         got = self._scan((_MANIFEST_WRITETO[0], lines))
         self.assertEqual(got['_publisherAttributionSources'].number, 1)
 
+    def test_a_call_handed_a_frame_address_before_the_begin_mark_is_not_it(self):
+        # the begin mark is the runtime's PlaceMark, the one mark outside every other -- not
+        # the first call handed a frame address in x1
+        lines = list(_MANIFEST_INVOKE[1])
+        k = lines.index(('mov', 'x19, x0'))
+        lines[k + 1:k + 1] = [('add', 'x1, sp, #0x18'), ('mov', 'x0, x22'), ('bl', '#0x18dbdbf00')]
+        got = self._scan(invoke=(_MANIFEST_INVOKE[0], lines))
+        self.assertEqual(got['_publisherAttributionSources'].number, 1)
+
     def test_unknown_ivar_offset_variable_is_not_bound(self):
         self.assertEqual(self._scan(names=M._IvarNames({0x1dcfb30e8: '_other'}, {})), {})
 
@@ -325,7 +359,8 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000='enumerateObjectsUsingBlock:')
         ctx.u32[0x1dcfb30e4] = 8
         self.assertEqual(M.scan_block_enumerated_maps(
-            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]),
+            _with_writer_flow(ctx, _Cls()), _Cls(), _MANIFEST_WRITETO[0],
+            FunctionEntries([0x18ce417e8]),
             M._IvarNames({0x1dcfb30e4: '_x'}, {})), {})
 
     def test_invoke_without_ret_is_never_analysed(self):
@@ -336,7 +371,8 @@ class TestScanBlockEnumeratedMaps(_Patched):
         ctx = _ctx_with_selectors(s18d100000=M._ENUMERATE_SELECTOR)
         ctx.u32[0x1dcfb30e4] = 8
         self.assertEqual(M.scan_block_enumerated_maps(
-            ctx, _MANIFEST_WRITETO[0], FunctionEntries([0x18ce417e8]),
+            _with_writer_flow(ctx, _Cls()), _Cls(), _MANIFEST_WRITETO[0],
+            FunctionEntries([0x18ce417e8]),
             M._IvarNames({0x1dcfb30e4: '_x'}, {})), {})
 
 
@@ -410,7 +446,8 @@ class TestNewerToolchainBlockShape(_Patched):
     def test_pac_signed_invoke_and_add_ldr_ivar_load_are_recovered(self):
         insns, fd = asm(_ARM64E_WRITETO, _ARM64E_INVOKE, self._stub())
         self.patch(fd)
-        got = M.scan_block_enumerated_maps(self._ctx(), _ARM64E_WRITETO[0], FunctionEntries([0x199a3000]),
+        got = M.scan_block_enumerated_maps(_with_writer_flow(self._ctx(), _Cls()), _Cls(),
+                                           _ARM64E_WRITETO[0], FunctionEntries([0x199a3000]),
                                            M._IvarNames({0x1e4941dcc: '_vehicles'}, {}))
         e = got['_vehicles']
         self.assertEqual((e.number, e.key_helper, e.value_helper),
@@ -448,18 +485,11 @@ class TestFindMapWriters(_Patched):
         ctx.u32[0x1dcfb30e4] = 8
         ctx._function_entries = {0x18ce417e8}
 
-        class _Method:
-            imp = _MANIFEST_WRITETO[0]
-
-        class _Cls:
-            name = 'GEOFake'
-            def get_method(self, sel):
-                return _Method() if sel == 'writeTo:' else None
-
         class _Iv:
             name, offset, type_enc = '_publisherAttributionSources', 8, '@"NSMutableDictionary"'
             offset_slot = 0x1dcfb30e4
 
+        _with_writer_flow(ctx, _Cls())
         ok = M.find_map_writers(ctx, _Cls(), [_Iv()], {}, [_Iv()], {})
         self.assertEqual(ok[_Iv.name].number, 1)
         clash = M.find_map_writers(ctx, _Cls(), [_Iv()], {}, [_Iv()], {'_other': 1})

@@ -19,7 +19,9 @@ rest from the two serializers:
     the write sites already bind the begin-mark to the ivar, so the entry body is the
     code after that write (:func:`entry_from_bound_write`).
 
-  Both feed :func:`analyze_entry`, which reads the field number and the key/value
+  Both feed :func:`analyze_entry`, which reads off the writer flow's calls of the function
+  (:mod:`proto.writer_flow`; the block's with the writer among what it captured) the field
+  number and the key/value
   *write helpers* (plus, as a cross-check, the NSNumber unboxing selector feeding
   each).  A helper's meaning is NOT hard-coded: every write helper is shared by all
   fields of one wire type, so its type is the unanimous type of the ivars that use it
@@ -48,14 +50,14 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from macho.memory import READ_ERRORS, BinaryContext, _ctx_cache, record_unread, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
-from proto.callees import callee_name, real_target, stub_selector
+from proto.callees import real_target, stub_selector
 
 from proto.arm64cfg import mem_operand
-from proto.arm64_operands import branch_target, split_ops
+from proto.arm64_operands import split_ops
 from proto.dispatch import FunctionEntries, function_entries
 from proto.function_body import function_body, function_listing
-from proto.writeto import BoundWrite
-from proto.submessage_marks import PLACE_MARK, analyze_bracket, scratch_slot_of
+from proto.writeto import BoundWrite, writer_calls
+from proto.submessage_marks import NO_OPEN_MARK, PLACE_MARK, submessage
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family
 from proto.models import FieldLabel, ProtoField, ProtoMessage, record_analysis_failure
 from proto.protocore import _SCALAR_ENC, _CLASS_TO_PROTO
@@ -216,40 +218,44 @@ def _trace_unbox_selector(ctx: BinaryContext, flow, i: int) -> Optional[str]:
 # ── Entry-body analysis (shared by both writeTo: shapes) ──────────────────────
 
 
-def analyze_entry(ctx: BinaryContext, insns: Sequence, begin_idx: int) -> Optional[MapEntryWriter]:
-    """Analyse one map-entry body: the sub-message whose BEGIN mark is at ``insns[begin_idx]``
-    (:func:`proto.submessage_marks.analyze_bracket`: every path from the mark to the matching
-    END mark).  Returns the :class:`MapEntryWriter` or ``None`` unless the body writes
-    exactly sub-fields 1 and 2, ONE helper call each -- anything else (nested sub-messages,
-    a second write of a sub-field, a path with no end mark, a sub-field other than 1/2) is
-    not a recognisable map entry."""
-    br = analyze_bracket(ctx, insns, begin_idx)
-    if br is None:
+def analyze_entry(ctx: BinaryContext, insns: Sequence, calls,
+                  begin) -> Optional[MapEntryWriter]:
+    """Analyse one map-entry body: the sub-message the begin mark *begin* opens among the
+    writer flow's *calls* of the function *insns* lists
+    (:func:`proto.submessage_marks.submessage`).  Returns the :class:`MapEntryWriter` or
+    ``None`` unless the body writes exactly sub-fields 1 and 2, ONE helper call each --
+    anything else (nested sub-messages, a second write of a sub-field, a path with no end
+    mark, a sub-field other than 1/2) is not a recognisable map entry."""
+    sub = submessage(calls, begin)
+    if sub is None:
         return None
-    writes: Dict[int, Tuple[int, int]] = {}            # sub-field -> (helper_va, insn index)
-    for j, fn, helper in br.writes:
-        if fn not in (_KEY_FIELD, _VALUE_FIELD) or fn in writes:
+    writes = {}                                        # sub-field -> its write call
+    for t in sub.writes:
+        if t.number not in (_KEY_FIELD, _VALUE_FIELD) or t.number in writes:
             return None                                # not a {key, value} entry
-        writes[fn] = (helper, j)
+        writes[t.number] = t
     if len(writes) != 2:
         return None
+    at = {ins.addr: k for k, ins in enumerate(insns)}
+    key, value = writes[_KEY_FIELD], writes[_VALUE_FIELD]
+    if key.addr not in at or value.addr not in at:
+        return None
     flow = listing_flow(ctx, insns)
-    (kh, kj), (vh, vj) = writes[_KEY_FIELD], writes[_VALUE_FIELD]
     return MapEntryWriter(
-        number=br.number, key_helper=kh, value_helper=vh,
-        key_sel=_trace_unbox_selector(ctx, flow, kj),
-        value_sel=_trace_unbox_selector(ctx, flow, vj))
+        number=sub.number, key_helper=key.target, value_helper=value.target,
+        key_sel=_trace_unbox_selector(ctx, flow, at[key.addr]),
+        value_sel=_trace_unbox_selector(ctx, flow, at[value.addr]))
 
 
 # ── Shape A: enumerateKeysAndObjectsUsingBlock: ───────────────────────────────
 
 
 def scan_block_enumerated_maps(
-    ctx: BinaryContext, imp: int, entries: FunctionEntries,
+    ctx: BinaryContext, cls: ObjcClass, imp: int, entries: FunctionEntries,
     names: _IvarNames,
 ) -> Dict[str, MapEntryWriter]:
     """``{ivar_name: MapEntryWriter}`` for every ``[self->_dict
-    enumerateKeysAndObjectsUsingBlock:&block]`` in the ``writeTo:`` at *imp*.
+    enumerateKeysAndObjectsUsingBlock:&block]`` in *cls*'s ``writeTo:`` at *imp*.
 
     The parent is its extent (:func:`proto.function_body.function_listing`: ``imp`` .. the
     next function entry, *entries* among them; its out-of-line tail blocks included),
@@ -258,8 +264,9 @@ def scan_block_enumerated_maps(
     enumerate call: the receiver (``x0``) traces to the dictionary ivar; ``x2`` is the stack
     block, whose invoke pointer is the 8-byte slot at ``x2 + 0x10`` as every path into the
     call leaves it; the invoke function's own body (:func:`proto.function_body.function_body`)
-    is then analysed by :func:`analyze_entry`.  Unrecognised shapes are simply absent (the field keeps its
-    flagged fallback)."""
+    is then analysed by :func:`analyze_entry`, its one begin mark outside every other the
+    entry's (:meth:`proto.writer_flow.WriterFlow.block_calls`).  Unrecognised shapes are
+    simply absent (the field keeps its flagged fallback)."""
     out: Dict[str, MapEntryWriter] = {}
     try:
         insns = function_listing(ctx, imp, entries)
@@ -291,38 +298,34 @@ def scan_block_enumerated_maps(
             record_unread(ctx, "map entry block", f"{invoke:#x}",
                           ValueError("its body was read only in part"))
             continue
-        body_flow = listing_flow(ctx, body)
-        for k, b in enumerate(body):
-            # the begin mark: a call to PBDataWriterPlaceMark, handed a stack slot in x1 (by
-            # that shape alone when the callee is unnamed)
-            if b.mnemonic == 'bl' and scratch_slot_of(body_flow, k) is not None \
-                    and callee_name(ctx, branch_target(b)) in (PLACE_MARK, None):
-                entry = analyze_entry(ctx, body, k)
-                if entry is not None:
-                    out[ivar] = entry
-                break                                   # first begin only
+        calls = writer_calls(ctx, cls, invoke)
+        begins = [s for s in calls.sites if s.name == PLACE_MARK
+                  and s.open_marks == NO_OPEN_MARK] if calls is not None else []
+        entry = analyze_entry(ctx, body, calls, begins[0]) if len(begins) == 1 else None
+        if entry is not None:
+            out[ivar] = entry
     return out
 
 
 # ── Shape B: inline enumeration loop (bound begin-mark) ──────────────────────
 
 
-def entry_from_bound_write(ctx: BinaryContext, imp: int, entries: FunctionEntries,
-                          w: BoundWrite) -> Optional[MapEntryWriter]:
-    """The :class:`MapEntryWriter` for a bound ``writeTo:`` write *w* (at *imp*) that is a
-    begin-submessage mark (already bound to the dictionary ivar, with its field number).
-    The entry body is the code after it in the method's linear listing
-    (:func:`proto.function_body.function_listing`)."""
+def entry_from_bound_write(ctx: BinaryContext, cls: ObjcClass, imp: int,
+                          entries: FunctionEntries, w: BoundWrite) -> Optional[MapEntryWriter]:
+    """The :class:`MapEntryWriter` for a bound write *w* of *cls*'s ``writeTo:`` (at *imp*)
+    that is a begin-submessage mark (already bound to the dictionary ivar, with its field
+    number): the sub-message it opens among the ``writeTo:``'s writer calls."""
     if not w.bracket:
+        return None
+    calls = writer_calls(ctx, cls)
+    begin = next((s for s in calls.sites if s.addr == w.addr), None) if calls else None
+    if begin is None:
         return None
     try:
         insns = function_listing(ctx, imp, entries)
     except READ_ERRORS:
         return None
-    k = next((i for i, x in enumerate(insns) if x.addr == w.addr), None)
-    if k is None:
-        return None
-    entry = analyze_entry(ctx, insns, k)
+    entry = analyze_entry(ctx, insns, calls, begin)
     if entry is None or entry.number != w.number:
         return None
     return MapEntryWriter(**{**entry.__dict__, 'shape': 'inline-loop'})
@@ -345,13 +348,13 @@ def find_map_writers(
     for iv in map_ivars:
         w = bound_writes.get(iv.name)
         if w is not None:
-            e = entry_from_bound_write(ctx, m.imp, entries, w)
+            e = entry_from_bound_write(ctx, cls, m.imp, entries, w)
             if e is not None:
                 writers[iv.name] = e
     pending = [iv for iv in map_ivars if iv.name not in writers]
     if pending:
         for name, e in scan_block_enumerated_maps(
-                ctx, m.imp, entries, _IvarNames.of(field_ivars)).items():
+                ctx, cls, m.imp, entries, _IvarNames.of(field_ivars)).items():
             if any(iv.name == name for iv in pending):
                 writers[name] = e
     taken: Dict[int, str] = {}

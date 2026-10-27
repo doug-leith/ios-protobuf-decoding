@@ -208,7 +208,7 @@ class WriteSite:
         return dict(self.args).get(reg, frozenset())
 
     @property
-    def _value_reg(self) -> Optional[str]:
+    def value_reg(self) -> Optional[str]:
         """Where the serialised value travels: the writer contract's register; for a callee
         without one, the AAPCS64 positions -- ``(writer, value, field)`` in x0 / x1 / w2, or,
         with a float / double value set up in v0, ``(writer, value, field)`` in x0 / v0 / w1."""
@@ -226,7 +226,7 @@ class WriteSite:
         if pb is not None:
             reads = pb[0]
             return None if len(reads) < 3 else self.x1 if reads[2] == "x1" else self.x2
-        return self.x1 if self._value_reg == "v0" else self.x2
+        return self.x1 if self.value_reg == "v0" else self.x2
 
     @property
     def is_mark(self) -> bool:
@@ -240,8 +240,17 @@ class WriteSite:
         writer)``)."""
         if self.writer_reg != "x0":
             return frozenset().union(*(o for r, o in self.args if r != self.writer_reg))
-        reg = self._value_reg
+        reg = self.value_reg
         return self.v0_origins if reg == "v0" else self.origins(reg) if reg else frozenset()
+
+
+@dataclass(frozen=True)
+class WriterCalls:
+    """A function's calls that may be handed the writer (:class:`WriteSite`, in address order)
+    and the length-delimited marks open where it is left: every stack of ``(slot, begin-mark
+    address)`` a path out of it (a return, a tail call) can have."""
+    sites: Tuple[WriteSite, ...]
+    open_at_exit: FrozenSet
 
 
 class _Result:
@@ -253,7 +262,7 @@ class _Result:
     serialisation reaches what was put, at a place with a path to it, into an object among its
     origins.  ``where`` is the index of the function's instruction being run (``at``)."""
     __slots__ = ('ser', 'ser_in', 'puts', 'at', 'ret', 'complete', 'why', 'sites', 'sends',
-                 'indirect_calls')
+                 'indirect_calls', 'open_at_exit')
 
     def __init__(self):
         self.ser: Set = set()
@@ -262,6 +271,7 @@ class _Result:
         self.at = -1
         self.ret: Set = set()
         self.sites: Dict[int, WriteSite] = {}
+        self.open_at_exit: Set = set()       # the marks open where a path leaves the body
         self.sends: Set[str] = set()         # selectors the body's own calls send
         self.indirect_calls = 0              # its ``blr`` calls (target unknown)
         self.complete = True
@@ -367,6 +377,7 @@ class WriterFlow:
         build_function_index(ctx, cl)
         self.entries = function_entries(ctx)
         self._analysed: Dict[int, tuple] = {}
+        self._blocks: Dict[Tuple[int, int], Optional[WriterCalls]] = {}
 
     # ── public entry ─────────────────────────────────────────────────────────
     def reachable_ivars(self, cls: ObjcClass) -> Tuple[Optional[FrozenSet[str]], List[str]]:
@@ -375,11 +386,25 @@ class WriterFlow:
         reach, why = self.analyse(cls)[:2]
         return reach, why
 
-    def write_sites(self, cls: ObjcClass) -> Optional[List[WriteSite]]:
+    def writer_calls(self, cls: ObjcClass) -> Optional["WriterCalls"]:
         """The calls of *cls*'s own ``writeTo:`` that may be handed the writer, in address
-        order; None when the body is not decoded or the fixpoint does not go through (control
-        leaves the function window, an indirect jump is unresolved, ...)."""
+        order, and the marks open where it is left; None when the body is not decoded or the
+        fixpoint does not go through (control leaves the function window, an indirect jump is
+        unresolved, ...)."""
         return self.analyse(cls)[2]
+
+    def block_calls(self, cls: ObjcClass, invoke: int) -> Optional["WriterCalls"]:
+        """The calls of the block function at *invoke*, which *cls*'s ``writeTo:`` hands to a
+        method that calls it, that may be handed the writer, and the marks open where it is
+        left; None as for :meth:`writer_calls`.  The block (``x0``) holds what it captured, the
+        writer among it: every value read from it is taken to be possibly the writer."""
+        key = (cls.vmaddr, invoke)
+        if key not in self._blocks:
+            res = _ClassFlow(self, cls)._run(invoke, {'x0': frozenset({_W})}, 0, invoke)
+            self._blocks[key] = (None if res is None or not res.complete
+                                 else WriterCalls(tuple(res.sites[a] for a in sorted(res.sites)),
+                                                  frozenset(res.open_at_exit)))
+        return self._blocks[key]
 
     def sent_selectors(self, cls: ObjcClass) -> Optional[FrozenSet[str]]:
         """Every selector *cls*'s own ``writeTo:`` sends: through a selector stub, or a plain
@@ -388,8 +413,8 @@ class WriterFlow:
         return self.analyse(cls)[3]
 
     def analyse(self, cls: ObjcClass):
-        """``(reachable ivars, reasons, write sites, sent selectors)`` of *cls*'s
-        ``writeTo:`` (see :meth:`reachable_ivars` / :meth:`write_sites` /
+        """``(reachable ivars, reasons, writer calls, sent selectors)`` of *cls*'s
+        ``writeTo:`` (see :meth:`reachable_ivars` / :meth:`writer_calls` /
         :meth:`sent_selectors`), memoised per class."""
         hit = self._analysed.get(cls.vmaddr)
         if hit is None:
@@ -406,13 +431,14 @@ class WriterFlow:
             return None, ["writeTo: body not decoded"], None, None
         if not res.complete:
             return None, res.why, None, None
-        sites = [res.sites[a] for a in sorted(res.sites)]
+        calls = WriterCalls(tuple(res.sites[a] for a in sorted(res.sites)),
+                            frozenset(res.open_at_exit))
         sends = None if res.indirect_calls else frozenset(res.sends)
         bad = sorted(str(x) for x in res.ser if not isinstance(x, tuple) or x[0] != 'I')
         if any(x in (_S, _T) for x in res.ser):
-            return None, [f"self reaches the writer ({', '.join(bad)})"], sites, sends
+            return None, [f"self reaches the writer ({', '.join(bad)})"], calls, sends
         return (frozenset(x[1] for x in res.ser if isinstance(x, tuple) and x[0] == 'I'), [],
-                sites, sends)
+                calls, sends)
 
 
 class _ClassFlow:
@@ -496,6 +522,7 @@ class _ClassFlow:
             ops = split_ops(ins.op_str)
             if mn in RETURNS:
                 res.ret |= st.p('x0') | st.p('v0')
+                res.open_at_exit |= st.om
                 return True
             tgt = branch_target(ins) if mn in ('b', 'bl') else None
             frag = flow.fragment(k)
@@ -525,6 +552,7 @@ class _ClassFlow:
                     return True                      # no-return callee
                 if mn not in CALLS:                  # a tail call
                     res.ret |= st.p('x0') | st.p('v0')
+                    res.open_at_exit |= st.om
                     return True
                 continue
             if mn == 'br':

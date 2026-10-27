@@ -51,7 +51,7 @@ from proto.defaults import DEFAULT_PREFIXES
 from proto.models import (
     FieldLabel, ProtoField, ProtoMessage, ProtoEnum, ProtoEnumValue,
     OPAQUE_PASSTHROUGH_COMMENT, HEURISTIC_CLASS_DETECTION_COMMENT,
-    VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix, PACKABLE_SCALARS as _PACKABLE_SCALARS,
+    VA_CLUSTER_CLASS_DETECTION_COMMENT, _enum_prefix,
     SCALAR_TYPES, retag_enums,
 )
 
@@ -300,13 +300,6 @@ def _best_in_compat_group(
 # is unknown, and the file's edition default (PACKED) is only a default.
 _REPEATED_ENCODING_UNSEEN_NOTE = (
     "packed/expanded not read from writeTo: (declared PACKED by the edition default)")
-
-
-def _is_packable(fld: ProtoField, type_str: str) -> bool:
-    """True for a field whose (resolved) type protobuf can pack: a numeric/bool scalar or
-    an enum."""
-    return (type_str in _PACKABLE_SCALARS
-            or bool(fld.type_class and fld.type_class.startswith("ENUM:")))
 
 
 # ── ProtoFile data model ───────────────────────────────────────────────────────
@@ -558,7 +551,7 @@ class ProtoFile:
         if fld.type_inference_note:
             parts.append(fld.type_inference_note)
         features: List[str] = []
-        if fld.label is FieldLabel.REPEATED and _is_packable(fld, type_str):
+        if fld.label is FieldLabel.REPEATED:
             if fld.repeated_encoding == "EXPANDED":
                 features.append("features.repeated_field_encoding = EXPANDED")
             elif fld.repeated_encoding == "UNSEEN":

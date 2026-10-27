@@ -123,3 +123,75 @@ class TestSiteBindings(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestSiteNumbers(unittest.TestCase):
+    """The field number a write call is handed (:attr:`WriteSite.number`): the constant w2
+    holds on every path into it -- directly for a ``bl``, or past the hoisted epilogue for a
+    tail-call ``b`` -- or, for a float / double writer, w1 when v0 is set for it.  Regression
+    cover for locationd ALSCellTower.psc / ALSLocation.infoMask (last field, tail-call
+    ``b _PBDataWriterWrite…Field``)."""
+
+    def number(self, lines, idx):
+        from tests._writer_calls import run_writer_flow
+        calls, insns = run_writer_flow([(0x1000, lines + [('ret', '')]), (0x9000, [('ret', '')]),
+                                        (0x9100, [('ret', '')])])
+        site = {s.addr: s for s in calls.sites}.get(insns[idx].addr)
+        return None if site is None else site.number
+
+    def test_bl_field_number_immediately_before(self):
+        self.assertEqual(self.number([('mov', 'x1, x19'), ('movz', 'w2, #0x3'),
+                                      ('bl', '#0x9000')], 2), 3)
+
+    def test_tailcall_b_with_epilogue_between(self):
+        self.assertEqual(self.number([('movz', 'w2, #0xc'), ('ldp', 'x29, x30, [sp, #0x20]'),
+                                      ('ldp', 'x20, x19, [sp, #0x10]'), ('b', '#0x9000')], 3), 12)
+
+    def test_double_field_uses_w1(self):
+        # A double field's number is in w1 and its VALUE in d0, so the call has an FP
+        # argument (without one `mov w1,#N` is just a constant argument).
+        self.assertEqual(self.number([('ldr', 'd0, [x8]'), ('movz', 'w1, #0x7'),
+                                      ('ldp', 'x29, x30, [sp, #0x20]'), ('b', '#0x9000')], 3), 7)
+
+    def test_w1_constant_without_an_fp_value_is_not_a_field_number(self):
+        self.assertIsNone(self.number([('movz', 'w1, #0x7'), ('ldp', 'x29, x30, [sp, #0x20]'),
+                                       ('b', '#0x9000')], 2))
+
+    def test_fp_value_of_an_earlier_call_does_not_count(self):
+        # d0 was set for the PREVIOUS call, which clobbers it
+        self.assertIsNone(self.number([('ldr', 'd0, [x8]'), ('movz', 'w1, #0x7'),
+                                       ('bl', '#0x9000'), ('movz', 'w1, #0x10000'),
+                                       ('bl', '#0x9100')], 4))
+
+    def test_no_constant_is_no_number(self):
+        self.assertIsNone(self.number([('ldr', 'w2, [x20, x8]'), ('b', '#0x9000')], 1))
+
+    def test_any_number_of_restores_between_number_and_tail_call(self):
+        # no skip bound: however many restores (and an arm64e `autibsp`) sit between
+        lines = [('movz', 'w2, #0x5')] + [('ldp', f'x{n}, x{n+1}, [sp]') for n in range(19, 29, 2)] \
+            + [('autibsp', ''), ('b', '#0x9000')]
+        self.assertEqual(self.number(lines, len(lines) - 1), 5)
+
+    def test_a_restore_of_x2_is_its_definition(self):
+        self.assertIsNone(self.number([('movz', 'w2, #0x5'), ('ldp', 'x1, x2, [sp]'),
+                                       ('b', '#0x9000')], 2))
+
+    def test_code_after_a_branch_that_does_not_fall_through_is_not_reached(self):
+        # `mov w2,#3; b elsewhere` -- the call after the `b` is reached from somewhere else
+        self.assertIsNone(self.number([('movz', 'w2, #0x3'), ('b', '#0x9000'),
+                                       ('mov', 'x0, x19'), ('bl', '#0x9100')], 3))
+
+    def test_a_call_clobbers_the_number(self):
+        lines = [('movz', 'w2, #0x3'), ('bl', '#0x9000'), ('bl', '#0x9100')]
+        self.assertEqual(self.number(lines, 1), 3)
+        self.assertIsNone(self.number(lines, 2))
+
+    def test_a_loop_counter_is_not_a_field_number(self):
+        # `mov x2, x21` with x21 a loop counter: 0 on entry, x21+1 on the back edge
+        lines = [('mov', 'x21, #0'), ('mov', 'x2, x21'), ('bl', '#0x9000'),
+                 ('add', 'x21, x21, #1'), ('cmp', 'x21, #4'), ('b.lo', '#0x1004')]
+        self.assertIsNone(self.number(lines, 2))
+
+    def test_a_copy_of_a_constant_is_that_constant(self):
+        self.assertEqual(self.number([('mov', 'x21, #0x6'), ('mov', 'x2, x21'),
+                                      ('bl', '#0x9000')], 2), 6)

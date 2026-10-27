@@ -36,7 +36,8 @@ from typing import Dict, List, Optional
 from serializers import cpp_descriptor_extract as _cpp
 from serializers import swift_descriptor_extract as _swift
 
-from .models import FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage, SCALAR_TYPES
+from .models import (FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage, SCALAR_TYPES,
+                     PACKABLE_SCALARS)
 from .protoclass_set import _proto_class_set
 from .foreign_detect import (google_protobuf_classes, swift_protobuf_messages,
                              cpp_file_protos, cpp_protobuf_namespaces, protobufc_descriptors)
@@ -66,9 +67,9 @@ def _flat(qualified: str) -> str:
 
 def _cpp_field(f: "_cpp.Field", package: str,
                registry: "Dict[str, tuple]", syntax: str = "proto2") -> ProtoField:
-    """*f* in edition 2023, with what its file's *syntax* implied: a proto2 repeated scalar is
-    EXPANDED unless declared packed, a proto3 one PACKED unless declared not; ``required`` is
-    LEGACY_REQUIRED presence; a group is a DELIMITED message."""
+    """*f* in edition 2023, with what its file's *syntax* implied: a proto2 repeated scalar or
+    enum is EXPANDED unless declared packed, a proto3 one PACKED unless declared not;
+    ``required`` is LEGACY_REQUIRED presence; a group is a DELIMITED message."""
     ref_package = ref_file = None
     if f.type in (11, 14, 10):                       # message / enum / group
         # Resolve the (absolute) descriptor type name through the global
@@ -89,10 +90,12 @@ def _cpp_field(f: "_cpp.Field", package: str,
     label = {3: FieldLabel.REPEATED, 2: FieldLabel.REQUIRED}.get(f.label, FieldLabel.OPTIONAL)
     note = "oneof member (flattened)" if f.oneof_index >= 0 else None
     packed = f.packed if f.has_packed else syntax == "proto3"
+    packable = f.type == 14 or _cpp._FTYPE.get(f.type) in PACKABLE_SCALARS
     return ProtoField(name=f.name, number=f.number, type_name=type_name,
                       label=label, number_confirmed=True, type_inference_note=note,
                       ref_package=ref_package, ref_file=ref_file,
-                      repeated_encoding=("PACKED" if packed else "EXPANDED") if f.label == 3 else None,
+                      repeated_encoding=(("PACKED" if packed else "EXPANDED")
+                                         if f.label == 3 and packable else None),
                       delimited=f.type == 10)
 
 
