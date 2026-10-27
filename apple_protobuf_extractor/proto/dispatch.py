@@ -7,8 +7,7 @@ starts from:
 * :func:`_jump_table_arm_addrs` -- decoded ``br`` jump tables, the CFG completion every
   :class:`proto.arm64_eval.Flow` user seeds its graph with.
 
-Never imports proto.extractor or proto.dispatch_eval (which imports this module); the
-evaluator (:mod:`proto.arm64_eval`) is imported inside the functions that run it.
+Never imports proto.extractor or proto.dispatch_eval (which imports this module).
 """
 from __future__ import annotations
 import bisect
@@ -19,9 +18,10 @@ from macho.memory    import READ_ERRORS, BinaryContext, _ctx_cache, _ctx_store, 
 from macho.classlist import ClassList, ObjcClass
 from macho.disasm   import Insn, _norm_reg, _parse_imm
 from proto.arm64cfg import dominators
+from proto.arm64_eval import Flow, _FLAG_SETTERS, _MAX_GATE_SPAN
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.arm64_operands import (PATH_ENDS, first_end, imm_operand, is_cond_branch, reads, reg_bits,
-                                  split_ops)
+from proto.arm64_operands import (PATH_ENDS, VALUE_GPRS, first_end, imm_operand, is_cond_branch,
+                                  reads, reg_bits, split_ops)
 from proto.models import record_heuristic_hit
 from proto.protoclass_set import _proto_class_set
 
@@ -48,7 +48,6 @@ def _find_readfrom_c_func(
     ``readFrom:``), and a ``-readFrom:`` that hands only the reader to a shared function
     (a field-less filter's skip-everything helper) has none either.
     """
-    from proto.arm64_eval import Flow
     from proto.function_body import function_listing     # (function_body imports this module)
     method = cls.get_method("readFrom:")
     if method is None or method.imp == 0:
@@ -80,7 +79,6 @@ _RANGE_CONDS = frozenset(('hi', 'hs', 'cs', 'lo', 'cc', 'ls'))
 def _guarding_cond(flow, k: int) -> Optional[str]:
     """The condition of the conditional branch that reads the flags ``insns[k]`` sets: the
     first flag reader after it in its block, when that is a ``b.<cond>``; else None."""
-    from proto.arm64_eval import _FLAG_SETTERS
     b = flow._block_of.get(k)
     end = flow._first_in_block[b] + len(flow.cfg.blocks[b])
     for j in range(k + 1, end):
@@ -101,7 +99,6 @@ def _index_bound(flow, k: int):
     ``br``; or a low-bit mask (``and w8, w0, #2^k-1``) or a field taken off the top or the
     middle of a register (``lsr x8, x1, #62`` -- a value's tag bits; ``ubfx w8, w0, #3, #2``),
     evaluated from just after it with every value it lets through.  None for anything else."""
-    from proto.arm64_eval import _MAX_GATE_SPAN
     ins = flow.insns[k]
     ops = split_ops(ins.op_str)
     if ins.mnemonic == 'cmp' and len(ops) in (2, 3) and ops[1].startswith('#'):
@@ -230,7 +227,7 @@ def _same_value(flow, k: int, reg: str) -> set:
     out = {reg}
     if origin is None:
         return out
-    for r in (f"x{i}" for i in range(29)):
+    for r in VALUE_GPRS:
         if r != reg:
             o, b = _copy_origin(flow, k, r)
             if o == origin and (origin[0] == 'entry' or len(blocks | b) == 1):
@@ -245,7 +242,6 @@ def _value_set(flow, k: int, reg: str, memo: dict) -> Optional[frozenset]:
     definition is anything else (a load, the value on entry), the definitions run through
     themselves (a loop), or there would be more than an ordered gate can let through
     (:data:`proto.arm64_eval._MAX_GATE_SPAN`)."""
-    from proto.arm64_eval import _MAX_GATE_SPAN
     if reg == 'xzr':
         return frozenset((0,))
     key = (k, reg)
@@ -359,7 +355,6 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
              bounds: Optional[Tuple[int, int]] = None) -> list:
     """``[{br address: arms}, Flow or None, sorted listing]`` for *insns*, memoised on *ctx* per
     listing: the decoder's last Flow is kept when it was built with the final arms."""
-    from proto.arm64_eval import Flow
     ins = sorted(insns, key=lambda i: i.addr)
     key = (tuple(i.addr for i in ins), bounds)
     memo = _ctx_cache(ctx, "_jump_table_arms", dict)
@@ -444,7 +439,6 @@ def decoded_flow(ctx: BinaryContext, insns: List["Insn"]):
     """The :class:`proto.arm64_eval.Flow` of *insns* (in address order) with each ``br``
     reaching its own decoded table (:func:`_jump_table_arm_addrs`): the decoder's own when it
     built one with the final arms.  Memoised on *ctx* per listing."""
-    from proto.arm64_eval import Flow
     hit = _decoded(ctx, insns)
     if hit[1] is None:
         hit[1] = Flow(ctx, hit[2], br_arms=hit[0])
@@ -455,7 +449,6 @@ def listing_flow(ctx: BinaryContext, insns: List["Insn"]):
     """The :class:`proto.arm64_eval.Flow` of an instruction listing, each ``br`` reaching its
     own decoded table (:func:`decoded_flow` for a listing in address order); with no tables,
     which need the image, when *ctx* is None."""
-    from proto.arm64_eval import Flow
     if ctx is None or any(a.addr >= b.addr for a, b in zip(insns, insns[1:])):
         return Flow(ctx, list(insns), br_arms=_jump_table_arm_addrs(ctx, insns, per_br=True))
     return decoded_flow(ctx, insns)

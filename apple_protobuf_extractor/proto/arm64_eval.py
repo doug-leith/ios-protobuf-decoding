@@ -27,10 +27,10 @@ from macho.memory import READ_ERRORS
 from proto.arm64cfg import (build_blocks, build_blocks_with_br_arms, inject_arm_edges, parse_adrp,
                             predecessors, reverse_postorder)
 from macho.strings import read_cfstring_text
-from proto.callees import (call_clobbers as callee_clobbers, outlined_fragment, outlined_tail,
-                           outlined_tail_reg)
+from proto.callees import Outlined, call_clobbers as callee_clobbers, outlined_code
 from proto.arm64_operands import (
     ARG_GPRS, AUTHENTICATED_BRANCHES, CALL_ARG_GPRS, CALLER_SAVED, CALLER_SAVED_GPRS, CALLS,
+    VALUE_GPRS,
     INDIRECT_BRANCHES, POINTER_AUTH, RETURNS, LOAD_BYTES, SIGNED_LOADS, STORE_BYTES, TRAPS,
     split_ops, writes_memory, reg_bytes, reg_mask, reg_bits, branch_target, is_cond_branch,
     is_conditional, writes,
@@ -406,7 +406,9 @@ class _Machine:
         slots too once a callee can reach them (*handed*: a stack address in a register it
         reads -- *args*, default x0-x8 -- now, or handed out before).  A callee that changes
         fewer (*clobbers*: :data:`proto.callees.CALL_CLOBBERS`) changes only those and the
-        flags."""
+        flags.  The callee-saved registers survive every call -- x21 too, Swift's error
+        register, which a throwing callee writes: a Swift call is taken to succeed (heuristic
+        registry ``swift-call-succeeds``)."""
         if clobbers is not None:
             for r in clobbers:
                 self.regs.pop(r, None)
@@ -469,7 +471,7 @@ class Objects:
 
 
 NO_OBJECTS = Objects()
-_ALL_GPRS = tuple(f"x{n}" for n in range(29))
+_ALL_GPRS = VALUE_GPRS
 
 
 @dataclass
@@ -592,9 +594,7 @@ class Flow:
         self._const_memo: Dict[Tuple[int, str], Optional[int]] = {}
         self._ivar_memo: Dict[int, Optional[int]] = {}
         self._reg_targets: Optional[Dict[int, int]] = None   # :meth:`_register_call_targets`
-        self._fragments: Dict[int, Optional[Tuple[Insn, ...]]] = {}   # :meth:`fragment`
-        self._tails: Dict[int, Optional[int]] = {}                    # :meth:`fragment_tail`
-        self._tail_regs: Dict[int, Optional[str]] = {}                # :meth:`fragment_tail_reg`
+        self._outlined: Dict[int, Optional[Outlined]] = {}            # :meth:`outlined`
         self._known: Dict[int, Dict[str, int]] = {}                   # :meth:`known_before`
         self._entry_states: Optional[Dict[int, "_Machine"]] = None    # :meth:`known_before`
 
@@ -1412,31 +1412,33 @@ class Flow:
             target = self._register_call_targets().get(k)
         return callee_clobbers(self.ctx, target)
 
-    def fragment(self, k: int) -> Optional[Tuple[Insn, ...]]:
-        """The instructions the ``bl`` ``insns[k]`` runs as part of this function (an outlined
-        fragment, or a thunk's prefix: :func:`proto.callees.outlined_code`), else None."""
-        if k not in self._fragments:
+    def outlined(self, k: int) -> Optional[Outlined]:
+        """The code the ``bl`` ``insns[k]`` runs as part of this function
+        (:func:`proto.callees.outlined_code`: an outlined fragment, or a thunk), else None."""
+        if k not in self._outlined:
             ins = self.insns[k]
-            self._fragments[k] = (outlined_fragment(self.ctx, _parse_imm(ins.op_str))
-                                  if ins.mnemonic == 'bl' and self.ctx is not None else None)
-        return self._fragments[k]
+            self._outlined[k] = (outlined_code(self.ctx, _parse_imm(ins.op_str))
+                                 if ins.mnemonic == 'bl' and self.ctx is not None else None)
+        return self._outlined[k]
+
+    def fragment(self, k: int) -> Optional[Tuple[Insn, ...]]:
+        """The instructions the ``bl`` ``insns[k]`` runs in place (an outlined fragment, or a
+        thunk's prefix: :meth:`outlined`), else None."""
+        o = self.outlined(k)
+        return None if o is None else o.body
 
     def fragment_tail(self, k: int) -> Optional[int]:
         """The target of the tail call the thunk the ``bl`` ``insns[k]`` runs ends in: after
         its prefix (:meth:`fragment`) the ``bl`` is a call to it.  None for a fragment, a
         call, or a tail call through a register (:meth:`fragment_tail_reg`)."""
-        if k not in self._tails:
-            self._tails[k] = (outlined_tail(self.ctx, _parse_imm(self.insns[k].op_str))
-                              if self.fragment(k) is not None else None)
-        return self._tails[k]
+        o = self.outlined(k)
+        return None if o is None else o.tail
 
     def fragment_tail_reg(self, k: int) -> Optional[str]:
         """The register the tail call of the thunk the ``bl`` ``insns[k]`` runs goes through
         (``mov x19, x0 ; mov x0, #0 ; br x1``), else None."""
-        if k not in self._tail_regs:
-            self._tail_regs[k] = (outlined_tail_reg(self.ctx, _parse_imm(self.insns[k].op_str))
-                                  if self.fragment(k) is not None else None)
-        return self._tail_regs[k]
+        o = self.outlined(k)
+        return None if o is None else o.tail_reg
 
     def fragment_calls(self, k: int) -> bool:
         """The ``bl`` ``insns[k]`` runs a thunk: its prefix, then a tail call (to

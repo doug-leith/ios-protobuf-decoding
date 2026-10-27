@@ -145,6 +145,7 @@ class TestOutlinedFragments(unittest.TestCase):
         # *before* / *after*: the function's own instructions either side of the bl
         from unittest import mock
         import proto.writer_flow as WF
+        from proto.callees import Outlined
         from tests._listing import insns, layout
         frag = tuple(insns(frag_lines, 0x2000))
         _order, fd = layout((0x1000, [
@@ -153,8 +154,8 @@ class TestOutlinedFragments(unittest.TestCase):
         wf = WF._ClassFlow(WF.WriterFlow(NoImage(segments=[]), []))
         wf.off_to_ivar = {8: '_a'}
         with mock.patch('proto.function_body.disasm', fd), \
-                mock.patch('proto.arm64_eval.outlined_fragment',
-                           lambda ctx, t: frag if t == 0x2000 else None), \
+                mock.patch('proto.arm64_eval.outlined_code', lambda ctx, t: (
+                    Outlined(frag, None, None) if t == 0x2000 else None)), \
                 mock.patch.object(WF, 'callee_name', lambda ctx, va: None), \
                 mock.patch.object(WF, 'stub_selector', lambda ctx, va: None):
             res = wf._run(0x1000, {'x0': frozenset({'S'}), 'x2': frozenset({'W'})}, 0, 0x1000)

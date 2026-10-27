@@ -124,9 +124,9 @@ class TestMangledNameParse(unittest.TestCase):
         self.assertIsNone(self._type("_OBJC_CLASS_$_NSString"))
         self.assertIsNone(self._type("_$s1MV17_protobuf_nameMap"))  # <2 idents
 
-    def test_split_idents(self):
-        self.assertEqual(S._split_idents("6oracle9Ora_Multi"), ["oracle", "Ora_Multi"])
-        self.assertEqual(S._split_idents("1M5OuterV5Inner"), ["M", "Outer", "Inner"])
+    def test_demangle_idents(self):
+        self.assertEqual(S.demangle_idents("6oracle9Ora_Multi"), ["oracle", "Ora_Multi"])
+        self.assertEqual(S.demangle_idents("1M5OuterV5Inner"), ["M", "Outer", "Inner"])
 
     def test_word_substituted_identifier_with_zero_terminator(self):
         # `06ClientF0` = literal 'Client' + last-subst 'F' ('Metadata') closed by

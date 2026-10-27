@@ -52,7 +52,7 @@ from proto.arm64cfg import mem_operand
 from proto.arm64_operands import (CALLER_SAVED_GPRS, CALLS, LOAD_BYTES, NO_DEST, BLOCK_ENDS,
                                   reg_name, split_ops)
 from proto import arm64_eval, dictrep_flow
-from proto.callees import stub_selector, text_holding
+from proto.callees import FP_WRITE_ARGS, INT_WRITE_ARGS, stub_selector, text_holding
 from macho.strings import read_cfstring_text
 from proto.config import _class_to_proto_name
 from proto.dispatch import FunctionEntries, _jump_table_arm_addrs, function_entries, listing_flow
@@ -64,7 +64,7 @@ from proto.models import (FieldLabel, ImageEvidence, ProtoEnum, ProtoField, Prot
 from proto.writeto import BoundWrite, writer_calls
 from proto.write_helpers import _classify_write_helper, _refine_scalar_by_family, INT_ENCODING_NOTE
 from proto.eval_tokens import SELF, READER, OPAQUE
-from proto.protocore import _SCALAR_ENC
+from proto.protocore import _SCALAR_ENC, enum_base_name
 
 log = logging.getLogger(__name__)
 
@@ -239,7 +239,7 @@ def decode_struct_writer(ctx, entry: int) -> List[MemberWrite]:
         if c.args.get('x0') != _WRITER_ARG or c.target is None:
             continue
         got = []
-        for number_reg, value_reg in (('x2', 'x1'), ('x1', 'v0')):
+        for value_reg, number_reg in (INT_WRITE_ARGS, FP_WRITE_ARGS):
             n = c.args.get(number_reg)
             if type(n) is int:
                 member = _member_in(flow, insns, k, value_reg, member_at)
@@ -266,9 +266,6 @@ def match_layout(layout: StructLayout, writes: Sequence[MemberWrite]) -> Optiona
     if set(got) != set(by_off) or len(set(got.values())) != len(got):
         return None
     return got
-
-
-# ── the owner's begin/end-marked sub-message write ────────────────────────────
 
 
 # ── inlined struct members: a symbolic base-register data flow ─────────────────
@@ -331,11 +328,11 @@ def _struct_load_step(flow, ins, k: int, state: Dict[str, tuple],
     return member
 
 
-def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_slot,
+def track_struct_loads(ctx, insns: Sequence, is_ivar_slot,
                        is_array: bool) -> Dict[int, Tuple[int, int]]:
-    """``{instruction index: (member offset, width)}`` for every load, among ``insns[:last+1]``,
-    that reads a member of the struct held in one particular ivar — found by following how the
-    code addresses it:
+    """``{instruction index: (member offset, width)}`` for every load of *insns* that reads a
+    member of the struct held in one particular ivar — found by following how the code
+    addresses it:
 
     * the ivar's **offset variable** is loaded (``ldrsw xOff,[xPage, #k]``, its address by
       :meth:`Flow.slot_load_address`; *is_ivar_slot* says whether that address is this
@@ -368,7 +365,7 @@ def track_struct_loads(ctx, insns: Sequence, last: int, is_ivar_slot,
         state = st0.copy()
         for k in flow.block_range(b):
             member = _struct_load_step(flow, flow.insns[k], k, state, is_ivar_slot, is_array)
-            if member is not None and k <= last:
+            if member is not None:
                 out[k] = member
     return out
 
@@ -388,8 +385,7 @@ def decode_inline_writes(ctx, insns: Sequence, writes, is_ivar_slot,
     found = [(at[w.addr], w) for w in writes if w.addr in at]
     if not found:
         return []
-    loads = track_struct_loads(ctx, insns, max(k for k, _w in found), is_ivar_slot,
-                               layout.is_array)
+    loads = track_struct_loads(ctx, insns, is_ivar_slot, layout.is_array)
     flow = listing_flow(ctx, insns)
     out: List[MemberWrite] = []
     for k, w in found:
@@ -657,7 +653,7 @@ def decode_inline_dictrep_members(ctx, insns: Sequence, is_ivar_slot,
     members are located through the ivar's offset variable exactly as in the inline
     ``writeTo:`` (:func:`track_struct_loads`), so only this ivar's keys are paired."""
     want = {m.offset for m in layout.members}
-    loads = track_struct_loads(ctx, insns, len(insns) - 1, is_ivar_slot, layout.is_array)
+    loads = track_struct_loads(ctx, insns, is_ivar_slot, layout.is_array)
     members, _unpaired = _pair_members(
         ctx, insns, lambda k: loads[k][0] if k in loads and loads[k][0] in want else None)
     return members
@@ -681,8 +677,8 @@ def record_struct_site(sites: Dict[Tuple[str, str], StructSite], class_name: str
                        write: Optional[BoundWrite]) -> bool:
     """Add to *sites* (:attr:`proto.models.ImageEvidence.struct_sites`) a struct-typed field's
     bound begin-mark for :func:`finalize_struct_fields`; True when it is one.  A no-op unless
-    the ivar is a flat scalar struct, its offset variable is known and a write binds it."""
-    if write is None or not offset_slot:
+    the ivar is a flat scalar struct, its offset variable is known and a begin mark binds it."""
+    if write is None or not write.bracket or not offset_slot:
         return False
     if parse_struct_encoding(enc) is None:
         return False
@@ -737,7 +733,7 @@ def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, entries, memo
     calls = writer_calls(ctx, cls)
     begin = next((s for s in calls.sites if s.addr == site.write_addr), None) if calls else None
     sub = submessage(calls, begin) if begin is not None else None
-    if sub is None or sub.nested or sub.number != site.number:
+    if sub is None or sub.nested:
         return None
     for callee in sub.callees:
         writes = decode_struct_writer(ctx, callee)
@@ -941,8 +937,7 @@ def finalize_struct_fields(ctx, cl, messages: List[ProtoMessage], evidence: Imag
             if m.offset in enum_pairs and ptype in ("int32", "uint32"):
                 pairs = enum_pairs[m.offset]
                 if pairs:
-                    enum = _make_enum(_qualify_enum_name(pname, fld.name[:1].upper() + fld.name[1:]),
-                                      pairs)
+                    enum = _make_enum(_qualify_enum_name(pname, enum_base_name(fld.name)), pairs)
                     fld.type_name, fld.type_class = enum.name, f"ENUM:{enum.name}"
                     enums.append(enum)
                 else:

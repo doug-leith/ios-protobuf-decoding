@@ -159,8 +159,8 @@ class TestOnePath(unittest.TestCase):
                  I(B + 8, 'bl', f'#{callee:#x}'), I(B + 12, 'bl', '#0x9000'), I(B + 16, 'ret')]
         where = []
         with mock.patch.object(E, "read_cfstring_text", lambda ctx, va: f"S{va:#x}"), \
-                mock.patch.object(E, "outlined_fragment",
-                                  lambda ctx, t: frag if t == self.FRAG else None), \
+                mock.patch.object(E, "outlined_code", lambda ctx, t: (
+                    E.Outlined(frag, None, None) if t == self.FRAG else None)), \
                 mock.patch.object(E, "callee_clobbers",
                                   lambda ctx, t: ('x16', 'x17') if t == self.PROBE else None):
             got = Flow(NoImage(), insns).evaluate(0, 'x8', 1, where=where)

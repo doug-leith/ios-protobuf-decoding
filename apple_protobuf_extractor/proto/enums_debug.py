@@ -42,7 +42,7 @@ from macho.memory     import BinaryContext, PROGRAM_ERRORS
 from macho.strings    import StringTable
 from macho.classlist  import ObjcClass, ObjcIvar
 from proto.models     import ProtoField
-from proto.protocore  import _proto_name, enum_selectors
+from proto.protocore  import _proto_name, enum_base_name, enum_selectors
 from proto.config     import _dbg_enum
 from proto.enums      import _enum_name_from_pairs, _extract_xasstring, _xasstring_flow
 
@@ -176,13 +176,10 @@ def _emit_mode_a_debug(ctx: BinaryContext, cls: ObjcClass, st: StringTable,
     when that selector exists (keeps the debug file to actionable misses); only runs under
     ``--debug-enums``."""
     pname_a = _proto_name(ivar.name)
-    cap_a   = pname_a[0].upper() + pname_a[1:] if pname_a else ""
-    xas_a   = f"{pname_a}AsString:"
-    stx_a   = f"StringAs{cap_a}:"
-    xas_in_mn = bool(st.find(xas_a))
-    stx_in_mn = bool(st.find(stx_a))
-    if not (xas_in_mn or stx_in_mn):
+    hits = _gather_asstring_methname_hits(pname_a, st)
+    if not (hits["xasstring_in_methname"] or hits["stringasx_in_methname"]):
         return
+    xas_a, stx_a = hits["xasstring_sel"], hits["stringasx_sel"]
     _dbg_enum({
         "mode":                       "A_scalar_no_enum_tag",
         "class":                      cls.name,
@@ -191,16 +188,9 @@ def _emit_mode_a_debug(ctx: BinaryContext, cls: ObjcClass, st: StringTable,
         "ivar":                       ivar.name,
         "type_enc":                   ivar.type_enc,
         "scalar_type":                scalar_type,
-        "xasstring_sel":              xas_a,
-        "stringasx_sel":              stx_a,
+        **hits,
         "xasstring_in_instance_methods": xas_a in instance_method_names,
         "stringasx_in_instance_methods": stx_a in instance_method_names,
-        "xasstring_in_methname":      xas_in_mn,
-        "stringasx_in_methname":      stx_in_mn,
-        "related_asstring_sels":      sorted({
-            e.value for e in st.all_in_section('__objc_methname')
-            if 'AsString:' in e.value and pname_a.lower() in e.value.lower()
-        })[:20],
         "type_compatible_candidates": _gather_type_compatible_methods(cls, ctx),
         "methods_total":              len(cls.methods),
         "methods_null_name":          sum(1 for m in cls.methods if m.name is None),
@@ -241,7 +231,7 @@ def _emit_mode_c_debug(ctx: BinaryContext, cls: ObjcClass, fld: ProtoField,
     because no ``xAsString:`` method could be resolved/extracted. Builds the candidate
     list + record. Carved out of :func:`proto.enums._collect_enum_definitions` (only
     runs under ``--debug-enums``)."""
-    cap = fld.name[:1].upper() + fld.name[1:]
+    cap = enum_base_name(fld.name)
     candidates_info = [
         c if "error" in c else {**c, "phase1_match": c["derived_name"] != "\x00"
                                 and c["derived_name"].endswith(cap)}

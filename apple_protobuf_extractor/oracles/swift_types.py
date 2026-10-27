@@ -18,7 +18,7 @@ oracles check (:mod:`serializers.swift_type_recovery`).
 import struct
 from typing import Dict, List, NamedTuple, Optional, Set, Tuple
 
-MODULE, EXTENSION, ANONYMOUS, PROTOCOL, CLASS, STRUCT, ENUM = 0, 1, 2, 3, 16, 17, 18
+MODULE, PROTOCOL, CLASS, STRUCT, ENUM = 0, 3, 16, 17, 18
 _NOMINAL_CODE = {STRUCT: "V", ENUM: "O", CLASS: "C"}
 _MAX_DEPTH = 64                       # a parent chain longer than this is not a real one
 

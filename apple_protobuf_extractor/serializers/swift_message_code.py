@@ -39,6 +39,7 @@ from proto.callees import callee_name, outlined_code, text_holding
 from proto.function_body import function_body
 from proto.models import MAX_FIELD_NUMBER
 from serializers import swift_symbols as SY
+from serializers import swift_type_recovery as TR
 from serializers.swift_symbols import read_i32, rel
 
 # self; the decoder (or visitor) argument, its type and its witness table
@@ -460,13 +461,13 @@ _INSTANTIATE = ("___swift_instantiateConcreteTypeFromMangledName",
 def _accessors(ctx) -> Dict[int, int]:
     """``{metadata access function: type descriptor}`` of the image's nominal types (each
     descriptor's AccessFunction, a relative pointer at +0x0C)."""
-    import serializers.swift_type_recovery as TR
 
     def build():
         out: Dict[int, int] = {}
         for _rec, desc in TR.type_descriptors(ctx):
             try:
-                if TR._desc_kind(ctx, desc) in (16, 17, 18) and read_i32(ctx, desc + 0x0C):
+                if TR._desc_kind(ctx, desc) in (TR._CLASS_KIND, TR._STRUCT_KIND, TR._ENUM_KIND) \
+                        and read_i32(ctx, desc + 0x0C):
                     out.setdefault(rel(ctx, desc + 0x0C), desc)
             except READ_ERRORS:
                 continue
@@ -481,7 +482,6 @@ def _type_of_accessor_symbol(name: str) -> Optional[str]:
     """``$s<module><Outer>V<Inner>VMa`` -> ``Outer.Inner``: another image's type, by the
     symbol of its metadata accessor (one run of identifiers: a word substitution refers back
     across them, ``21InternalSwiftProtobuf06Google_C10_TimestampV`` -> Google_Protobuf_Timestamp)."""
-    import serializers.swift_type_recovery as TR
     body = name[3:-2] if name.startswith("_$s") and name.endswith("Ma") else ""
     if not body or body[-1] not in _KIND_LETTERS:
         return None
@@ -494,7 +494,6 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
     type (by its descriptor), of another image's (by its symbol), or of instantiating a mangled
     name (``__swift_instantiateConcreteTypeFromMangledName`` handed its cache, whose first word
     is a relative reference to the name); or a static metadata record (its descriptor at +8)."""
-    import serializers.swift_type_recovery as TR
     if v is None:
         return None
     if is_pointer(v):
@@ -507,7 +506,8 @@ def metadata_type(ctx, objs: _Objects, v: Optional[int]) -> Optional[str]:
         return None
     try:
         desc = ctx.read_ptr(v + 8)
-        return TR._qualified_name(ctx, desc) if TR._desc_kind(ctx, desc) in (17, 18) else None
+        return (TR._qualified_name(ctx, desc)
+                if TR._desc_kind(ctx, desc) in (TR._STRUCT_KIND, TR._ENUM_KIND) else None)
     except READ_ERRORS:
         return None
 
@@ -517,7 +517,6 @@ def _call_result_type(ctx, target: Optional[int], x0) -> Optional[str]:
     (:func:`metadata_type`).  A call to an unnamed outlined thunk with a fixed tail
     (``mov x0, #0 ; b <accessor>``) is its tail call: x0 is the caller's unless its prefix
     writes it."""
-    import serializers.swift_type_recovery as TR
     if target is None:
         return None
     desc = _accessors(ctx).get(target)
@@ -579,25 +578,6 @@ def _visits_a_field(visit: Tuple[str, str]) -> bool:
 
 def _code(traverse) -> "Code":
     return traverse if isinstance(traverse, Code) else Code(traverse)
-
-
-def visit_methods(ctx, traverse) -> Dict[int, Tuple[str, str]]:
-    """``{k: (label, kind)}``: the Visitor method of each call ``insns[k]`` of a
-    ``traverse(visitor:)`` body itself (a :class:`Code` or its address; *insns* those of its
-    :func:`serializers.swift_symbols.function_flow`) that visits a field, named as
-    :func:`visited_fields` names them."""
-    code = _code(traverse)
-    flow = SY.function_flow(ctx, code.va)
-    if flow is None:
-        return {}
-    objs = _Objects(ctx)
-    region = flow.run_from(0, objs.entry(code), objects=objs.objects(code.va))
-    out: Dict[int, Tuple[str, str]] = {}
-    for c in region.calls:
-        visit = _visitor_method(ctx, objs, c)
-        if visit is not None and _visits_a_field(visit):
-            out[c.k] = visit
-    return out
 
 
 def visited_fields(ctx, traverse) -> Dict[int, List[Visited]]:

@@ -254,6 +254,12 @@ PB_FIELD_WRITERS: Dict[str, str] = {
 }
 
 
+#: Where a field writer ``(writer, value, field#)`` takes its value and its field number
+#: (AAPCS64; the writer in x0): ``(value register, number register)`` -- an integer value in x1
+#: with the number in w2, a float / double value in v0 with the number in w1.
+INT_WRITE_ARGS, FP_WRITE_ARGS = ("x1", "x2"), ("v0", "x1")
+
+
 def pb_field_writer_type(name: Optional[str]) -> Optional[str]:
     """The proto type the field writer named *name* (:data:`PB_FIELD_WRITERS`) serialises;
     None for any other name."""
@@ -311,12 +317,7 @@ _SWIFT_SYMBOL_PREFIXES = ("_$s", "_$S", "__T0")
 
 def _is_swift_name(name: Optional[str]) -> bool:
     """*name* is a function of the Swift calling convention: a mangled Swift symbol that is not
-    an ``@objc`` thunk (mangled ``...To``, which has the C convention).
-
-    Such a call is assumed to succeed: a throwing Swift function writes its error to x21 (which
-    its caller zeroes and tests after the call), but x21 is kept across the call like the other
-    callee-saved registers, so the error path is not followed (heuristic registry
-    ``swift-call-succeeds``)."""
+    an ``@objc`` thunk (mangled ``...To``, which has the C convention)."""
     return bool(name) and name.startswith(_SWIFT_SYMBOL_PREFIXES) and not name.endswith("To")
 
 class Outlined(NamedTuple):
@@ -373,27 +374,6 @@ def outlined_code(ctx, target: Optional[int]) -> Optional[Outlined]:
         res = None
     memo[target] = res
     return res
-
-
-def outlined_fragment(ctx, target: Optional[int]) -> Optional[Tuple]:
-    """The instructions a ``bl`` to *target* runs in its caller (:func:`outlined_code`'s
-    ``body``: a fragment without its ``ret``, a thunk's prefix), else None."""
-    o = outlined_code(ctx, target)
-    return None if o is None else o.body
-
-
-def outlined_tail(ctx, target: Optional[int]) -> Optional[int]:
-    """The target of the tail call a thunk at *target* ends in (:func:`outlined_code`), else
-    None (a fragment, or a tail call through a register: :func:`outlined_tail_reg`)."""
-    o = outlined_code(ctx, target)
-    return None if o is None else o.tail
-
-
-def outlined_tail_reg(ctx, target: Optional[int]) -> Optional[str]:
-    """The register the tail call a thunk at *target* ends in goes through
-    (:func:`outlined_code`), else None."""
-    o = outlined_code(ctx, target)
-    return None if o is None else o.tail_reg
 
 
 def _return_address_check(body, i: int) -> bool:

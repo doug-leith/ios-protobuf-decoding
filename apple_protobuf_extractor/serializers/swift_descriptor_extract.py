@@ -83,6 +83,7 @@ from proto.models import (MAX_FIELD_NUMBER, PACKABLE_SCALARS, record_analysis_fa
                           record_heuristic_hit)
 from serializers import swift_message_code as MC
 from serializers.swift_symbols import NAMEMAP_MARKER as _NAMEMAP_MARKER, function_names, symbol_addrs
+from serializers import swift_type_recovery
 from serializers.swift_type_recovery import demangle_idents
 from serializers.swift_namemap_bytecode import (
     bytecode_literal_from_getter, call_site_registers, decode_namemap_bytecode)
@@ -138,23 +139,16 @@ class SwiftMessage:
 
 # ── mangled name parsing ──────────────────────────────────────────────────────
 
-def _split_idents(head: str) -> List[str]:
-    """Parse a run of Swift length-prefixed identifiers (``6oracle9Ora_Multi``
-    → ``["oracle", "Ora_Multi"]``), skipping single-letter nominal-kind tags and
-    resolving word-substitution abbreviations (e.g. ``07Google_B4_Any`` →
-    ``Google_Protobuf_Any``).  Delegates to the shared demangler in
-    :mod:`swift_type_recovery` so the type and name sides agree."""
-    return demangle_idents(head)
-
-
 def _type_of_symbol(sym: str, member: str) -> Optional[Tuple[str, str, str]]:
     """``(module, type_name, kind)`` of the Swift type a member's symbol belongs to:
     ``…<identifiers>V<member>…`` (kind ``V``: a struct, i.e. a message) or ``…O<member>…``
-    (an enum); type_name is dotted for a nested type.  None for any other symbol."""
+    (an enum); type_name is dotted for a nested type (the identifiers by
+    :func:`serializers.swift_type_recovery.demangle_idents`, as the type side reads them).  None
+    for any other symbol."""
     m = re.search(r"_\$[sS](.*?)([VO])" + re.escape(member), sym)
     if not m:
         return None
-    idents = _split_idents(m.group(1))
+    idents = demangle_idents(m.group(1))
     if len(idents) < 2:
         return None
     return idents[0], ".".join(idents[1:]), m.group(2)
@@ -592,7 +586,7 @@ class _Reading(NamedTuple):
         return self.fields, self.shape
 
 
-def _read_static(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optional[_Reading]:
+def _read_static(ctx: BinaryContext, insns, enum: bool) -> Optional[_Reading]:
     """Shape C: the array the getter hands ``swift_initStaticObject`` (a data blob, never cut)."""
     for blob in _static_objects(ctx, insns):
         got = _parse_static_blob(ctx, blob, enum)
@@ -601,7 +595,7 @@ def _read_static(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optiona
     return None
 
 
-def _read_inline(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optional[_Reading]:
+def _read_inline(ctx: BinaryContext, insns, enum: bool) -> Optional[_Reading]:
     """Shape A, inline, directly in the getter, or in the function it tail-calls with its
     registers (CreateML getters: ``adrp; add; b <the closure placed next>``)."""
     got = _walk_inline_closure(ctx, insns, enum)
@@ -618,7 +612,7 @@ def _read_inline(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optiona
     return _Reading(got, "inline", body.truncated) if got else None
 
 
-def _read_runtime(ctx: BinaryContext, init_va: int, insns, enum: bool) -> _Reading:
+def _read_runtime(ctx: BinaryContext, insns, enum: bool) -> _Reading:
     """The once-initialised ``_NameMap`` lowering: the getter fast-path loads a cached
     ``_NameMap`` from ``__bss`` and a ``cmn x?,#1; b.ne <builder>`` guards a cold builder that
     constructs it once.  The builder -- the getter's own cold path, or the closure it hands
@@ -666,7 +660,7 @@ def _read_shared_once(ctx: BinaryContext, init_va: int, insns,
     return best
 
 
-def _read_bytecode(ctx: BinaryContext, init_va: int, insns, enum: bool) -> Optional[_Reading]:
+def _read_bytecode(ctx: BinaryContext, insns, enum: bool) -> Optional[_Reading]:
     """Shape E, a packed-bytecode ``_NameMap(bytecode:)`` literal (iOS 27 toolchain) the getter
     hands with its length to a shared template; decoded whole or not at all."""
     lit = bytecode_literal_from_getter(ctx, insns, enum=enum, flow=_flow_of(ctx, insns))
@@ -692,7 +686,8 @@ def _read_inline_closure(ctx: BinaryContext, init_va: int, insns,
 
 def _namemap_builder_validated(ctx: BinaryContext, got: List[SwiftField],
                                visited: Optional[Set[int]], enum: bool = False) -> bool:
-    """Guard the runtime-namemap reading against fabrication.
+    """Guard a name-map reading with no check of its own (a runtime builder's, a shared
+    once-init template's) against fabrication.
 
     A ``stp <smallInt>, <namePtr>, [base,#slot]`` pair is AMBIGUOUS by its stores alone: the
     small int is the field NUMBER in the older codegen (remindd) but the name LENGTH in a
@@ -787,20 +782,18 @@ def _extract_namemap_raw(ctx: BinaryContext, init_va: int,
             visited.append(_visited_numbers(ctx, traverse, owner))
         return _namemap_builder_validated(ctx, got, visited[0], enum)
 
-    for read in (_read_static, _read_inline):
-        r = read(ctx, init_va, insns, enum)
-        if r is not None:
-            return r.taken()
-    runtime = _read_runtime(ctx, init_va, insns, enum)
+    r = _read_static(ctx, insns, enum) or _read_inline(ctx, insns, enum)
+    if r is not None:
+        return r.taken()
+    runtime = _read_runtime(ctx, insns, enum)
     if len(runtime.fields) > (0 if enum else 1) and validated(runtime.fields):
         return runtime.taken()
     shared = _read_shared_once(ctx, init_va, insns, enum)
     if shared is not None and (shared.shape == "bytecode" or validated(shared.fields)):
         return shared.taken()
-    for read in (_read_bytecode, _read_inline_closure):
-        r = read(ctx, init_va, insns, enum)
-        if r is not None:
-            return r.taken()
+    r = _read_bytecode(ctx, insns, enum) or _read_inline_closure(ctx, init_va, insns, enum)
+    if r is not None:
+        return r.taken()
     # a runtime builder with exactly ONE entry is used last, under the same oracle validation and
     # Swift reflection's check of the name (``runtime-single``): its literal is the only support.
     if len(runtime.fields) == 1 and not enum and validated(runtime.fields):
@@ -906,7 +899,6 @@ def _one_entry(m: SwiftMessage) -> bool:
 
 def _witnesses(ctx: BinaryContext) -> Dict[str, Dict[str, MC.Code]]:
     """:func:`serializers.swift_message_code.message_witnesses` by the type's qualified name."""
-    from serializers.swift_type_recovery import _qualified_name
 
     def build():
         try:
@@ -916,7 +908,7 @@ def _witnesses(ctx: BinaryContext) -> Dict[str, Dict[str, MC.Code]]:
             return {}
         out = {}
         for td, ws in found.items():
-            name = _qualified_name(ctx, td)          # (None: unreadable, recorded there)
+            name = swift_type_recovery._qualified_name(ctx, td)  # (None: unreadable, recorded)
             if name is not None:
                 out[name] = ws
         return out
@@ -1054,7 +1046,6 @@ def _attach_field_types(ctx: BinaryContext, msgs: List[SwiftMessage], decoded=fr
     name (normalised), :func:`_attach_types`' last resort."""
     joined: Dict[Tuple[int, int], Tuple[str, Optional[str]]] = {}
     try:
-        from serializers import swift_type_recovery
         by_type, incomplete, fieldless, stored = swift_type_recovery.collect_field_types(ctx)
     except PROGRAM_ERRORS:
         raise

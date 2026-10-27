@@ -343,8 +343,8 @@ class TestScanBlockEnumeratedMaps(_Patched):
         got = self._scan()
         self.assertEqual(list(got), ['_publisherAttributionSources'])
         e = got['_publisherAttributionSources']
-        self.assertEqual((e.number, e.key_helper, e.value_helper, e.shape),
-                         (1, 0x18dbdac18, 0x18dbdac24, 'block'))
+        self.assertEqual((e.number, e.key_helper, e.value_helper),
+                         (1, 0x18dbdac18, 0x18dbdac24))
 
     def test_block_at_stack_bottom_uses_mov_x2_sp(self):
         # GEOLPRRoot's second block sits at sp+0: `mov x2, sp` and the invoke pointer
@@ -492,7 +492,7 @@ class TestNewerToolchainBlockShape(_Patched):
             ('add', 'x8, x20, x8'), ('ldr', 'x20, [x8]'), ('mov', 'x0, x20'),
             ('bl', '#0x9000')]))
         ctx = FakeCtx(u32={0x1e493efa8: 32})
-        self.assertEqual(M._trace_ivar(ctx, listing_flow(ctx, insns), len(insns) - 1, 'x0',
+        self.assertEqual(M._trace_ivar(listing_flow(ctx, insns), len(insns) - 1, 'x0',
                                        M._IvarNames({0x1e493efa8: '_vehicleTypes'}, {})),
                          '_vehicleTypes')
 
@@ -813,7 +813,7 @@ class TestLiveCoreParsec(unittest.TestCase):
                                                   f.map_value_type, f.map_value_class,
                                                   f.type_inference_note, f.label)
                          for m in msgs for f in m.fields if f.map_key_type or
-                         f.type_class in E._MAP_OBJC_CLASSES}
+                         f.type_class in E.MAP_OBJC_CLASSES}
         cls.msgs = copy.deepcopy(msgs)
 
     def test_recovered_shapes(self):

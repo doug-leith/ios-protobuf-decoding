@@ -45,19 +45,19 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 # Direct internal dependencies: a consumer of any of these imports it from the module that
 # defines it (proto.protocore / dispatch / repeated / enums / writeto / config, macho.*).
-from macho.memory    import BinaryContext, _ctx_store, reset_ctx_caches, PROGRAM_ERRORS
+from macho.memory    import BinaryContext, reset_ctx_caches, PROGRAM_ERRORS
 from macho.strings   import StringTable
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 
 from proto.models    import (FieldLabel, ImageEvidence, ProtoField, ProtoMessage, get_diagnostics,
-                             record_analysis_failure, record_failed_pass, record_heuristic_hit,
+                             record_analysis_failure, record_heuristic_hit,
                              PACKABLE_SCALARS)
 from proto.writeto   import BoundWrite, _extract_writeto_field_numbers, writeto_sent_selectors
 from proto.writer_flow import writer_reachable_ivars
 from proto.write_helpers import (
     _identify_string_write_helpers, _find_string_write_helper,
     _classify_write_helper, _refine_scalar_by_family, _ensure_writeto_prepass, INT_ENCODING_NOTE,
-    _ensure_string_write_helpers,
+    _ensure_string_write_helpers, image_prepass,
 )
 from proto.protocore import (
     _is_real_field_ivar, _type_from_enc,
@@ -142,7 +142,6 @@ _ELEMENT_UNRESOLVED_NOTE = (
 # recovered stays flagged: a map field whose entry writer was found but whose types
 # were not emits as ``repeated bytes`` (each element an entry message); one with no
 # entry writer at all keeps ``bytes`` + note.  See LIMITATIONS.md (1).
-_MAP_OBJC_CLASSES = MAP_OBJC_CLASSES
 
 # ACCEPTED LIMITATION (field# 0): Apple emits deliberate 0-based proto fields
 # (writeTo: `mov w2,#0`, readFrom: `case 0`).  Field 0 is illegal in proto2/proto3
@@ -291,19 +290,9 @@ def _ensure_readfrom_core_index(ctx: BinaryContext, cl: ClassList) -> Dict[int, 
     """Lazily build + cache the binary-wide ``{ReadAllFrom_va: class}`` index on
     ``ctx``. Same rationale as :func:`_ensure_string_write_helpers` — without it a
     standalone caller loses principled ``repeated <message>`` element resolution."""
-    cached = getattr(ctx, "_readfrom_core_index", None)
-    if cached is not None:
-        return cached
-    try:
-        index = _build_readfrom_core_index(ctx, cl)
-    except PROGRAM_ERRORS:
-        raise
-    except Exception as exc:
-        record_failed_pass(ctx, "readFrom core index", exc,
-                           "repeated-message element types are not recovered from readFrom:")
-        index = {}
-    _ctx_store(ctx, "_readfrom_core_index", index)
-    return index
+    return image_prepass(ctx, "_readfrom_core_index", lambda: _build_readfrom_core_index(ctx, cl),
+                         "readFrom core index",
+                         "repeated-message element types are not recovered from readFrom:", {})
 
 
 @dataclass(frozen=True)
@@ -911,7 +900,7 @@ def extract_proto_message(
         # protobuf map<> field: remember its entry writer for the post-extraction
         # type resolution (:func:`_finalize_map_fields`); until then — and for any map
         # it cannot resolve — the field stays flagged `bytes` (see LIMITATIONS.md (1), #41).
-        if type_class in _MAP_OBJC_CLASSES:
+        if type_class in MAP_OBJC_CLASSES:
             if ivar.name in _map_writers:
                 _evidence.map_writers[(cls.name, pname)] = _map_writers[ivar.name]
             if not _type_note:

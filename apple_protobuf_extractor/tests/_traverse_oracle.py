@@ -20,9 +20,11 @@ Two things name a location:
   offset global (``ldr x8, <…Wvd>``), is the class field that global's symbol names, when the
   record loaded from is typed by a direct reference to that class.
 
-Only visits whose Visitor method :func:`serializers.swift_message_code.visit_methods` names
-are read (the method fixes the field number's register); a location two visits or two
-properties share names nothing, and nor does one the getters and the metadata name apart."""
+Only visits of a Visitor method whose signature (:func:`visit_arguments`: demangled by the
+toolchain, lowered by the Swift calling convention) has a value and a field number are read;
+a location two visits or two properties share names nothing, and nor does one the getters and
+the metadata name apart."""
+import functools
 import re
 import shutil
 import subprocess
@@ -381,14 +383,15 @@ def _proven_equal(flow, k, c):
 _DEMANGLED: Dict[str, str] = {}
 
 
-def demangler() -> Optional[List[str]]:
+@functools.lru_cache(maxsize=None)
+def demangler() -> Optional[Tuple[str, ...]]:
     """The toolchain's ``swift-demangle`` command, or None."""
     if shutil.which("swift-demangle"):
-        return ["swift-demangle"]
+        return ("swift-demangle",)
     if shutil.which("xcrun"):
         r = subprocess.run(["xcrun", "--find", "swift-demangle"], capture_output=True, text=True)
         if r.returncode == 0 and r.stdout.strip():
-            return [r.stdout.strip()]
+            return (r.stdout.strip(),)
     return None
 
 
@@ -401,6 +404,8 @@ def _demangle(symbols) -> Dict[str, str]:
             raise RuntimeError("no swift-demangle: the traverse oracle reads Visitor signatures")
         out = subprocess.run(cmd, input="\n".join(todo) + "\n", capture_output=True,
                              text=True, check=True).stdout.splitlines()
+        if len(out) != len(todo):
+            raise RuntimeError(f"swift-demangle gave {len(out)} lines for {len(todo)} symbols")
         _DEMANGLED.update(zip(todo, out))
     return {s: _DEMANGLED[s] for s in symbols}
 
@@ -471,9 +476,10 @@ def visit_arguments(demangled: str) -> Optional[Tuple[str, str, str, str]]:
 
 def visit_calls(ctx, va) -> Dict[int, Tuple[str, str, str, str]]:
     """``{k: visit_arguments(...)}`` for each call ``insns[k]`` of the ``traverse(visitor:)`` at
-    *va* that reaches a Visitor method visiting a field (not an extension's or the unknown
-    fields'): the symbols the call reaches, demangled (the call is found as the extractor finds
-    it: :func:`MC._call_names`, a witness-table slot named by its requirement)."""
+    *va* that reaches a Visitor method visiting a field (one with a value and a field number:
+    an extension's and the unknown fields' have neither): the symbols the call reaches,
+    demangled (the call is found as the extractor finds it: :func:`MC._call_names`, a
+    witness-table slot named by its requirement)."""
     code = MC._code(va)
     flow = SY.function_flow(ctx, code.va)
     if flow is None:
@@ -486,7 +492,7 @@ def visit_calls(ctx, va) -> Dict[int, Tuple[str, str, str, str]]:
     out = {}
     for k, ns in names.items():
         got = [a for a in (visit_arguments(text[n]) for n in ns) if a is not None]
-        if got and "Extension" not in got[0][0] and "Unknown" not in got[0][0]:
+        if got:
             out[k] = got[0]
     return out
 

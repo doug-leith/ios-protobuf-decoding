@@ -23,7 +23,7 @@ from macho.strings    import StringTable
 from macho.classlist  import ObjcClass
 from proto.models     import (ProtoEnum, ProtoEnumValue, ProtoField, _enum_prefix, get_diagnostics,
                               retag_enums)
-from proto.protocore  import _SCALAR_ENC, _proto_name, enum_selectors
+from proto.protocore  import _SCALAR_ENC, _proto_name, enum_base_name, enum_selectors
 from proto.dispatch   import _jump_table_arm_addrs, function_entries
 from proto.dictrep_flow import Flow
 from proto.callees import text_holding
@@ -258,9 +258,9 @@ def _harvest_dictrep(
     # The field's int is driven through the function's own code, value by value, to the
     # CFString it hands to the dictionary -- see proto/dictrep_flow.py.
     flow = Flow(ctx, insns, jump_table_arms=_jump_table_arm_addrs(ctx, insns))
-    return DictrepHarvest(*flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
-                                           if iv.offset is not None and iv.offset_slot}, wanted),
-                          truncated=insns.truncated)
+    got = flow.enum_maps({iv.offset_slot: iv.offset for iv in cls.ivars
+                          if iv.offset is not None and iv.offset_slot}, wanted)
+    return DictrepHarvest(got.maps, got.incomplete, got.unevaluated, insns.truncated)
 
 
 def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
@@ -277,7 +277,7 @@ def _enum_name_from_methname(ivar_name: str, st: StringTable) -> Optional[str]:
     if not pname or len(pname) < 2:
         return None
     if any(st.find(sel) for sel in enum_selectors(pname)):
-        return pname[0].upper() + pname[1:]
+        return enum_base_name(pname)
     return None
 
 
@@ -504,7 +504,7 @@ def _collect_enum_definitions(
 
     **Phase 2 — enum extraction loop**:  For each ``ENUM:``-tagged field, find
     and extract the ``xAsString:`` method implementation (:func:`_recover_enum_values`).
-    On success a :class:`ProtoEnum` is appended to the returned list.  On failure (no
+    On success a :class:`ProtoEnum` is among the returned enums.  On failure (no
     resolvable ``xAsString:`` method for the field) the ``ENUM:`` tag is reverted
     and the field is left as its raw scalar type (``int32``/``uint32``).
 
@@ -523,7 +523,7 @@ def _collect_enum_definitions(
     if not instance_method_names:
         _tag_methname_enums(ctx, cls, fields, st, _pfx, _dbg_w)
     dictrep_pairs, dictrep_incomplete, dictrep_truncated = _tag_dictrep_enums(
-        ctx, cls, fields, st, _pfx)
+        ctx, cls, fields, _pfx)
 
     enums: List[ProtoEnum] = []
     seen_enum_names: Set[str] = set()
@@ -619,7 +619,7 @@ def _tag_methname_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFi
 
 
 def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoField],
-                       st: StringTable, prefixes: Tuple[str, ...]
+                       prefixes: Tuple[str, ...]
                        ) -> Tuple[Dict[str, List[Tuple[int, str]]], Dict[str, str], bool]:
     """Phase 1.5, ``_dictionaryRepresentation:`` switch-table enums: ``(pairs, incomplete)``
     by field name, and whether the body was read only in part.
@@ -657,7 +657,7 @@ def _tag_dictrep_enums(ctx: BinaryContext, cls: ObjcClass, fields: List[ProtoFie
             pairs = dr_enums[off]
             if not pairs:
                 continue
-            _tag_enum(fld, _qualify_enum_name(cls_prefix, fld.name[0].upper() + fld.name[1:]))
+            _tag_enum(fld, _qualify_enum_name(cls_prefix, enum_base_name(fld.name)))
             dictrep_pairs[fld.name] = pairs
             if off in dr_incomplete:
                 dictrep_incomplete[fld.name] = dr_incomplete[off]

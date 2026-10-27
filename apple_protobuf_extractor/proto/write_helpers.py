@@ -283,7 +283,9 @@ def _ensure_writeto_prepass(ctx: BinaryContext, cl: ClassList) -> None:
     :func:`proto.extractor.extract_proto_message` may also be called standalone
     (single-class extraction, unit tests) without ``extract_all`` — so build it on
     first use here too; without this, a standalone call would silently get NO writeTo
-    decoding.  Rebuilt for a different class list."""
+    decoding.  The writer flow is rebuilt for a different class list; the other per-image
+    pre-passes (:func:`_ensure_string_write_helpers`, the readFrom core index, the proto class
+    set) are kept on *ctx* whatever the class list."""
     writer_flow_for(ctx, cl)
     if getattr(ctx, "_function_entries", None) is None:
         build_function_index(ctx, cl)
@@ -297,16 +299,25 @@ def _ensure_string_write_helpers(ctx: BinaryContext, cl: ClassList) -> "FrozenSe
     caller that omits the kwarg would otherwise silently lose ``repeated string`` vs
     ``repeated bytes`` typing. Cached so the binary-wide scan runs at most once per
     context. An empty result is a valid build (cached, not retried)."""
-    cached = getattr(ctx, "_string_write_helpers", None)
+    return image_prepass(ctx, "_string_write_helpers",
+                         lambda: frozenset(_identify_string_write_helpers(ctx, cl)),
+                         "string write helper",
+                         "repeated string fields are not told from repeated bytes", frozenset())
+
+
+def image_prepass(ctx: BinaryContext, attr: str, build, name: str, consequence: str, empty):
+    """An image-wide pre-pass's result, memoised on *ctx* as *attr*: ``build()``, once; a build
+    that raises is recorded (:func:`proto.models.record_failed_pass`: the run continues with
+    *consequence*) and *empty* stands for it."""
+    cached = getattr(ctx, attr, None)
     if cached is not None:
         return cached
     try:
-        helpers = frozenset(_identify_string_write_helpers(ctx, cl))
+        got = build()
     except PROGRAM_ERRORS:
         raise
     except Exception as exc:
-        record_failed_pass(ctx, "string write helper", exc,
-                           "repeated string fields are not told from repeated bytes")
-        helpers = frozenset()
-    _ctx_store(ctx, "_string_write_helpers", helpers)
-    return helpers
+        record_failed_pass(ctx, name, exc, consequence)
+        got = empty
+    _ctx_store(ctx, attr, got)
+    return got

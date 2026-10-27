@@ -16,8 +16,8 @@ rest from the two serializers:
     ``block+0x10``), not ``writeTo:`` itself.  Found by
     :func:`scan_block_enumerated_maps`.
   - **inline loop** — a ``countByEnumeratingWithState:`` loop in ``writeTo:`` itself;
-    the write sites already bind the begin-mark to the ivar, so the entry body is the
-    code after that write (:func:`entry_from_bound_write`).
+    the write sites already bind the begin-mark to the ivar, so the entry is the
+    sub-message it opens (:func:`entry_from_bound_write`).
 
   Both feed :func:`analyze_entry`, which reads off the writer flow's calls of the function
   (:mod:`proto.writer_flow`; the block's with the writer among what it captured) the field
@@ -128,7 +128,6 @@ class MapEntryWriter:
     value_helper: int                 # write helper called with field# 2
     key_sel: Optional[str] = None     # NSNumber unboxing selector feeding the key, if any
     value_sel: Optional[str] = None   # ... feeding the value, if any
-    shape: str = "block"              # 'block' | 'inline-loop' (diagnostic only)
 
 
 @dataclass(frozen=True)
@@ -160,8 +159,7 @@ def _offset_var_address(flow, i: int, offreg: str) -> Optional[int]:
     return None if d is None else flow.slot_load_address(d)
 
 
-def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
-                names: _IvarNames) -> Optional[str]:
+def _trace_ivar(flow, i: int, reg: str, names: _IvarNames) -> Optional[str]:
     """Name of the ivar whose value is in *reg* at ``insns[i]``: follow ``mov`` chains
     back to the defining ``ldr xD,[Xself, Xoff]`` (``Xoff`` = a loaded ivar-offset
     variable, the ivar by its address) or the immediate-offset form."""
@@ -283,16 +281,16 @@ def scan_block_enumerated_maps(
         record_unread(ctx, "method body", f"writeTo: {imp:#x}", exc)
         return out
     flow = listing_flow(ctx, insns)
-    calls = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
-             and _send_at(ctx, flow, i) == _ENUMERATE_SELECTOR]
-    if not calls:
+    enumerates = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
+                  and _send_at(ctx, flow, i) == _ENUMERATE_SELECTOR]
+    if not enumerates:
         return out
     slots: Dict[int, Dict[int, Tuple[int, int]]] = {}
     # a callee handed a pointer into the frame (a fast-enumeration state, say) may write
     # that object and upward, never the slots below it (Objects.object_escape)
-    regs = flow.propagate({}, calls, Objects(object_escape=True), slots_out=slots)
-    for i in calls:
-        ivar = _trace_ivar(ctx, flow, i, 'x0', names)
+    regs = flow.propagate({}, enumerates, Objects(object_escape=True), slots_out=slots)
+    for i in enumerates:
+        ivar = _trace_ivar(flow, i, 'x0', names)
         blk = regs.get(i, {}).get('x2')
         slot = slots.get(i, {}).get(blk + _BLOCK_INVOKE_OFFSET) if blk is not None else None
         invoke = slot[1] if slot is not None and slot[0] == 8 else None
@@ -342,10 +340,7 @@ def entry_from_bound_write(ctx: BinaryContext, cls: ObjcClass, imp: int,
         insns = function_listing(ctx, imp, entries)
     except READ_ERRORS:
         return None
-    entry = analyze_entry(ctx, insns, calls, begin)
-    if entry is None or entry.number != w.number:
-        return None
-    return MapEntryWriter(**{**entry.__dict__, 'shape': 'inline-loop'})
+    return analyze_entry(ctx, insns, calls, begin)
 
 
 def find_map_writers(

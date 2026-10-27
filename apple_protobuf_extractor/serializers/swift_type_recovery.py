@@ -30,7 +30,6 @@ the nameMap (number↔name).
 from __future__ import annotations
 
 import re
-import struct
 from typing import Dict, NamedTuple, Optional, Set
 
 from macho.memory import READ_ERRORS, _ctx_cache, record_unread
@@ -287,7 +286,7 @@ def _resolve_symbolic(ctx, va):
     ctrl = ctx.read_bytes(va, 1)[0]
     if ctrl not in (1, 2):
         return None
-    off = struct.unpack("<i", ctx.read_bytes(va + 1, 4))[0]
+    off = read_i32(ctx, va + 1)
     ptr_site = va + 1 + off
     if ctrl == 1:
         # Direct: the relptr points straight at the local type context descriptor.

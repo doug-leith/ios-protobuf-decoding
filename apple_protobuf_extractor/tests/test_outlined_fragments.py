@@ -18,6 +18,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
 from proto import callees
+from proto.callees import Outlined
 from proto.arm64_eval import Flow, Objects, _STACK_TOP
 from tests._listing import insns, layout
 from tests._fakes import NoImage
@@ -28,18 +29,11 @@ FRAG, TAIL = 0x2000, 0x5000
 def _flow(frag_lines, *caller, tail=None, tail_reg=None):
     """Flow over *caller* (at 0x1000) where ``bl #0x2000`` runs *frag_lines* (with *tail*: a
     thunk's prefix, then a call to *tail*; with *tail_reg*, through that register)."""
-    frag = tuple(insns(frag_lines, FRAG))
-    with mock.patch('proto.arm64_eval.outlined_fragment',
-                    lambda ctx, t: frag if t == FRAG else None), \
-            mock.patch('proto.arm64_eval.outlined_tail',
-                       lambda ctx, t: tail if t == FRAG else None), \
-            mock.patch('proto.arm64_eval.outlined_tail_reg',
-                       lambda ctx, t: tail_reg if t == FRAG else None):
+    code = Outlined(tuple(insns(frag_lines, FRAG)), tail, tail_reg)
+    with mock.patch('proto.arm64_eval.outlined_code', lambda ctx, t: code if t == FRAG else None):
         flow = Flow(NoImage(), insns(caller))
         k = next(k for k, i in enumerate(flow.insns) if i.mnemonic == 'bl')
-        flow.fragment(k)
-        flow.fragment_tail(k)
-        flow.fragment_tail_reg(k)
+        flow.outlined(k)
     return flow
 
 
@@ -212,7 +206,8 @@ class TestRecognise(unittest.TestCase):
     def _frag(self, lines, starts=(0x1000, FRAG, 0x2100), target=FRAG):
         _order, fake = layout((FRAG, lines))
         with mock.patch('proto.callees.disasm', fake):
-            return callees.outlined_fragment(_TextCtx(list(starts)), target)
+            o = callees.outlined_code(_TextCtx(list(starts)), target)
+            return None if o is None else o.body
 
     def test_a_straight_line_ending_in_ret(self):
         got = self._frag([('ldrsw', 'x9, [x23, #0x30]'), ('add', 'x0, x8, x9'), ('ret', '')])
@@ -256,7 +251,7 @@ class TestRecognise(unittest.TestCase):
         self.assertEqual(got.tail, 0x5000)
         got = self._code([('mov', 'x1, x25'), ('b', '#0x5000')], starts=(0x1000, FRAG, FRAG + 8))
         self.assertEqual(([i.mnemonic for i in got.body], got.tail), (['mov'], 0x5000))
-        self.assertEqual(callees.outlined_tail(None, FRAG), None)
+        self.assertIsNone(callees.outlined_code(None, FRAG))
 
     def test_a_branch_inside_its_extent_or_not_at_its_end_is_not_a_thunk(self):
         self.assertIsNone(self._code([('mov', 'x1, x25'), ('b', '#0x2000')],

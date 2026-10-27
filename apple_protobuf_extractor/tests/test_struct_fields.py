@@ -1081,8 +1081,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
         br = submessage(calls, next(s for s in calls.sites if s.target == 0x1a0103d00))
         layout = SF.parse_struct_encoding('^{GEOCoarseLocationPoint=ii}')
         var = lambda a: a == 0x1e4930558                                       # noqa: E731
-        last = max(k for k, x in enumerate(insns) if x.addr in {t.addr for t in br.writes})
-        loads = SF.track_struct_loads(None, insns, last, var, True)
+        loads = SF.track_struct_loads(None, insns, var, True)
         # the array-pointer load through &self->_points is not a member; the two element loads are
         self.assertEqual(sorted(loads.values()), [(0, 4), (4, 4)])
         w = SF.decode_inline_writes(None, insns, br.writes, var, layout)
@@ -1091,7 +1090,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
     def test_a_by_value_struct_through_add_is_still_the_struct(self):
         insns, _ = asm((0x1000, [('adrp', 'x8, #0x5000'), ('ldrsw', 'x8, [x8, #0x10]'),
                                  ('add', 'x8, x19, x8'), ('ldr', 'w1, [x8, #4]')]))
-        loads = SF.track_struct_loads(None, insns, 3, lambda a: a == 0x5010, False)
+        loads = SF.track_struct_loads(None, insns, lambda a: a == 0x5010, False)
         self.assertEqual(loads, {3: (4, 4)})
 
     def test_a_role_set_on_one_branch_only_does_not_reach_the_join(self):
@@ -1102,7 +1101,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
                                  ('adrp', 'x8, #0x5000'), ('ldrsw', 'x8, [x8, #0x10]'),
                                  ('add', 'x8, x19, x8'), ('nop', ''),
                                  ('ldr', 'w1, [x8, #4]'), ('ret', '')]))   # 0x1014: the join
-        self.assertEqual(SF.track_struct_loads(None, insns, 5, lambda a: a == 0x5010, False), {})
+        self.assertEqual(SF.track_struct_loads(None, insns, lambda a: a == 0x5010, False), {})
 
     def test_an_offset_load_hoisted_above_a_loop_reaches_its_body(self):
         insns, _ = asm((0x1000, [('adrp', 'x8, #0x5000'), ('ldrsw', 'x9, [x8, #0x10]'),
@@ -1110,7 +1109,7 @@ class TestInlineStructWritesNewerToolchain(_Patched):
                                  ('ldr', 'w1, [x20, #8]'), ('bl', '#0x9000'),      # 0x100c: loop
                                  ('add', 'x21, x21, #1'), ('cmp', 'x21, #3'),
                                  ('b.lo', '#0x100c'), ('ret', '')]))
-        self.assertEqual(SF.track_struct_loads(None, insns, 8, lambda a: a == 0x5010, False),
+        self.assertEqual(SF.track_struct_loads(None, insns, lambda a: a == 0x5010, False),
                          {3: (8, 4)})
 
 

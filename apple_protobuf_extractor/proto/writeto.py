@@ -31,9 +31,6 @@ from proto.submessage_marks import NO_OPEN_MARK, submessage
 
 # ════════════════════════════════════════════════════════════════════════════
 
-# protobuf wire-format field-number range (spec): 1 .. 2^29-1.  Principled
-# validity test on the `mov w2,#N` immediate (the wire spec, not a tuned cap).
-
 # The field# a ProtocolBuffer write helper takes to mean "write the bare value, NO
 # tag": every PB element writer opens with ``cmn w<field>,#1 ; b.eq <skip-tag>``.
 # writeTo: passes it for each element of a PACKED repeated field, which it writes

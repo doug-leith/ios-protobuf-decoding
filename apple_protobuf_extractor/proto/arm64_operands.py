@@ -84,6 +84,11 @@ CALLER_SAVED_FPRS = tuple(f"v{n}" for n in range(0, 8)) + tuple(f"v{n}" for n in
 
 CALLER_SAVED = CALLER_SAVED_GPRS + CALLER_SAVED_FPRS
 
+# The registers a value can be in: x0-x28 (not the frame pointer, the link register or sp) and
+# the SIMD / FP registers.
+VALUE_GPRS = tuple(f"x{n}" for n in range(29))
+VALUE_REGS = VALUE_GPRS + tuple(f"v{n}" for n in range(32))
+
 
 # Mnemonics whose first operand is NOT a destination (and calls, handled separately).
 NO_DEST = _SOURCE_FIRST_MNEMONICS | {

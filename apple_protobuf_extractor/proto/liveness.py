@@ -16,10 +16,10 @@ from macho.disasm import _norm_reg, _parse_imm
 from macho.memory import READ_ERRORS, _ctx_cache
 from proto.arm64_operands import (parse_mem, split_ops, reads, writes, STORE_BYTES, PAIR_STORES,
                                   RETURNS, AUTHENTICATED_BRANCHES, CALLS, CALLER_SAVED, TRAPS,
-                                  branch_target, is_conditional)
+                                  VALUE_REGS, branch_target, is_conditional)
 from proto.callees import (ABI_ARGS, NORETURN, RUNTIME_CONTRACTS, SWIFT_CALL_ARGS, _is_swift_name,
                            _moves_sp, call_clobbers, callee_name, outlined_code,
-                           outlined_fragment, stub_selector, text_holding)
+                           stub_selector, text_holding)
 from proto.dispatch import (decoded_flow, function_entries, note_provisional_answer,
                             recheck_provisional_decodes)
 from proto.function_body import function_body
@@ -27,14 +27,14 @@ from proto.models import record_heuristic_hit
 
 #: Every register a callee could read as a value its caller hands it (not the frame pointer or
 #: the link register).
-_ALL_REGS = tuple(f"x{i}" for i in range(29)) + tuple(f"v{i}" for i in range(32))
+_ALL_REGS = VALUE_REGS
 #: The callee-saved registers the Swift calling convention passes arguments in: self (x20), the
 #: error register (x21), the async context (x22).
-_SWIFT_ARGS = frozenset(("x20", "x21", "x22"))
+_SWIFT_ARGS = frozenset(SWIFT_CALL_ARGS) - frozenset(ABI_ARGS)
 #: The frame pointer and link register: read on entry by design (arm64e's return-address check
 #: before a tail call reads x30), saved with the callee-saved registers.
 _FRAME_LINK = frozenset(("x29", "x30"))
-_CALLEE_SAVED = frozenset(f"x{i}" for i in range(19, 31)) | frozenset(f"v{i}" for i in range(8, 16))
+_CALLEE_SAVED = (frozenset(VALUE_REGS) - frozenset(CALLER_SAVED)) | _FRAME_LINK
 #: What a return hands its caller: the result register (a function that does not write v0
 #: returns no floating-point value).
 _RETURN_REGS = frozenset(("x0",))
@@ -330,7 +330,9 @@ def _live_before_call(ctx, t: Optional[int], live_after: set) -> set:
 
 
 def _outlined_body(ctx, ins) -> Tuple:
-    """The instructions the call *ins* runs in its caller (:func:`outlined_fragment`), else ()."""
+    """The instructions the call *ins* runs in its caller (:func:`proto.callees.outlined_code`'s
+    body), else ()."""
     if ins.mnemonic != "bl":
         return ()
-    return outlined_fragment(ctx, branch_target(ins)) or ()
+    o = outlined_code(ctx, branch_target(ins))
+    return () if o is None else o.body
