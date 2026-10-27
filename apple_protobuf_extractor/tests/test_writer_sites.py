@@ -15,7 +15,7 @@ from macho.memory import BinaryContext
 from macho.strings import build_string_table
 from proto.protocore import _INTERNAL_PB_IVARS, _is_proto_flags_ivar, _proto_name
 from proto.write_helpers import _ensure_writeto_prepass
-from proto.writer_flow import WriteSite
+from proto.writer_flow import WriteSite, WriterCalls
 import proto.writeto as W
 from tests.test_synthetic_fixtures import (_FIXTURES, _FIXTURES_DIR, _extract, _load_expected,
                                            load_macho_slice)
@@ -68,6 +68,11 @@ def _site(addr, n, ivars=(), *, name="_PBDataWriterWriteInt32Field", target=0x90
                      slot, marks)
 
 
+def _bind(sites, field_ivars):
+    """proto.writeto._site_bindings of *sites*, no mark open where the body is left."""
+    return W._site_bindings(WriterCalls(tuple(sites), frozenset()), field_ivars)
+
+
 def _field_ivars(*names):
     return [SimpleNamespace(name=n, offset=8 * (i + 1)) for i, n in enumerate(names)]
 
@@ -76,21 +81,21 @@ class TestSiteBindings(unittest.TestCase):
     """proto.writeto._site_bindings: what the write sites bind, on hand-built sites."""
 
     def test_scalar_write_binds_its_ivar_number_and_helper(self):
-        b = W._site_bindings([_site(0x10, 3, ['_a'])], _field_ivars('_a'))
+        b = _bind([_site(0x10, 3, ['_a'])], _field_ivars('_a'))
         self.assertEqual(b.numbers, {'_a': 3})
         self.assertEqual(b.helpers, {'_a': 0x9000})
         self.assertEqual(b.writes['_a'], W.BoundWrite(3, 0x10))
 
     def test_value_from_two_ivars_binds_nothing(self):
-        self.assertEqual(W._site_bindings([_site(0x10, 3, ['_a', '_b'])],
+        self.assertEqual(_bind([_site(0x10, 3, ['_a', '_b'])],
                                           _field_ivars('_a', '_b')).numbers, {})
 
     def test_the_first_call_binding_an_ivar_wins(self):
-        b = W._site_bindings([_site(0x10, 1, ['_a']), _site(0x20, 4, ['_a'])], _field_ivars('_a'))
+        b = _bind([_site(0x10, 1, ['_a']), _site(0x20, 4, ['_a'])], _field_ivars('_a'))
         self.assertEqual(b.numbers, {'_a': 1})
 
     def test_an_ivar_that_is_not_a_field_is_not_bound(self):
-        self.assertEqual(W._site_bindings([_site(0x10, 1, ['_lock'])], _field_ivars('_a')).numbers, {})
+        self.assertEqual(_bind([_site(0x10, 1, ['_lock'])], _field_ivars('_a')).numbers, {})
 
     def test_packed_list_binds_the_begin_mark_and_its_element_writer(self):
         inside = frozenset({((0x40, 0x20),)})
@@ -98,7 +103,7 @@ class TestSiteBindings(unittest.TestCase):
                  _site(0x30, -1, ['_list'], target=0x9100, marks=inside),
                  _site(0x34, -1, ['_list'], target=0x9100, marks=inside),
                  _site(0x38, None, name="_PBDataWriterRecallMark", slot=0x40, marks=inside)]
-        b = W._site_bindings(sites, _field_ivars('_list'))
+        b = _bind(sites, _field_ivars('_list'))
         self.assertEqual(b.numbers, {'_list': 4})
         self.assertEqual(b.writes['_list'], W.BoundWrite(4, 0x20, True, (0x9100,)))
 
@@ -109,13 +114,22 @@ class TestSiteBindings(unittest.TestCase):
         sites = [_site(0x20, 7, name="_PBDataWriterPlaceMark", slot=0x40),
                  _site(0x24, 1, ['_sub'], marks=outer),
                  _site(0x30, 2, name="_PBDataWriterPlaceMark", slot=0x50, marks=outer),
-                 _site(0x34, -1, ['_x'], target=0x9100, marks=inner)]
-        b = W._site_bindings(sites, _field_ivars('_sub', '_x'))
+                 _site(0x34, -1, ['_x'], target=0x9100, marks=inner),
+                 _site(0x38, None, name="_PBDataWriterRecallMark", slot=0x50, marks=inner),
+                 _site(0x3c, None, name="_PBDataWriterRecallMark", slot=0x40, marks=outer)]
+        b = _bind(sites, _field_ivars('_sub', '_x'))
         self.assertEqual(b.numbers, {'_sub': 7})
         self.assertEqual(b.writes['_sub'].elem_helper_vas, ())
 
+    def test_a_mark_no_end_mark_closes_binds_nothing(self):
+        # (the one rule of a sub-message, proto.submessage_marks.submessage)
+        inside = frozenset({((0x40, 0x20),)})
+        sites = [_site(0x20, 4, name="_PBDataWriterPlaceMark", slot=0x40),
+                 _site(0x30, -1, ['_list'], target=0x9100, marks=inside)]
+        self.assertEqual(_bind(sites, _field_ivars('_list')).numbers, {})
+
     def test_field_number_zero_is_a_zero_field_unless_also_bound(self):
-        b = W._site_bindings([_site(0x10, 0, ['_k']), _site(0x20, 0, ['_a']),
+        b = _bind([_site(0x10, 0, ['_k']), _site(0x20, 0, ['_a']),
                               _site(0x30, 2, ['_a'])], _field_ivars('_k', '_a'))
         self.assertEqual(b.zero_fields, {'_k'})
         self.assertEqual(b.numbers, {'_a': 2})
@@ -195,3 +209,77 @@ class TestSiteNumbers(unittest.TestCase):
     def test_a_copy_of_a_constant_is_that_constant(self):
         self.assertEqual(self.number([('mov', 'x21, #0x6'), ('mov', 'x2, x21'),
                                       ('bl', '#0x9000')], 2), 6)
+
+
+class TestMarksTheFlowCannotFollow(unittest.TestCase):
+    """A begin mark reached through a thunk opens its sub-message at the thunk's tail call; a mark
+    the open-mark stacks cannot follow -- a scratch that is not a frame address, a begin mark
+    reached again before its end mark, an end mark closing nothing -- or a body read only in
+    part leaves the writer flow undecided, saying why, instead of binding what is inside the mark
+    as top-level fields (2026-10-27 review A3)."""
+
+    ENTRY = {'x0': frozenset({'S'}), 'x2': frozenset({'W'}), 'x20': frozenset({('I', '_s')}),
+             'x23': frozenset({('I', '_t')})}
+    HELPER = (0x9000, [('ret', '')])
+
+    def run_flow(self, lines, *more, tails=()):
+        from tests._writer_calls import run_writer_flow
+        why = []
+        calls, _ = run_writer_flow([(0x1000, lines), *more, self.HELPER], entry=self.ENTRY,
+                                   tails=tails, why=why, outlined=True)
+        return calls, why
+
+    def test_a_begin_mark_through_a_thunk_opens_its_sub_message(self):
+        calls, why = self.run_flow([
+            ('sub', 'sp, sp, #0x20'), ('mov', 'x19, x2'),
+            ('bl', '#0x2000'),                                    # thunk: PlaceMark(sp+8, 3)
+            ('mov', 'x0, x19'), ('mov', 'x1, x20'), ('mov', 'w2, #1'), ('bl', '#0x9000'),
+            ('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('bl', '#0x18dbdab94'),
+            ('add', 'sp, sp, #0x20'), ('ret', '')],
+            (0x2000, [('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('mov', 'w2, #3'),
+                      ('b', '#0x18dbdab88')]))
+        self.assertEqual(why, [])
+        self.assertEqual(W._site_bindings(calls, _field_ivars('_s')).numbers, {'_s': 3})
+
+    def test_a_mark_whose_scratch_is_not_a_frame_address(self):
+        calls, why = self.run_flow([
+            ('mov', 'x19, x2'), ('mov', 'x0, x19'), ('mov', 'x1, x24'), ('mov', 'w2, #3'),
+            ('bl', '#0x18dbdab88'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x20'), ('mov', 'w2, #1'), ('bl', '#0x9000'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x24'), ('bl', '#0x18dbdab94'), ('ret', '')])
+        self.assertIsNone(calls)
+        self.assertIn("scratch is not a frame address", " ".join(why))
+
+    def test_a_loop_round_an_unclosed_begin_mark(self):
+        calls, why = self.run_flow([
+            ('sub', 'sp, sp, #0x20'), ('mov', 'x19, x2'),
+            ('mov', 'x0, x19'), ('mov', 'x1, x23'), ('mov', 'w2, #7'), ('bl', '#0x9000'),
+            ('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('mov', 'w2, #3'),       # 0x1018: loop
+            ('bl', '#0x18dbdab88'),
+            ('cbz', 'x21, #0x1018'),                              # round again, the mark open
+            ('mov', 'x0, x19'), ('mov', 'x1, x20'), ('mov', 'w2, #1'), ('bl', '#0x9000'),
+            ('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('bl', '#0x18dbdab94'),
+            ('cbnz', 'x22, #0x1018'), ('add', 'sp, sp, #0x20'), ('ret', '')])
+        self.assertIsNone(calls)
+        self.assertIn("reached again before its end mark", " ".join(why))
+
+    def test_an_end_mark_closing_nothing(self):
+        calls, why = self.run_flow([
+            ('sub', 'sp, sp, #0x20'), ('mov', 'x19, x2'),
+            ('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('bl', '#0x18dbdab94'),
+            ('add', 'sp, sp, #0x20'), ('ret', '')])
+        self.assertIsNone(calls)
+        self.assertIn("closes no begin mark", " ".join(why))
+
+    def test_a_body_read_in_part(self):
+        # the path past the cbz runs off the end of what was read, the mark open
+        calls, why = self.run_flow([
+            ('sub', 'sp, sp, #0x20'), ('mov', 'x19, x2'),
+            ('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('mov', 'w2, #3'), ('bl', '#0x18dbdab88'),
+            ('cbz', 'x21, #0x1030'),
+            ('mov', 'x0, x19'), ('add', 'x1, sp, #8'), ('bl', '#0x18dbdab94'),
+            ('add', 'sp, sp, #0x20'), ('ret', ''),
+            ('mov', 'x0, x19'), ('mov', 'x1, x20'), ('mov', 'w2, #2'),  # 0x1030
+            ('bl', '#0x9000')])
+        self.assertIsNone(calls)
+        self.assertIn("read only in part", " ".join(why))

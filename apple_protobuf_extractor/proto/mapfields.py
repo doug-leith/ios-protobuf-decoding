@@ -228,7 +228,7 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, calls,
     anything else (nested sub-messages, a second write of a sub-field, a path with no end
     mark, a sub-field other than 1/2) is not a recognisable map entry."""
     sub = submessage(calls, begin)
-    if sub is None:
+    if sub is None or sub.nested:
         return None
     writes = {}                                        # sub-field -> its write call
     for t in sub.writes:

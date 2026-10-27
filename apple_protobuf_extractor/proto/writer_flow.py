@@ -56,7 +56,7 @@ from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes,
                                   imm_operand, split_ops)
 
 from proto.models import record_heuristic_hit
-from proto.submessage_marks import PLACE_MARK, RECALL_MARK
+from proto.submessage_marks import NO_OPEN_MARK, PLACE_MARK, RECALL_MARK
 
 log = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class _St:
     object (:class:`_Result`)."""
     __slots__ = ('r', 'sl', 'esc', 'fl', 'om', 'fv')
 
-    def __init__(self, r=None, sl=None, esc=False, fl=None, om=frozenset({()}), fv=False):
+    def __init__(self, r=None, sl=None, esc=False, fl=None, om=NO_OPEN_MARK, fv=False):
         self.r = dict(r or {})
         self.sl = dict(sl or {})      # 8-byte frame granule (offset from entry sp) -> origins
         self.esc = esc
@@ -202,7 +202,7 @@ class WriteSite:
     args: Tuple[Tuple[str, FrozenSet], ...]   # (x0..x7, origins), non-empty ones
     v0_origins: FrozenSet
     slot: Optional[int]                 # x1 as a frame address (a mark's scratch), else None
-    open_marks: FrozenSet = frozenset({()})   # stacks of (slot, begin-mark addr) open here
+    open_marks: FrozenSet = NO_OPEN_MARK      # stacks of (slot, begin-mark addr) open here
     fp_value: bool = False              # every path sets v0 for this call (an FP argument)
 
     def origins(self, reg: str) -> FrozenSet:
@@ -277,6 +277,12 @@ class _Result:
         self.indirect_calls = 0              # its ``blr`` calls (target unknown)
         self.complete = True
         self.why: List[str] = []
+
+    def calls(self) -> "WriterCalls":
+        """The calls handed the writer, in address order, and the marks open where the body is
+        left."""
+        return WriterCalls(tuple(self.sites[a] for a in sorted(self.sites)),
+                           frozenset(self.open_at_exit))
 
     def fail(self, why: str) -> None:
         self.complete = False
@@ -402,9 +408,7 @@ class WriterFlow:
         key = (cls.vmaddr, invoke)
         if key not in self._blocks:
             res = _ClassFlow(self, cls)._run(invoke, {'x0': frozenset({_W})}, 0, invoke)
-            self._blocks[key] = (None if res is None or not res.complete
-                                 else WriterCalls(tuple(res.sites[a] for a in sorted(res.sites)),
-                                                  frozenset(res.open_at_exit)))
+            self._blocks[key] = None if res is None or not res.complete else res.calls()
         return self._blocks[key]
 
     def sent_selectors(self, cls: ObjcClass) -> Optional[FrozenSet[str]]:
@@ -432,8 +436,7 @@ class WriterFlow:
             return None, ["writeTo: body not decoded"], None, None
         if not res.complete:
             return None, res.why, None, None
-        calls = WriterCalls(tuple(res.sites[a] for a in sorted(res.sites)),
-                            frozenset(res.open_at_exit))
+        calls = res.calls()
         sends = None if res.indirect_calls else frozenset(res.sends)
         bad = sorted(str(x) for x in res.ser if not isinstance(x, tuple) or x[0] != 'I')
         if any(x in (_S, _T) for x in res.ser):
@@ -476,8 +479,11 @@ class _ClassFlow:
         fragments: Dict[int, List[Dict[str, int]]] = {}
         values = flow.propagate({}, range(len(flow.insns)), _FRAME_OBJECTS,
                                 fragments_out=fragments)
-        return self._fixpoint(_Run(flow, values, fragments, arms, depth, top, insns[0].addr,
-                                   insns[-1].addr + 4), entry)
+        res = self._fixpoint(_Run(flow, values, fragments, arms, depth, top, insns[0].addr,
+                                  insns[-1].addr + 4), entry)
+        if getattr(insns, "truncated", False):
+            res.fail(f"the body at {imp:#x} was read only in part")
+        return res
 
     def _fixpoint(self, run: _Run, entry: Dict[str, FrozenSet]) -> _Result:
         """The origins at every block (:meth:`proto.arm64_eval.Flow.forward`), then what
@@ -529,7 +535,8 @@ class _ClassFlow:
             frag = flow.fragment(k)
             if frag is not None:
                 frag_vals = run.fragments.get(k, ())
-                self._run_in_place(st, frag, frag_vals, tgt, res, run.depth, ins.addr, vals)
+                self._run_in_place(st, frag, frag_vals, tgt, res, run.depth, ins.addr, vals,
+                                   site=not flow.fragment_calls(k))
                 if flow.fragment_calls(k) and self._tail_call(
                         st, k, res, run, frag_vals[-1] if len(frag_vals) > len(frag) else {}):
                     return True                      # no-return callee
@@ -590,14 +597,18 @@ class _ClassFlow:
 
     # ── calls ────────────────────────────────────────────────────────────────
     def _run_in_place(self, st: _St, frag, frag_vals, tgt: int, res: _Result, depth: int,
-                      addr: int, vals: Dict[str, int]) -> None:
+                      addr: int, vals: Dict[str, int], site: bool) -> None:
         """The ``bl`` at *addr* to code that runs as part of this function
         (:meth:`proto.arm64_eval.Flow.fragment`): an outlined fragment, a thunk's prefix (its
         tail call: :meth:`_tail_call`), or a leaf function its shape cannot be told from.  Its
-        effect on the state is its instructions' (run
-        with *frag_vals*, the registers before each); as a call it is a write site when handed
-        the writer, and may serialise what it reads (:func:`proto.liveness.call_reads`)."""
-        self._site(st, tgt, None, res, depth, addr, vals)
+        effect on the state is its instructions' (run with *frag_vals*, the registers before
+        each); it may serialise what it reads (:func:`proto.liveness.call_reads`).  It is a
+        write site (*site*) when handed the writer, as a leaf function is -- but a thunk, whose
+        write site is its tail call (:meth:`_tail_call`).  An outlined fragment's ``bl`` that
+        only sets up the next call's arguments cannot be told from a leaf function by its
+        shape, and is recorded too."""
+        if site:
+            self._site(st, tgt, None, res, depth, addr, vals)
         argp = self._read_origins(st, call_reads(self.ctx, tgt), vals)[0]
         if _W in argp or st.esc:
             res.serialise(frozenset(argp) - {_W})
@@ -608,8 +619,8 @@ class _ClassFlow:
     def _tail_call(self, st: _St, k: int, res: _Result, run: _Run,
                    vals: Dict[str, int]) -> bool:
         """The tail call the thunk the ``bl`` ``insns[k]`` runs makes after its prefix
-        (:meth:`proto.arm64_eval.Flow.thunk_target`), the registers there *vals*: a call
-        whose site is the ``bl``'s (:meth:`_run_in_place` records it); True when it does not
+        (:meth:`proto.arm64_eval.Flow.thunk_target`), the registers there *vals*: the call
+        recorded as the ``bl``'s write site, with its callee's name; True when it does not
         return."""
         clobbers = run.flow.tail_clobbers(k)
         if clobbers is not None:                     # changes only these (the stack probe)
@@ -617,7 +628,7 @@ class _ClassFlow:
                 st.r.pop(r, None)
             return False
         return self._call(st, run.flow.thunk_target(k, vals), res, run.depth, run.top,
-                          run.flow.insns[k].addr, vals, site=False)
+                          run.flow.insns[k].addr, vals)
 
     def _read_origins(self, st: _St, reads, vals: Dict[str, int]):
         """``(origins, frame addresses)`` of what a callee reading the registers *reads* can
@@ -633,29 +644,36 @@ class _ClassFlow:
     def _site(self, st: _St, tgt: Optional[int], name: Optional[str], res: _Result,
               depth: int, addr: int, vals: Dict[str, int]) -> None:
         """Record the call at *addr* as a :class:`WriteSite` when it is handed the writer, and
-        the length-delimited marks it opens or closes."""
+        the length-delimited marks it opens or closes.  A mark the stacks cannot follow fails
+        the analysis: one whose scratch is not a frame address, a begin mark opened again
+        before its end mark, an end mark that closes no begin mark on some path."""
         wreg = next((r for r in ARG_GPRS if _W in st.p(r)), None) if depth == 0 else None
-        if wreg is not None:
-            slot = self._frame(vals, 'x1')
-            res.sites[addr] = WriteSite(
-                addr, tgt, name, wreg, self._int32(vals, 'x1'), self._int32(vals, 'x2'),
-                tuple((r, st.p(r)) for r in ARG_GPRS if st.p(r)), st.p('v0'), slot, st.om,
-                st.fv)
-        if wreg == 'x0' and name in (PLACE_MARK, RECALL_MARK):
-            # A length-delimited mark, handed the writer and a frame scratch: the begin mark
-            # opens one, the end mark closes the one open on that scratch.
-            slot = self._frame(vals, 'x1')
-            if slot is not None:
-                if name == PLACE_MARK:
-                    st.om = frozenset(stk + ((slot, addr),) for stk in st.om)
-                else:
-                    st.om = frozenset(stk[:-1] if stk and stk[-1][0] == slot else stk
-                                      for stk in st.om)
+        if wreg is None:
+            return
+        slot = self._frame(vals, 'x1')
+        res.sites[addr] = WriteSite(
+            addr, tgt, name, wreg, self._int32(vals, 'x1'), self._int32(vals, 'x2'),
+            tuple((r, st.p(r)) for r in ARG_GPRS if st.p(r)), st.p('v0'), slot, st.om, st.fv)
+        if wreg != 'x0' or name not in (PLACE_MARK, RECALL_MARK):
+            return
+        # A length-delimited mark, handed the writer and a frame scratch: the begin mark opens
+        # one, the end mark closes the one open on that scratch.
+        if slot is None:
+            res.fail(f"the mark at {addr:#x}: its scratch is not a frame address")
+        elif name == PLACE_MARK:
+            if any((slot, addr) in stk for stk in st.om):
+                res.fail(f"the begin mark at {addr:#x} is reached again before its end mark")
+            else:
+                st.om = frozenset(stk + ((slot, addr),) for stk in st.om)
+        elif all(stk and stk[-1][0] == slot for stk in st.om):
+            st.om = frozenset(stk[:-1] for stk in st.om)
+        else:
+            res.fail(f"the end mark at {addr:#x} closes no begin mark on some path")
 
     def _call(self, st: _St, tgt: Optional[int], res: _Result, depth: int, top: int,
-              addr: int, vals: Dict[str, int], site: bool = True) -> bool:
-        """The call at *addr* to *tgt* (None: unknown), the registers before it *vals*;
-        True when it does not return.  *site*: record it as a write site (:meth:`_site`)."""
+              addr: int, vals: Dict[str, int]) -> bool:
+        """The call at *addr* to *tgt* (None: unknown), the registers before it *vals*, recorded
+        as a write site (:meth:`_site`); True when it does not return."""
         name = callee_name(self.ctx, tgt) if tgt is not None else None
         sel = sent_selector(self.ctx, tgt, self._const(vals, 'x1'))
         if depth == 0:
@@ -663,8 +681,7 @@ class _ClassFlow:
                 res.indirect_calls += 1
             elif sel is not None:
                 res.sends.add(sel)
-        if site:
-            self._site(st, tgt, name, res, depth, addr, vals)
+        self._site(st, tgt, name, res, depth, addr, vals)
         if name in _NORETURN:
             return True
         state = self._frame(vals, 'x2')

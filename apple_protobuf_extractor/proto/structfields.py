@@ -737,7 +737,7 @@ def _decode_site(ctx, cls, site: StructSite, layout: StructLayout, entries, memo
     calls = writer_calls(ctx, cls)
     begin = next((s for s in calls.sites if s.addr == site.write_addr), None) if calls else None
     sub = submessage(calls, begin) if begin is not None else None
-    if sub is None or sub.number != site.number:
+    if sub is None or sub.nested or sub.number != site.number:
         return None
     for callee in sub.callees:
         writes = decode_struct_writer(ctx, callee)

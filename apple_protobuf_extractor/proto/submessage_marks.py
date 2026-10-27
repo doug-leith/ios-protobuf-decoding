@@ -29,17 +29,18 @@ class Submessage:
     """What one ``begin(F) … end`` sub-message write contains: the calls made with that mark
     innermost on a path into them."""
     number: int                          # the field number the begin mark carries
-    writes: Tuple["WriteSite", ...]      # writer-in-x0 calls handed a field number: members
-                                         # written inline
-    callees: Tuple[int, ...]             # every other call's target: candidate struct
-                                         # serialisers ``f(&struct, writer)``
+    calls: Tuple["WriteSite", ...]       # every call inside but the marks
+    writes: Tuple["WriteSite", ...]      # of those, the writer-in-x0 calls handed a field
+                                         # number: members written inline
+    callees: Tuple[int, ...]             # the others' targets: candidate struct serialisers
+                                         # ``f(&struct, writer)``
+    nested: bool                         # another sub-message begins inside it
 
 
 def submessage(calls: "WriterCalls", begin: "WriteSite") -> Optional[Submessage]:
     """The sub-message whose begin mark is the call *begin* among *calls*, or None: *begin* is
     not a begin mark handed a frame scratch and a field number, no end mark closes it, a path
-    leaves the function with it open, or another mark is opened or closed inside it (an
-    unmodelled shape)."""
+    leaves the function with it open, or an end mark inside it closes another."""
     if begin.name != PLACE_MARK or begin.writer_reg != 'x0' or begin.slot is None:
         return None
     number = begin.number
@@ -51,10 +52,12 @@ def submessage(calls: "WriterCalls", begin: "WriteSite") -> Optional[Submessage]
     inside = [t for t in calls.sites if any(stk and stk[-1] == mark for stk in t.open_marks)]
     ends = [t for t in inside if t.name == RECALL_MARK and t.writer_reg == 'x0'
             and t.slot == begin.slot]
-    if not ends or any(t.is_mark and t not in ends for t in inside):
+    if not ends or any(t.name == RECALL_MARK and t not in ends for t in inside):
         return None
-    writes = tuple(t for t in inside if not t.is_mark and t.writer_reg == 'x0'
-                   and t.number is not None and t.target is not None)
-    callees = tuple(dict.fromkeys(t.target for t in inside if not t.is_mark
-                                  and t not in writes and t.target is not None))
-    return Submessage(number, writes, callees)
+    others = tuple(t for t in inside if not t.is_mark)
+    writes = tuple(t for t in others if t.writer_reg == 'x0' and t.number is not None
+                   and t.target is not None)
+    callees = tuple(dict.fromkeys(t.target for t in others
+                                  if t not in writes and t.target is not None))
+    return Submessage(number, others, writes, callees,
+                      any(t.name == PLACE_MARK for t in inside))

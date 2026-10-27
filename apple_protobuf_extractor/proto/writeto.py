@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from macho.memory import BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ObjcClass, ObjcIvar
 from proto.models import MAX_FIELD_NUMBER, record_analysis_failure
-from proto.submessage_marks import NO_OPEN_MARK
+from proto.submessage_marks import NO_OPEN_MARK, submessage
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -71,28 +71,29 @@ def _ivars_of(origins) -> Set[str]:
     return {o[1] for o in origins if isinstance(o, tuple) and o[0] == 'I'}
 
 
-def _site_bindings(sites, field_ivars) -> WriteBindings:
-    """Bindings from :class:`proto.writer_flow.WriteSite` records, in address order.
+def _site_bindings(calls, field_ivars) -> WriteBindings:
+    """Bindings from the writer flow's :class:`proto.writer_flow.WriterCalls`, in address order.
 
     A call outside every mark binds the one field ivar its value derives from to the field
     number it is handed (number 0: a #52 zero field).  A begin mark (PlaceMark) outside every
-    mark binds the one field ivar the values written directly inside it derive from -- a
-    packed list or an inline sub-message -- and its no-tag calls are the element writers
-    (:data:`_NO_TAG_FIELD_NUMBER`).  Calls inside a mark write the element's own fields.  A
-    value from more than one ivar binds nothing; the first call binding an ivar wins."""
+    mark binds the one field ivar the values written directly inside its sub-message
+    (:func:`proto.submessage_marks.submessage`) derive from -- a packed list or an inline
+    sub-message -- and its no-tag calls are the element writers (:data:`_NO_TAG_FIELD_NUMBER`).
+    Calls inside a mark write the element's own fields.  A value from more than one ivar binds
+    nothing; the first call binding an ivar wins."""
     names = {iv.name for iv in field_ivars if iv.offset != 0 and iv.name}
     out = WriteBindings()
     zero: Set[str] = set()
-    for s in sites:
+    for s in calls.sites:
         n = s.number
         if n is None or s.open_marks != NO_OPEN_MARK:
             continue
         elem: List[int] = []
         if s.is_mark:
-            if not _is_field_number(n):
+            sub = submessage(calls, s) if _is_field_number(n) else None
+            if sub is None:
                 continue
-            inner = [t for t in sites if not t.is_mark
-                     and any(stk and stk[-1] == (s.slot, s.addr) for stk in t.open_marks)]
+            inner = sub.calls
             ivs = set().union(*(_ivars_of(t.value_origins) for t in inner))
             for t in inner:
                 if (t.number == _NO_TAG_FIELD_NUMBER and t.target is not None
@@ -128,7 +129,7 @@ def _extract_writeto_field_numbers(
     direct unit test) or the flow does not decide the class -- the caller then falls back
     to its own flagged estimate."""
     calls = writer_calls(ctx, cls)
-    return WriteBindings() if calls is None else _site_bindings(calls.sites, field_ivars)
+    return WriteBindings() if calls is None else _site_bindings(calls, field_ivars)
 
 
 def writer_calls(ctx: BinaryContext, cls: ObjcClass, invoke: Optional[int] = None):
