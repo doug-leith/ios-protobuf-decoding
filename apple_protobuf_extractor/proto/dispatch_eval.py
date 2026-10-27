@@ -251,9 +251,11 @@ def find_cores(ctx, cls, entries: Optional[List[int]] = None, flows: Optional[Di
 
 def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict[int, str],
                  out: ClassDispatch, entries: Optional[List[int]] = None,
-                 first: Optional[tuple] = None) -> None:
+                 first: Optional[tuple] = None, known_classes: FrozenSet[str] = frozenset()
+                 ) -> None:
     """Run *cls*'s dispatch core at *core_va* for each field number into *out*.  *first* is
-    :func:`find_cores`' ``(insns, br_arms, Flow)`` for the core (round 0 needs exactly that)."""
+    :func:`find_cores`' ``(insns, br_arms, Flow)`` for the core (round 0 needs exactly that);
+    *known_classes* the image's proto class set (:func:`proto.protoclass_set._proto_class_set`)."""
     array_offsets = frozenset(iv.offset for iv in cls.ivars if iv.type_enc in _ARRAY_ENCS)
     array_slots = {iv.offset_slot: iv.name for iv in cls.ivars
                    if iv.type_enc in _ARRAY_ENCS and iv.offset_slot}
@@ -262,9 +264,9 @@ def _decode_core(ctx, core_va: int, entry: Dict[str, int], cls, core_index: Dict
     off_to_ivar = {iv.offset: iv.name for iv in cls.ivars}
     sel_to_imp = {mm.name: mm.imp for mm in cls.methods if mm.name and mm.imp}
     # Known proto classes: every class with a ReadAllFrom core, plus the image's whole proto
-    # class set when extraction has computed it (proto.protoclass_set caches it on ctx); a
-    # message class whose readFrom: does not resolve to a core of its own is still one.
-    known = set(core_index.values()) | set(getattr(ctx, "_proto_class_names_cache", None) or ())
+    # class set (a message class whose readFrom: does not resolve to a core of its own is
+    # still one).
+    known = set(core_index.values()) | set(known_classes)
     objs = object_model(ctx)
 
     arms: Dict[int, Set[int]] = {}             # br address -> targets found by evaluation
@@ -493,14 +495,15 @@ def _writes_foreign_object(ctx, flow: Flow, blocks: Set[int], calls, own_slots: 
     return bool(used) and not (used & own_slots)
 
 
-def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
+def evaluate_class(ctx, cls, core_index: Dict[int, str],
+                   known_classes: FrozenSet[str] = frozenset()) -> ClassDispatch:
     """Decode *cls*'s readFrom: dispatch (see the module docstring).  Memoised per class on
     *ctx*: the element-by-number and element-by-ivar consumers share one evaluation.  The
     result depends on *core_index*, so it is memoised only for the image's own index (the
     one cached on *ctx* as ``_readfrom_core_index``) and for an empty one, any other index
-    evaluated afresh -- and on the image's proto class set once extraction has computed it
+    evaluated afresh -- and on *known_classes*, the image's proto class set
     (:func:`_decode_core`'s known classes), which the key holds."""
-    known = getattr(ctx, "_proto_class_names_cache", None)
+    known = frozenset(known_classes)
     if not core_index:
         key = (cls.vmaddr, "empty", known)
     elif core_index is getattr(ctx, "_readfrom_core_index", None):
@@ -521,7 +524,8 @@ def evaluate_class(ctx, cls, core_index: Dict[int, str]) -> ClassDispatch:
     for core_va, entry in cores:
         out.cores.append(core_va)
         try:
-            _decode_core(ctx, core_va, entry, cls, core_index, out, entries, flows.get(core_va))
+            _decode_core(ctx, core_va, entry, cls, core_index, out, entries, flows.get(core_va),
+                         known)
         except PROGRAM_ERRORS:
             raise
         except Exception as exc:

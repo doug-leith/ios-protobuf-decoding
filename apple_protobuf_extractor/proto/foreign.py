@@ -37,7 +37,7 @@ from serializers import cpp_descriptor_extract as _cpp
 from serializers import swift_descriptor_extract as _swift
 
 from .models import (FieldLabel, ProtoEnum, ProtoEnumValue, ProtoField, ProtoMessage, SCALAR_TYPES,
-                     PACKABLE_SCALARS)
+                     PACKABLE_SCALARS, record_analysis_failure)
 from .protoclass_set import _proto_class_set
 from .foreign_detect import (google_protobuf_classes, swift_protobuf_messages,
                              cpp_file_protos, cpp_protobuf_namespaces, protobufc_descriptors)
@@ -618,7 +618,12 @@ def collect_foreign_messages(ctx, data: Optional[bytes]) -> List[ProtoMessage]:
     descriptor sections / ``.symbols`` nlist through *ctx*."""
     out: List[ProtoMessage] = []
     try:
-        out += _cpp_protos_to_messages(cpp_file_protos(ctx, data))
+        file_protos = cpp_file_protos(ctx, data)
+        for fp in file_protos:
+            if fp.syntax == _cpp.EDITIONS:
+                record_analysis_failure(ctx, fp.name, "C++ descriptor",
+                                        "an edition's features are not read: not emitted")
+        out += _cpp_protos_to_messages([fp for fp in file_protos if fp.syntax != _cpp.EDITIONS])
     except PROGRAM_ERRORS:
         raise
     except Exception as exc:

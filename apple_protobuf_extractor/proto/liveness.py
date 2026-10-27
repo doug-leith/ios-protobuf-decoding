@@ -146,6 +146,12 @@ def call_reads(ctx, target: Optional[int]) -> Tuple[str, ...]:
     return res
 
 
+def solving(ctx) -> bool:
+    """:func:`call_reads` is reading a function (a cycle of them may be open)."""
+    state = getattr(ctx, "_call_reads", None)
+    return bool(state is not None and state.open)
+
+
 class _State:
     """:func:`call_reads`' memo for one image: the answers settled (``memo``), the size of the
     function index they were read with, the functions being read (``open``: target ->
@@ -250,7 +256,8 @@ def _pointer_tail_call(flow, br) -> bool:
     ``mov x20, x0 ; br x2``, a partial-apply forwarder) or one loaded from memory (the register's
     one definition an 8-byte load from a base and a constant offset: ``ldr x2, [x8, #8] ; br x2``,
     a Swift value witness): a tail call, not a jump table (a code base plus an offset read from a
-    table at an index, or a pointer read at one -- computed in the function)."""
+    table at an index, or a pointer read at one -- computed in the function: the load's base
+    an address plus a register, ``add x8, x8, x1, lsl #3 ; ldr x2, [x8]``, is an index's)."""
     reg = _norm_reg(split_ops(br.op_str)[0]) if br.op_str else None
     if reg is None:
         return False
@@ -263,7 +270,15 @@ def _pointer_tail_call(flow, br) -> bool:
     ins = flow.insns[d]
     ops = split_ops(ins.op_str)
     pm = parse_mem(ops[1]) if ins.mnemonic in ("ldr", "ldur") and len(ops) == 2 else None
-    return pm is not None and ops[0].startswith("x") and pm[1] is None
+    if pm is None or not ops[0].startswith("x") or pm[1] is not None:
+        return False
+    b = flow.only_def(d, pm[0])
+    if b is not None and b >= 0:
+        bops = split_ops(flow.insns[b].op_str)
+        if (flow.insns[b].mnemonic in ("add", "sub") and len(bops) >= 3
+                and not bops[2].strip().startswith("#")):
+            return False                         # a pointer read at an index
+    return True
 
 
 def _live_before(ctx, ins, live_after: set, own: frozenset, frame: bool = True) -> set:

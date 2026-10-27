@@ -104,15 +104,20 @@ class TestRepeatedEncodingOffline(unittest.TestCase):
     CLIST = '{?="list"^I"count"Q"size"Q}'
 
     def test_bracket_is_packed(self):
-        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': BoundWrite(3, 0x1000, True)}),
+        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': BoundWrite(3, 0x1000, True)}, 'uint32'),
                          'PACKED')
 
     def test_tag_per_element_is_expanded(self):
-        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': BoundWrite(3, 0x1000)}),
+        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {'_a': BoundWrite(3, 0x1000)}, 'uint32'),
                          'EXPANDED')
 
     def test_unseen_write(self):
-        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {}), 'UNSEEN')
+        self.assertEqual(_repeated_encoding(_Ivar('_a', self.CLIST), {}, 'uint32'), 'UNSEEN')
+
+    def test_a_list_of_what_cannot_be_packed_has_no_encoding(self):
+        # a C-list of structs the type resolution leaves `bytes` (review 2026-10-27)
+        structs = _Ivar('_a', '{?="list"^{Foo="a"i"b"i}"count"Q"size"Q}')
+        self.assertIsNone(_repeated_encoding(structs, {}, 'bytes'))
 
     def test_object_array_of_scalars_is_read_the_same_way(self):
         # an NSArray whose elements are scalars (written per element with the field's number)

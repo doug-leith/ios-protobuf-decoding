@@ -9,7 +9,7 @@ extractor re-imports the surface.
 from __future__ import annotations
 import logging
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, FrozenSet, Optional, Tuple
 
 from macho.memory    import READ_ERRORS, BinaryContext, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar, class_name_at
@@ -104,23 +104,26 @@ def _resolve_repeated_via_dispatch_ivars(
     ctx: BinaryContext,
     cls: ObjcClass,
     core_index: Dict[int, str],
+    known_classes: FrozenSet[str] = frozenset(),
 ) -> Dict[str, Tuple[str, int]]:
     """Bind ``{ivar_name: (element_class, field_number)}`` from this class's readFrom:
     dispatch: for each field the evaluator (:mod:`proto.dispatch_eval`) finds, the array ivar
     its handler appends the element to -- the accessor it hands (self, element), method IMP or
     objc_direct C function alike, identified by the ivar-offset variable it loads; or
     ``[self->_array addObject:element]``.  Keyed by IVAR, so safe to apply even when the field
-    number is not write-confirmed.  Empty when nothing binds."""
+    number is not write-confirmed.  Empty when nothing binds.  *known_classes*: the image's
+    proto class set."""
     if not core_index:
         return {}
     from proto.dispatch_eval import evaluate_class
-    return evaluate_class(ctx, cls, core_index).ivars()
+    return evaluate_class(ctx, cls, core_index, known_classes).ivars()
 
 
 def _resolve_repeated_via_dispatch(
     ctx: BinaryContext,
     cls: ObjcClass,
     core_index: Dict[int, str],
+    known_classes: FrozenSet[str] = frozenset(),
 ) -> Dict[int, str]:
     """
     Resolve ``{field_number: element_class}`` for *cls* by running its readFrom: dispatch for
@@ -141,11 +144,12 @@ def _resolve_repeated_via_dispatch(
     handed this object), not by call-site shape.  Results are keyed by field NUMBER, which the
     caller may only trust when it is *confirmed* (:func:`_confirm_field_numbers`) or the
     message has a single field.  Empty dict when the dispatch can't be followed.
+    *known_classes*: the image's proto class set.
     """
     if not core_index:
         return {}
     from proto.dispatch_eval import evaluate_class
-    return evaluate_class(ctx, cls, core_index).elements()
+    return evaluate_class(ctx, cls, core_index, known_classes).elements()
 
 
 #: Tail calls that return the class they are handed in x0: the ARC return-value handshake,

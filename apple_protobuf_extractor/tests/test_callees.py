@@ -411,6 +411,26 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class TestPointerTailCall(unittest.TestCase):
+    """A ``br`` to a pointer the function was handed, or loaded at a constant offset from one, is
+    a tail call; a pointer read at an index -- in the load's address, or added to its base
+    first -- is a table's (review 2026-10-27)."""
+
+    def tail(self, lines):
+        import proto.liveness as L
+        from proto.arm64_eval import Flow
+        from tests._listing import insns
+        flow = Flow(None, insns(lines))
+        return L._pointer_tail_call(flow, flow.insns[-1])
+
+    def test_each_shape(self):
+        self.assertTrue(self.tail([('ldr', 'x2, [x0, #8]'), ('br', 'x2')]))
+        self.assertTrue(self.tail([('mov', 'x1, x19'), ('br', 'x8')]))
+        self.assertFalse(self.tail([('ldr', 'x2, [x8, x1, lsl #3]'), ('br', 'x2')]))
+        self.assertFalse(self.tail([('add', 'x8, x8, x1, lsl #3'), ('ldr', 'x2, [x8]'),
+                                    ('br', 'x2')]))
+
+
 class TestCallReadsDeepChain(unittest.TestCase):
     def test_a_chain_deeper_than_the_stack_answers_every_register_not_raises(self):
         # 100,000 unnamed functions, each calling the next: deeper than Python's stack

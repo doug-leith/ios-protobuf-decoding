@@ -223,14 +223,36 @@ class TestAnalyzeEntry(_Patched):
     """analyze_entry on the writer flow's calls of a block's invoke function (the block in x0,
     the writer among what it captured) or of an inline loop."""
 
-    def _entry(self, listing, *more, ctx=None, entry=None, begin=None):
+    def _entry(self, listing, *more, ctx=None, entry=None, begin=None, names=None):
         insns, fd = asm(listing, *more)
         self.patch(fd)
         calls, _ = run_writer_flow([listing, *more], entry=entry or {'x0': _W},
-                                   tails=exits(listing))
+                                   tails=exits(listing), names=names)
         begin = begin or (lambda s: s.name == PLACE_MARK)
         return M.analyze_entry(ctx or FakeCtx(), insns, calls,
                                next(s for s in calls.sites if begin(s)))
+
+    def test_a_double_value_is_traced_in_v0(self):
+        # value = [v doubleValue] (in d0), written by the double writer, number in w1
+        from tests._fakes import MARKS
+        DOUBLE = 0x18dbdac60
+        lines = (0x18ce50000, [
+            ('mov', 'x22, x2'), ('mov', 'x19, x1'), ('mov', 'x20, x0'),
+            ('ldr', 'x21, [x0, #0x20]'), ('str', 'xzr, [sp, #8]'),
+            ('add', 'x1, sp, #8'), ('mov', 'x0, x21'), ('mov', 'w2, #3'),
+            ('bl', '#0x18dbdab88'),                                       # begin F=3
+            ('ldr', 'x0, [x20, #0x20]'), ('mov', 'x1, x19'), ('mov', 'w2, #1'),
+            ('bl', '#0x18dbdac18'),                                       # key
+            ('mov', 'x0, x22'), ('bl', '#0x18db2ce60'),                   # [v doubleValue]
+            ('ldr', 'x0, [x20, #0x20]'), ('mov', 'w1, #2'),
+            ('bl', f'#{DOUBLE:#x}'),                                      # value (double)
+            ('ldr', 'x0, [x20, #0x20]'), ('add', 'x1, sp, #8'),
+            ('bl', '#0x18dbdab94'),                                       # end
+            ('ret', '')])
+        ctx = _ctx_with_selectors(s18d000000='doubleValue')
+        e = self._entry(lines, selector_stub(0x18db2ce60, 0x18d000000), ctx=ctx,
+                        names={**MARKS, DOUBLE: '_PBDataWriterWriteDoubleField'})
+        self.assertEqual((e.number, e.value_helper, e.value_sel), (3, DOUBLE, 'doubleValue'))
 
     def test_block_invoke_string_key_message_value(self):
         e = self._entry(_MANIFEST_INVOKE)

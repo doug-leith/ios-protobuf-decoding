@@ -1494,15 +1494,21 @@ class Flow:
 
     def _register_call_targets(self) -> Dict[int, int]:
         """``{index: target}`` of the calls through a register whose register the forward
-        evaluation knows (:meth:`known_before`; it reads no reaching definitions)."""
+        evaluation knows (:meth:`known_before`; it reads no reaching definitions).  While it is
+        being built a call asks of an empty table (the evaluation it runs reaches the calls); a
+        build that raises leaves it unbuilt, not in part."""
         if self._reg_targets is None:
             ks = [k for k, i in enumerate(self.insns) if i.mnemonic in CALLS and i.mnemonic != 'bl']
             self._reg_targets = {}
-            for k in ks:
-                ops = split_ops(self.insns[k].op_str)
-                v = self.known_before(k).get(_norm_reg(ops[0])) if ops else None
-                if v is not None and not _is_symbolic(v):
-                    self._reg_targets[k] = v
+            try:
+                for k in ks:
+                    ops = split_ops(self.insns[k].op_str)
+                    v = self.known_before(k).get(_norm_reg(ops[0])) if ops else None
+                    if v is not None and not _is_symbolic(v):
+                        self._reg_targets[k] = v
+            except BaseException:
+                self._reg_targets = None
+                raise
         return self._reg_targets
 
     def _call_reads(self, target: Optional[int]) -> Optional[Tuple[str, ...]]:

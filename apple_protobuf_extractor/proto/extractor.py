@@ -328,6 +328,7 @@ def _resolve_dispatch_context(
     ctx: BinaryContext, cls: ObjcClass,
     readfrom_core_index: "Optional[Dict[int, str]]",
     field_ivars: List[ObjcIvar],
+    known_classes: FrozenSet[str] = frozenset(),
 ) -> _DispatchContext:
     """Resolve the readFrom: dispatch context for repeated-<message> element typing:
 
@@ -344,14 +345,16 @@ def _resolve_dispatch_context(
     dispatch_ivars: Dict[str, Tuple[str, int]] = {}
     if readfrom_core_index:
         try:
-            dispatch_elements = _resolve_repeated_via_dispatch(ctx, cls, readfrom_core_index)
+            dispatch_elements = _resolve_repeated_via_dispatch(ctx, cls, readfrom_core_index,
+                                                               known_classes)
         except PROGRAM_ERRORS:
             raise
         except Exception as exc:
             record_analysis_failure(ctx, cls.name, "readFrom: dispatch (element classes)",
                                     f"{type(exc).__name__}: {exc}")
         try:
-            dispatch_ivars = _resolve_repeated_via_dispatch_ivars(ctx, cls, readfrom_core_index)
+            dispatch_ivars = _resolve_repeated_via_dispatch_ivars(ctx, cls, readfrom_core_index,
+                                                                  known_classes)
         except PROGRAM_ERRORS:
             raise
         except Exception as exc:
@@ -614,8 +617,8 @@ def _repeated_encoding(ivar, bound_writes, type_name=None, type_class=None):
     when no write binds the ivar, None when the ivar is neither.  The emitter declares the
     encoding from this, instead of edition 2023's PACKED default."""
     packable = type_name in PACKABLE_SCALARS or (type_class or "").startswith("ENUM:")
-    if not (_is_packed_list_enc(ivar.type_enc)
-            or (ivar.type_enc in _OBJECT_ARRAY_ENCS and packable)):
+    if not packable or not (_is_packed_list_enc(ivar.type_enc)
+                            or ivar.type_enc in _OBJECT_ARRAY_ENCS):
         return None
     w = (bound_writes or {}).get(ivar.name)
     if w is None:
@@ -842,7 +845,8 @@ def extract_proto_message(
                         _proto_class_names)
 
     # ── Principled repeated-<message> element types (readFrom: dispatch) ───────
-    _dispatch = _resolve_dispatch_context(ctx, cls, readfrom_core_index, field_ivars)
+    _dispatch = _resolve_dispatch_context(ctx, cls, readfrom_core_index, field_ivars,
+                                          _proto_class_names)
 
     # ── Build ProtoField list ─────────────────────────────────────────────────
     # Build a set of field numbers already taken by confirmed fields so that

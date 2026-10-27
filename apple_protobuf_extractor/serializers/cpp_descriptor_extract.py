@@ -449,6 +449,12 @@ def _emit_field(f: Field, package: str, proto3: bool, in_oneof: bool = False) ->
     return line + ";"
 
 
+#: A descriptor of an edition (``syntax = "editions"``): its field presence, encodings and enum
+#: openness are features (FeatureSet options) this reader does not read, so it is not rendered
+#: rather than rendered with proto2 / proto3 defaults.
+EDITIONS = "editions"
+
+
 def format_proto(fp: FileProto) -> str:
     proto3 = fp.syntax == "proto3"
     out: List[str] = [f'syntax = "{fp.syntax}";']
@@ -507,6 +513,9 @@ def _main(argv: List[str]) -> int:
         print("no embedded FileDescriptorProto found "
               "(lite runtime, or not a C++ libprotobuf binary)")
         return 1
+    for fp in [fp for fp in protos if fp.syntax == EDITIONS]:
+        print(f"skipping {fp.name!r}: an edition's features are not read")
+    protos = [fp for fp in protos if fp.syntax != EDITIONS]
     if args.out:
         os.makedirs(args.out, exist_ok=True)
         written = 0

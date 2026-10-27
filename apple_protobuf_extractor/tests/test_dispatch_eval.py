@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.join(_HERE, '..'))
 from proto.arm64_eval import Flow, Objects
 from proto import dispatch_eval as E
 from proto import eval_tokens as T
+from proto.protoclass_set import _proto_class_set
 
 CALL, CALL2 = '#0x9000', '#0x9100'           # callees outside the listing
 SELF = T.SELF
@@ -331,7 +332,7 @@ class TestSyntheticFixtures(unittest.TestCase):
                 skip = _UNDISPATCHED.get((fixture_dir, msg), set())
                 want = {f['number']: f for f in spec['fields'] if f['number'] not in skip
                         and f['type_name'] not in _SCALARS and f['type_name'] in known}
-                got = E.evaluate_class(ctx, cls, core_index)
+                got = E.evaluate_class(ctx, cls, core_index, _proto_class_set(ctx, cl))
                 with self.subTest(fixture=f'{fixture_dir}/{binary}', message=msg):
                     self.assertEqual(got.elements(),
                                      {n: f['type_name'] for n, f in want.items()},
@@ -381,6 +382,7 @@ class _Live(unittest.TestCase):
         if syms:
             apply_to_classes(cl, syms)
         cls.core_index = _build_readfrom_core_index(cls.ctx, cl)
+        cls.known = _proto_class_set(cls.ctx, cl)
         cls.by_name = {c.name: c for c in cl if not c.is_meta}
 
     @classmethod
@@ -388,7 +390,7 @@ class _Live(unittest.TestCase):
         cls.reader.close()
 
     def ev(self, name):
-        return E.evaluate_class(self.ctx, self.by_name[name], self.core_index)
+        return E.evaluate_class(self.ctx, self.by_name[name], self.core_index, self.known)
 
 
 @unittest.skipUnless(_MACOS27, 'macOS 27 cache not present (macos27_data/dylib or MACHO_TEST_MACOS27_CACHE)')
@@ -526,12 +528,12 @@ class TestEvaluateClassMemo(unittest.TestCase):
         self.assertIs(a, b)
         self.assertEqual(self.calls, [0])
 
-    def test_the_proto_class_set_once_computed_is_part_of_the_key(self):
-        # the evaluation reads the image's proto class set once extraction has computed it
+    def test_the_proto_class_set_is_part_of_the_key(self):
+        # the evaluation reads the image's proto class set, handed to it
         ctx = self._Ctx()
         E.evaluate_class(ctx, self._Cls, {})
-        ctx._proto_class_names_cache = frozenset({'GEOX'})
-        E.evaluate_class(ctx, self._Cls, {})
+        E.evaluate_class(ctx, self._Cls, {}, frozenset({'GEOX'}))
+        E.evaluate_class(ctx, self._Cls, {}, frozenset({'GEOX'}))
         self.assertEqual(self.calls, [0, 0])
 
     def test_image_index_is_memoised_separately_from_empty(self):

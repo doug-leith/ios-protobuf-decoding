@@ -55,7 +55,7 @@ from proto.arm64_operands import (reads, writes, reg_name, parse_mem, reg_bytes,
                                   AUTHENTICATED_BRANCHES, ARG_GPRS, branch_target, is_conditional,
                                   imm_operand, split_ops)
 
-from proto.models import record_heuristic_hit
+from proto.models import record_analysis_failure, record_heuristic_hit
 from proto.submessage_marks import NO_OPEN_MARK, PLACE_MARK, RECALL_MARK
 
 log = logging.getLogger(__name__)
@@ -403,12 +403,17 @@ class WriterFlow:
     def block_calls(self, cls: ObjcClass, invoke: int) -> Optional["WriterCalls"]:
         """The calls of the block function at *invoke*, which *cls*'s ``writeTo:`` hands to a
         method that calls it, that may be handed the writer, and the marks open where it is
-        left; None as for :meth:`writer_calls`.  The block (``x0``) holds what it captured, the
-        writer among it: every value read from it is taken to be possibly the writer."""
+        left; None as for :meth:`writer_calls`, recorded as *cls*'s analysis failure.  The block
+        (``x0``) holds what it captured, the writer among it: every value read from it is taken
+        to be possibly the writer."""
         key = (cls.vmaddr, invoke)
         if key not in self._blocks:
             res = _ClassFlow(self, cls)._run(invoke, {'x0': frozenset({_W})}, 0, invoke)
             self._blocks[key] = None if res is None or not res.complete else res.calls()
+            if self._blocks[key] is None:
+                record_analysis_failure(self.ctx, cls.name, "map entry block",
+                                        f"{invoke:#x}: " + ("; ".join(res.why) if res is not None
+                                                            else "its body is not decoded"))
         return self._blocks[key]
 
     def sent_selectors(self, cls: ObjcClass) -> Optional[FrozenSet[str]]:

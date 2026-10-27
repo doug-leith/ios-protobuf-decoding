@@ -50,10 +50,10 @@ from typing import Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 from macho.memory import READ_ERRORS, BinaryContext, record_unread, PROGRAM_ERRORS
 from macho.classlist import ClassList, ObjcClass, ObjcIvar
 from macho.disasm import _parse_imm, _norm_reg
-from proto.callees import real_target, stub_selector
+from proto.callees import real_target, sent_selector
 
 from proto.arm64cfg import mem_operand
-from proto.arm64_operands import split_ops
+from proto.arm64_operands import reg_name, split_ops
 from proto.dispatch import FunctionEntries, function_entries
 from proto.function_body import function_body, function_listing
 from proto.writeto import BoundWrite, writer_calls
@@ -194,12 +194,19 @@ def _trace_ivar(ctx: BinaryContext, flow, i: int, reg: str,
     return None
 
 
-def _trace_unbox_selector(ctx: BinaryContext, flow, i: int) -> Optional[str]:
-    """Selector of the objc call that produced the value passed in ``x1`` at the
-    write-helper call ``insns[i]`` — the NSNumber unboxing step (``[v longLongValue]``)
-    for a scalar key/value, or ``None`` when the object is passed straight through
-    (string / message / bytes) or the chain can't be followed."""
-    reg, j, seen = 'x1', i, set()
+def _send_at(ctx: BinaryContext, flow, k: int) -> Optional[str]:
+    """The selector the ``bl`` ``flow.insns[k]`` sends (:func:`proto.callees.sent_selector`: a
+    selector stub's, or a plain ``objc_msgSend``'s selector string in x1), else None."""
+    return sent_selector(ctx, _parse_imm(flow.insns[k].op_str), flow.known_before(k).get('x1'))
+
+
+def _trace_unbox_selector(ctx: BinaryContext, flow, i: int, reg: str) -> Optional[str]:
+    """Selector of the objc call that produced the value the write-helper call ``insns[i]`` is
+    handed in *reg* (its writer's value register: x1, or v0 for a float / double) -- the
+    NSNumber unboxing step (``[v longLongValue]``, ``[v doubleValue]``) for a scalar key / value,
+    or ``None`` when the object is passed straight through (string / message / bytes) or the
+    chain can't be followed."""
+    j, seen = i, set()
     while (j, reg) not in seen:
         seen.add((j, reg))
         d = flow.only_def(j, reg)
@@ -207,10 +214,11 @@ def _trace_unbox_selector(ctx: BinaryContext, flow, i: int) -> Optional[str]:
             return None
         ins = flow.insns[d]
         if ins.mnemonic == 'bl':
-            return stub_selector(ctx, _parse_imm(ins.op_str)) if reg == 'x0' else None
+            return _send_at(ctx, flow, d) if reg in ('x0', 'v0') else None
         ops = split_ops(ins.op_str)
-        if ins.mnemonic == 'mov' and len(ops) == 2 and _norm_reg(ops[1]):
-            reg, j = _norm_reg(ops[1]), d
+        src = reg_name(ops[1]) if ins.mnemonic in ('mov', 'fmov') and len(ops) == 2 else None
+        if src:
+            reg, j = src, d
             continue
         return None
     return None
@@ -244,8 +252,8 @@ def analyze_entry(ctx: BinaryContext, insns: Sequence, calls,
     flow = listing_flow(ctx, insns)
     return MapEntryWriter(
         number=sub.number, key_helper=key.target, value_helper=value.target,
-        key_sel=_trace_unbox_selector(ctx, flow, at[key.addr]),
-        value_sel=_trace_unbox_selector(ctx, flow, at[value.addr]))
+        key_sel=_trace_unbox_selector(ctx, flow, at[key.addr], key.value_reg),
+        value_sel=_trace_unbox_selector(ctx, flow, at[value.addr], value.value_reg))
 
 
 # ── Shape A: enumerateKeysAndObjectsUsingBlock: ───────────────────────────────
@@ -274,11 +282,11 @@ def scan_block_enumerated_maps(
     except READ_ERRORS as exc:
         record_unread(ctx, "method body", f"writeTo: {imp:#x}", exc)
         return out
+    flow = listing_flow(ctx, insns)
     calls = [i for i, ins in enumerate(insns) if ins.mnemonic == 'bl'
-             and stub_selector(ctx, _parse_imm(ins.op_str)) == _ENUMERATE_SELECTOR]
+             and _send_at(ctx, flow, i) == _ENUMERATE_SELECTOR]
     if not calls:
         return out
-    flow = listing_flow(ctx, insns)
     slots: Dict[int, Dict[int, Tuple[int, int]]] = {}
     # a callee handed a pointer into the frame (a fast-enumeration state, say) may write
     # that object and upward, never the slots below it (Objects.object_escape)
@@ -299,11 +307,19 @@ def scan_block_enumerated_maps(
             record_unread(ctx, "map entry block", f"{invoke:#x}",
                           ValueError("its body was read only in part"))
             continue
-        calls = writer_calls(ctx, cls, invoke)
-        begins = [s for s in calls.sites if s.name == PLACE_MARK
-                  and s.open_marks == NO_OPEN_MARK] if calls is not None else []
+        calls = writer_calls(ctx, cls, invoke)              # (undecided: recorded there)
+        if calls is None:
+            continue
+        begins = [s for s in calls.sites if s.name == PLACE_MARK and s.open_marks == NO_OPEN_MARK]
         entry = analyze_entry(ctx, body, calls, begins[0]) if len(begins) == 1 else None
-        if entry is not None:
+        if entry is None:
+            record_analysis_failure(ctx, cls.name, "map fields",
+                                    f"{ivar}: the entry block at {invoke:#x} writes "
+                                    f"{len(begins)} sub-messages, not one map entry"
+                                    if len(begins) != 1 else
+                                    f"{ivar}: the entry block at {invoke:#x} writes no "
+                                    "{key = 1, value = 2} entry")
+        else:
             out[ivar] = entry
     return out
 
@@ -435,7 +451,8 @@ def readfrom_value_classes(
     and every proto class it allocates (:mod:`proto.dispatch_eval`, which runs the dispatch
     with the field number set to *number*).  ``None`` when the dispatch, or a handler for that
     number, can't be found (the caller then reports the value class as unrecovered)."""
-    ev = evaluate_class(ctx, cls, core_index or {})   # an empty index still names allocated classes
+    ev = evaluate_class(ctx, cls, core_index or {}, known_classes)  # an empty index still names
+                                                                    # the classes allocated
     fd = ev.fields.get(number)
     if fd is None:
         return None

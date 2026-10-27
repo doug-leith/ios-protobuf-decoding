@@ -386,7 +386,11 @@ def _decoded(ctx: BinaryContext, insns: List["Insn"],
             by_br = {**by_br, **new}
         hit = memo[key] = [by_br, final, ins]
         if _provisional_answers(ctx)[0] != provisional:
-            _ctx_cache(ctx, "_provisional_decodes", list).append((key, ins, bounds))
+            from proto.liveness import solving        # (proto.liveness imports this module)
+            if solving(ctx):                           # rechecked when the cycles settle
+                _ctx_cache(ctx, "_provisional_decodes", list).append((key, ins, bounds))
+            else:                                      # they settled while it was decoded
+                return _redecode(ctx, key, ins, bounds)
         if bounds is not None and all(ins[0].addr <= a < ins[-1].addr + 4
                                       for arms in by_br.values() for a in arms):
             # Every arm lies in the listing's span: decoding within the span accepts the same
@@ -415,19 +419,25 @@ def recheck_provisional_decodes(ctx: BinaryContext) -> None:
     settled.  A table that decodes differently now is warned of and replaced; what was read
     with the old arms (the cycle's own reads) is not redone."""
     todo = _ctx_cache(ctx, "_provisional_decodes", list)
-    memo = _ctx_cache(ctx, "_jump_table_arms", dict)
     while todo:
-        key, ins, bounds = todo.pop()
-        old = memo.pop(key, None)
-        memo.pop((key[0], None), None)
-        new = _decoded(ctx, ins, bounds)
-        if old is not None and old[0] != new[0]:
-            record_heuristic_hit(
-                ctx, "jump table decoded in an unsettled call_reads cycle",
-                f"the listing at {key[0][0]:#x} decodes differently once the cycle has settled "
-                f"({sum(len(a) for a in old[0].values())} -> "
-                f"{sum(len(a) for a in new[0].values())} arms); the cycle's call_reads may be "
-                f"stale (TODO #119)")
+        _redecode(ctx, *todo.pop())
+
+
+def _redecode(ctx: BinaryContext, key, ins, bounds) -> list:
+    """Decode the listing *ins* again (:func:`_decoded`), its first decoding having used a
+    provisional ``call_reads`` answer; a different result is warned of and replaces it."""
+    memo = _ctx_cache(ctx, "_jump_table_arms", dict)
+    old = memo.pop(key, None)
+    memo.pop((key[0], None), None)
+    new = _decoded(ctx, ins, bounds)
+    if old is not None and old[0] != new[0]:
+        record_heuristic_hit(
+            ctx, "jump table decoded in an unsettled call_reads cycle",
+            f"the listing at {key[0][0]:#x} decodes differently once the cycle has settled "
+            f"({sum(len(a) for a in old[0].values())} -> "
+            f"{sum(len(a) for a in new[0].values())} arms); the cycle's call_reads may be "
+            f"stale (TODO #119)")
+    return new
 
 
 def decoded_flow(ctx: BinaryContext, insns: List["Insn"]):

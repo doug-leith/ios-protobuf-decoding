@@ -248,8 +248,10 @@ class TestProvisionalDecodes(unittest.TestCase):
                 D.note_provisional_answer(ctx)     # it consulted a function still being read
             return answers.pop(0)
 
-        with mock.patch.object(D, '_evaluated_arms', evaluated):
+        with mock.patch.object(D, '_evaluated_arms', evaluated), \
+                mock.patch('proto.liveness.solving', lambda ctx: True):   # a cycle open
             self.assertEqual(D._jump_table_arm_addrs(ctx, listing), {0x1010})
+        with mock.patch.object(D, '_evaluated_arms', evaluated):
             with self.assertLogs('proto.models', 'WARNING') as logs:
                 D.recheck_provisional_decodes(ctx)
         self.assertIn('decodes differently', logs.output[0])
@@ -273,10 +275,36 @@ class TestProvisionalDecodes(unittest.TestCase):
             return {0x1010}
 
         with mock.patch.object(D, '_evaluated_arms', evaluated):
-            D._jump_table_arm_addrs(ctx, listing)
+            with mock.patch('proto.liveness.solving', lambda ctx: True):
+                D._jump_table_arm_addrs(ctx, listing)
             D.recheck_provisional_decodes(ctx)
         self.assertEqual(len(calls), 2)                 # decoded again once settled
         self.assertEqual(get_diagnostics(ctx).heuristics_hit, [])
+
+
+class TestProvisionalDecodeSettledWhileDecoded(unittest.TestCase):
+    """A decode that used a provisional answer, the cycle settling before the decode returned,
+    is decoded again at once: it was queued after the recheck had run (review 2026-10-27)."""
+
+    def test_decoded_again_at_once(self):
+        from unittest import mock
+        import proto.dispatch as D
+        from tests._fakes import NoImage
+        from tests._listing import insns
+        listing = insns([('cmp', 'w8, #1'), ('b.hi', '#0x1010'), ('adr', 'x9, #0x1010'),
+                         ('br', 'x9'), ('ret', '')])
+        ctx = NoImage()
+        answers = [{0x1010}, {0x100c}]
+
+        def evaluated(flow, idom, kb, lo, hi):
+            if len(answers) == 2:
+                D.note_provisional_answer(ctx)
+            return answers.pop(0)
+
+        with mock.patch.object(D, '_evaluated_arms', evaluated), \
+                self.assertLogs('proto.models', 'WARNING'):
+            self.assertEqual(D._jump_table_arm_addrs(ctx, listing), {0x100c})
+        self.assertEqual(getattr(ctx, "_provisional_decodes", []), [])
 
 
 class TestTableBaseParkedAcrossACall(unittest.TestCase):

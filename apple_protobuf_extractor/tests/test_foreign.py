@@ -529,6 +529,23 @@ class TestCollectForeignMessages(unittest.TestCase):
         self.assertTrue(any(m.name == "Msg" and m.serializer == F.CPP_SERIALIZER
                             for m in msgs))
 
+    def test_an_edition_s_descriptor_is_refused_and_reported(self):
+        # its presence, encodings and enum openness are features this reader does not read
+        from unittest import mock
+        from proto.models import get_diagnostics
+        files = [C.FileProto(name="e.proto", package="e", syntax="editions",
+                             messages=[C.Message(name="E", fields=[C.Field(name="r", number=1,
+                                                                           label=3, type=5)])]),
+                 C.FileProto(name="p.proto", package="p", syntax="proto2",
+                             messages=[C.Message(name="P", fields=[C.Field(name="x", number=1,
+                                                                           type=5)])])]
+        ctx = NoImage()
+        with mock.patch.object(F, "cpp_file_protos", lambda ctx, data: files), \
+                mock.patch.object(F, "swift_messages", lambda ctx: []):
+            msgs = F.collect_foreign_messages(ctx, None)
+        self.assertEqual([m.name for m in msgs], ["P"])
+        self.assertIn("e.proto", [c for c, _a, _d in get_diagnostics(ctx).analysis_failures])
+
     def test_cache_mode_merges_cpp_and_swift(self):
         ctx = _SectionCtx(0x4000, _cpp_file_blob("cache.proto"))
         sm = [SW.SwiftMessage(module="mod", name="SwMsg",
