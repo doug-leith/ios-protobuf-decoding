@@ -24,6 +24,8 @@ Only visits whose Visitor method :func:`serializers.swift_message_code.visit_met
 are read (the method fixes the field number's register); a location two visits or two
 properties share names nothing, and nor does one the getters and the metadata name apart."""
 import re
+import shutil
+import subprocess
 from typing import Dict, List, Optional, Set, Tuple
 
 from proto.arm64_eval import _is_stack
@@ -371,22 +373,139 @@ def _proven_equal(flow, k, c):
     return _loc(flow, kl - 1, ops[0], "traverse", {})
 
 
+# ── a Visitor method's arguments, from its own signature ──────────────────────
+# The registers a Visitor call takes its value and field number in are read off the method's
+# signature, as the toolchain's demangler spells it, lowered by the Swift calling convention
+# (arm64) -- not from the extractor's reading of the method's name.
+
+_DEMANGLED: Dict[str, str] = {}
+
+
+def demangler() -> Optional[List[str]]:
+    """The toolchain's ``swift-demangle`` command, or None."""
+    if shutil.which("swift-demangle"):
+        return ["swift-demangle"]
+    if shutil.which("xcrun"):
+        r = subprocess.run(["xcrun", "--find", "swift-demangle"], capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return [r.stdout.strip()]
+    return None
+
+
+def _demangle(symbols) -> Dict[str, str]:
+    """``{symbol: its demangled text}`` (memoised)."""
+    todo = sorted(set(symbols) - set(_DEMANGLED))
+    if todo:
+        cmd = demangler()
+        if cmd is None:
+            raise RuntimeError("no swift-demangle: the traverse oracle reads Visitor signatures")
+        out = subprocess.run(cmd, input="\n".join(todo) + "\n", capture_output=True,
+                             text=True, check=True).stdout.splitlines()
+        _DEMANGLED.update(zip(todo, out))
+    return {s: _DEMANGLED[s] for s in symbols}
+
+
+_VISITOR_METHOD = re.compile(r"\.Visitor\.(visit\w+)(?:<.*?>)?\((.*)\)(?: async)?(?: throws)? ->")
+
+
+def _split_params(text: str) -> List[Tuple[str, str]]:
+    """``[(label, type)]`` of a demangled parameter list (commas inside ``<>``, ``[]``, ``()``
+    are a type's own)."""
+    out, depth, start = [], 0, 0
+    for i, ch in enumerate(text + ","):
+        if ch in "<[(":
+            depth += 1
+        elif ch in ">])":
+            depth -= 1
+        elif ch == "," and depth == 0:
+            label, _, typ = text[start:i].strip().partition(": ")
+            out.append((label, typ))
+            start = i + 1
+    return out
+
+
+def _integer_registers(typ: str) -> Optional[int]:
+    """How many integer registers a value of the Swift type *typ* is passed in (the Swift calling
+    convention, arm64): a ``Float`` / ``Double`` none (a floating-point register); a struct's
+    metatype none (thin); a ``String`` or ``Data`` two (16 bytes: two words); an integer, a
+    ``Bool``, an array or dictionary (one reference) or a generic parameter's value (passed
+    indirectly, by address) one.  None for a type not among these."""
+    if typ in ("Swift.Float", "Swift.Double") or typ.endswith(".Type"):
+        return 0
+    if typ in ("Swift.String", "Foundation.Data"):
+        return 2
+    if (re.fullmatch(r"Swift\.U?Int(8|16|32|64)?|Swift\.Bool|[A-Z]\d*", typ)
+            or typ.startswith("[")):
+        return 1
+    return None
+
+
+def visit_arguments(demangled: str) -> Optional[Tuple[str, str, str, str]]:
+    """``(method, value type, value register, number register)`` of a call to the Visitor
+    method *demangled* names, or None (not a Visitor method, or a parameter of a type
+    :func:`_integer_registers` does not lower)."""
+    m = _VISITOR_METHOD.search(demangled)
+    if m is None:
+        return None
+    params = _split_params(m.group(2))
+    labels = [label for label, _t in params]
+    if "fieldNumber" not in labels or "value" not in labels:
+        return None
+    gprs = fprs = 0
+    value_reg = number_reg = vtype = None
+    for label, typ in params:
+        n = _integer_registers(typ)
+        if n is None:
+            return None
+        if label == "value":
+            vtype = typ
+            value_reg = f"v{fprs}" if n == 0 and not typ.endswith(".Type") else f"x{gprs}"
+        if label == "fieldNumber":
+            number_reg = f"x{gprs}"
+            break
+        if n == 0 and not typ.endswith(".Type"):
+            fprs += 1
+        gprs += n
+    return m.group(1), vtype, value_reg, number_reg
+
+
+def visit_calls(ctx, va) -> Dict[int, Tuple[str, str, str, str]]:
+    """``{k: visit_arguments(...)}`` for each call ``insns[k]`` of the ``traverse(visitor:)`` at
+    *va* that reaches a Visitor method visiting a field (not an extension's or the unknown
+    fields'): the symbols the call reaches, demangled (the call is found as the extractor finds
+    it: :func:`MC._call_names`, a witness-table slot named by its requirement)."""
+    code = MC._code(va)
+    flow = SY.function_flow(ctx, code.va)
+    if flow is None:
+        return {}
+    objs = MC._Objects(ctx)
+    region = flow.run_from(0, objs.entry(code), objects=objs.objects(code.va))
+    names = {c.k: MC._call_names(ctx, objs, c.target, c.via, slots=MC._visitor_slots)
+             for c in region.calls}
+    text = _demangle([n for ns in names.values() for n in ns])
+    out = {}
+    for k, ns in names.items():
+        got = [a for a in (visit_arguments(text[n]) for n in ns) if a is not None]
+        if got and "Extension" not in got[0][0] and "Unknown" not in got[0][0]:
+            out[k] = got[0]
+    return out
+
+
 def traverse_locations(ctx, va) -> Dict[tuple, int]:
-    """{location: field number} over the visits :func:`MC.visit_methods` names."""
+    """{location: field number} over the field visits :func:`visit_calls` reads."""
     flow = SY.function_flow(ctx, va)
     if flow is None:
         return {}
-    visits = MC.visit_methods(ctx, va)
+    visits = visit_calls(ctx, va)
     out: Dict[tuple, int] = {}
     shared = set()
     frame = None
     for k in range(len(flow.insns)):
         visit = visits.get(k)
-        nreg = MC.visit_number_register(*visit) if visit else None
-        num = flow.const_before(k, nreg) if nreg else None
+        num = flow.const_before(k, visit[3]) if visit else None
         if num is None:
             continue
-        vreg = "v0" if visit[0] == "Singular" and visit[1] in ("Float", "Double") else "x0"
+        vreg = visit[2]
         where = _location(_loc(flow, k, vreg, "traverse", {}))
         if where is None and vreg == "x0":
             # a value passed by address after a copy into the frame: the stored value's location
@@ -395,7 +514,7 @@ def traverse_locations(ctx, va) -> Dict[tuple, int]:
             last = frame.last_store(k, a) if a is not None else None
             v = _loc(flow, last[0], last[1], "traverse", {}) if last else None
             where = _location(v) if v is not None and v[0] == "val" else None
-        if where is None and visit == ("Singular", "Bool"):
+        if where is None and visit[1] == "Swift.Bool":
             c = flow.const_before(k, "x0")
             v = _proven_equal(flow, k, c) if c is not None else None
             where = _location(v) if v is not None and v[0] == "val" else None

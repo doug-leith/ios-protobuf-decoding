@@ -5,8 +5,10 @@ it calls, which run too -- must be among those ``call_reads`` says a call to it 
 Not a read of a register's value: saving a callee-saved register (x19-x28, d8-d15) to the stack
 before writing it (a prologue's spill), and the frame link (x29, x30) and sp, read on entry by
 design.  A call out of the image (through an import's slot) reads what its ABI says -- a runtime
-function its contract (:data:`proto.callees.RUNTIME_CONTRACTS`: ``objc_opt_class`` reads x0, x1),
-a Swift function the Swift convention's, any other the AAPCS64 arguments (x0-x8, v0-v7) -- and
+function its contract (:data:`proto.callees.RUNTIME_CONTRACTS`: ``objc_opt_class`` reads x0, x1;
+the contracts are checked against runs of the runtime's own code, :mod:`oracles.call_models`),
+a Swift function the Swift convention's (stated here from the Swift ABI, not taken from the
+analysis checked), any other the AAPCS64 arguments (x0-x8, v0-v7) -- and
 leaves the caller-saved registers written: what is checked is the analysis of the image's own
 functions.  A run ends at the return to the
 function's caller, a fault, or a step budget.
@@ -21,14 +23,29 @@ from unicorn import arm64_const as A
 from macho.disasm import disasm
 from oracles.flow_emulation import (make_machine, Report, RET_SENTINEL, SP0, random_value,
                                     _X)
-from proto.arm64_operands import (ARG_FPRS, CALL_ARG_GPRS, CALLER_SAVED, PAIR_STORES, STORE_BYTES,
-                                  parse_mem, reads, reg_name, split_ops, writes)
-from proto.callees import RUNTIME_CONTRACTS, SWIFT_CALL_ARGS, _is_swift_name
+from proto.arm64_operands import (CALLER_SAVED, PAIR_STORES, STORE_BYTES, parse_mem, reads,
+                                  reg_name, split_ops, writes)
+from proto.callees import RUNTIME_CONTRACTS
 from proto.liveness import _ALL_REGS, call_reads
 
 _CALLEE_SAVED = frozenset([f"x{i}" for i in range(19, 29)] + [f"v{i}" for i in range(8, 16)])
 _NOT_VALUES = frozenset(("sp", "x29", "x30", "xzr"))
-_IMPORT_READS = tuple(CALL_ARG_GPRS) + tuple(ARG_FPRS)
+#: What a call to a function of the C convention may read (AAPCS64): its arguments in x0-x7 /
+#: v0-v7 and an indirect result's address in x8.
+_IMPORT_READS = tuple(f"x{i}" for i in range(9)) + tuple(f"v{i}" for i in range(8))
+#: What a call to a Swift function may read: the Swift calling convention on arm64
+#: (swift/docs/ABI/CallConvSummary.rst) passes those, and context in callee-saved registers:
+#: self in x20, the error in x21, the async context in x22.
+_SWIFT_READS = _IMPORT_READS + ("x20", "x21", "x22")
+#: Swift's mangled-name prefixes as Mach-O spells them (swift/docs/ABI/Mangling.rst: ``$s``
+#: Swift 5, ``$S`` 4.2, ``_T0`` 4.0; with the C underscore).
+_SWIFT_PREFIXES = ("_$s", "_$S", "__T0")
+
+
+def _swift_function(name) -> bool:
+    """*name* is a function of the Swift calling convention: a mangled Swift symbol other than
+    an ``@objc`` thunk (mangled ``...To``: the C convention)."""
+    return bool(name) and name.startswith(_SWIFT_PREFIXES) and not name.endswith("To")
 _EVERY = frozenset(_ALL_REGS)
 
 
@@ -76,7 +93,7 @@ class Run:
 
     def _call(self, uc, name):
         contract = RUNTIME_CONTRACTS.get(name)
-        for r in (contract[0] if contract else SWIFT_CALL_ARGS if _is_swift_name(name)
+        for r in (contract[0] if contract else _SWIFT_READS if _swift_function(name)
                   else _IMPORT_READS):
             if r not in self.written:
                 self.read.add(r)

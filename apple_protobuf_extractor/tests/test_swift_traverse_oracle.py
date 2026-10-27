@@ -41,6 +41,48 @@ def _binary_names(ctx):
     return {n: a for n, a in ctx.iter_symbols() if a}
 
 
+class TestVisitorArgumentsFromTheSignature(unittest.TestCase):
+    """The oracle reads where a Visitor call takes its value and field number off the method's
+    demangled signature, lowered by the Swift calling convention (arm64): not the extractor's
+    reading of the method's name (serializers.swift_message_code.visit_number_register)."""
+
+    SIG = "dispatch thunk of InternalSwiftProtobuf.Visitor.%s throws -> ()"
+
+    def test_each_shape(self):
+        for method, want in (
+                ("visitSingularStringField(value: Swift.String, fieldNumber: Swift.Int)", ("x0", "x2")),
+                ("visitSingularBytesField(value: Foundation.Data, fieldNumber: Swift.Int)", ("x0", "x2")),
+                ("visitSingularDoubleField(value: Swift.Double, fieldNumber: Swift.Int)", ("v0", "x0")),
+                ("visitSingularBoolField(value: Swift.Bool, fieldNumber: Swift.Int)", ("x0", "x1")),
+                ("visitRepeatedInt32Field(value: [Swift.Int32], fieldNumber: Swift.Int)", ("x0", "x1")),
+                ("visitSingularMessageField<A where A1: InternalSwiftProtobuf.Message>"
+                 "(value: A1, fieldNumber: Swift.Int)", ("x0", "x1")),
+                ("visitMapField<A, B where A1: InternalSwiftProtobuf.MapKeyType, B1: "
+                 "InternalSwiftProtobuf.MapValueType>(fieldType: InternalSwiftProtobuf."
+                 "_ProtobufMap<A1, B1>.Type, value: [A1.BaseType : B1.BaseType], fieldNumber: "
+                 "Swift.Int)", ("x0", "x1"))):
+            with self.subTest(method=method):
+                self.assertEqual(O.visit_arguments(self.SIG % method)[2:], want)
+
+    def test_a_type_it_cannot_lower_is_not_read(self):
+        self.assertIsNone(O.visit_arguments(
+            self.SIG % "visitSingularThingField(value: Mod.Thing, fieldNumber: Swift.Int)"))
+
+    @unittest.skipUnless(O.demangler(), "no swift-demangle")
+    def test_a_planted_error_in_the_extractor_s_rule_leaves_the_oracle_as_it_was(self):
+        from unittest import mock
+        from serializers import swift_message_code as MC
+        p = _data_path(*_INTERNAL_SWIFT_PROTOBUF)
+        if not p:
+            self.skipTest("extracted InternalSwiftProtobuf not available")
+        ctx = _load_ctx(p)
+        names = _binary_names(ctx)
+        before = O.oracle(ctx, names)
+        with mock.patch.object(MC, "visit_number_register", lambda label, kind: "x7"):
+            self.assertEqual(O.oracle(_load_ctx(p), names), before)
+        self.assertTrue(before)
+
+
 class TestTraverseOracleStandalone(unittest.TestCase):
     def test_standalone_binaries(self):
         paths = [p for p in (_data_path(*rel) for rel in _IPHONE8_STANDALONE) if p]

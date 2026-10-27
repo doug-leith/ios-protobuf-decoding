@@ -510,6 +510,42 @@ class TestCallModelsAgainstTheRuntime(unittest.TestCase):
         self.assertIn(("_objc_opt_class", "does not return its argument"), got)
 
 
+class TestOraclesStateTheirOwnRules(unittest.TestCase):
+    """What an oracle needs of the ABI it states itself: an error planted in the analysis it
+    checks leaves the oracle's answer as it was (2026-10-25 review E7)."""
+
+    def test_a_swift_call_reads_the_swift_convention_s_registers(self):
+        # (the oracle's own statement of the convention, not proto.callees.SWIFT_CALL_ARGS)
+        from types import SimpleNamespace
+        import oracles.callreads_emulation as O
+        self.assertFalse(hasattr(O, "SWIFT_CALL_ARGS"))
+        run = O.Run.__new__(O.Run)
+        run.written, run.read = set(), set()
+        run._call(SimpleNamespace(reg_write=lambda *a: None), "_$s4main1fyyF")
+        self.assertEqual(run.read, {f"x{i}" for i in range(9)} | {f"v{i}" for i in range(8)}
+                         | {"x20", "x21", "x22"})
+
+    @unittest.skipUnless(IOS27_CACHE, "iOS 27 cache not available")
+    def test_the_types_are_read_apart_from_the_analysis(self):
+        """The oracles' __swift5_types reading names the types the analysis's does, and an
+        error planted in the analysis's names leaves it as it was."""
+        from macho.dyld_cache import DyldCacheReader
+        from macho.load import load_cache_image
+        import serializers.swift_type_recovery as TR
+        from oracles.swift_types import swift_types
+        reader = DyldCacheReader(IOS27_CACHE)
+        try:
+            ctx = load_cache_image(reader, reader.find_image_header("TokenGeneration")).ctx
+            ours = {(t.desc, t.qualified) for t in swift_types(ctx)}
+            theirs = {(d, TR._qualified_name(ctx, d)) for _r, d in TR.type_descriptors(ctx)}
+            self.assertGreater(len(ours), 50)
+            self.assertEqual(ours, theirs)
+            with mock.patch.object(TR, "_desc_name", lambda ctx, d: "Wrong"):
+                self.assertEqual({(t.desc, t.qualified) for t in swift_types(ctx)}, ours)
+        finally:
+            reader.close()
+
+
 def _remote_mirror():
     try:
         from oracles.swift_mirror import library
@@ -523,8 +559,8 @@ def _remote_mirror():
 @pytest.mark.slow
 class TestSwiftAgainstRemoteMirror(unittest.TestCase):
     """Every emitted Swift message's stored fields and their types, and the types of the fields
-    it emits (paired with its property by offset where static: #130), against Remote Mirror (TODO
-    #124, #128): all agree; not compared, two one-case oneofs
+    it emits (paired with the property of its name), against Remote Mirror (TODO #124, #128): all
+    agree; not compared, two one-case oneofs
     (CipherML's AspireApiPIRShardConfigs, one of TokenGeneration's).  Before #128 the oneofs of
     Apple's own generator (an enum of their own, not a nested OneOf_) went untyped and unread,
     and the fields swift-protobuf names with a ``_p`` were emitted with no type."""
@@ -538,7 +574,7 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
     def test_ios27_images(self):
         from oracles.swift_mirror import CacheMirror, compare
         mirror = CacheMirror(IOS27_CACHE)
-        not_compared, unpaired, compared, renamed, by_offset = {}, {}, {}, [], 0
+        not_compared, compared, unpaired = {}, {}, []
         for image in self.IMAGES:
             with self.subTest(image=image):
                 res = compare(mirror, image)
@@ -551,18 +587,14 @@ class TestSwiftAgainstRemoteMirror(unittest.TestCase):
                 left = res.stats["messages"] - res.stats["agree"]
                 if left:
                     not_compared[image] = res.stats["not compared: a one-case oneof"]
-                if res.stats["emitted fields with no one property of their name"]:
-                    unpaired[image] = res.stats["emitted fields with no one property of their name"]
                 compared[image] = res.stats["emitted fields compared"]
-                renamed += [(q, n) for q, n, _f, _p in res.renamed]
-                by_offset += res.stats["emitted fields paired by offset"]
+                unpaired += res.unpaired
         self.assertEqual(not_compared, {"CipherML": 1, "TokenGeneration": 1})
-        self.assertEqual(unpaired, {})
-        # paired by the offset decodeMessage writes where it is static (#130): EnergyKitFoundation's
-        # GridCleanlinessStats #2 / #3 (clean / reduce) are the properties cleaner / lessClean
-        self.assertEqual(sorted(renamed), [("InsightRecordPayload.GridCleanlinessStats", 2),
-                                           ("InsightRecordPayload.GridCleanlinessStats", 3)])
-        self.assertGreater(by_offset, 1_000)
+        # not compared: EnergyKitFoundation's GridCleanlinessStats #2 / #3 (clean / reduce) are
+        # the properties cleaner / lessClean (#130), which only the analysis's decodeMessage
+        # reading pairs them with
+        self.assertEqual(sorted(unpaired), [("InsightRecordPayload.GridCleanlinessStats", 2, "clean"),
+                                            ("InsightRecordPayload.GridCleanlinessStats", 3, "reduce")])
         self.assertGreaterEqual(compared["TokenGenerationCore"], 190)       # its oneofs' cases
         self.assertGreater(sum(compared.values()), 5_900)
 
